@@ -240,6 +240,23 @@ class RetrieveTest(RagBase):
         self.assertIn("主题：天气", block)
         self.assertIn("只能补充", block)
 
+    def test_build_block_optional_trace_reports_real_selection(self):
+        self.client.docs = [
+            {"id": "a", "content": "用户：怕打雷。", "distance": 0.40,
+             "metadata": {"kind": "fact", "about": "user", "topics": "天气"}},
+            {"id": "b", "content": "完全无关。", "distance": 0.90,
+             "metadata": {"kind": "fact", "about": "user"}},
+        ]
+        trace = {}
+        block = rank.build_block("web_10001__rem", "天气", trace=trace)
+        self.assertEqual(trace["query"], "天气")
+        self.assertEqual(trace["hit_count"], 1)
+        self.assertEqual(trace["hits"][0]["id"], "a")
+        self.assertAlmostEqual(trace["hits"][0]["similarity"], 0.60)
+        self.assertEqual(trace["injected_count"], 1)
+        self.assertEqual(trace["selected"][0]["id"], "a")
+        self.assertEqual(trace["block"], block)
+
     def test_recent_leaves_the_relevance_slots_alone(self):
         """召回明明命中的旧事实，不能被「最近 2 批」挤下桌。
 

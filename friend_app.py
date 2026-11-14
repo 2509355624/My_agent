@@ -113,6 +113,9 @@ LIMITS = {
     # 发码略放宽到 20/小时（他可能反复试登录），验码 30/10 分钟同群友页。
     "gv_send": (20, 3600),
     "gv_verify": (30, 600),
+    # 产品展示页：聊天与状态共用一个宽松桶，真实生图单独限流。
+    "showcase": (120, 600),
+    "showimg": (12, 600),
 }
 
 
@@ -179,10 +182,16 @@ def _secure(resp):
 
 @app.before_request
 def _gate():
-    bucket = "img" if ((request.path or "").startswith("/api/gal/img/")
-                       or (request.path or "").startswith("/api/comic/img")
-                       or (request.path or "").startswith("/api/outfit/img")) \
-        else "all"
+    path = request.path or ""
+    if path == "/api/showcase/image/submit":
+        bucket = "showimg"
+    elif path.startswith("/api/showcase/"):
+        bucket = "showcase"
+    else:
+        bucket = "img" if (path.startswith("/api/gal/img/")
+                           or path.startswith("/api/comic/img")
+                           or path.startswith("/api/outfit/img")
+                           or path == "/api/showcase/image") else "all"
     if not rate_ok(bucket):
         return _secure(jsonify({"ok": False, "error": "请求太频繁，歇一下"})), 429
     # 独立游客页的隔离：只圈「没登录 + 进过 /play」的人，且只挡页面导航。
@@ -214,7 +223,8 @@ def _gate():
             and p not in (SOLO_PATH, SOLO_PATH + ".html", "/health", "/logout",
                           "/login/send", "/login/verify",
                           "/char_intros.json", "/outfit", "/outfit.html",
-                          "/runbench", "/runbench.html")):
+                          "/runbench", "/runbench.html",
+                          "/showcase", "/showcase.html")):
         return redirect(SOLO_PATH)
     return None
 
@@ -531,6 +541,7 @@ def _forward(prefix, sub, allow_guest=False, force_guest=False,
                       or (request.path or "").startswith("/api/comic/img")
                       or (request.path or "").startswith("/api/runbench/cover/")
                       or (request.path or "").startswith("/api/image/web/")
+                      or (request.path or "") == "/api/showcase/image"
                       or (request.path or "").startswith(
                           "/api/image/角色扮演生图/")))
     #  ↑ moss 漫画图单张 2MB+（2026-11-03 实测），persona 的 CG 单张 8MB+
@@ -884,6 +895,15 @@ def proxy_outfit(sub):
     return _forward("/api/outfit", sub, allow_guest=True)
 
 
+# ── 产品展示页 ───────────────────────────────────────────
+# 匿名访问独立干净页面；API 不注入 QQ，也不使用内部扮演的游客会话。
+
+@app.route("/showcase")
+@app.route("/showcase.html")
+def showcase():
+    return send_from_directory(WEB_DIR, "showcase.html")
+
+
 # ── 跑图台页（2026-11-13）────────────────────────────────
 #
 # 「/跑图台」QQ 命令回的链接指向这里。和 /outfit 同款**免登录令牌制**：令牌
@@ -925,6 +945,13 @@ def play_page():
         resp.set_cookie(SOLO_COOKIE, "1", max_age=GUEST_TTL, httponly=True,
                         samesite="Lax", secure=_cookie_secure(), path="/")
     return resp
+
+
+@app.route("/api/showcase/<path:sub>", methods=["GET", "POST", "DELETE"])
+def proxy_showcase(sub):
+    """产品展示接口匿名开放，但不注入 QQ，也不透传内部扮演身份。"""
+    return _forward("/api/showcase", sub, allow_guest=True, force_guest=True,
+                    post_timeout=180)
 
 
 @app.route("/api/persona/<path:sub>", methods=["GET", "POST", "DELETE"])

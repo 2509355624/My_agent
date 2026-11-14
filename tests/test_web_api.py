@@ -93,6 +93,21 @@ class WebApiTest(unittest.TestCase):
         self.assertTrue({"volc", "deepseek", "ollama"}.issubset(ids))
         self.assertIn("default", data)
 
+    def test_friend_url_returns_current_tunnel(self):
+        url = "https://demo.trycloudflare.com"
+        with mock.patch("app.main.friend_site.url", return_value=url):
+            resp = self.client.get("/api/friend_url")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(), {"ok": True, "url": url})
+        self.assertEqual(resp.headers.get("Cache-Control"), "no-store")
+
+    def test_friend_url_empty_when_tunnel_down(self):
+        with mock.patch("app.main.friend_site.url", return_value=""):
+            resp = self.client.get("/api/friend_url")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(), {"ok": False, "url": ""})
+        self.assertEqual(resp.headers.get("Cache-Control"), "no-store")
+
     def test_history_starts_empty(self):
         resp = self.client.get("/api/history")
         self.assertEqual(resp.status_code, 200)

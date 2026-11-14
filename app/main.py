@@ -5,6 +5,7 @@ Flask Web 服务入口
 import re
 import json
 import os
+import logging
 import base64
 import ipaddress
 import socket
@@ -29,6 +30,7 @@ from app import comic_api
 from app import moss_api
 from app import gen_api
 from app import friend_api
+from app import friend_site
 from app import gallery_api
 from app import card_api
 from app import output_api
@@ -54,6 +56,8 @@ from app.tools import execute_tool
 from app.tools.normal.documents import list_documents, file_info, read_document, search_document
 
 app = Flask(__name__, static_folder=WEB_DIR, static_url_path="")
+
+log = logging.getLogger("main")
 
 # 伪装 Server 头（2026-11-08）：Werkzeug 默认发
 # `Server: Werkzeug/3.1.3 Python/3.14.0`——版本号等于直接告诉扫描器该试哪几个
@@ -140,6 +144,10 @@ app.register_blueprint(moss_api.bp)
 from app import persona_api                        # noqa: E402
 app.register_blueprint(persona_api.bp)
 
+# 公开产品展示页：独立干净素材与会话线，不挂到内部扮演 blueprint 上。
+from app import showcase_api                       # noqa: E402
+app.register_blueprint(showcase_api.bp)
+
 # 角色扮演「查看台」（2026-11-03）：看谁玩过、聊了什么。
 # 只挂 5174，公网只映射 5175 的网关，所以这里不需要额外鉴权。
 from app import persona_admin_api                  # noqa: E402
@@ -192,6 +200,7 @@ def _tunnel_guard():
     p = request.path or ""
     if (p.startswith("/api/friend/") or p.startswith("/api/gal/")
             or p.startswith("/api/outfit/") or p.startswith("/api/runbench/")
+            or p.startswith("/api/showcase/") or p == "/showcase"
             or p == "/health"):
         return None
     return jsonify({"ok": False, "error": "not found"}), 404
@@ -220,6 +229,20 @@ app.register_blueprint(runbench_web.bp)
 @app.route("/")
 def index():
     return send_from_directory(WEB_DIR, "index.html")
+
+
+@app.route("/api/friend_url")
+def friend_url_api():
+    """个人 Agent 顶栏用的当前隧道地址。
+
+    只给本机 / 局域网页读：公网经隧道进来时 `_tunnel_guard` 会把它挡成
+    404，5175 也不反代这条。地址每次从 `state/friend_url.txt` 现读，
+    隧道重启换了随机域名，页面下一次点击就能拿到新值，不缓存旧地址。
+    """
+    url = friend_site.url()
+    resp = jsonify({"ok": bool(url), "url": url})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 # ─── API 路由 ────────────────────────────────────────

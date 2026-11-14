@@ -138,6 +138,33 @@ class StreamForwardTest(unittest.TestCase):
         r = anon.get("/api/image/web/生图页/anima-line/x.png")
         self.assertEqual(r.status_code, 401)
 
+    def test_showcase_api_is_anonymous_but_never_injects_qq(self):
+        anon = friend_app.app.test_client()
+        sess = mock.MagicMock()
+        response = _FakeResp(body=b'{"ok": true}', ctype="application/json")
+        with patch.object(friend_app, "_new_session", return_value=sess):
+            with patch.object(sess, "get", return_value=response) as m:
+                r = anon.get("/api/showcase/chain?qq=2509355624")
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn("qq", m.call_args.kwargs["params"])
+        self.assertIn("X-Friend-Token", m.call_args.kwargs["headers"])
+        self.assertFalse(m.call_args.kwargs.get("stream"))
+
+    def test_showcase_image_is_streamed(self):
+        r, exp, m = self._get(
+            "/api/showcase/image?tag=HT-00000001&session_id=abc")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(r.data), len(exp.content))
+        self.assertTrue(m.call_args.kwargs.get("stream"))
+        self.assertNotIn("qq", m.call_args.kwargs["params"])
+
+    def test_showcase_submit_uses_dedicated_rate_bucket(self):
+        response = _FakeResp(body=b'{"ok": true}', ctype="application/json")
+        self._sess.post.return_value = response
+        with patch.object(friend_app, "rate_ok", return_value=True) as rate:
+            self.client.post("/api/showcase/image/submit", json={})
+        rate.assert_any_call("showimg")
+
     def test_other_image_branches_are_not_exposed(self):
         """`/api/image` 底下还有 QQ 私聊/群聊的图，只放 `web/` 这一支。"""
         r = self._client_for_qq().get("/api/image/qq/私聊_123/x.png")

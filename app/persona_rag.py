@@ -896,7 +896,24 @@ _FACT_SLOTS = 4
 _RECENT_FACT_SLOTS = 1
 
 
-def _fact_block(docs, recent=()):
+def _trace_doc(doc, source):
+    """展示页用的只读检索轨迹；不参与排序，也不改变原有注入块。"""
+    metadata = (doc or {}).get("metadata") or {}
+    try:
+        distance = float((doc or {}).get("distance") or 0.0)
+    except (TypeError, ValueError):
+        distance = 0.0
+    return {
+        "id": str((doc or {}).get("id") or ""),
+        "source": source,
+        "kind": str(metadata.get("kind") or ""),
+        "content": str((doc or {}).get("content") or "")[:1200],
+        "distance": distance,
+        "similarity": max(0.0, 1.0 - distance),
+    }
+
+
+def _fact_block(docs, recent=(), trace=None):
     """提炼事实 → 一段；没有可用的返回空串。
 
     `docs` 是按相关性排好的（锚点在最前）。`recent` 单独传：它是「最近 2 批
@@ -931,6 +948,7 @@ def _fact_block(docs, recent=()):
     if not pick:
         return ""
     who = {"user": "用户事实", "character": "角色言行", "shared": "双方约定"}
+    selected = []
     lines = ["【长期记忆 · 从过去提炼出的经过与事实】\n"
              "下面都是当时记下的话；里面的「明天」「下次」「约定」是那一轮的说法，"
              "不代表现在还欠着。想提旧事照提，用已经发生过的口吻。"]
@@ -959,10 +977,14 @@ def _fact_block(docs, recent=()):
         if len(text) > limit:
             text = text[:limit] + "…"
         lines.append(head + "\n" + text)
+        selected.append(d)
+    if trace is not None:
+        trace.setdefault("selected", []).extend(
+            _trace_doc(d, "distilled") for d in selected)
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
-def _raw_block(docs):
+def _raw_block(docs, trace=None):
     """原文条目 → 一段；总字数受 RAW_BLOCK_CHARS 限制。
 
     2026-11-10：单条不再硬截 520 字（见 RAW_ITEM_CHARS）；预算不够时
@@ -971,6 +993,7 @@ def _raw_block(docs):
     if not docs:
         return ""
     lines, used = [], 0
+    selected = []
     for d in docs:
         text = " ".join(str(d.get("content") or "").split())
         if not text:
@@ -983,13 +1006,17 @@ def _raw_block(docs):
         if len(text) > left:
             text = text[:left].rstrip() + "…"
         lines.append("- " + text)
+        selected.append(d)
         used += len(text)
     if not lines:
         return ""
+    if trace is not None:
+        trace.setdefault("selected", []).extend(
+            _trace_doc(d, "raw") for d in selected)
     return "【当时的原话 · 用来确认说过和做过什么】\n" + "\n".join(lines)
 
 
-def build_block(line, query, k=None, day=None, context=""):
+def build_block(line, query, k=None, day=None, context="", trace=None):
     """拼成能直接塞进最后一条玩家消息的一段；没命中返回空串。
 
     2026-11-06：两路检索——当前用户话 + 最近几轮上下文，合并去重后
@@ -999,6 +1026,9 @@ def build_block(line, query, k=None, day=None, context=""):
     2026-11-07：加原文层。两层分工写进块标题——提炼层说「经过与事实」，
     原文层说「用来确认说过和做过什么」，结尾用法句再点明「正在发生的
     比旧话更重要」，避免演员拿旧对话当台词复述。
+
+    `trace` 是展示页的可选只读输出：传入 dict 时记录 query、召回条目、
+    距离与最终入选项；默认 None，原有调用方的行为和返回值完全不变。
     """
     docs = retrieve(line, query, k=k, day=day)
     # 锚点（第一次/初夜/关系确认…）不看距离，直接排最前，见 `_anchor_docs`。
@@ -1012,16 +1042,31 @@ def build_block(line, query, k=None, day=None, context=""):
     if recent:
         seen = {str(d.get("id") or "") for d in docs}
         recent = [d for d in recent if str(d.get("id") or "") not in seen]
+    if trace is not None:
+        trace.clear()
+        trace.update({
+            "query": str(query or ""),
+            "context_query": str(context or ""),
+            "hit_count": len(docs),
+            "hits": [_trace_doc(d, "distilled") for d in docs],
+            "recent_count": len(recent),
+            "selected": [],
+            "injected_count": 0,
+            "block": "",
+        })
     if context:
         extra = retrieve(line, context, k=k, day=day)
         seen = {str(d.get("id") or "") for d in docs}
         docs += [d for d in extra
                  if str(d.get("id") or "") not in seen]
+        if trace is not None:
+            trace["context_hit_count"] = len(extra)
+            trace["context_hits"] = [_trace_doc(d, "context") for d in extra]
     parts = []
-    fact = _fact_block(docs, recent)
+    fact = _fact_block(docs, recent, trace=trace)
     if fact:
         parts.append(fact)
-    raw = _raw_block(retrieve_raw(line, query))
+    raw = _raw_block(retrieve_raw(line, query), trace=trace)
     if raw:
         parts.append(raw)
     if not parts:
@@ -1033,7 +1078,13 @@ def build_block(line, query, k=None, day=None, context=""):
         "旧事实只能补充，不会被近期闲聊覆盖。"
         "她主动提昨天的事是好的，用已经发生过的口吻提；里面写到「明天」"
         "「下次」的约定都是当时那一轮的说法，不代表今天还欠着。")
-    return "\n\n".join(parts)
+    out = "\n\n".join(parts)
+    if trace is not None:
+        selected = trace.get("selected") or []
+        trace["injected_count"] = len({
+            (item.get("source"), item.get("id")) for item in selected})
+        trace["block"] = out
+    return out
 
 
 def _run():
