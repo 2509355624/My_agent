@@ -4110,6 +4110,10 @@ class BgTransparencyTest(unittest.TestCase):
     原话：「我加了背景之后，希望内容卡片是透明的，不然看不到背景，
     现在是半透明灰色的，看不到背景很难受。」
     原来气泡是 rgba(...,.52)，整张图被一块块灰挡住，加背景等于白加。
+
+    2026-11-14 用户又进一步明确：要「透明、能看清背景」的文字框。所以
+    气泡底色压到极淡（.08/.16），且**关掉背景模糊**（模糊会把气泡后面
+    的图糊掉，跟「看清背景」相反），可读性改靠多层文字描边阴影兜底。
     """
 
     def _html(self):
@@ -4121,7 +4125,7 @@ class BgTransparencyTest(unittest.TestCase):
             return fh.read()
 
     def test_bubbles_are_translucent_enough(self):
-        """不透明度必须低于 0.3——再高就把背景盖住了。"""
+        """不透明度必须低于 0.2——再高就把背景盖住了。"""
         import re
         h = self._html()
         for sel in (".mid.has-bg .row.a .bubble", ".mid.has-bg .row.u .bubble"):
@@ -4130,17 +4134,30 @@ class BgTransparencyTest(unittest.TestCase):
             seg = h[i:i + 300]
             m = re.search(r"rgba\([^)]*?,\s*([0-9.]+)\)", seg)
             self.assertIsNotNone(m, "%s 里找不到 rgba" % sel)
-            self.assertLessEqual(float(m.group(1)), 0.30,
+            self.assertLessEqual(float(m.group(1)), 0.20,
                                  "%s 还是太实（%s）" % (sel, m.group(1)))
 
     def test_readability_compensated(self):
-        """透归透，字要看得清：必须有模糊兜底 + 文字阴影。"""
+        """透归透，字要看得清：靠多层文字描边阴影兜底，不靠背景模糊。
+
+        「看清背景」和「背景模糊」是矛盾的——模糊会把气泡后面的图糊掉。
+        所以气泡必须**不模糊**（backdrop-filter 为 none 或不存在），可读性
+        由多层 text-shadow（四向描边 + 底部投影）保证。
+        """
         h = self._html()
         for sel in (".mid.has-bg .row.a .bubble", ".mid.has-bg .row.u .bubble"):
             i = h.find(sel)
-            seg = h[i:i + 400]
-            self.assertIn("backdrop-filter", seg, "%s 缺模糊" % sel)
-            self.assertIn("text-shadow", seg, "%s 缺文字阴影" % sel)
+            seg = h[i:i + 500]
+            # 气泡不能靠模糊兜底可读性（模糊 = 看不清背景）
+            m = re.search(r"backdrop-filter:\s*([^;]+);", seg)
+            if m:
+                self.assertIn("none", m.group(1),
+                              "%s 不该模糊背景（%s）" % (sel, m.group(1)))
+            # 文字描边阴影必须在：多层 shadow（四向描边），不是单条
+            self.assertIn("text-shadow", seg, "%s 缺文字描边" % sel)
+            shadows = seg.split("text-shadow:", 1)[1].split(";", 1)[0]
+            self.assertGreaterEqual(shadows.count("rgba"), 3,
+                                    "%s 文字描边不够（%s）" % (sel, shadows))
 
     def test_no_heavy_opacity_left(self):
         """has-bg 那一组里不许再留 .5 以上的实底。"""

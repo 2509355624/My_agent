@@ -179,38 +179,52 @@
      URL 与 `has-bg` 由 JS 写在 `#mid` 上。 */
   .mid.has-bg { background-position: center; background-size: cover;
     background-repeat: no-repeat; }
-  /* 有背景图时内容卡片让出透明度（2026-11-14 用户要求「看到背景」）：
-     原来 .52 太实，整张图被一块块灰挡住，加了背景等于白加。
-     现在降到 .18，靠**更强模糊 + 文字阴影**把可读性补回来——
-     模糊不是装饰：背景若是花火/夜景这类高频细节，不模糊的话
-     半透明底上的字边缘会和图打架。没有背景图时整组不生效。 */
+  /* 有背景图时气泡改成「极淡玻璃」（2026-11-14 用户拍板）：
+     要「透明、能看清背景」，所以底色压到 .08 上下，且**不做背景模糊**——
+     模糊会把气泡后面的图糊掉，跟「看清背景」正好相反，直接关掉。
+     可读性改靠**文字描边阴影**：四向 1px 描边 + 底部 2px 投影，花背景上字
+     也压得住。没有背景图时整组不生效，观感与以前完全一致。 */
   .mid.has-bg .row.a .bubble {
-    background: rgba(14, 14, 18, .18);
-    border-color: rgba(255, 255, 255, .12);
-    text-shadow: 0 1px 3px rgba(0, 0, 0, .78);
-    -webkit-backdrop-filter: blur(14px) saturate(1.15);
-    backdrop-filter: blur(14px) saturate(1.15); }
+    background: rgba(14, 14, 18, .08);
+    border-color: rgba(255, 255, 255, .2);
+    text-shadow: -1px 0 1px rgba(0,0,0,.9), 1px 0 1px rgba(0,0,0,.9),
+                 0 -1px 1px rgba(0,0,0,.85), 0 1px 1px rgba(0,0,0,.85),
+                 0 2px 3px rgba(0,0,0,.7);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none; }
   .mid.has-bg .row.u .bubble {
-    background: rgba(109, 42, 72, .26);
-    text-shadow: 0 1px 3px rgba(0, 0, 0, .78);
-    -webkit-backdrop-filter: blur(14px) saturate(1.15);
-    backdrop-filter: blur(14px) saturate(1.15); }
-  /* 开场导读、图下工具条、输入框：同样是一块块实心黑，一并让出透明度。
-     输入框比气泡再实一点（.55），光标和占位字在花哨背景上才不至于发飘。 */
+    background: rgba(109, 42, 72, .16);
+    text-shadow: -1px 0 1px rgba(0,0,0,.9), 1px 0 1px rgba(0,0,0,.9),
+                 0 -1px 1px rgba(0,0,0,.85), 0 1px 1px rgba(0,0,0,.85),
+                 0 2px 3px rgba(0,0,0,.7);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none; }
+  /* 开场导读、图下工具条、输入框：同样压一块底，一并降到极淡。
+     导读也关模糊；文字照气泡加多层描边阴影（之前漏了 text-shadow，导致
+     text-dim 的灰字糊在花背景上），并整体提亮一档到正文色。 */
   .mid.has-bg .intro {
-    background: rgba(14, 14, 18, .18);
-    border-color: rgba(255, 255, 255, .14);
-    -webkit-backdrop-filter: blur(14px) saturate(1.15);
-    backdrop-filter: blur(14px) saturate(1.15); }
-  .mid.has-bg .picbar { background: rgba(23, 23, 31, .3); }
+    background: rgba(14, 14, 18, .1);
+    border-color: rgba(255, 255, 255, .16);
+    color: var(--text);
+    text-shadow: -1px 0 1px rgba(0,0,0,.9), 1px 0 1px rgba(0,0,0,.9),
+                 0 -1px 1px rgba(0,0,0,.85), 0 1px 1px rgba(0,0,0,.85),
+                 0 2px 3px rgba(0,0,0,.7);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none; }
+  /* 导读里的标签（「性格」「开场」、beh 小标题）默认是 text-mute 的浅灰，
+     有背景时提亮到可读，描边由上面那条 text-shadow 继承。 */
+  .mid.has-bg .intro::before,
+  .mid.has-bg .introRow .ik,
+  .mid.has-bg .introBehK { color: var(--text-dim); }
+  .mid.has-bg .picbar { background: rgba(23, 23, 31, .22); }
   /* 图片容器自带一层 #0a0a0f 打底（占位/加载时用），压在图上就是一块黑，
      有背景时改成半透明，加载中的占位字也不至于糊在图上。 */
-  .mid.has-bg .pic { background: rgba(10, 10, 15, .16); }
-  /* 输入框比气泡稍实一点（.3）：光标和占位字要找准位置，太透会发飘 */
+  .mid.has-bg .pic { background: rgba(10, 10, 15, .14); }
+  /* 输入框比气泡稍实一点（.24）：光标和占位字要找准位置，太透会发飘 */
   .mid.has-bg .composer textarea {
-    background: rgba(23, 23, 31, .3);
-    -webkit-backdrop-filter: blur(10px);
-    backdrop-filter: blur(10px); }
+    background: rgba(23, 23, 31, .24);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none; }
   /* 横向分隔线也调淡：纯 #1a1a22 的线压在图上像一道黑缝 */
   .mid.has-bg .top, .mid.has-bg .composer { border-color: rgba(255, 255, 255, .09); }
   /* 气泡外的「她 / 你」小字和重发提示直接压在图上，得自带一点阴影 */
@@ -224,41 +238,23 @@
     text-shadow: 0 1px 4px rgba(0, 0, 0, .9); }
   .mid.has-bg .aff .sub { color: #cfcfda; }
   .mid.has-bg .tb {
-    background: rgba(14, 14, 18, .3);
+    background: rgba(14, 14, 18, .24);
     border-color: rgba(255, 255, 255, .18);
-    -webkit-backdrop-filter: blur(4px);
-    backdrop-filter: blur(4px); }
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none; }
   /* 输入区上面那条工具条（心理活动 / 道具 / 字体 / 写法 / 精确输入）：
      默认是透明底的胶囊，压在图上同样会「消失」。彩色那三个保留自己的颜色，
      其余按钮垫深底、文字提亮。 */
-  .mid.has-bg .precise .ptab, .mid.has-bg .precise .ptgl {
-    background: rgba(14, 14, 18, .3);
+  .mid.has-bg .precise .ptab {
+    background: rgba(14, 14, 18, .24);
     border-color: rgba(255, 255, 255, .18);
-    -webkit-backdrop-filter: blur(4px);
-    backdrop-filter: blur(4px); }
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none; }
   .mid.has-bg .precise .ptab:not([data-f]) { color: #cfcfda; }
-  .mid.has-bg .precise .ptgl { color: #cfcfda; }
   /* 选中态要压回来一层：底色更实、边框仍是它自己的颜色，别被上面那条盖掉 */
   .mid.has-bg .precise .ptab.on {
     background: rgba(14, 14, 18, .55);
     border-color: currentColor; }
-  /* 「当前模型」是 2026-11-09 才加的，比上面那批背景适配晚了一步：默认
-     11px 的 --text-dim 灰字直接压在角色背景图上会糊成一片（用户实测）。
-     照 .aff / .precise 的老办法：垫半透明深底 + 提亮字 + 加阴影 + 按钮垫底。 */
-  .mid.has-bg .modelBar {
-    background: rgba(14, 14, 18, .62);
-    border-top-color: rgba(255, 255, 255, .14);
-    color: #e2e2ec; font-size: 12px;
-    text-shadow: 0 1px 4px rgba(0, 0, 0, .9);
-    -webkit-backdrop-filter: blur(6px);
-    backdrop-filter: blur(6px); }
-  .mid.has-bg .modelBar .mn { color: #f0f0f6; font-weight: 600; }
-  .mid.has-bg .modelBar .btn {
-    background: rgba(30, 30, 40, .82);
-    border-color: rgba(255, 255, 255, .22);
-    color: #f2f2f8; font-size: 12px; }
-  .mid.has-bg .modelBody { color: #e2e2ec; font-size: 12.5px; }
-  .mid.has-bg .modelBody b { color: #ffd24a; }
 
   .row { display: flex; }
   .row.u { justify-content: flex-end; }
@@ -356,14 +352,19 @@
   .precise { flex: none; padding: 7px 14px 0; }
   .preciseTabs { display: flex; gap: 6px; align-items: center;
     flex-wrap: wrap; position: relative; }
-  .ptab, .ptgl { background: transparent; border: 1px solid var(--border);
+  .ptab { background: transparent; border: 1px solid var(--border);
     border-radius: 999px; padding: 5px 11px; font: inherit; font-size: 12px;
-    cursor: pointer; color: var(--text-dim); }
+    cursor: pointer; color: var(--text-dim); white-space: nowrap; }
   .ptab.on { background: var(--bg-input); border-color: currentColor; }
   .ptab[data-f="thought"] { color: #b48aff; }
   .ptab[data-f="action"] { color: #5fd6a0; }
   .ptab[data-f="plot"] { color: #ffb86b; }
-  .ptgl { margin-left: auto; color: var(--text-mute); }
+  /* 窄屏：gap 收紧、按钮内边距略缩，让按钮尽量塞进一行，实在塞不下也
+     折得整齐。 */
+  @media (max-width: 700px) {
+    .preciseTabs { gap: 4px; }
+    .ptab { padding: 4px 8px; font-size: 11.5px; }
+  }
   .preciseBody { display: none; gap: 6px; padding: 7px 0 2px; }
   .preciseBody.open { display: flex; flex-direction: column; }
   .pfield { display: none; }
@@ -392,6 +393,14 @@
     margin-bottom: 10px; }
   .fontPop .fpH b, .stylePop .fpH b { font-size: 13px; font-weight: 500;
     color: var(--accent); }
+  /* 标题行右侧：当前档位名 + 「?」说明按钮。? 放卡片右上角，点开就知道。 */
+  .stylePop .fpHRight { display: inline-flex; align-items: center; gap: 8px; }
+  .stylePop .styleHelp {
+    width: 18px; height: 18px; line-height: 16px; padding: 0;
+    border: 1px solid var(--border); border-radius: 50%;
+    background: var(--bg-input); color: var(--text-dim);
+    font-size: 12px; cursor: pointer; text-align: center; }
+  .stylePop .styleHelp:hover { color: var(--accent); border-color: var(--accent); }
   .fontPop input[type="range"] { width: 100%; accent-color: var(--accent); }
   .stylePop select, .stylePop input[type="text"] { width: 100%;
     box-sizing: border-box; background: var(--bg-input); color: var(--text);
@@ -971,16 +980,14 @@
   .relayBox b { color: var(--text); }
   .relayBox .wbtns { display: flex; gap: 8px; margin-top: 14px; }
   .relayBox .wbtns .btn { flex: 1; display: flex; justify-content: center; }
-  /* 聊天区底部「当前模型」：小按钮 + 可展开的一行说明。 */
-  .modelBar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-    padding: 5px 12px; border-top: 1px solid var(--border);
-    font-size: 11px; color: var(--text-dim); }
-  .modelBar .btn { padding: 3px 9px; font-size: 11px; }
-  .modelBar .mn { word-break: break-all; }
-  .modelBody { display: none; flex-basis: 100%; padding: 6px 2px 2px;
-    font-size: 11.5px; line-height: 1.7; color: var(--text-dim); }
-  .modelBody.on { display: block; }
-  .modelBody b { color: var(--text); }
+  /* 右栏底部「模型」下拉（2026-11-14 从聊天区底部挪过来）：和右栏其它
+     nowrow 的 v 一样紧凑，下拉占满剩余宽度。 */
+  #modelBox .nowrow { align-items: center; }
+  .modelSel { flex: 1; min-width: 0; box-sizing: border-box;
+    background: var(--bg-input); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--rs);
+    padding: 4px 6px; font: inherit; font-size: 12px; outline: none;
+    cursor: pointer; }
   /* 代充「查看」面板（2026-11-10）：余额 + 命中/未命中/输出 + 每日横条 + 明细。
      复用 cmMask 的遮罩壳，横条照 DeepSeek 用量页那样按天排，纯 CSS 不引库。 */
   .billBox { width: min(620px, 100%); background: var(--bg-elev);
@@ -1148,36 +1155,10 @@
               title="看她现在到哪一步了">状态</button>
       <a class="btn sm" id="btnLogin" style="display:none;text-decoration:none"
          href="/" title="登录后可以无限对话、还能出图">登录</a>
-      <!-- 独立游客页的自救出口（2026-11-11）：/play?exit=1 会清掉 fr_solo
-           页面锁并回首页。默认藏，只有 SOLO 态在 bindGalleryLink 里露出来——
-           站主/误入者不用去记那个隐藏地址，点一下就能回自己的画廊去登录。
-           访客点了也只是回到未登录首页，看不到站主任何数据，锁的意义不变。 -->
-      <a class="btn sm back" id="btnExitSolo"
-         style="display:none;text-decoration:none" href="/play?exit=1"
-         title="退出独立游客页，回到首页">退出游客模式</a>
       <span class="quota" id="quota" style="display:none"></span>
     </div>
     <div class="log" id="log">
       <div class="empty">左边点一个角色开始<br>或者直接用输入框说话</div>
-    </div>
-    <!-- 「当前模型」（2026-11-09）：放在聊天区最底下，点一下展开 / 收起。
-         显示最近一次回话实际用的是公用 V4 Pro 还是玩家自己的模型。 -->
-    <div class="modelBar" id="modelBar">
-      <button class="btn sm" id="btnModelNow" type="button">当前模型 ▾</button>
-      <span class="mn" id="modelNowName">还没开始聊</span>
-      <!-- 模型选择（2026-11-14）：选项由后端白名单给，前端不写死。
-           默认 V4.1 Flash；切过就记在浏览器本地，换设备/重登会回默认。 -->
-      <select id="modelPick" class="btn sm"
-              title="用哪个模型写这一轮的回复">
-        <option value="">读取中…</option>
-      </select>
-      <div class="modelBody" id="modelBody">
-        最近一次回话用的是 <b id="modelBodyName">—</b>。<br>
-        上面那个下拉决定用哪个模型：<b>V4.1 Flash</b> 快、写得完整（默认）；
-        <b>V4 Pro</b> 更细腻但慢一倍，个别情况下会中途停笔（偶发，不是每次）。<br>
-        连续三次连不上，才会按「模型选择（自定义）」面板里的顺序用你自己的模型。
-        <button class="btn sm" id="btnModelCfg" type="button">模型选择（自定义）</button>
-      </div>
     </div>
     <!-- 精确输入（2026-11-06）：主输入框依旧是兜底；这三栏填了就以它为准。
          桌面展开后三栏并排；手机点上面的彩色按钮切换，各栏内容互不影响。 -->
@@ -1204,21 +1185,27 @@
           <div class="fpTip">只影响聊天区正文，右栏与输入框不变</div>
         </div>
         <!-- 文风档位（2026-11-06）：酒馆 sysprompt 那层做成可切换的一句短句，
-             作者注并进贴脸尾注。常态档不发任何额外字段，老链路不受影响。 -->
+             作者注并进贴脸尾注。常态档不发任何额外字段，老链路不受影响。
+             说明「?」按钮已去掉（2026-11-14 用户：用户自己点开就知道怎么用）。 -->
         <button class="ptab" id="btnStyle" type="button"
                 title="这一局怎么写">写法</button>
-        <button class="ptab" id="btnStyleHelp" type="button"
-                title="五种写法分别是什么意思"
-                style="min-width:0;padding:0 9px">?</button>
         <div class="stylePop" id="stylePop" style="display:none">
-          <div class="fpH"><span>这一局的写法</span><b id="styleVal">常态</b></div>
+          <div class="fpH"><span>这一局的写法</span>
+            <span class="fpHRight">
+              <b id="styleVal">常态</b>
+              <button class="styleHelp" id="btnStyleHelp" type="button"
+                      title="这一档是什么意思" aria-label="写法说明">?</button>
+            </span>
+          </div>
           <select id="styleSel" aria-label="文风档位"></select>
           <input type="text" id="styleNote" maxlength="160"
                  placeholder="这一幕的调子（可留空）">
           <div class="fpTip">只给这一局换个写法，随时可以改回来</div>
         </div>
-        <button class="ptgl" id="btnPrecise"
-                onclick="togglePrecise()">精确输入 ▾</button>
+        <!-- 收起/展开：三栏（preciseBody）展开后能收起来，不占空间（2026-11-14）。
+             点彩色 Tab 展开对应栏，点这个收起；再点彩色 Tab 又重新展开。 -->
+        <button class="ptab" id="btnFoldPrecise" type="button"
+                title="收起/展开这三栏">展开 ▾</button>
       </div>
       <div class="preciseBody" id="preciseBody">
         <div class="pfield f-thought on" data-f="thought">
@@ -1341,6 +1328,16 @@
     <div class="st" id="billEntry">
       <button class="btn sm" id="btnBill" type="button">查看 · 用量 / 余额</button>
       <div class="cmNow" id="billNow" style="display:none"></div>
+    </div>
+    <!-- 模型切换（2026-11-14 从聊天区底部挪到右栏最底）：不再显示「当前用的
+         是哪个模型」，用户只要从这里选要用的模型即可。选项由后端白名单给，
+         默认 V4.1 Flash，切过记浏览器本地。 -->
+    <div class="st" id="modelBox">
+      <div class="nowrow"><span class="k">模型</span>
+        <select id="modelPick" class="modelSel" aria-label="切换模型"
+                title="用哪个模型写这一轮的回复">
+          <option value="">读取中…</option>
+        </select></div>
     </div>
   </aside>
 
@@ -1602,18 +1599,6 @@
   </div>
 </div>
 
-<!-- 写法说明（2026-11-07）：五种写法各是什么意思。数据取自
-     /api/persona/writing_styles，和下拉同源，不在这里另写一份文案。 -->
-<div class="skipMask" id="styleHelpMask">
-  <div class="skipBox">
-    <h3>这一局的写法</h3>
-    <p class="skipt">只影响这一局，随时能改回来。选中的那句会放在每一轮的最后，
-      模型最后读到的就是它。</p>
-    <div id="styleHelpBody" style="margin-top:12px"></div>
-    <button class="btn pri skipGo" id="styleHelpClose">知道了</button>
-  </div>
-</div>
-
 <!-- 射精选择（2026-11-05）：她的高潮值满了之后弹出来。
      2026-11-05 晚改：选完**立刻生成**，不用玩家再发一句话；原来的「不射」
      按钮换成下面的大文本框——玩家说「不射」其实就是一种自定义做法。 -->
@@ -1683,6 +1668,17 @@
     <h3 id="axisHelpTitle">说明</h3>
     <div id="axisHelpBody" class="axisHelpBody"></div>
     <button class="btn pri skipGo" id="axisHelpClose">知道了</button>
+  </div>
+</div>
+
+<!-- 写法说明（2026-11-14）：点「写法」卡片右上角的「?」弹出，五种写法各是什么意思。
+     文案来自 `/api/persona/writing_styles` 的 line，和下拉同源，不另写一份。 -->
+<div class="skipMask" id="styleHelpMask">
+  <div class="skipBox">
+    <h3>这一局的写法</h3>
+    <p class="skipt">只影响这一局，随时能改回来。选中的那句会放在每一轮的最后，模型最后读到的就是它。</p>
+    <div id="styleHelpBody" style="margin-top:12px"></div>
+    <button class="btn pri skipGo" id="styleHelpClose">知道了</button>
   </div>
 </div>
 
@@ -1851,17 +1847,13 @@ let AFF = null;          // 攻略模式状态（session/chat 带回来；null=�
 (function bindGalleryLink() {
   // 独立游客页连按钮都不给：藏起来只是防手滑，这里干脆不绑跳转，
   // 免得哪天有人改了样式又把它露出来。首屏就收干净，不等 session 回来。
+  // 「退出游客模式」按钮已彻底删掉（2026-11-14 用户：给访客的游客页不能暴露
+  // 登录口）。站主自己要解锁用 /play?exit=1 或清浏览器 fr_solo。
   if (SOLO) {
     ["btnGallery", "btnLogin", "btnNew", "btnBurger"].forEach(id => {
       const el = $(id);
       if (el) el.style.display = "none";
     });
-    // 露出「退出游客模式」：给误入的站主一个可见的解锁口，不用记 /play?exit=1。
-    // 这条链接是服务端清 fr_solo 的正规解除口（play_page 的 exit 分支），
-    // 跟隐藏地址同一条路，只是从「藏着」改成「摆出来」。
-    // 注意：SOLO 分支放在 `if (!a) return` 之前，退出按钮不依赖 btnGallery 存在。
-    const exitBtn = $("btnExitSolo");
-    if (exitBtn) exitBtn.style.display = "";
     return;
   }
   const a = $("btnGallery");
@@ -1922,9 +1914,6 @@ async function api(p, opt) {
   let d;
   try { d = await r.json(); } catch (e) { d = null; }
   if (!d || typeof d !== "object") d = { ok: false, error: "返回不是 JSON" };
-  // 2026-11-09：所有扮演回包都带 model_used（after_request 统一注入），
-  // 在这里接一次，聊天 / 跳过 / 切时段等每条支线都会刷新「当前模型」。
-  if (d.model_used) renderModelUsed(d.model_used);
   if (!r.ok || d.ok === false) {
     const err = new Error(d.error || ("HTTP " + r.status));
     err.code = d.code || "";
@@ -4474,20 +4463,14 @@ function composeDisplay(f, text) {
   return parts.join("\n") || text;
 }
 
-function togglePrecise() {
-  const body = $("preciseBody");
-  const open = body.classList.toggle("open");
-  $("btnPrecise").textContent = open ? "收起 ▴" : "精确输入 ▾";
-  if (open) pickPField(P_FIELD);
-}
-
 function pickPField(f) {
   if (!P_IDS[f]) return;
   P_FIELD = f;
   const body = $("preciseBody");
+  // 点哪个 Tab 就展开哪个栏（2026-11-14 用户：去掉独立的「精确输入」开关，
+  // 用户自己点 Tab 就知道怎么用了）。
   if (!body.classList.contains("open")) {
     body.classList.add("open");
-    $("btnPrecise").textContent = "收起 ▴";
   }
   document.querySelectorAll(".ptab").forEach(b =>
     b.classList.toggle("on", b.dataset.f === f));
@@ -4495,7 +4478,32 @@ function pickPField(f) {
     el.classList.toggle("on", el.dataset.f === f));
   const ta = $(P_IDS[f]);
   if (ta) ta.focus();
+  syncFoldBtn();
 }
+
+// 同步「收起/展开」按钮的文案和高亮（2026-11-14）。
+function syncFoldBtn() {
+  const btn = $("btnFoldPrecise");
+  const body = $("preciseBody");
+  if (!btn || !body) return;
+  const open = body.classList.contains("open");
+  btn.textContent = open ? "收起 ▴" : "展开 ▾";
+  btn.classList.toggle("on", open);
+}
+$("btnFoldPrecise").onclick = function () {
+  const body = $("preciseBody");
+  const open = body.classList.contains("open");
+  if (open) {
+    body.classList.remove("open");
+    // 收起时把 Tab 高亮也一起清掉，回到「什么都没选」的干净状态
+    document.querySelectorAll(".ptab").forEach(b => b.classList.remove("on"));
+    document.querySelectorAll(".pfield").forEach(el => el.classList.remove("on"));
+  } else {
+    // 展开时回到上次选的那一栏
+    pickPField(P_FIELD);
+  }
+  syncFoldBtn();
+};
 
 // ── 发消息 ────────────────────────────────────────────
 async function send() {
@@ -5254,20 +5262,6 @@ function openRelay(hasCustom) {
 }
 function closeRelay() { $("relayMask").classList.remove("on"); }
 
-// after_request 把本轮真正回话的模型塞进每个 JSON 回包；这里统一接一次，
-// 侧栏那行和聊天区底部「当前模型」都会跟着刷新。
-function renderModelUsed(used) {
-  const el = $("modelNowName");
-  if (!el || !used) return;
-  const name = used.kind === "public"
-    ? "公用 V4 Pro（免费）"
-    : used.kind === "paid"
-      ? "官方 DeepSeek（代充余额）"
-      : ("自定义模型 · " + (used.name || "未命名"));
-  el.textContent = name;
-  $("modelBodyName").textContent = name;
-}
-
 $("btnCustom").onclick = openCm;
 $("cmClose").onclick = closeCm;
 $("cmPresetDs").onclick = () => cmAddRow(DS_PRESET);
@@ -5381,11 +5375,6 @@ document.addEventListener("keydown", e => {
   if ($("relayMask").classList.contains("on")) closeRelay();
 });
 
-$("btnModelNow").onclick = () => {
-  const on = $("modelBody").classList.toggle("on");
-  $("btnModelNow").textContent = on ? "当前模型 ▴" : "当前模型 ▾";
-};
-$("btnModelCfg").onclick = openCm;
 const _mp = $("modelPick");
 if (_mp) {
   _mp.onchange = () => {
@@ -5833,8 +5822,8 @@ const STYLE_FALLBACK = [
   { key: "quiet",   label: "留白" }
 ];
 let STYLE_MODE = "normal";
-// 服务端返回的那份含 `line`（每种写法具体写什么），说明窗要用它。
-// 兜底清单只有 label，说明窗里那几档会显示「（默认）」——旧服务也能开。
+// 服务端那份含 `line`（每种写法具体写什么），「?」说明弹窗要用；兜底清单没有
+// line 就显示「默认」。说明弹窗点「写法」卡片右上角的「?」弹出。
 let STYLE_LIST = STYLE_FALLBACK;
 
 function renderStyleSel(list) {
@@ -5880,7 +5869,9 @@ $("btnStyle").onclick = function (e) {
   p.style.display = show ? "" : "none";
   this.classList.toggle("on", show);
 };
-// 问号：五种写法各是什么意思（2026-11-07 用户要的）
+$("stylePop").addEventListener("click", e => e.stopPropagation());
+// 「?」说明按钮：弹出五种写法各是什么意思的说明弹窗。文案来自 STYLE_LIST
+// 的 line（和下拉同源），兜底清单没有 line 就显示「默认」。
 $("btnStyleHelp").onclick = function (e) {
   e.stopPropagation();
   const body = $("styleHelpBody");
@@ -5906,10 +5897,9 @@ $("styleHelpClose").onclick = () => $("styleHelpMask").classList.remove("on");
 $("styleHelpMask").addEventListener("click", e => {
   if (e.target === $("styleHelpMask")) $("styleHelpMask").classList.remove("on");
 });
-$("stylePop").addEventListener("click", e => e.stopPropagation());
 $("styleSel").onchange = function () {
   STYLE_MODE = this.value;
-  const hit = STYLE_FALLBACK.find(s => s.key === STYLE_MODE);
+  const hit = STYLE_LIST.find(s => s.key === STYLE_MODE);
   $("styleVal").textContent = hit ? hit.label : STYLE_MODE;
   try { localStorage.setItem(STYLE_KEY, STYLE_MODE); } catch (e) {}
 };
