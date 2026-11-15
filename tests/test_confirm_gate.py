@@ -61,8 +61,15 @@ class IsConfirmTest(unittest.TestCase):
 class InterceptTest(unittest.TestCase):
     def setUp(self):
         confirm_gate._PENDING.clear()
+        # 2026-11-15 起闸默认关；本类测的是「闸开着」的拦下行为，
+        # 显式挂上 enabled=True（与 DisabledByDefaultTest 成对）。
+        self._en = mock.patch.object(confirm_gate, "enabled",
+                                     return_value=True)
+        self._en.start()
 
-    tearDown = setUp
+    def tearDown(self):
+        self._en.stop()
+        confirm_gate._PENDING.clear()
 
     def test_qq_turn_intercepts_and_stores(self):
         sent = []
@@ -107,12 +114,18 @@ class InterceptTest(unittest.TestCase):
 class ConsumeTest(unittest.TestCase):
     def setUp(self):
         confirm_gate._PENDING.clear()
+        # 同 InterceptTest：本类测「闸开着」的消费行为，显式挂 enabled=True。
+        self._en = mock.patch.object(confirm_gate, "enabled",
+                                     return_value=True)
+        self._en.start()
         self.allowed = mock.patch("app.agents.image_gen_allowed",
                                   return_value=(True, ""))
         self.allowed.start()
         self.addCleanup(self.allowed.stop)
 
-    tearDown = setUp
+    def tearDown(self):
+        self._en.stop()
+        confirm_gate._PENDING.clear()
 
     def _pending_comfy(self):
         confirm_gate._PENDING[("group", "123")] = {
@@ -288,6 +301,17 @@ class AttributionPrefixTest(unittest.TestCase):
     确认词锚定行首全部漏判 → pending 反复作废 → 模型重出卡死循环，
     一张图都没真正入队（最后那句「图已跑完」是模型编的）。"""
 
+    def setUp(self):
+        confirm_gate._PENDING.clear()
+        # 本类测的是「闸开着」时的确认判据，显式挂 enabled=True。
+        self._en = mock.patch.object(confirm_gate, "enabled",
+                                     return_value=True)
+        self._en.start()
+
+    def tearDown(self):
+        self._en.stop()
+        confirm_gate._PENDING.clear()
+
     def test_group_prefix_recognized(self):
         for t in ("胡桃桃：好", "胡桃桃：好！", "清酒瓶子：确认",
                   "@大大怪（生图机器人，贼拉快，种类多） 好"):
@@ -337,6 +361,57 @@ class AttributionPrefixTest(unittest.TestCase):
                 "group", "1103174141", "胡桃桃：好")
         self.assertEqual(reply, "回执")
         en.assert_called_once()
+
+
+class DisabledByDefaultTest(unittest.TestCase):
+    """2026-11-15 用户拍板关掉生图确认闸：用户让生图就直接入队，别再弹
+    确认卡等一句「好」。总开关是 settings.json 的 `confirm_gate_enabled`，
+    **缺省 False**。旧行为（拦下等确认 / 轮入口消费「好」）的测试在上面
+    原样保留——那些是闸**开着**时的判据，用户随时可以把它开回来。
+    """
+
+    def setUp(self):
+        confirm_gate._PENDING.clear()
+
+    tearDown = setUp
+
+    def test_defaults_to_disabled(self):
+        """settings 里没这个键 = 关（绝不在热路径上因为缺配置把生图卡住）。"""
+        with mock.patch("app.agents.load_settings", return_value={}):
+            self.assertFalse(confirm_gate.enabled())
+
+    def test_settings_key_turns_it_on(self):
+        with mock.patch("app.agents.load_settings",
+                        return_value={"confirm_gate_enabled": True}):
+            self.assertTrue(confirm_gate.enabled())
+
+    def test_intercept_passes_through_when_disabled(self):
+        sent = []
+        with mock.patch.object(confirm_gate, "enabled", return_value=False), \
+             _fake_ctx(), \
+             mock.patch("app.tools.normal.generate_image._send_receipt",
+                        side_effect=lambda t, i, x: sent.append(x)):
+            gate = confirm_gate.intercept(
+                "comfy", skill="anima_clear", prompt="1girl", seed=42,
+                intent="k", workflow={"w": 1}, note="")
+        self.assertIsNone(gate)
+        self.assertEqual(sent, [])
+        self.assertEqual(confirm_gate._PENDING, {})
+
+    def test_stale_pending_is_not_consumed_when_disabled(self):
+        """闸关了之后，「好」不接管任何轮：即使内存里还挂着旧 pending
+        （改配置前的残留），也既不消费也不作废，更不去入队。"""
+        confirm_gate._PENDING[("group", "123")] = {
+            "kind": "comfy", "skill": "anima_clear", "prompt": "1girl",
+            "seed": None, "intent": "k", "workflow": {"w": 1}, "note": "",
+        }
+        with mock.patch.object(confirm_gate, "enabled", return_value=False), \
+             mock.patch("app.image_jobs.enqueue") as en:
+            reply = confirm_gate.consume_if_confirmed("group", "123", "好")
+        self.assertIsNone(reply)
+        en.assert_not_called()
+        # 残留 pending 原样留着：将来重新开闸，行为从那一刻重新开始。
+        self.assertIn(("group", "123"), confirm_gate._PENDING)
 
 
 if __name__ == "__main__":

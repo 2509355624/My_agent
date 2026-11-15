@@ -340,6 +340,81 @@ def _cq_arg(rest, key):
     return ""
 
 
+# ─── 「文件」段里的图片（2026-11-15 用户要求）────────────────────
+# QQ 有两条上传通道：「图片」和「文件」。走「文件」发上来的图，消息里是
+# `{"type": "file"}` 段，而 `_parse_segments` 原先只认 text/at/image/mface/face
+# ——整段被静默丢掉：群里 @ 了却「没有内容」，私聊更是连轮都不进，用户看到
+# 的就是「大大怪识别不了我发的图」。现在按扩展名认图，当普通图片收。
+#
+# 拿不到 url 时退回 `fileid://` 伪地址，由 worker 线程的 `_prepare_images`
+# 调 OneBot 的取文件链接接口解析——`_parse_segments` 跑在 WS 消息循环上，
+# 在这儿发 HTTP 会把所有群一起卡住（与图片「只取地址不下载」同一条纪律）。
+_IMAGE_FILE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")
+_FILE_REF_RE = re.compile(r"^fileid://(group|private)/([^/]+)/([^/]+)/(.+)$")
+
+
+def _file_name(sdata):
+    """文件段里的文件名。NapCat 把它放在 `file`，别的实现叫 `name`。"""
+    return str(sdata.get("file") or sdata.get("name")
+               or sdata.get("file_name") or "").strip()
+
+
+def _is_image_file(name):
+    """按扩展名判「这是图片文件」。名字取不到就不猜（当不是）。"""
+    n = str(name or "").split("?")[0].split("#")[0].strip().lower()
+    return any(n.endswith(ext) for ext in _IMAGE_FILE_EXTS)
+
+
+def _file_ref(sdata, ev):
+    """文件段 → 能交给 `_prepare_images` 的地址；不是图片 / 拿不到 → 空串。"""
+    if not _is_image_file(_file_name(sdata)):
+        return ""
+    url = str(sdata.get("url") or "").strip()
+    if url:
+        return url
+    fid = str(sdata.get("file_id") or "").strip()
+    if not fid:
+        return ""
+    from urllib.parse import quote
+
+    # 群/私聊按 message_type 分；`get_msg` 拉回来的被引用消息不一定带这个字段
+    # （`_quote_body` 复用本函数），有 group_id 就按群算——群号不会误落到私聊。
+    mt = str(ev.get("message_type") or "")
+    if (mt == "group") or (mt != "private" and ev.get("group_id")):
+        kind, tid = "group", str(ev.get("group_id") or "")
+        busid = str(sdata.get("busid") or "0")
+    else:
+        kind, tid = "private", str(ev.get("user_id") or "")
+        busid = "0"
+    if not tid:
+        return ""
+    return "fileid://%s/%s/%s/%s" % (kind, tid, busid, quote(fid, safe=""))
+
+
+def _resolve_file_ref(url):
+    """`fileid://` 伪地址 → 真实下载链接。**只能在 worker 线程里调**（发 HTTP）。
+
+    解析失败原样返回：`fetch_image` 会抛、`_prepare_images` 记一行 warning
+    跳过——跟普通图片取不到的处理一致，不额外炸整轮。
+    """
+    m = _FILE_REF_RE.match(str(url or ""))
+    if not m:
+        return url
+    from urllib.parse import unquote
+
+    kind, tid, busid = m.group(1), m.group(2), m.group(3)
+    fid = unquote(m.group(4))
+    try:
+        real = qq_api.file_url(kind, tid, fid, busid=busid)
+    except Exception as exc:                     # noqa: BLE001
+        log.warning("取文件链接失败（%s %s）：%s", kind, tid, exc)
+        return url
+    if not real:
+        log.warning("取文件链接为空（%s %s / %s）", kind, tid, fid[:24])
+        return url
+    return real
+
+
 def _parse_segments(ev):
     """从事件里取出文本、@ 标记、以及图片地址列表。
 
@@ -378,6 +453,15 @@ def _parse_segments(ev):
                     images.append(url)
                 else:
                     parts.append("[表情]")
+            elif stype == "file":
+                # 「文件」通道发上来的图（2026-11-15）：按扩展名认图，当普通图片
+                # 收；不是图片 / 拿不到地址就留一条文字占位，至少让模型知道对方
+                # 发过东西（否则整轮会是「有 @ 但没内容」直接被丢掉）。
+                ref = _file_ref(sdata, ev)
+                if ref:
+                    images.append(ref)
+                else:
+                    parts.append("[文件：%s]" % (_file_name(sdata) or "未命名"))
             elif stype == "face":
                 parts.append("[表情]")
         return "".join(parts).strip(), at_me, images
@@ -397,6 +481,16 @@ def _parse_segments(ev):
             url = _cq_arg(rest, "url")
             if url:
                 images.append(url)
+        elif name == "file":
+            sdata = {"file": _cq_arg(rest, "file"),
+                     "file_id": _cq_arg(rest, "file_id"),
+                     "busid": _cq_arg(rest, "busid"),
+                     "url": _cq_arg(rest, "url")}
+            ref = _file_ref(sdata, ev)
+            if ref:
+                images.append(ref)
+            else:
+                return "[文件：%s]" % (_file_name(sdata) or "未命名")
         return ""
 
     _sub.at_me = False
@@ -1078,7 +1172,9 @@ class SessionRunner:
         out = []
         for i, url in enumerate(picked, 1):
             try:
-                out.append(to_data_url(fetch_image(url)))
+                # `fileid://` 伪地址（QQ「文件」通道发的图）先换成真实链接，
+                # 会发 HTTP —— 这里已经是 worker 线程，可以放心调。
+                out.append(to_data_url(fetch_image(_resolve_file_ref(url))))
             except Exception as exc:
                 log.warning("取图失败（第 %d 张）：%s", i, exc)
         return out, len(urls) - len(picked)
@@ -1616,7 +1712,10 @@ class SessionRunner:
         # 不该引爆一张没确认过的图）。见 app/confirm_gate.py。
         # 借用线整轮不消费：确认闸是生图机器人的语义，被借的 agent 没有
         # pending 这一说；留着 pending 不动，切回默认人设时它还在。
+        # 2026-11-15 用户拍板关闸（settings.json confirm_gate_enabled，默认关）：
+        # 闸关了这里也不消费——一句「好」不接管任何轮，整段跳过。
         confirm_reply = (None if (voluntary or borrowed)
+                         or not confirm_gate.enabled()
                          else confirm_gate.consume_if_confirmed(
                              self.target, self.target_id, own_text))
         if confirm_reply is not None:

@@ -397,6 +397,128 @@ class ParseSegmentsTest(unittest.TestCase):
         self.assertFalse(at_me)
 
 
+class FileSegmentTest(unittest.TestCase):
+    """QQ 的「文件」通道发上来的图（2026-11-15 用户要求）。
+
+    病根：`_parse_segments` 原先只认 text/at/image/mface/face，`file` 段整段
+    被静默丢掉——群里 @ 了却「没有内容」，私聊连轮都不进，用户看到的就是
+    「大大怪识别不了我发的图」。
+    """
+
+    def test_image_file_with_url_is_collected(self):
+        ev = {"self_id": 1, "message_type": "group", "group_id": 9,
+              "message": [
+                  {"type": "file", "data": {"file": "参考图.PNG",
+                                            "url": "https://e.com/f.png"}},
+                  {"type": "text", "data": {"text": "照这个画"}},
+              ]}
+        text, _at, imgs = qq_bot._parse_segments(ev)
+        self.assertEqual(text, "照这个画")
+        self.assertEqual(imgs, ["https://e.com/f.png"])
+
+    def test_image_file_without_url_becomes_fileid_ref(self):
+        """只有 file_id 时记成伪地址，由 worker 线程换成真链接（这里不联网）。"""
+        ev = {"self_id": 1, "message_type": "group", "group_id": 9,
+              "message": [{"type": "file",
+                           "data": {"file": "a.jpg", "file_id": "FID/1",
+                                    "busid": "102"}}]}
+        _text, _at, imgs = qq_bot._parse_segments(ev)
+        self.assertEqual(len(imgs), 1)
+        self.assertTrue(imgs[0].startswith("fileid://group/9/102/"))
+        self.assertTrue(imgs[0].endswith("FID%2F1"))
+
+    def test_private_file_uses_user_id(self):
+        ev = {"self_id": 1, "message_type": "private", "user_id": 77,
+              "message": [{"type": "file",
+                           "data": {"name": "b.webp", "file_id": "X"}}]}
+        _text, _at, imgs = qq_bot._parse_segments(ev)
+        self.assertEqual(imgs, ["fileid://private/77/0/X"])
+
+    def test_non_image_file_becomes_placeholder(self):
+        """压缩包/文档不当图收——留一行文字，模型才知道对方发过东西。"""
+        ev = {"self_id": 1, "message_type": "group", "group_id": 9,
+              "message": [{"type": "file",
+                           "data": {"file": "资料.zip", "file_id": "Z"}}]}
+        text, _at, imgs = qq_bot._parse_segments(ev)
+        self.assertEqual(text, "[文件：资料.zip]")
+        self.assertEqual(imgs, [])
+
+    def test_file_without_name_or_id_is_placeholder(self):
+        ev = {"self_id": 1, "message": [{"type": "file", "data": {}}]}
+        text, _at, imgs = qq_bot._parse_segments(ev)
+        self.assertEqual(text, "[文件：未命名]")
+        self.assertEqual(imgs, [])
+
+    def test_cq_string_image_file_is_collected(self):
+        ev = {"self_id": "1", "message_type": "group", "group_id": "9",
+              "raw_message": "[CQ:file,file=c.png,url=https://e.com/c.png] 看"}
+        text, _at, imgs = qq_bot._parse_segments(ev)
+        self.assertEqual(text, "看")
+        self.assertEqual(imgs, ["https://e.com/c.png"])
+
+    def test_cq_string_non_image_file_is_placeholder(self):
+        ev = {"self_id": "1", "raw_message": "[CQ:file,file=a.pdf] 在吗"}
+        text, _at, imgs = qq_bot._parse_segments(ev)
+        self.assertEqual(text, "[文件：a.pdf] 在吗")
+        self.assertEqual(imgs, [])
+
+    def test_resolve_file_ref_calls_the_api(self):
+        with mock.patch("app.qq_api.file_url",
+                        return_value="https://e.com/real.png") as fu:
+            got = qq_bot._resolve_file_ref("fileid://group/9/102/FID%2F1")
+        self.assertEqual(got, "https://e.com/real.png")
+        fu.assert_called_once_with("group", "9", "FID/1", busid="102")
+
+    def test_resolve_file_ref_passes_through_plain_urls(self):
+        self.assertEqual(qq_bot._resolve_file_ref("https://e.com/a.png"),
+                         "https://e.com/a.png")
+
+    def test_resolve_file_ref_keeps_ref_when_api_fails(self):
+        """解析失败原样返回：fetch_image 会抛，_prepare_images 记一行跳过。"""
+        with mock.patch("app.qq_api.file_url", return_value=""):
+            got = qq_bot._resolve_file_ref("fileid://private/77/0/X")
+        self.assertEqual(got, "fileid://private/77/0/X")
+
+    def test_prepare_images_resolves_file_ref_first(self):
+        """_prepare_images 是唯一能发 HTTP 的地方：伪地址必须先换成真链接。"""
+        seen = []
+        with mock.patch("app.qq_api.file_url",
+                        return_value="https://e.com/real.jpg"), \
+             mock.patch("app.vision.fetch_image",
+                        side_effect=lambda u: (seen.append(u), b"RAW")[1]), \
+             mock.patch("app.vision.to_data_url", return_value="data:x"):
+            out, dropped = qq_bot.SessionRunner._prepare_images(
+                ["fileid://group/9/7/F%2F1"])
+        self.assertEqual(out, ["data:x"])
+        self.assertEqual(dropped, 0)
+        self.assertEqual(seen, ["https://e.com/real.jpg"])
+
+    def test_file_url_prefers_group_api(self):
+        """取文件链接按 get_group_file_url → get_file 兜底，只认 http/file。"""
+        calls = []
+
+        def fake_call(action, payload=None, timeout=20):
+            calls.append(action)
+            if action == "get_group_file_url":
+                return {"url": "https://e.com/g.png"}
+            return {"url": "should-not-be-used"}
+
+        with mock.patch("app.qq_api._call", side_effect=fake_call):
+            got = qq_api.file_url("group", "9", "F", busid="7")
+        self.assertEqual(got, "https://e.com/g.png")
+        self.assertEqual(calls, ["get_group_file_url"])
+
+    def test_file_url_falls_back_and_rejects_base64(self):
+        """get_file 可能把内容塞进 file 字段——那不是 URL，不能交给 fetch。"""
+        def fake_call(action, payload=None, timeout=20):
+            if action == "get_group_file_url":
+                raise RuntimeError("不支持")
+            return {"file": "AAABBBBCCCC"}       # base64，不是地址
+
+        with mock.patch("app.qq_api._call", side_effect=fake_call):
+            self.assertEqual(qq_api.file_url("group", "9", "F"), "")
+
+
 # ─── 引用消息（reply / forward 段）───────────────────
 
 class ExtractQuotesTest(unittest.TestCase):

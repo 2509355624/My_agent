@@ -327,6 +327,43 @@ def error_reason(exc, limit=80):
     return onebot_reason(text, limit) or _clip_line(text, limit)
 
 
+def file_url(target, target_id, file_id, busid="", timeout=20):
+    """取一个「文件」的下载地址，拿不到返回空串。
+
+    2026-11-15：QQ 的「文件」通道发上来的图，消息段里有时只有 `file_id`
+    没有 `url`。`_parse_segments` 在 WS 消息循环上不能发 HTTP，所以先记成
+    `fileid://` 伪地址，由 worker 线程（`qq_bot._prepare_images`）调到这里。
+
+    NapCat 的取文件链接是 `get_group_file_url` / `get_private_file_url`；
+    标准 OneBot 只有 `get_file`。三个都试：谁先给出 http(s) / file:// 地址
+    就用谁。**不接受 base64**——`get_file` 可能把文件内容直接塞进 `file`，
+    那串不是 URL，交给 `fetch_image` 只会炸。
+    """
+    payloads = []
+    if target == "group":
+        try:
+            bus = int(str(busid or "0"))
+        except (TypeError, ValueError):
+            bus = 0
+        payloads.append(("get_group_file_url",
+                         {"group_id": target_id, "file_id": file_id,
+                          "busid": bus}))
+    else:
+        payloads.append(("get_private_file_url",
+                         {"user_id": target_id, "file_id": file_id}))
+    payloads.append(("get_file", {"file_id": file_id}))
+    for action, payload in payloads:
+        try:
+            data = _call(action, payload, timeout=timeout)
+        except Exception as exc:                 # noqa: BLE001
+            log.info("取文件链接 %s 失败：%s", action, exc)
+            continue
+        url = str((data or {}).get("url") or "").strip()
+        if url.startswith(("http://", "https://", "file://")):
+            return url
+    return ""
+
+
 def check_alive(timeout=5):
     """探活：能取到登录信息就说明协议端在线。"""
     info = _call("get_login_info", timeout=timeout)

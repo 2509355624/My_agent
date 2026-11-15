@@ -29,6 +29,24 @@ log = logging.getLogger(__name__)
 _PENDING = {}
 _LOCK = threading.Lock()
 
+
+def enabled():
+    """生图二次确认闸的总开关。读生图机器人的 settings.json 键
+    `confirm_gate_enabled`，**缺省 False（关）**——2026-11-15 用户拍板关掉：
+    用户让生图就直接入队，别再弹确认卡等一句「好」。
+
+    settings.json 按 mtime 热加载（agents.load_settings），管理页保存即写盘、
+    下一轮生效，不用重启。读坏了宁可当关（放行）也不拦——这是热路径，
+    别让设置文件的问题把生图整个卡住。
+    """
+    try:
+        from app import agents
+        from app.config import QQ_AGENT_ID
+        return bool(agents.load_settings(QQ_AGENT_ID)
+                    .get("confirm_gate_enabled"))
+    except Exception:                      # noqa: BLE001
+        return False
+
 # ── 确认词判据（语料：_at_corpus.txt，10-01~10-04 群聊点名 + 私聊 sessions）──
 # 精确匹配：整句（去首尾空白与标点）就是一个确认词。语料实录：确认 / 好 / 行 /
 # 可以了 / 对对对 / 嗯 / OK / 跑吧 / 继续吧 / 就这样 / 没问题 / 你换吧 / 1，
@@ -123,6 +141,9 @@ def intercept(kind, *, skill, prompt, seed=None, intent=None, workflow=None,
     from app import image_jobs, qq_api
     if skip_confirm:
         return None
+    # 总开关（settings.json 热生效，默认关）：关 = 整道闸不存在，直接放行。
+    if not enabled():
+        return None
     target, target_id = qq_api.current_context()
     if target is None:
         return None
@@ -168,7 +189,13 @@ def intercept(kind, *, skill, prompt, seed=None, intent=None, workflow=None,
 def consume_if_confirmed(target, target_id, text):
     """轮入口：有 pending 且这条话是确认 → 原样入队发回执，返回要直发的文本；
     否则返回 None（pending 没了就作废，没有就原样放行）。主动接话轮调用方
-    应该跳过本函数（群聊路人的「好」不引爆）。"""
+    应该跳过本函数（群聊路人的「好」不引爆）。
+
+    总开关关着时（settings.json 默认）**整函数不消费、不动作**：一句「好」
+    不接管任何轮，改配置前的残留 pending 也原样留着，重新开闸再从那一刻开始。
+    """
+    if not enabled():
+        return None
     with _LOCK:
         pend = _PENDING.pop((target, target_id), None)
     if pend is None:
