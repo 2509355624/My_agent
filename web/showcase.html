@@ -1227,6 +1227,20 @@ html.js .scope-note[hidden] { display: none !important; }
 .rag-hit-text { font-size: 0.78rem; color: var(--paper-soft); margin-block-start: 0.2rem; }
 
 .rag-chat { border: 1px solid var(--line); background: rgba(10, 26, 38, 0.72); display: grid; }
+/* 检索这一步跟着「提问」走：放在「问这份文档」标题下面、对话上面。
+   它以前在左侧四步流水线的末尾，提问后得一直滑到页面底部才知道检索到了什么。 */
+.rag-retrieve { border-block-end: 1px solid var(--line); }
+.rag-retrieve .rag-step {
+  border: 0;
+  background: transparent;
+  padding: 0.7rem 0.8rem;
+  border-inline-start: 2px solid transparent;
+}
+.rag-retrieve .rag-step[data-state="done"] { border-inline-start-color: var(--sea); }
+.rag-retrieve .rag-step[data-state="running"] { border-inline-start-color: var(--amber); }
+.rag-retrieve .rag-step[data-state="error"] { border-inline-start-color: var(--danger); }
+.rag-retrieve .rag-step-body { max-block-size: 18rem; overflow: auto; }
+.rag-retrieve summary { cursor: pointer; font-size: 0.76rem; color: var(--amber); }
 .rag-chat-head {
   display: flex;
   align-items: baseline;
@@ -1628,7 +1642,7 @@ html.js .scope-note[hidden] { display: none !important; }
       <div class="feature-intro">
         <p class="feature-kicker">文档问答 / 检索增强全流程</p>
         <h2 id="rag-title">上传一份文档，看它怎么变成向量、又怎么被找回来</h2>
-        <p class="feature-desc">四步全部真跑：规则清洗先删掉页眉页码，大模型按语义切块（提示词原样展开给你看），本地小模型把每块压成 512 维向量，最后用你的问题去检索并带引用作答。每一步的中间数据都摊在下面，数字可以自己核对。支持 txt / md / PDF / Word（PDF 与 Word 优先读文本层，零 token 零幻觉；没有文字层的扫描页会自动渲染成图、交视觉模型抄成 Markdown，最多 10 页）。文档限 1 万字，超出按段落截断；临时库 30 分钟无人访问自动销毁，同时最多 3 个。</p>
+        <p class="feature-desc">四步全部真跑：规则清洗先删掉页眉页码，大模型按语义切块（提示词原样展开给你看），本地小模型把每块压成 512 维向量，最后用你的问题去检索并带引用作答。左边三步是建库，中间数据全摊开；检索这一步跟着提问走，就在右边问题区上方，问完立刻能看到命中了哪几块、发给模型的 prompt 长什么样。支持 txt / md / PDF / Word（PDF 与 Word 优先读文本层，零 token 零幻觉；没有文字层的扫描页会自动渲染成图、交视觉模型抄成 Markdown，最多 10 页）。文档限 1 万字，超出按段落截断；临时库 30 分钟无人访问自动销毁，同时最多 3 个。</p>
       </div>
       <div class="feature-tools">
         <button class="btn btn--small" type="button" id="ragSample">载入示例文档</button>
@@ -1665,6 +1679,9 @@ html.js .scope-note[hidden] { display: none !important; }
           <b id="ragChatTitle">问这份文档</b>
           <span id="ragKb">尚未建库</span>
         </div>
+        <!-- 04 检索：它只在提问时才发生，属于「问」不属于「建库」。
+             以前挂在左边四步流水线的末尾，得滑到底才看得见（2026-11-15）。 -->
+        <div class="rag-retrieve" id="ragRetrieve"></div>
         <div class="rag-log" id="ragLog">
           <p class="rag-empty" id="ragEmpty">先把文档跑进临时向量库，再在下面提问。回答只依据检索到的片段，并标注引用编号。</p>
         </div>
@@ -3348,10 +3365,17 @@ html.js .scope-note[hidden] { display: none !important; }
     { key: "clean", no: "01", title: "清洗", idle: "规则去噪 · 去页码 / 页眉 / 重复行" },
     { key: "split", no: "02", title: "切分", idle: "DeepSeek 官方 · 语义切块" },
     { key: "ingest", no: "03", title: "向量化", idle: "bge-small-zh-v1.5 · 每块编成 512 维向量 · CPU" },
-    { key: "query", no: "04", title: "检索", idle: "余弦距离 · Top 4" },
   ];
 
-  const S = { sid: null, kb: null, filename: "", ingested: false, busy: false, chunks: [] };
+  // 04 检索不跟上面三步排在一起：前三是「建库」，检索是「提问时才发生」。
+  // 挂在流水线末尾时，问完得滑到页面最底下才知道命中了哪几块（2026-11-15 用户反馈），
+  // 现在它渲染在右栏「问这份文档」正下方，提问后自动展开。
+  const QUERY_STEP = {
+    key: "query", no: "04", title: "检索",
+    idle: "提问后在这里展开：余弦距离取 Top 4，再做 MMR 去重",
+  };
+
+  const S = { sid: null, kb: null, filename: "", ingested: false, busy: false, chunks: [], steps: {} };
 
   // 刷新页面后认回自己的临时库（2026-11-15）：库本身在后端还在（30 分钟 TTL），
   // 丢的只是 sid —— 它以前只活在这个页面的内存里，一刷新就没了，于是「刚建好的
@@ -3399,9 +3423,8 @@ html.js .scope-note[hidden] { display: none !important; }
     errBox.hidden = !msg;
   }
 
-  function renderSteps() {
-    if (!stepsBox) return;
-    stepsBox.innerHTML = STEPS.map((s) => `
+  function stepHTML(s) {
+    return `
       <article class="rag-step" data-step="${s.key}" data-state="idle">
         <div class="rag-step-head">
           <span class="rag-step-no">${s.no}</span>
@@ -3410,19 +3433,30 @@ html.js .scope-note[hidden] { display: none !important; }
         </div>
         <div class="rag-step-body" hidden></div>
         <button class="rag-step-toggle" type="button" hidden>展开明细</button>
-      </article>`).join("");
-    stepsBox.querySelectorAll(".rag-step-toggle").forEach((btn) => {
+      </article>`;
+  }
+
+  function wireToggles() {
+    document.querySelectorAll(".rag-step-toggle").forEach((btn) => {
       btn.addEventListener("click", () => {
         const body = btn.parentElement.querySelector(".rag-step-body");
         const open = body.hidden;
         body.hidden = !open;
         btn.textContent = open ? "收起明细" : "展开明细";
+        rememberStep(btn.parentElement.dataset.step);
       });
     });
   }
 
+  function renderSteps() {
+    if (stepsBox) stepsBox.innerHTML = STEPS.map(stepHTML).join("");
+    const queryBox = $("ragRetrieve");
+    if (queryBox) queryBox.innerHTML = stepHTML(QUERY_STEP);
+    wireToggles();
+  }
+
   function stepEl(key) {
-    return stepsBox ? stepsBox.querySelector(`.rag-step[data-step="${key}"]`) : null;
+    return document.querySelector(`.rag-step[data-step="${key}"]`);
   }
 
   function setStep(key, state, meta, bodyHTML, open) {
@@ -3440,6 +3474,66 @@ html.js .scope-note[hidden] { display: none !important; }
       body.hidden = !(has && open);
       toggle.textContent = body.hidden ? "展开明细" : "收起明细";
     }
+    rememberStep(key);
+  }
+
+  // ── 四步明细的快照（2026-11-15）────────────────────────
+  // 以前刷新页面只剩一句「明细随刷新丢失」：库还在、能继续问，但清洗删了哪些行、
+  // 切分怎么断的、向量长什么样全没了，拿去做演示等于断在半截。
+  // 这里把每一步**渲染后的真实状态**存进 localStorage，刷新后原样放回来，
+  // 不是重新编一份——存的就是当时那份 DOM。
+  const STEPS_KEY = "showcase.ragSteps.v1";
+
+  function readSteps() {
+    try {
+      const v = JSON.parse(localStorage.getItem(STEPS_KEY) || "null");
+      return v && v.sid && v.steps ? v : null;
+    } catch (_) { return null; }
+  }
+
+  function rememberStep(key) {
+    const el = key ? stepEl(key) : null;
+    if (!el) return;
+    const body = el.querySelector(".rag-step-body");
+    const toggle = el.querySelector(".rag-step-toggle");
+    S.steps[key] = {
+      state: el.dataset.state,
+      meta: el.querySelector(".rag-step-meta").textContent,
+      body: body ? body.innerHTML : "",
+      open: body ? !body.hidden : false,
+      toggle: toggle ? !toggle.hidden : false,
+    };
+    if (!S.sid) return;                      // 还没拿到 sid，先攒在内存里
+    try {
+      localStorage.setItem(STEPS_KEY, JSON.stringify({ sid: S.sid, steps: S.steps }));
+    } catch (_) { /* 超出配额就不存，页面照常跑 */ }
+  }
+
+  function restoreSteps(sid) {
+    const snap = readSteps();
+    if (!snap || snap.sid !== sid) return false;
+    let any = false;
+    Object.keys(snap.steps).forEach((key) => {
+      const rec = snap.steps[key];
+      const el = stepEl(key);
+      if (!rec || !el) return;
+      el.dataset.state = rec.state || "idle";
+      el.querySelector(".rag-step-meta").textContent = rec.meta || "";
+      const body = el.querySelector(".rag-step-body");
+      const toggle = el.querySelector(".rag-step-toggle");
+      body.innerHTML = rec.body || "";
+      toggle.hidden = !rec.toggle;
+      body.hidden = !rec.open;
+      toggle.textContent = rec.open ? "收起明细" : "展开明细";
+      S.steps[key] = rec;
+      any = true;
+    });
+    return any;
+  }
+
+  function clearSteps() {
+    S.steps = {};
+    try { localStorage.removeItem(STEPS_KEY); } catch (_) {}
   }
 
   async function postJSON(path, body) {
@@ -3477,6 +3571,7 @@ html.js .scope-note[hidden] { display: none !important; }
   async function runPipeline(rawText, filename, meta) {
     if (S.busy) return;
     showErr("");
+    clearSteps();          // 新文档：旧那套明细作废，别混进来
     renderSteps();
     S.chunks = [];
     S.ingested = false;
@@ -3628,7 +3723,7 @@ html.js .scope-note[hidden] { display: none !important; }
              <div class="rag-hits">${bars}</div>`
           : `<p>这一问没有检索到片段。</p>`) +
         (data.prompt
-          ? `<p style="margin:.6rem 0 .25rem;font-size:.78rem;color:var(--amber)">发给模型的 prompt（原样）</p><pre class="rag-prompt">${esc(data.prompt)}</pre>`
+          ? `<details><summary>看发给模型的 prompt（原样，含检索到的片段）</summary><pre class="rag-prompt">${esc(data.prompt)}</pre></details>`
           : ""),
         true);
 
@@ -3759,8 +3854,9 @@ html.js .scope-note[hidden] { display: none !important; }
     // 等接口的这段时间里用户可能已经重新传了一份，别拿旧的覆盖新的。
     if (S.sid && S.sid !== saved.sid) return;
     if (!data || !data.ok) {
-      // 后端明确说没有这个会话：过期了或已被「销毁这个库」，钥匙也一并删掉。
+      // 后端明确说没有这个会话：过期了或已被「销毁这个库」，钥匙和明细快照一起删掉。
       try { localStorage.removeItem(LIB_KEY); } catch (_) {}
+      clearSteps();
       return;
     }
 
@@ -3781,14 +3877,20 @@ html.js .scope-note[hidden] { display: none !important; }
 
     if (!S.ingested) {
       showErr("上次的文档传到一半就刷新了，重新传一次就能入库。");
+      clearSteps();
       return;
     }
     if (askBtn) askBtn.disabled = false;
     if (question) question.disabled = false;
     if (emptyBox) emptyBox.hidden = true;
-    setStep("clean", "done", "刷新前已完成", "");
-    setStep("split", "done", `${num(chunks)} 块（明细随刷新丢失）`, "");
-    setStep("ingest", "done", `${num(chunks)} 条 · 已入库`, "");
+    // 有快照就把四步明细原样放回来（含切分提示词、每块内容、向量预览）；
+    // 没有（换过浏览器 / 清过缓存 / 明细太大没存下）才只回填结论。
+    const restored = restoreSteps(S.sid);
+    if (!restored) {
+      setStep("clean", "done", "刷新前已完成", "");
+      setStep("split", "done", `${num(chunks)} 块（明细没能留住）`, "");
+      setStep("ingest", "done", `${num(chunks)} 条 · 已入库`, "");
+    }
     if (logBox) {
       const wrap = document.createElement("div");
       wrap.className = "rag-msg";
@@ -3797,7 +3899,9 @@ html.js .scope-note[hidden] { display: none !important; }
         `<span class="rag-msg-role">已恢复</span>` +
         `<div class="rag-msg-body">这个浏览器上次建的库还在：` +
         `${esc(S.filename || "未命名文档")} · ${num(chars)} 字切 ${num(chunks)} 块 · ` +
-        `${S.kb}。不用重新上传，直接提问就行。</div>`;
+        `${S.kb}。不用重新上传，直接提问就行。` +
+        (restored ? `四步的明细也一并放回来了，点「展开明细」就能看。` : "") +
+        `</div>`;
       logBox.appendChild(wrap);
       logBox.scrollTop = logBox.scrollHeight;
     }
@@ -3866,6 +3970,7 @@ html.js .scope-note[hidden] { display: none !important; }
       } catch (_) { /* 过期了也算清掉 */ }
       S.sid = null; S.kb = null; S.ingested = false; S.chunks = [];
       saveLib();   // 钥匙一起删，下次刷新别再去找一个已经销毁的库
+      clearSteps();
       renderSteps();
       if (logBox) logBox.innerHTML = "";
       if (emptyBox) { emptyBox.hidden = false; logBox?.appendChild(emptyBox); }

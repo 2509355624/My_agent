@@ -383,6 +383,46 @@ class PageTest(unittest.TestCase):
             self.assertNotIn("overscroll-behavior", block, cls)
         self.assertIn("dialog:modal { overscroll-behavior: contain; }", self.src)
 
+    def test_retrieve_step_sits_next_to_the_question(self):
+        """04 检索要跟着「提问」走，别挂在左侧建库流水线的末尾。
+
+        2026-11-15 用户反馈：问完一句，得一直滑到页面最底下才看到检索命中了
+        什么，等于「不知道检索有没有生效」。它本来就只在提问时发生，属于「问」
+        不属于「建库」，所以渲染进右栏 `#ragRetrieve`、贴在标题下面。
+        """
+        import re
+        self.assertIn('const QUERY_STEP', self.src)
+        self.assertIn('id="ragRetrieve"', self.src)
+        # 三步建库流水线里不能再有 query
+        steps = re.search(r"const STEPS = \[(.*?)\];", self.src, re.S).group(1)
+        self.assertNotIn('"query"', steps)
+        # 容器顺序：标题 → 检索 → 对话 → 输入
+        i_head = self.src.index('id="ragChatTitle"')
+        i_ret = self.src.index('id="ragRetrieve"')
+        i_log = self.src.index('id="ragLog"')
+        i_form = self.src.index('id="ragForm"')
+        self.assertLess(i_head, i_ret)
+        self.assertLess(i_ret, i_log)
+        self.assertLess(i_log, i_form)
+        # 提问后自动展开，不用再点一下
+        self.assertIn('setStep("query", hits.length ? "done" : "error"', self.src)
+
+    def test_steps_are_snapshotted_so_a_refresh_keeps_the_detail(self):
+        """刷新后四步明细要原样回来，不能只剩一句「明细随刷新丢失」。
+
+        库在 localStorage 的钥匙里（上一版加的），明细跟着库一起存：
+        键 `showcase.ragSteps.v1`，按 sid 匹配，销毁库 / 过期时一起删。
+        存的是当时渲染出来的那段 DOM，不是重新编一份。
+        """
+        self.assertIn('const STEPS_KEY = "showcase.ragSteps.v1"', self.src)
+        self.assertIn("function rememberStep(", self.src)
+        self.assertIn("function restoreSteps(sid)", self.src)
+        self.assertIn("const restored = restoreSteps(S.sid)", self.src)
+        # 有快照时不能再写那句「明细没能留住」
+        self.assertIn("if (!restored) {", self.src)
+        # 销毁库 / 后端说没这个会话，都要把快照一起清掉
+        self.assertGreaterEqual(self.src.count("clearSteps()"), 4)
+
     def test_sample_is_served_by_the_gateway(self):
         """网关只反代 /api/*，示例文档必须单独给静态路由，否则手机端 404。"""
         with open(FRIEND, encoding="utf-8") as f:
