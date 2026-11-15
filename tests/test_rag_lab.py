@@ -351,6 +351,38 @@ class PageTest(unittest.TestCase):
         for tag in ("section", "div", "aside", "form", "article"):
             self.assertEqual(self.src.count("<" + tag), self.src.count("</" + tag + ">"), tag)
 
+    def test_switching_a_tab_also_collapses_the_hero(self):
+        """hero 占满第一屏：切标签时它不收起，点了「降级链」看到的还是同一张大标题。
+
+        2026-11-15 用户反馈「点标签下面没切」——切换其实生效了，是视口停在
+        hero 上。第二条反馈又指出 hero 下面的「公开展示边界」条也常驻，切过去
+        还挂在内容上方。这几条守住「首页内容跟随默认标签」+「所有 #xxx 链接都
+        走 showTab」+「切完瞬时归零（CSS 是 scroll-behavior: smooth）」。
+        """
+        self.assertIn("html.js .hero[hidden]", self.src)
+        self.assertIn("html.js .scope-note[hidden] { display: none !important; }",
+                      self.src)
+        self.assertIn("#main > .hero, #main > .scope-note", self.src)
+        self.assertIn('el.hidden = id !== "image"', self.src)
+        self.assertIn("""target.closest('a[href^="#"]')""", self.src)
+        self.assertIn('root.style.scrollBehavior = "auto"', self.src)
+        self.assertNotIn('"instant" in window', self.src)
+
+    def test_scrolling_panels_do_not_trap_the_wheel(self):
+        """固定高度的滚动容器别写 overscroll-behavior: contain。
+
+        2026-11-15 用户反馈「滚了一下再滚就滚不动了」：`.chat-log` 在 0 轮对话时
+        根本没有溢出、自己滚不了，但 contain 照样把滚轮吃在自己身上，鼠标停在
+        聊天面板上整页就卡住。模态弹窗里那块保留（弹窗开着本来就不该滚页面）。
+        """
+        import re
+        for cls in (".chat-log", ".code-block"):
+            block = re.search(re.escape(cls) + r"\s*\{([^}]*)\}", self.src).group(1)
+            # 注释里会写「不要加 overscroll-behavior」，先剥掉注释再断言
+            block = re.sub(r"/\*.*?\*/", "", block, flags=re.S)
+            self.assertNotIn("overscroll-behavior", block, cls)
+        self.assertIn("dialog:modal { overscroll-behavior: contain; }", self.src)
+
     def test_sample_is_served_by_the_gateway(self):
         """网关只反代 /api/*，示例文档必须单独给静态路由，否则手机端 404。"""
         with open(FRIEND, encoding="utf-8") as f:
@@ -358,7 +390,7 @@ class PageTest(unittest.TestCase):
         self.assertIn('"/raglab-sample.md"', src)
         self.assertIn('"/api/raglab/<path:sub>"', src)
         self.assertIn('"raglab": (60, 600)', src)
-        self.assertIn('timeout = 300 if sub in ("split", "answer")', src)
+        self.assertIn('sub in ("split", "answer", "extract")', src)
 
 
 def make_pdf(pages):
@@ -400,10 +432,10 @@ def make_pdf(pages):
 
 
 class ExtractTest(LabBase):
-    """PDF / Word 只读**文本层**（2026-11-15 用户拍板先做 A 档）。
+    """PDF / Word：有文字层直接抽（A 档），扫描页走视觉识别（B 档）。
 
-    这条路的全部价值在于「抽不到就明说」：不 OCR、不猜、不拿图片硬凑，
-    否则演示页会拿一堆空内容去切块，看着跑通了其实什么都没有。
+    A 档的价值是「零 token 零幻觉」，B 档的价值是「扫描件也能用」。两边共同的
+    底线是**抽不到就明说**——不拿空内容去切块，也不把模型猜的话当成原文。
     """
 
     def _extract(self, name, raw):
@@ -422,12 +454,62 @@ class ExtractTest(LabBase):
         self.assertEqual(d["meta"]["pages"], 2)
         self.assertEqual(d["meta"]["empty_pages"], [])
         self.assertFalse(d["meta"]["truncated"])
+        self.assertNotIn("source", d["meta"])      # 有文字层就一页都不 OCR
 
-    def test_scanned_pdf_is_reported_not_faked(self):
-        """空白页 = 没有文字层。必须报错，不能回一段空正文让后面全跑空。"""
-        r = self._extract("scan.pdf", make_pdf(["", ""]))
+    def test_scanned_pages_go_through_vision(self):
+        """没有文字层的页 → 渲染成图交视觉模型抄。meta 要如实报是哪几页。"""
+        with mock.patch.object(rag_lab.vision, "describe",
+                               side_effect=["第一页抄下来的正文", "第二页抄下来的正文"]) as d, \
+                mock.patch.object(rag_lab.vision, "active_choice",
+                                  return_value=("deepseek", "deepseek-flash")):
+            r = self._extract("scan.pdf", make_pdf(["", ""]))
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        body = r.get_json()
+        self.assertIn("第一页抄下来的正文", body["text"])
+        self.assertIn("第二页抄下来的正文", body["text"])
+        self.assertEqual(body["meta"]["source"], "vision")
+        self.assertEqual(body["meta"]["ocr_pages"], [1, 2])
+        self.assertEqual(body["meta"]["ocr_failed"], [])
+        self.assertEqual(body["meta"]["ocr_model"], "deepseek/deepseek-flash")
+        # 每页一次，prompt 里带页码（模型才知道自己在抄第几页）
+        self.assertEqual(d.call_count, 2)
+        self.assertIn("第 2 页", d.call_args.kwargs["prompt"])
+
+    def test_only_pages_without_text_layer_are_ocred(self):
+        """混排 PDF：有字的页一个字都不 OCR，省 token 也不碰原文。"""
+        with mock.patch.object(rag_lab.vision, "describe",
+                               return_value="抄出来的内容") as d, \
+                mock.patch.object(rag_lab.vision, "active_choice",
+                                  return_value=("deepseek", "x")):
+            r = self._extract("mix.pdf", make_pdf(["text layer page", ""]))
+        self.assertEqual(r.status_code, 200)
+        body = r.get_json()
+        self.assertIn("text layer page", body["text"])
+        self.assertEqual(body["meta"]["ocr_pages"], [2])
+        self.assertEqual(d.call_count, 1)
+
+    def test_vision_failure_falls_back_to_a_clear_error(self):
+        """视觉也读不出来时必须报错，不能回一份空正文。"""
+        with mock.patch.object(rag_lab.vision, "describe",
+                               side_effect=RuntimeError("vision down")), \
+                mock.patch.object(rag_lab.vision, "active_choice",
+                                  return_value=("deepseek", "x")):
+            r = self._extract("scan.pdf", make_pdf(["", ""]))
         self.assertEqual(r.status_code, 400)
-        self.assertIn("扫描件", r.get_json()["error"])
+        self.assertIn("视觉识别也没读出内容", r.get_json()["error"])
+
+    def test_ocr_is_capped_and_says_so(self):
+        """最多识别 OCR_MAX_PAGES 页，超出的页在 meta.warning 里说明白。"""
+        pages = [""] * (rag_lab.OCR_MAX_PAGES + 2)
+        with mock.patch.object(rag_lab.vision, "describe",
+                               return_value="抄出来的内容") as d, \
+                mock.patch.object(rag_lab.vision, "active_choice",
+                                  return_value=("deepseek", "x")):
+            r = self._extract("big-scan.pdf", make_pdf(pages))
+        self.assertEqual(r.status_code, 200)
+        body = r.get_json()
+        self.assertEqual(d.call_count, rag_lab.OCR_MAX_PAGES)
+        self.assertIn("只识别了前", body["meta"]["warning"])
 
     def test_docx_keeps_heading_and_table_order(self):
         import docx
@@ -490,8 +572,79 @@ class ExtractPageTest(unittest.TestCase):
         self.assertIn("function clipText", self.src)   # 1 万字截断
 
     def test_scanned_hint_is_shown(self):
-        """页面上得写清楚「扫描件抽不出字」，否则用户以为是 bug。"""
-        self.assertIn("扫描件", self.src)
+        """页面上得写清楚「扫描页走视觉识别」，否则用户以为这类文件传不了。"""
+        self.assertIn("扫描页自动走视觉识别", self.src)
+
+
+class LibraryPersistenceTest(unittest.TestCase):
+    """刷新网页后要能认回上次的临时库（2026-11-15 用户反馈）。
+
+    库在后端其实没丢（30 分钟 TTL），丢的是 sid —— 它以前只活在页面内存里。
+    这些断言守三件事：钥匙存 localStorage、页面打开先问 /state、销毁时删钥匙。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(ROOT, "web", "showcase.html"), encoding="utf-8") as f:
+            cls.src = f.read()
+
+    def test_sid_is_kept_in_local_storage(self):
+        self.assertIn('const LIB_KEY = "showcase.ragLib.v1"', self.src)
+        self.assertIn("localStorage.setItem(LIB_KEY", self.src)
+        self.assertIn("localStorage.removeItem(LIB_KEY)", self.src)
+
+    def test_page_asks_the_backend_on_load(self):
+        self.assertIn("async function restoreLib", self.src)
+        self.assertIn("/api/raglab/state?sid=", self.src)
+        # 必须在 bindRag()（它会 renderSteps）之后调，否则四步卡片会被冲掉
+        tail = self.src[self.src.rindex("bindRag();"):]
+        self.assertIn("restoreLib();", tail)
+
+    def test_expired_library_clears_the_key(self):
+        body = self.src[self.src.index("async function restoreLib"):]
+        body = body[:body.index("function bindRag()")]
+        # ok=false（后端明确说没这个会话）时才删钥匙；网络错误要留着下次再试
+        self.assertIn("if (!data || !data.ok)", body)
+        self.assertIn("localStorage.removeItem(LIB_KEY)", body)
+
+
+class DaemonStdioEncodingTest(unittest.TestCase):
+    """daemon 与父进程之间的管道，两边都必须是 UTF-8。
+
+    Windows 上 stdio 连管道时 Python 用系统 ANSI（简体中文 = cp936），中文 JSON
+    按 GBK 写出去、父进程按 UTF-8 读：轻则正文一片 \\ufffd（检索回来的是乱码，
+    模型照着乱码编），重则 GBK 双字节把紧跟的引号一起吃掉、JSON 结构坏掉，
+    请求的 Event 永远等不到 → 30 秒超时 → 页面显示「请求失败（HTTP 502）」。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(ROOT, "app", "rag", "rag_daemon.py"), encoding="utf-8") as f:
+            cls.src = f.read()
+        with open(os.path.join(ROOT, "app", "rag", "rag_client.py"), encoding="utf-8") as f:
+            cls.client = f.read()
+
+    def test_all_three_streams_are_pinned_to_utf8(self):
+        body = self.src[self.src.index("def _force_utf8_stdio"):]
+        body = body[:body.index("def _reply")]
+        for name in ("stdin", "stdout", "stderr"):
+            self.assertIn('"%s"' % name, body)
+        self.assertIn('encoding="utf-8"', body)
+
+    def test_called_before_the_model_loads(self):
+        main = self.src[self.src.index("def main():"):]
+        self.assertLess(main.index("_force_utf8_stdio()"),
+                        main.index("_load_services()"))
+
+    def test_reply_can_still_fall_back_to_ascii(self):
+        self.assertIn("ensure_ascii=True", self.src)
+        self.assertIn("UnicodeEncodeError", self.src)
+
+    def test_ready_flag_resets_when_daemon_is_respawned(self):
+        """新进程还在加载模型时，start() 不能因为旧 _ready 还是 True 就放行。"""
+        start = self.client[self.client.index("def start(self)"):]
+        start = start[:start.index("def _read_loop")]
+        self.assertIn("self._ready = False", start)
 
 
 if __name__ == "__main__":

@@ -49,6 +49,12 @@ class RagClient:
         if self._proc and self._proc.poll() is None:
             return self._ready
 
+        # 老进程已经死了才会走到这里。必须先把 _ready 归零（2026-11-15）：
+        # 否则新进程还在 import torch / 加载模型的那十几秒里，start() 会立刻
+        # 返回 True 把请求写进它的 stdin，请求就在缓冲区里干等，30 秒后
+        # 报「RAG daemon 调用超时」——页面看到的是 HTTP 502。
+        self._ready = False
+
         python_exe = sys.executable
         daemon_script = Path(__file__).parent / "rag_daemon.py"
 

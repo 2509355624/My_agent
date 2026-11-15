@@ -27,8 +27,41 @@ from app.rag.local_embeddings import LocalEmbeddings, DEFAULT_MODEL  # noqa: E40
 from app.rag.vector_store import VectorStore  # noqa: E402
 
 
+def _force_utf8_stdio() -> None:
+    """把 stdin/stdout/stderr 三个流都钉成 UTF-8（2026-11-15 修）。
+
+    这次是真的「必须」：Windows 上进程的 stdio 连到管道时，Python 用的是系统
+    本地编码（简体中文机器 = cp936/GBK），**不是 UTF-8**。于是 daemon 把中文
+    JSON 按 GBK 写进管道，父进程 `RagClient` 按 UTF-8 读、`errors="replace"`，
+    结果是：
+
+    * 轻的：正文全变成 `\\ufffd`，检索回来的片段是乱码，模型只能照着乱码编；
+    * 重的：GBK 的双字节序列被 UTF-8 解码器当成多字节字符，**把紧跟其后的
+      ASCII 引号/逗号一起吃掉**，JSON 结构当场坏掉 —— 父进程 `json.loads`
+      失败、`continue`，那个请求的 Event 永远等不到 → 30 秒超时 → 页面显示
+      「请求失败（HTTP 502）」。
+
+    以前只 reconfigure 了 stdin（那是另一半：父进程按 UTF-8 写中文，daemon
+    按 GBK 读会 UnicodeDecodeError 直接退出），stdout 一直漏着。
+    """
+    for name in ("stdin", "stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        if stream is None:
+            continue
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:                                # noqa: BLE001
+            pass
+
+
 def _reply(msg: dict) -> None:
-    sys.stdout.write(json.dumps(msg, ensure_ascii=False) + "\n")
+    line = json.dumps(msg, ensure_ascii=False)
+    try:
+        sys.stdout.write(line + "\n")
+    except UnicodeEncodeError:
+        # 双保险：真遇到编码不了的东西，退化成纯 ASCII 的 \uXXXX 转义。
+        # 宁可正文难看，也不能让 daemon 在写响应时炸掉、连带后面的请求全超时。
+        sys.stdout.write(json.dumps(msg, ensure_ascii=True) + "\n")
     sys.stdout.flush()
 
 
@@ -195,14 +228,9 @@ def _handle(req: dict, embeddings: LocalEmbeddings, store: VectorStore) -> dict:
 
 
 def main():
+    _force_utf8_stdio()
     embeddings, store = _load_services()
     _reply({"id": "0", "ok": True, "event": "ready"})
-    # Windows 下 stdin 默认走 GBK（或 cp936），对面按 UTF-8 发 JSON 时第一条
-    # 中文就抛 UnicodeDecodeError，守护进程当场退出——表现是「RAG 调用超时」。
-    try:
-        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:                                    # noqa: BLE001
-        pass
     for line in sys.stdin:
         line = line.strip()
         if not line:

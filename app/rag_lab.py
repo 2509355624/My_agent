@@ -40,7 +40,7 @@ import uuid
 
 from flask import Blueprint, jsonify, request
 
-from app import llm
+from app import llm, vision
 from app.config import DEEPSEEK_MODEL, state_path
 
 log = logging.getLogger("rag_lab")
@@ -58,11 +58,12 @@ TTL_SECONDS = 1800         # 30 分钟无人访问就删
 RATE_LIMIT = 12            # 每分钟每会话最多 12 次检索/问答
 MAX_ANSWER_TOKENS = 1200
 
-# ─── 上传与抽取（2026-11-15，PDF / Word 文本层）─────────────
-# 只做**文本层**：PDF 用 pypdf、Word 用 python-docx。扫描件没有文字层，
-# 这里不猜也不 OCR，直接告诉用户「这页抽不出来」——视觉识别是单独一档功能
-# （见 rag_lab 说明与当天讨论：多模态转 markdown 留给 B 档，先不塞进默认路径）。
-MAX_UPLOAD = 8 * 1024 * 1024   # 8MB：一份 40 页的文本型 PDF 通常 1~3MB
+# ─── 上传与抽取（2026-11-15，PDF / Word）───────────────────
+# 两条路：有文字层的直接抽（pypdf / python-docx，零 token 零幻觉）；没有文字层
+# 的扫描页渲染成图交视觉模型抄成 Markdown（见下方 OCR_* 常量）。顺序永远是
+# **先文本层再视觉**——能免费拿到的正文绝不花钱去认。
+MAX_UPLOAD = 15 * 1024 * 1024  # 15MB：文本型 PDF 40 页也就 1~3MB，但手机拍的
+                               # 扫描件一页就 2~4MB，8MB 会把人挡在门外（2026-11-15）
 MAX_PAGES = 40                 # 再多 1 万字也装不下，纯属浪费解析时间
 SCAN_PAGE_CHARS = 50           # 一页抽出来不到这么多字 → 按「没有文字层」算
 
@@ -292,16 +293,99 @@ def clean_text(raw):
 # ══════════════════════════════════════════════════════
 # ①.5 抽取：PDF / Word 的文本层
 # ══════════════════════════════════════════════════════
-# 2026-11-15 用户拍板「先做 A 档」：只抽**文本层**，不 OCR、不上视觉模型。
-# 覆盖的是 Word 导出的 PDF、电子书、正规文档——这类零 token、零幻觉。
-# 扫描件（复印件 / 手机拍的）没有文字层，这里**不猜也不兜底**，如实报出来，
-# 让用户知道该走视觉那条路（B 档，见模块说明）。
+# A 档（2026-11-15 上午）：只抽**文本层**，覆盖 Word 导出的 PDF、电子书、正规
+# 文档——这类零 token、零幻觉。
+# B 档（2026-11-15 晚，用户拍板）：扫描件那一档也接上——没有文字层的页渲染成图
+# 交给视觉模型抄成 Markdown。只处理**本来就没字的那几页**，有字的一页都不 OCR。
 #
-# 依赖：pypdf（纯 Python，无 torch）+ python-docx，合计约 10MB。
-# 都不常驻内存，只在这次请求里 import，没装也不影响别的功能。
+# 依赖：pypdf（纯 Python，无 torch）+ python-docx，合计约 10MB；扫描件另需
+# PyMuPDF。都不常驻内存，只在这次请求里 import，没装也不影响别的功能。
 
 class ExtractError(Exception):
     """抽不出正文。`str(e)` 直接展示给用户，要写成人话。"""
+
+
+# ── 扫描件：渲染 + 视觉识别 ──────────────────────────────
+# 三个数字的来由：
+#   ① 一页一次调用、串行。10 页约 40~90 秒，再多访客等不起（网关还要放行长请求）。
+#   ② 1600 长边（A4 ≈ 200dpi）是小字能认清的底线。**不能走 vision.to_data_url**
+#      ——那个会压到 VISION_MAX_EDGE（1024），是给聊天截图定的，A4 正文压下去
+#      只有 12px 高的字，模型会开始瞎猜。所以这里自己 base64。
+#   ③ 扫描件最怕的不是认不出，是模型「顺手把句子写顺」。那样 RAG 检索到的就是
+#      模型编的话而不是原文。prompt 里咬死「只抄不补、看不清写 [不清晰]」。
+OCR_MAX_PAGES = 10
+OCR_ZOOM = 2.7             # A4 → 1607×2274
+OCR_MAX_EDGE = 1600        # 超过就重渲染小一点，省 token 不损可读性
+OCR_TIMEOUT = 90           # 单页上限；VISION_TIMEOUT 是 120，这里留点余量
+
+_OCR_PROMPT = (
+    "这是一份扫描文档的第 %d 页。把页面上的文字按阅读顺序抄成 Markdown。\n"
+    "只抄页面上**真实存在**的字：不要补全、不要改写、不要总结、不要翻译、"
+    "不要合并段落。\n"
+    "标题用 # / ##，列表保留编号，表格用 Markdown 表格（对齐不准没关系）。\n"
+    "页眉、页脚、页码照抄，后面有程序统一清洗。\n"
+    "看不清的字写 [不清晰]，整块是插图/照片就写 [图片]。\n"
+    "直接给正文，不要加任何解释、前言、后记，不要加代码块围栏。"
+)
+
+
+def _render_page(doc, no):
+    """PDF 第 no 页（0 基）→ JPEG 字节。渲染失败返回 None。"""
+    import pymupdf
+    page = doc[no]
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(OCR_ZOOM, OCR_ZOOM))
+    long_edge = max(pix.width, pix.height)
+    if OCR_MAX_EDGE > 0 and long_edge > OCR_MAX_EDGE:
+        zoom = OCR_ZOOM * OCR_MAX_EDGE / float(long_edge)
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
+    return pix.tobytes("jpeg")
+
+
+def _ocr_scan_pages(raw, texts, scan_pages):
+    """把「没有文字层」的页交给视觉模型抄成文字，就地写回 texts。
+
+    返回 (识别成功的页码, 失败的页码, 实际用的模型)。单页失败只记页码不抛异常
+    ——3 页里坏一页不该让整份文档作废；但**一页都没成功**时调用方会报错。
+    """
+    try:
+        import pymupdf
+    except ImportError:
+        raise ExtractError("这台机器没装 PyMuPDF，扫描件识别跑不了"
+                           "（pip install pymupdf）")
+    try:
+        doc = pymupdf.open(stream=raw, filetype="pdf")
+    except Exception as exc:                        # noqa: BLE001
+        raise ExtractError("这份 PDF 打不开（%s）" % exc.__class__.__name__)
+    done, failed, model = [], [], ""
+    try:
+        for no in scan_pages[:OCR_MAX_PAGES]:
+            try:
+                jpeg = _render_page(doc, no)
+                data_url = ("data:image/jpeg;base64,"
+                            + base64.b64encode(jpeg).decode("ascii"))
+                text = vision.describe(
+                    data_url, timeout=OCR_TIMEOUT,
+                    prompt=_OCR_PROMPT % (no + 1)).strip()
+            except Exception as exc:                # noqa: BLE001
+                log.warning("rag_lab：第 %d 页视觉识别失败 %s", no + 1, exc)
+                failed.append(no + 1)
+                continue
+            if text:
+                texts[no] = text
+                done.append(no + 1)
+            else:
+                failed.append(no + 1)
+        try:
+            pid, mid = vision.active_choice()
+            model = ("%s/%s" % (pid or "", mid or "")).strip("/")
+        except Exception:                           # noqa: BLE001
+            model = ""
+    finally:
+        try:
+            doc.close()
+        except Exception:                           # noqa: BLE001
+            pass
+    return done, failed, model
 
 
 def _truncate(text, limit=MAX_CHARS):
@@ -327,7 +411,7 @@ def _extract_pdf(raw):
         except Exception:                           # noqa: BLE001
             raise ExtractError("这份 PDF 有密码保护，先取消密码再传")
     total = len(reader.pages)
-    page_chars, empty, low, texts = [], [], [], []
+    page_chars, low, texts = [], [], []
     for no in range(min(total, MAX_PAGES)):
         try:
             t = reader.pages[no].extract_text() or ""
@@ -336,20 +420,37 @@ def _extract_pdf(raw):
         t = t.replace("\x00", "")
         n = len(t.strip())
         page_chars.append(n)
-        if n == 0:
-            empty.append(no + 1)          # 这一页压根没有文字层（纯图 / 扫描）
-        elif n < SCAN_PAGE_CHARS:
+        if 0 < n < SCAN_PAGE_CHARS:
             low.append(no + 1)            # 只有页眉页码之类，基本没内容
         texts.append(t)
-    body = "\n\n".join(texts).strip()
+
+    # 一页字都没有 = 扫描页。交给视觉模型抄，最多 OCR_MAX_PAGES 页。
+    scan_pages = [i for i, n in enumerate(page_chars) if n == 0]
+    ocr_done, ocr_failed, ocr_model = [], [], ""
+    if scan_pages:
+        log.info("rag_lab：%d 页没有文字层，转视觉识别（最多 %d 页）",
+                 len(scan_pages), OCR_MAX_PAGES)
+        ocr_done, ocr_failed, ocr_model = _ocr_scan_pages(
+            raw, texts, scan_pages)
+
+    empty = [i + 1 for i, t in enumerate(texts) if not t.strip()]
+    body = "\n\n".join(t for t in texts if t.strip()).strip()
     if not body:
         raise ExtractError(
-            "这份 PDF 是扫描件：%d 页里一页都没有文字层，抽不出正文。"
-            "扫描件要走视觉识别（还没接）。" % total)
+            "这份 PDF 是扫描件：%d 页里一页都没有文字层，视觉识别也没读出内容。"
+            "换一份清晰点的扫描件，或者把正文复制成文本再传。" % total)
     meta = {"kind": "pdf", "pages": total, "read_pages": len(texts),
             "page_chars": page_chars, "empty_pages": empty,
             "low_text_pages": low}
-    if low and len(low) >= max(2, len(texts) // 2):
+    if ocr_done or ocr_failed:
+        meta["source"] = "vision"
+        meta["ocr_pages"] = ocr_done
+        meta["ocr_failed"] = ocr_failed
+        meta["ocr_model"] = ocr_model
+    if len(scan_pages) > OCR_MAX_PAGES:
+        meta["warning"] = ("扫描页共 %d 页，只识别了前 %d 页"
+                           % (len(scan_pages), OCR_MAX_PAGES))
+    elif low and len(low) >= max(2, len(texts) // 2):
         meta["warning"] = ("有 %d 页几乎读不到文字（只有页眉页码那种），"
                            "可能是扫描件或图片页，检索质量会受影响" % len(low))
     return body, meta

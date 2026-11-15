@@ -496,7 +496,8 @@ button { cursor: pointer; }
   padding: 0.8rem;
   max-block-size: 20rem;
   overflow: auto;
-  overscroll-behavior: contain;
+  /* 不要加 overscroll-behavior: contain。框里内容没溢出时它自己也滚不动，
+     却照样把滚轮吃掉，鼠标停在上面往下滚 = 整页卡住（2026-11-15 反馈）。 */
   scrollbar-gutter: stable;
   border: 1px solid var(--line);
   background: rgba(3, 12, 19, 0.76);
@@ -694,7 +695,8 @@ button { cursor: pointer; }
   min-block-size: 18rem;
   block-size: min(46dvh, 26rem);
   overflow-y: auto;
-  overscroll-behavior: contain;
+  /* 同上：0 轮对话时这块高度是定死的，滚不动却会截住滚轮。鼠标滚到聊天面板
+     上，页面就再也滚不下去了——删掉 contain，滚到底自然交给页面。 */
   scrollbar-gutter: stable;
   padding: 0.8rem 0.95rem;
   display: flex;
@@ -1062,7 +1064,17 @@ dialog::backdrop {
    CSS 立刻生效；底部 showTab 只负责把当前那块标成 is-active。
    JS 被禁用时 <noscript> 里的样式会把它们放出来。 */
 html.js .feature { display: none; }
-html.js .feature.is-active { display: block; }
+/* 一个标签就是一页：短内容（漫画、文档问答空态）也把视口撑满，
+   否则切过去底下直接露出页脚，看着像「这页下面还接着别的东西」。
+   vh 先兜底，认 dvh 的再用 dvh（手机地址栏收起时不会跳一下）。 */
+html.js .feature.is-active { display: block; min-block-size: calc(100vh - var(--header-h)); }
+@supports (height: 100dvh) {
+  html.js .feature.is-active { min-block-size: calc(100dvh - var(--header-h)); }
+}
+/* hero 和「公开展示边界」条都是首页（默认的生图标签）的内容，切到别的标签要一起收。
+   宽屏媒体查询里 .hero 是 grid，会盖掉 [hidden] 的 UA 样式，所以带 !important。 */
+html.js .hero[hidden],
+html.js .scope-note[hidden] { display: none !important; }
 .site-nav a[aria-current="page"] {
   color: var(--paper);
   border-block-end-color: var(--amber);
@@ -1616,7 +1628,7 @@ html.js .feature.is-active { display: block; }
       <div class="feature-intro">
         <p class="feature-kicker">文档问答 / 检索增强全流程</p>
         <h2 id="rag-title">上传一份文档，看它怎么变成向量、又怎么被找回来</h2>
-        <p class="feature-desc">四步全部真跑：规则清洗先删掉页眉页码，大模型按语义切块（提示词原样展开给你看），本地小模型把每块压成 512 维向量，最后用你的问题去检索并带引用作答。每一步的中间数据都摊在下面，数字可以自己核对。支持 txt / md / PDF / Word（PDF 与 Word 读的是文本层，扫描件抽不出字，那要走视觉识别）。文档限 1 万字，超出按段落截断；临时库 30 分钟无人访问自动销毁，同时最多 3 个。</p>
+        <p class="feature-desc">四步全部真跑：规则清洗先删掉页眉页码，大模型按语义切块（提示词原样展开给你看），本地小模型把每块压成 512 维向量，最后用你的问题去检索并带引用作答。每一步的中间数据都摊在下面，数字可以自己核对。支持 txt / md / PDF / Word（PDF 与 Word 优先读文本层，零 token 零幻觉；没有文字层的扫描页会自动渲染成图、交视觉模型抄成 Markdown，最多 10 页）。文档限 1 万字，超出按段落截断；临时库 30 分钟无人访问自动销毁，同时最多 3 个。</p>
       </div>
       <div class="feature-tools">
         <button class="btn btn--small" type="button" id="ragSample">载入示例文档</button>
@@ -1628,7 +1640,7 @@ html.js .feature.is-active { display: block; }
       <div class="rag-main">
         <div class="rag-drop" id="ragDrop">
           <strong>把 txt / md / PDF / Word 拖到这里</strong>
-          <span id="ragDropHint">或者选文件、粘贴正文。PDF 与 Word 读的是文本层，扫描件抽不出字。演示限 1 万字，超出按段落截断。</span>
+          <span id="ragDropHint">或者选文件、粘贴正文。PDF / Word 先读文本层；扫描页自动走视觉识别，每页约 3~9 秒。演示限 1 万字，超出按段落截断。</span>
           <div class="rag-drop-actions">
             <button class="btn btn--primary btn--small" type="button" id="ragPick">选择文件</button>
             <button class="btn btn--small" type="button" id="ragPaste">粘贴正文</button>
@@ -1660,7 +1672,7 @@ html.js .feature.is-active { display: block; }
           <textarea id="ragQuestion" rows="2" placeholder="比如：为什么生图要串行执行？" disabled></textarea>
           <button class="btn btn--primary btn--small" type="submit" id="ragAsk" disabled>提问</button>
         </form>
-        <div class="rag-status" id="ragStatus">向量模型 bge-small-zh-v1.5 · 512 维 · CPU</div>
+        <div class="rag-status" id="ragStatus">向量模型 bge-small-zh-v1.5 · 输入上限 512 token · 输出 512 维向量 · CPU</div>
       </aside>
     </div>
   </section>
@@ -3275,7 +3287,10 @@ html.js .feature.is-active { display: block; }
 
   // ─── 标签页 ────────────────────────────────────────────
   const TABS = ["image", "roleplay", "memory", "comic", "chain", "rag"];
-  const main = document.getElementById("main");
+  // hero + 「公开展示边界」条是首页的一部分，只在默认的生图标签下露脸。
+  // 之前它们常驻在 main 第一屏（hero 桌面约 700px），切标签只换下面的 feature，
+  // 视口还停在 hero / 那条说明上，点完看到的是同一屏 —— 用户以为没切换。
+  const homeOnly = document.querySelectorAll("#main > .hero, #main > .scope-note");
 
   function showTab(id, sync) {
     if (!TABS.includes(id)) id = "image";
@@ -3285,6 +3300,7 @@ html.js .feature.is-active { display: block; }
       el.hidden = t !== id;
       el.classList.toggle("is-active", t === id);
     });
+    homeOnly.forEach((el) => { el.hidden = id !== "image"; });
     document.querySelectorAll(".site-nav a, .header-action").forEach((a) => {
       const href = a.getAttribute("href") || "";
       if (href.charAt(0) !== "#") return;
@@ -3294,18 +3310,32 @@ html.js .feature.is-active { display: block; }
     if (sync && location.hash !== "#" + id) {
       history.replaceState(null, "", "#" + id);
     }
-    // 切完回到内容区顶部：hero 还在，别让人以为没变化
-    if (main) window.scrollTo({ top: 0, behavior: "instant" in window ? "instant" : "auto" });
+    // 立刻归零到新一页的顶部。页面 CSS 是 scroll-behavior: smooth，直接
+    // scrollTo 会一路平滑滚回去，中途能看见上一块内容挂在屏幕上 —— 那正是
+    // 「还能上下滚到别的页面、还被遮住一半」的来源。这里临时关掉平滑。
+    const root = document.documentElement;
+    const prev = root.style.scrollBehavior;
+    root.style.scrollBehavior = "auto";
+    window.scrollTo(0, 0);
+    root.style.scrollBehavior = prev;
   }
 
   function bindTabs() {
-    document.querySelectorAll(".site-nav a, .header-action").forEach((a) => {
-      const href = a.getAttribute("href") || "";
-      if (href.charAt(0) !== "#" || !TABS.includes(href.slice(1))) return;
-      a.addEventListener("click", (e) => {
+    // 委托到 document：hero 里的「体验生图」、蓝图列表、页脚链接都指向这些
+    // 标签，只绑顶栏那几个 <a> 会漏掉一半入口。
+    document.addEventListener("click", (e) => {
+      const target = e.target;
+      const a = target && target.closest ? target.closest('a[href^="#"]') : null;
+      if (!a) return;
+      const id = (a.getAttribute("href") || "").slice(1);
+      if (id === "top") {           // 品牌名 = 回首页
         e.preventDefault();
-        showTab(href.slice(1), true);
-      });
+        showTab("image", true);
+        return;
+      }
+      if (!TABS.includes(id)) return;   // #hero-title 这类留给浏览器
+      e.preventDefault();
+      showTab(id, true);
     });
     window.addEventListener("hashchange", () => {
       showTab((location.hash || "").replace("#", ""), false);
@@ -3317,11 +3347,33 @@ html.js .feature.is-active { display: block; }
   const STEPS = [
     { key: "clean", no: "01", title: "清洗", idle: "规则去噪 · 去页码 / 页眉 / 重复行" },
     { key: "split", no: "02", title: "切分", idle: "DeepSeek 官方 · 语义切块" },
-    { key: "ingest", no: "03", title: "向量化", idle: "bge-small-zh-v1.5 · 512 维 · CPU" },
+    { key: "ingest", no: "03", title: "向量化", idle: "bge-small-zh-v1.5 · 每块编成 512 维向量 · CPU" },
     { key: "query", no: "04", title: "检索", idle: "余弦距离 · Top 4" },
   ];
 
   const S = { sid: null, kb: null, filename: "", ingested: false, busy: false, chunks: [] };
+
+  // 刷新页面后认回自己的临时库（2026-11-15）：库本身在后端还在（30 分钟 TTL），
+  // 丢的只是 sid —— 它以前只活在这个页面的内存里，一刷新就没了，于是「刚建好的
+  // 库不见了」。存一把钥匙到 localStorage，页面打开时拿它去 /state 问一句。
+  const LIB_KEY = "showcase.ragLib.v1";
+
+  function saveLib() {
+    try {
+      if (S.sid) {
+        localStorage.setItem(LIB_KEY, JSON.stringify({ sid: S.sid, filename: S.filename || "" }));
+      } else {
+        localStorage.removeItem(LIB_KEY);
+      }
+    } catch (_) { /* 隐私模式下 localStorage 会抛，忽略：只是不能跨刷新恢复 */ }
+  }
+
+  function readLib() {
+    try {
+      const v = JSON.parse(localStorage.getItem(LIB_KEY) || "null");
+      return v && v.sid ? v : null;
+    } catch (_) { return null; }
+  }
 
   const $ = (id) => document.getElementById(id);
   const stepsBox = $("ragSteps");
@@ -3439,6 +3491,7 @@ html.js .feature.is-active { display: block; }
       S.sid = clean.sid;
       S.kb = clean.kb;
       S.filename = clean.filename;
+      saveLib();   // 一拿到 sid 就存：后面几步即使刷新，也能认回这个库
       if (kbLabel) kbLabel.textContent = clean.kb + " · " + clean.filename;
       const rep = clean.report;
       const removed = rep.removed;
@@ -3468,7 +3521,7 @@ html.js .feature.is-active { display: block; }
           <div class="rag-chunk-head">
             <b>${esc(c.id)}</b>
             <span>${esc(c.heading || "未命名小节")}</span>
-            <span class="${c.over ? "over" : ""}">${num(c.chars)} 字${c.over ? "（超 500，会被截断）" : ""}</span>
+            <span class="${c.over ? "over" : ""}">${num(c.chars)} 字${c.over ? "（超 500 字 ≈ 512 token，尾部会被截掉）" : ""}</span>
           </div>
           ${c.why ? `<div class="why">切分理由：${esc(c.why)}</div>` : ""}
           <p>${esc(c.content)}</p>
@@ -3507,7 +3560,7 @@ html.js .feature.is-active { display: block; }
         `<div class="rag-vec">${cells}</div>`,
         false);
 
-      if (statusBox) statusBox.textContent = `${S.kb} · ${ing.count} 条 · 512 维 · 30 分钟无人访问自动销毁`;
+      if (statusBox) statusBox.textContent = `${S.kb} · ${ing.count} 条 · ${ing.dim} 维 · 30 分钟无人访问自动销毁`;
       if (kbLabel) kbLabel.textContent = `${S.kb} · ${ing.count} 条`;
       if (askBtn) askBtn.disabled = false;
       if (question) question.disabled = false;
@@ -3624,8 +3677,14 @@ html.js .feature.is-active { display: block; }
     else bits.push("纯文本");
     bits.push(`抽到 ${num(meta.kept_chars)} 字`);
     if (meta.truncated) bits.push(`原文 ${num(meta.total_chars)} 字，按段落截到 ${num(meta.kept_chars)}`);
+    // 扫描件：后端把没有文字层的页渲染成图交给视觉模型抄，这里如实报几页、
+    // 用了哪个模型、哪几页没抄出来（不假装整份都读到了）。
+    const ocr = (meta.ocr_pages || []).length;
+    if (ocr) bits.push(`视觉识别 ${ocr} 页${meta.ocr_model ? ` · ${meta.ocr_model}` : ""}`);
+    const ocrFail = (meta.ocr_failed || []).length;
+    if (ocrFail) bits.push(`第 ${meta.ocr_failed.slice(0, 6).join("/")} 页识别失败`);
     const empty = (meta.empty_pages || []).length;
-    if (empty) bits.push(`第 ${meta.empty_pages.slice(0, 6).join("/")} 页没有文字层，已跳过`);
+    if (empty) bits.push(`第 ${meta.empty_pages.slice(0, 6).join("/")} 页没读到内容`);
     const warn = meta.warning
       ? `<span style="color:var(--amber)"> · ${esc(meta.warning)}</span>` : "";
     return `<p style="margin:0 0 .4rem;font-size:.78rem;color:var(--muted)">来源：${esc(bits.join(" · "))}${warn}</p>`;
@@ -3640,8 +3699,8 @@ html.js .feature.is-active { display: block; }
       showErr("只支持 txt / md / PDF / Word(.docx)");
       return;
     }
-    if (file.size > 8 * 1024 * 1024) {
-      showErr("文件太大：上限 8MB");
+    if (file.size > 15 * 1024 * 1024) {
+      showErr("文件太大：上限 15MB（手机拍的扫描件一页约 2~4MB）");
       return;
     }
     showErr("");
@@ -3650,11 +3709,15 @@ html.js .feature.is-active { display: block; }
       runPipeline(txt, name, meta);
       return;
     }
-    // 二进制（PDF / docx）：交给后端解析文本层。extract 自己会判「扫描件」
-    // 并回一句人话，不用前端猜。
+    // 二进制（PDF / docx）：交给后端解析文本层；PDF 里没有文字层的页会自动
+    // 走视觉识别（最多 10 页），所以提示里把「可能要等」说在前面。
     const hint = $("ragDropHint");
     const old = hint ? hint.textContent : "";
-    if (hint) hint.textContent = "正在解析 " + name + " …";
+    if (hint) {
+      hint.textContent = /\.pdf$/i.test(name) || /pdf/i.test(file.type)
+        ? "正在解析 " + name + " …（扫描页会走视觉识别，可能要几十秒）"
+        : "正在解析 " + name + " …";
+    }
     try {
       const data = await postJSON("/api/raglab/extract",
         { name, data: await fileToBase64(file) });
@@ -3674,6 +3737,69 @@ html.js .feature.is-active { display: block; }
       runPipeline(text, "raglab-sample.md");
     } catch (err) {
       showErr(err.message || "示例文档读取失败");
+    }
+  }
+
+  // ── 刷新后认回上次的库 ─────────────────────────────────
+  // 只回填**已知的事实**（库名 / 条数 / 字数 / 能不能提问）。删了哪些行、
+  // 每块为什么在这里断开，这些明细只存在于那一次请求的响应里，刷新后没有了
+  // —— 不编一份假的填上去。
+  async function restoreLib() {
+    const saved = readLib();
+    if (!saved) return;
+    let data = null;
+    try {
+      const res = await fetch("/api/raglab/state?sid=" + encodeURIComponent(saved.sid),
+        { cache: "no-store" });
+      data = await res.json();
+    } catch (_) {
+      // 网关刚重启 / 断网：这不能当成「库没了」，钥匙留着，下次刷新再试。
+      return;
+    }
+    // 等接口的这段时间里用户可能已经重新传了一份，别拿旧的覆盖新的。
+    if (S.sid && S.sid !== saved.sid) return;
+    if (!data || !data.ok) {
+      // 后端明确说没有这个会话：过期了或已被「销毁这个库」，钥匙也一并删掉。
+      try { localStorage.removeItem(LIB_KEY); } catch (_) {}
+      return;
+    }
+
+    S.sid = data.sid;
+    S.kb = data.kb;
+    S.filename = data.filename || saved.filename || "";
+    S.ingested = !!data.ingested;
+    const chunks = Number(data.chunks || 0);
+    const chars = Number(data.chars || 0);
+
+    if (kbLabel) {
+      kbLabel.textContent = S.ingested ? `${S.kb} · ${num(chunks)} 条` : `${S.kb} · 未入库`;
+    }
+    if (resetBtn) resetBtn.hidden = false;
+    if (statusBox) {
+      statusBox.textContent = `${S.kb} · ${num(chunks)} 条 · 512 维 · 30 分钟无人访问自动销毁`;
+    }
+
+    if (!S.ingested) {
+      showErr("上次的文档传到一半就刷新了，重新传一次就能入库。");
+      return;
+    }
+    if (askBtn) askBtn.disabled = false;
+    if (question) question.disabled = false;
+    if (emptyBox) emptyBox.hidden = true;
+    setStep("clean", "done", "刷新前已完成", "");
+    setStep("split", "done", `${num(chunks)} 块（明细随刷新丢失）`, "");
+    setStep("ingest", "done", `${num(chunks)} 条 · 已入库`, "");
+    if (logBox) {
+      const wrap = document.createElement("div");
+      wrap.className = "rag-msg";
+      wrap.dataset.role = "assistant";
+      wrap.innerHTML =
+        `<span class="rag-msg-role">已恢复</span>` +
+        `<div class="rag-msg-body">这个浏览器上次建的库还在：` +
+        `${esc(S.filename || "未命名文档")} · ${num(chars)} 字切 ${num(chunks)} 块 · ` +
+        `${S.kb}。不用重新上传，直接提问就行。</div>`;
+      logBox.appendChild(wrap);
+      logBox.scrollTop = logBox.scrollHeight;
     }
   }
 
@@ -3739,6 +3865,7 @@ html.js .feature.is-active { display: block; }
         await postJSON("/api/raglab/reset", { sid: S.sid });
       } catch (_) { /* 过期了也算清掉 */ }
       S.sid = null; S.kb = null; S.ingested = false; S.chunks = [];
+      saveLib();   // 钥匙一起删，下次刷新别再去找一个已经销毁的库
       renderSteps();
       if (logBox) logBox.innerHTML = "";
       if (emptyBox) { emptyBox.hidden = false; logBox?.appendChild(emptyBox); }
@@ -3747,12 +3874,13 @@ html.js .feature.is-active { display: block; }
       if (question) { question.disabled = true; question.value = ""; }
       resetBtn.hidden = true;
       showErr("");
-      if (statusBox) statusBox.textContent = "向量模型 bge-small-zh-v1.5 · 512 维 · CPU";
+      if (statusBox) statusBox.textContent = "向量模型 bge-small-zh-v1.5 · 输入上限 512 token · 输出 512 维向量 · CPU";
     });
   }
 
   bindTabs();
   bindRag();
+  restoreLib();   // 刷新后认回上次的库：sid 存在 localStorage 里
   // 页面打开就把小模型拉起来：冷启动约 12 秒，等用户真上传时已经热了
   fetch("/api/raglab/warm", { method: "POST" }).catch(() => {});
 })();

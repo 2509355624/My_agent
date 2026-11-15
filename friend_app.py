@@ -980,7 +980,9 @@ def proxy_raglab(sub):
     `split` 要分批调大模型、`answer` 要检索再加生成，60 秒的默认超时不够——
     宿主机实测一篇 4 千字文档切 2 批约 40 秒，1 万字打满要更久。
     """
-    timeout = 300 if sub in ("split", "answer") else 60
+    # extract 现在会走视觉识别扫描件（一页一次调用，最多 10 页 ≈ 40~90 秒），
+    # 60 秒的默认值会在第 4 页就 502，所以和 split/answer 一样放长。
+    timeout = 300 if sub in ("split", "answer", "extract") else 60
     return _forward("/api/raglab", sub, allow_guest=True, post_timeout=timeout)
 
 
