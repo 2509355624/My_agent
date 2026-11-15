@@ -24,13 +24,18 @@
 中转站挂了才扣 1 次 `script` 代充次数、改走站主官方。一轮两次 LLM（编剧 +
 写作）只算一次作业，跟「一次剧本生成 = 1 次」同一个口径。
 
-## 自定义模型为什么只在「真的配了」时挂覆盖（2026-11-12）
+## 站主的链：跟 1v1 一模一样，**永不接全局降级链**（2026-11-15 拍板）
 
 `llm.set_custom_override([])` 会把 `persona_chain_active()` 打开，`candidates()`
 随即把链尾换成「玩家自带模型 + 代充付费」，**不再接 `LLM_FALLBACK_CHAIN`**。
-站主没配自定义模型时链尾就是空的，中转站一 402 就无处可降——正好把
-`c728d4a`「跟 1v1 一致，放开降级链」修好的问题又弄回去。所以：
-配了才挂，没配就让 `novel._call(strict=False)` 照旧顺全局链降级。
+
+2026-11-12 曾经反着写过：只有真配了自定义模型才挂覆盖，没配就顺全局链降级，
+理由是「站主没配时链尾空，中转站一 402 无处可降」（`c728d4a`）。那条路的代价
+是**站主一跑小说就烧官方付费**——全局链第一项就是 `deepseek:deepseek-flash`。
+2026-11-15 用户重新拍板：小说模式要和 1v1 完全一致，中转站挂了就只剩
+「自己配的自定义模型 / 代充付费段」，**站主不替它掏官方那份钱**。
+⇒ 站主态**无条件**挂覆盖（空列表也挂），链尾爱空就空，报错交给前端引导。
+
 群友态一律不挂：自带 API Key 不该明文经过站主服务器，也不该绕开计费。
 """
 import json
@@ -95,7 +100,13 @@ def _begin_request():
     customs = [] if g.novel_qq else _novel_customs(
         request.get_json(silent=True) or {})
     g.novel_has_custom = bool(customs)
-    if customs:
+    if not g.novel_qq:
+        # 站主：**无条件**挂覆盖，空列表也挂（2026-11-15 用户拍板）。
+        # 只有挂了 `persona_chain_active()` 才会是 True，candidates() 的链尾
+        # 才会换成「自定义模型 + 代充付费段」；不挂就退回 LLM_FALLBACK_CHAIN，
+        # 那条链第一项过后就是付费官方 —— 小说不该烧那个钱。
+        # 链尾可能因此是空的（没配自定义、也没代充），中转站一挂直接报错，
+        # 由 `_fail` 给「去配自定义模型 / 找站长加次数」的引导。
         try:
             llm.set_custom_override(customs)
         except Exception:                                   # noqa: BLE001
@@ -132,7 +143,7 @@ def _attach_model_used(resp):
         else:
             used = {"kind": "chain_head",
                     "name": PERSONA_MODEL or "默认链头",
-                    "label": "链头（失败会顺链降级）"}
+                    "label": "公用中转站（本站免费层）"}
     if resp.is_json:
         try:
             d = resp.get_json() or {}
@@ -163,6 +174,17 @@ def _fail(e):
                         "detail": str(e)}), 502
     if isinstance(e, ValueError):
         return jsonify({"ok": False, "error": str(e)}), 400
+    if isinstance(e, llm.PersonaChainExhausted):
+        # 站主态才会走到这里：链尾被 `_begin_request` 换成了「自定义模型 +
+        # 代充付费段」，中转站一挂就是真的没路了。以前这里会悄悄顺全局链
+        # 落到付费官方，2026-11-15 起不再这样做，所以提示要给出**下一步动作**，
+        # 不能只说「等一下再试」——等多久都不会自己好。
+        log.warning("[novel] 链路走空（站主态，未接全局链）：%s", e)
+        return jsonify({"ok": False,
+                        "error": "公用中转站连不上了，也没有配自定义模型。"
+                                 "在「自定义模型」里填一个你自己的 API 就能继续，"
+                                 "或者找站长加代充次数",
+                        "detail": str(e)[:200]}), 502
     log.exception("[novel] 调用失败")
     return jsonify({"ok": False, "error": "模型链路暂时不通，等一下再试",
                     "detail": str(e)[:200]}), 502

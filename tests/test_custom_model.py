@@ -191,9 +191,18 @@ class PersonaChainTest(unittest.TestCase):
         self.assertEqual([x[1] for x in c[1:]], ["0", "1"])
 
     def test_paid_global_chain_is_never_appended(self):
+        """扮演链尾只有「自定义 + 代充」，全局链的其它项一个都不许接。
+
+        链头和全局链第一项**本来就可能是同一家**（现在就是 `cx_a1b2c3d4`），
+        那一项出现在链里是因为它是链头，不是因为接了全局链——所以要跳过它，
+        否则这条守卫永远是红的，等于没守。
+        """
         llm.set_custom_override([_CFG])
         c = llm.candidates(config.PERSONA_PROVIDER, config.PERSONA_MODEL)
+        head = (config.PERSONA_PROVIDER, config.PERSONA_MODEL)
         for item in llm.parse_chain(config.LLM_FALLBACK_CHAIN):
+            if item == head:
+                continue
             self.assertNotIn(item, c)
 
     def test_empty_list_still_marks_a_persona_request(self):

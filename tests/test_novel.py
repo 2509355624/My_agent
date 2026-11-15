@@ -351,7 +351,7 @@ class ApplyTest(NovelBase):
 
 class ChainTest(NovelBase):
     def test_llm_call_falls_back_like_1v1_and_uses_the_shared_provider(self):
-        """链头跟扮演共用；中转站 402 时允许顺链降级，不再一击即败。"""
+        """链头跟扮演共用；链尾由接口层挂的覆盖决定（不在这里写死）。"""
         with mock.patch.object(novel.llm, "call_llm",
                                return_value='{"ruling":"ok"}') as m:
             novel._call([{"role": "user", "content": "x"}], 100, 0.5)
@@ -1347,7 +1347,8 @@ class WiringTest(unittest.TestCase):
                        "persona_rag.remember", "writing_style.LENGTH_ANCHOR"):
             self.assertIn(needle, self.src, "没复用扮演内核：%s" % needle)
         self.assertIn('o.get("strict", False)', self.src,
-                      "站主默认不 strict，402 才能顺链降级；群友的免费层由接口层传严格模式")
+                      "strict 由接口层按身份给：站主 None（挂覆盖后链尾是自定义+代充），"
+                      "群友免费层才传 True")
         body = re.search(r"def _call\((.*?)\n\ndef ", self.src, re.S).group(1)
         self.assertNotIn("strict=True", body,
                          "服务层不许硬编码 strict=True：中转站余额归零时站主开场会直接 502")
@@ -1438,7 +1439,7 @@ class WarmWorldTest(NovelBase):
 
 
 class CustomModelApiTest(NovelBase):
-    """自定义模型不能把「402 顺链降级」修好的链路又切断。"""
+    """站主的小说链路必须跟 1v1 完全一致：中转站 → 自定义 → 代充，**不接全局链**。"""
 
     def setUp(self):
         super().setUp()
@@ -1446,14 +1447,19 @@ class CustomModelApiTest(NovelBase):
         app.register_blueprint(novel_api.bp)
         self.c = app.test_client()
 
-    def test_no_custom_models_does_not_switch_the_chain(self):
+    def test_no_custom_models_still_switches_the_chain(self):
+        """2026-11-15 用户拍板：没配自定义模型也要挂（空列表）。
+
+        只有 `persona_chain_active()` 为 True，`candidates()` 才会把链尾换成
+        「自定义 + 代充」；不挂就退回 `LLM_FALLBACK_CHAIN`，那条链第一项过后
+        就是付费官方 —— 站主跑小说不该烧那个钱。
+        """
         with mock.patch.object(novel_api.llm, "set_custom_override") as setter:
             self.c.post("/api/novel/turn", json={"id": "nv_x", "text": "走"})
         attached = [c.args[0] for c in setter.call_args_list
                     if c.args and c.args[0] is not None]
-        self.assertEqual(attached, [],
-                         "挂 set_custom_override([]) 会让 candidates 丢掉 "
-                         "LLM_FALLBACK_CHAIN，中转站一挂就无处可降")
+        self.assertEqual(attached, [[]],
+                         "站主态必须挂空列表；不挂就会接 LLM_FALLBACK_CHAIN")
 
     def test_custom_models_are_attached_for_the_whole_request(self):
         custom = [{"base_url": "https://x/v1", "model": "m", "api_key": "k"}]
@@ -1581,13 +1587,12 @@ class UiSevenTest(unittest.TestCase):
                        "env(safe-area-inset-top)"):
             self.assertIn(needle, self.html, "缺少 %s" % needle)
 
-    def test_custom_override_does_not_break_the_fallback_chain(self):
-        # 模块注释里会引用 `set_custom_override([])` 解释为什么不能那么写，
-        # 断言只看真正的代码部分。
+    def test_owner_never_falls_back_to_the_global_chain(self):
+        # 模块注释里会引用旧写法解释为什么改，断言只看真正的代码部分。
         code = re.sub(r'^""".*?"""', '', self.api, count=1, flags=re.S)
-        self.assertIn("if customs:", code)
-        self.assertIn("g.novel_has_custom = bool(customs)", code)
-        self.assertNotIn("set_custom_override([])", code)
+        self.assertIn("if not g.novel_qq:", code)
+        self.assertIn("llm.set_custom_override(customs)", code)
+        self.assertNotIn("if customs:", code)
 
 
 # ─── 上架 5175（2026-11-12）：归属隔离 / 链策略 / 幂等 / 计费 / 网关 ───

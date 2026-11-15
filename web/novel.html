@@ -724,7 +724,7 @@ function nvModelUsed(d){
     : u.kind === 'custom' ? ('自定义模型 · ' + (u.name || '未命名'))
     : (u.name || '默认链头');
   nvEl('nvModelNow').textContent = '当前模型：' + name +
-    (u.kind === 'chain_head' ? '（链头，失败会顺链降级）' : '');
+    (u.kind === 'chain_head' ? '（公用中转站，挂了不会自动换官方）' : '');
 }
 function nvSetVh(){
   var vv = window.visualViewport;

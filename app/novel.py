@@ -586,17 +586,23 @@ _NOVEL_CONTRACT = """你是这部长篇生存小说的叙述者，用第三人�
 
 
 def _call(messages, max_tokens, temperature, opts=None, timeout=None):
-    """跟扮演共用链头（公用中转站），失败时顺链降级，跟 1v1 一致。
+    """跟扮演共用链头（公用中转站），链尾由 `opts` 定，不在这里写死。
 
     2026-11-11：原来这里用严格模式单目标直调，中转站余额归零时
     开场直接 502，前端还写「等一下再试」，充值前完全玩不了。站主拍板放开：
     链头仍是 PERSONA_PROVIDER/MODEL，402 之后交给 llm.candidates() 顺链
     试 deepseek-flash / mimo / volc；代价是可能落到付费 provider。
 
+    2026-11-15 **这笔账改回去了**：站主态不再接全局链。`novel_api` 会无条件
+    挂 `set_custom_override`（空列表也挂），于是 `candidates()` 走扮演分支，
+    链尾恒为「玩家自带模型 + 代充付费段」，全局链第一个「别的」provider
+    （`deepseek:deepseek-flash`，付费官方）永远进不来。中转站挂了就报错，
+    由接口层引导配自定义模型 / 加代充次数 —— 跟 1v1 完全一致。
+
     2026-11-12 上架 5175：`opts` 是接口层已经定好的链策略，服务层只吃参数、
     不 import flask、不认 QQ。None = 站主现状；群友免费层走严格模式，只打
     公用中转站（绝不静默落到付费官方），中转站挂了才由接口层扣代充次数、
-    传 `provider/model=None` 走全局链。
+    传 `provider/model=None` 走全局链（这一条是扣过次数的，保留）。
 
     `timeout` 由三个调用点各自给（`OPEN/WRITER/DIRECTOR_TIMEOUT`），不传才落到
     全局 60 秒。别在这里写死一个值：同一份代码要服务 3000 字的开场和 600 字
