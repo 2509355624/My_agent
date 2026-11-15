@@ -27,6 +27,9 @@
 无人访问惰性删除（每个请求顺带扫一遍，不起后台线程）。
 """
 
+import base64
+import binascii
+import io
 import json
 import logging
 import os
@@ -54,6 +57,14 @@ MAX_LIBS = 3               # 同时最多 3 个临时库
 TTL_SECONDS = 1800         # 30 分钟无人访问就删
 RATE_LIMIT = 12            # 每分钟每会话最多 12 次检索/问答
 MAX_ANSWER_TOKENS = 1200
+
+# ─── 上传与抽取（2026-11-15，PDF / Word 文本层）─────────────
+# 只做**文本层**：PDF 用 pypdf、Word 用 python-docx。扫描件没有文字层，
+# 这里不猜也不 OCR，直接告诉用户「这页抽不出来」——视觉识别是单独一档功能
+# （见 rag_lab 说明与当天讨论：多模态转 markdown 留给 B 档，先不塞进默认路径）。
+MAX_UPLOAD = 8 * 1024 * 1024   # 8MB：一份 40 页的文本型 PDF 通常 1~3MB
+MAX_PAGES = 40                 # 再多 1 万字也装不下，纯属浪费解析时间
+SCAN_PAGE_CHARS = 50           # 一页抽出来不到这么多字 → 按「没有文字层」算
 
 LAB_EMBED_MODEL = os.getenv("RAG_LAB_MODEL", "BAAI/bge-small-zh-v1.5").strip()
 LAB_DATA_DIR = os.getenv(
@@ -199,6 +210,8 @@ _PAGE_RES = (
     re.compile(r"^\s*[-—–]?\s*\d{1,4}\s*[-—–]?\s*$"),
     re.compile(r"^\s*第\s*\d{1,4}\s*页(?:\s*[/／,，]\s*共?\s*\d{1,4}\s*页)?\s*$"),
     re.compile(r"^\s*\d{1,4}\s*[/／]\s*\d{1,4}\s*$"),
+    # 英文 PDF 的页脚（2026-11-15：抽英文白皮书时发现 "Page 3 of 12" 不被删）
+    re.compile(r"^\s*(?:page|p\.)\s*\d{1,4}\s*(?:of\s*\d{1,4})?\s*$", re.I),
 )
 _ZERO_WIDTH = re.compile(r"[\u200b\u200c\u200d\ufeff]")
 _BLANK = re.compile(r"^\s*$")
@@ -274,6 +287,167 @@ def clean_text(raw):
     report["kept_lines"] = sum(1 for line in out if line.strip())
     report["drop_chars"] = report["raw_chars"] - report["clean_chars"]
     return text, report
+
+
+# ══════════════════════════════════════════════════════
+# ①.5 抽取：PDF / Word 的文本层
+# ══════════════════════════════════════════════════════
+# 2026-11-15 用户拍板「先做 A 档」：只抽**文本层**，不 OCR、不上视觉模型。
+# 覆盖的是 Word 导出的 PDF、电子书、正规文档——这类零 token、零幻觉。
+# 扫描件（复印件 / 手机拍的）没有文字层，这里**不猜也不兜底**，如实报出来，
+# 让用户知道该走视觉那条路（B 档，见模块说明）。
+#
+# 依赖：pypdf（纯 Python，无 torch）+ python-docx，合计约 10MB。
+# 都不常驻内存，只在这次请求里 import，没装也不影响别的功能。
+
+class ExtractError(Exception):
+    """抽不出正文。`str(e)` 直接展示给用户，要写成人话。"""
+
+
+def _truncate(text, limit=MAX_CHARS):
+    """截到 limit 字。优先在换行处断，找不到合适断点再硬切。"""
+    if len(text) <= limit:
+        return text, False
+    cut = text.rfind("\n", 0, limit)
+    if cut < int(limit * 0.6):
+        cut = limit
+    return text[:cut].rstrip(), True
+
+
+def _extract_pdf(raw):
+    from pypdf import PdfReader
+    try:
+        reader = PdfReader(io.BytesIO(raw))
+    except Exception as exc:                        # noqa: BLE001
+        raise ExtractError("这份 PDF 打不开（%s），换个文件试试"
+                           % exc.__class__.__name__)
+    if getattr(reader, "is_encrypted", False):
+        try:
+            reader.decrypt("")
+        except Exception:                           # noqa: BLE001
+            raise ExtractError("这份 PDF 有密码保护，先取消密码再传")
+    total = len(reader.pages)
+    page_chars, empty, low, texts = [], [], [], []
+    for no in range(min(total, MAX_PAGES)):
+        try:
+            t = reader.pages[no].extract_text() or ""
+        except Exception:                           # noqa: BLE001
+            t = ""
+        t = t.replace("\x00", "")
+        n = len(t.strip())
+        page_chars.append(n)
+        if n == 0:
+            empty.append(no + 1)          # 这一页压根没有文字层（纯图 / 扫描）
+        elif n < SCAN_PAGE_CHARS:
+            low.append(no + 1)            # 只有页眉页码之类，基本没内容
+        texts.append(t)
+    body = "\n\n".join(texts).strip()
+    if not body:
+        raise ExtractError(
+            "这份 PDF 是扫描件：%d 页里一页都没有文字层，抽不出正文。"
+            "扫描件要走视觉识别（还没接）。" % total)
+    meta = {"kind": "pdf", "pages": total, "read_pages": len(texts),
+            "page_chars": page_chars, "empty_pages": empty,
+            "low_text_pages": low}
+    if low and len(low) >= max(2, len(texts) // 2):
+        meta["warning"] = ("有 %d 页几乎读不到文字（只有页眉页码那种），"
+                           "可能是扫描件或图片页，检索质量会受影响" % len(low))
+    return body, meta
+
+
+def _extract_docx(raw):
+    import docx
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+    try:
+        doc = docx.Document(io.BytesIO(raw))
+    except Exception as exc:                        # noqa: BLE001
+        raise ExtractError("这份 Word 打不开（%s），换个文件试试"
+                           % exc.__class__.__name__)
+    parts, tables = [], 0
+    # 按 XML 顺序遍历正文：只读 paragraphs 会把表格全部甩到文末。
+    for child in doc.element.body.iterchildren():
+        tag = child.tag.rsplit("}", 1)[-1]
+        if tag == "p":
+            para = Paragraph(child, doc)
+            txt = (para.text or "").strip()
+            if not txt:
+                parts.append("")
+                continue
+            m = re.match(r"(?:Heading|标题)\s*(\d)", para.style.name or "")
+            if m:
+                parts.append("#" * min(6, int(m.group(1))) + " " + txt)
+            else:
+                parts.append(txt)
+        elif tag == "tbl":
+            rows = []
+            for row in Table(child, doc).rows:
+                cells = [(c.text or "").strip().replace("\n", " ") for c in row.cells]
+                if any(cells):
+                    rows.append(" | ".join(cells))
+            if rows:
+                tables += 1
+                parts.append("\n".join(rows))
+    body = "\n".join(parts).strip()
+    if not body:
+        raise ExtractError("这份 Word 里没读到正文（可能是只贴了图片）")
+    meta = {"kind": "docx", "pages": 0, "read_pages": 0,
+            "page_chars": [], "empty_pages": [], "low_text_pages": [],
+            "tables": tables, "blocks": sum(1 for x in parts if x)}
+    return body, meta
+
+
+def _extract_plain(raw):
+    for enc in ("utf-8-sig", "utf-8", "gb18030"):
+        try:
+            return raw.decode(enc), {"kind": "text", "pages": 0, "read_pages": 0,
+                                     "page_chars": [], "empty_pages": [],
+                                     "low_text_pages": [], "encoding": enc}
+        except UnicodeDecodeError:
+            continue
+    raise ExtractError("这个文件不是 UTF-8 / GB18030 文本，读不出正文")
+
+
+def extract_document(name, raw):
+    """按文件头 / 扩展名抽正文。返回 (text, meta)。
+
+    `meta` 里带页数、每页字数、哪些页没有文字层——前端靠它显示
+    「PDF 20 页，抽了前 8 页」这种实话。
+    """
+    if not raw:
+        raise ExtractError("文件是空的")
+    if len(raw) > MAX_UPLOAD:
+        raise ExtractError("文件 %.1fMB，超过 %dMB 上限"
+                           % (len(raw) / 1048576, MAX_UPLOAD // 1048576))
+    ext = os.path.splitext(name or "")[1].lower()
+    head = raw[:8]
+    known = (".pdf", ".docx", ".doc", ".txt", ".md", ".markdown", ".text")
+    if ext in known:
+        kind = ext
+    elif not ext:
+        # 没扩展名（QQ 存下来的「文件」常常没有）→ 按文件头认
+        if head.startswith(b"%PDF"):
+            kind = ".pdf"
+        elif head.startswith(b"PK\x03\x04"):
+            kind = ".docx"
+        else:
+            raise ExtractError("认不出这个文件的格式（没有扩展名，内容也不是 PDF / docx）")
+    else:
+        # .xlsx / .pptx 也是 PK 开头，绝不能光看文件头就当 Word
+        raise ExtractError("只支持 txt / md / PDF / Word(.docx)，这个是 %s" % ext)
+    if kind == ".pdf":
+        text, meta = _extract_pdf(raw)
+    elif kind == ".docx":
+        text, meta = _extract_docx(raw)
+    elif kind == ".doc":
+        raise ExtractError("只支持 .docx；老版 .doc 先用 Word 另存为 .docx")
+    else:
+        text, meta = _extract_plain(raw)
+    total = len(text)
+    text, cut = _truncate(text)
+    meta.update({"total_chars": total, "kept_chars": len(text),
+                 "truncated": cut, "filename": name or ""})
+    return text, meta
 
 
 # ══════════════════════════════════════════════════════
@@ -434,6 +608,46 @@ def _build_answer_prompt(question, hits):
 # ══════════════════════════════════════════════════════
 # 路由
 # ══════════════════════════════════════════════════════
+@bp.post("/api/raglab/extract")
+def api_extract():
+    """PDF / Word / 文本 → 纯正文。前端拿到后走同一条 `clean` 管道。
+
+    为什么不在浏览器里读：PDF 和 docx 都是二进制，浏览器只能读成乱码；
+    而且「这页有没有文字层」得解析过才知道，正好一起在这儿判。
+    """
+    body = request.get_json(silent=True) or {}
+    name = str(body.get("name") or "").strip()
+    data = str(body.get("data") or "")
+    if not data:
+        return jsonify({"ok": False, "error": "没有收到文件内容"}), 400
+    try:
+        raw = base64.b64decode(data.split(",", 1)[-1], validate=False)
+    except (binascii.Error, ValueError):
+        return jsonify({"ok": False, "error": "文件内容读不出来（base64 解析失败）"}), 400
+    started = time.time()
+    try:
+        text, meta = extract_document(name, raw)
+    except ExtractError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except ImportError as exc:
+        # 部署环境没装 pypdf / python-docx 时，别把 ImportError 抛成 500 白屏
+        log.warning("rag_lab：缺解析依赖 %s", exc)
+        return jsonify({"ok": False,
+                        "error": "服务器没装解析依赖（%s），先 pip install pypdf python-docx"
+                                 % (getattr(exc, "name", "") or exc)}), 503
+    except Exception as exc:                        # noqa: BLE001
+        log.warning("rag_lab：抽取失败 %s", exc)
+        return jsonify({"ok": False, "error": "抽取失败：%s" % exc}), 500
+    if not text.strip():
+        return jsonify({"ok": False, "error": "抽出来的正文是空的"}), 400
+    return jsonify({"ok": True, "text": text, "meta": meta,
+                    "filename": name or ("未命名." + meta.get("kind", "txt")),
+                    "secs": round(time.time() - started, 2),
+                    "limits": {"max_chars": MAX_CHARS, "max_pages": MAX_PAGES,
+                               "max_upload_mb": MAX_UPLOAD // 1048576,
+                               "scan_page_chars": SCAN_PAGE_CHARS}})
+
+
 @bp.post("/api/raglab/clean")
 def api_clean():
     body = request.get_json(silent=True) or {}

@@ -361,5 +361,138 @@ class PageTest(unittest.TestCase):
         self.assertIn('timeout = 300 if sub in ("split", "answer")', src)
 
 
+def make_pdf(pages):
+    """手搓一个最小 PDF（每页一行 Helvetica 文本）。
+
+    不引第三方写库：测的是**读**，只要文件结构合法就够。空字符串页 = 没有
+    文字层的扫描页，用来测「抽不出正文时如实报错」。
+    """
+    n = len(pages)
+    page_ids = [4 + 2 * i for i in range(n)]
+    objs = {
+        1: b"<< /Type /Catalog /Pages 2 0 R >>",
+        2: ("<< /Type /Pages /Kids [%s] /Count %d >>"
+            % (" ".join("%d 0 R" % p for p in page_ids), n)).encode(),
+        3: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    }
+    for i, text in enumerate(pages):
+        pid, cid = page_ids[i], 5 + 2 * i
+        objs[pid] = ("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+                     "/Resources << /Font << /F1 3 0 R >> >> /Contents %d 0 R >>"
+                     % cid).encode()
+        stream = ("BT /F1 12 Tf 72 720 Td (%s) Tj ET"
+                  % text.replace("\\", r"\\").replace("(", r"\(")
+                        .replace(")", r"\)")).encode("latin-1", "replace")
+        objs[cid] = (b"<< /Length " + str(len(stream)).encode()
+                     + b" >>\nstream\n" + stream + b"\nendstream")
+    out, offsets = bytearray(b"%PDF-1.4\n"), {}
+    for oid in sorted(objs):
+        offsets[oid] = len(out)
+        out += ("%d 0 obj\n" % oid).encode() + objs[oid] + b"\nendobj\n"
+    xref_at, maxid = len(out), max(objs) + 1
+    out += ("xref\n0 %d\n" % maxid).encode() + b"0000000000 65535 f \n"
+    for oid in range(1, maxid):
+        out += (("%010d 00000 n \n" % offsets[oid]).encode() if oid in offsets
+                else b"0000000000 65535 f \n")
+    out += ("trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n"
+            % (maxid, xref_at)).encode()
+    return bytes(out)
+
+
+class ExtractTest(LabBase):
+    """PDF / Word 只读**文本层**（2026-11-15 用户拍板先做 A 档）。
+
+    这条路的全部价值在于「抽不到就明说」：不 OCR、不猜、不拿图片硬凑，
+    否则演示页会拿一堆空内容去切块，看着跑通了其实什么都没有。
+    """
+
+    def _extract(self, name, raw):
+        import base64
+        return self.post("/api/raglab/extract",
+                         {"name": name, "data": base64.b64encode(raw).decode()})
+
+    def test_pdf_text_layer(self):
+        pdf = make_pdf(["Hello RAG page one", "second page text"])
+        r = self._extract("doc.pdf", pdf)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        d = r.get_json()
+        self.assertIn("Hello RAG page one", d["text"])
+        self.assertIn("second page text", d["text"])
+        self.assertEqual(d["meta"]["kind"], "pdf")
+        self.assertEqual(d["meta"]["pages"], 2)
+        self.assertEqual(d["meta"]["empty_pages"], [])
+        self.assertFalse(d["meta"]["truncated"])
+
+    def test_scanned_pdf_is_reported_not_faked(self):
+        """空白页 = 没有文字层。必须报错，不能回一段空正文让后面全跑空。"""
+        r = self._extract("scan.pdf", make_pdf(["", ""]))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("扫描件", r.get_json()["error"])
+
+    def test_docx_keeps_heading_and_table_order(self):
+        import docx
+        import io
+        doc = docx.Document()
+        doc.add_heading("第一章 概览", level=1)
+        doc.add_paragraph("大大怪跑在单台工作站上。")
+        tbl = doc.add_table(rows=2, cols=2)
+        tbl.cell(0, 0).text, tbl.cell(0, 1).text = "指标", "值"
+        tbl.cell(1, 0).text, tbl.cell(1, 1).text = "延迟", "1.2s"
+        doc.add_paragraph("表格之后的一段。")
+        buf = io.BytesIO()
+        doc.save(buf)
+        d = self._extract("a.docx", buf.getvalue()).get_json()
+        self.assertEqual(d["meta"]["kind"], "docx")
+        self.assertEqual(d["meta"]["tables"], 1)
+        text = d["text"]
+        self.assertIn("# 第一章 概览", text)          # 标题层级保留，切块时有用
+        self.assertIn("指标 | 值", text)
+        # 表格必须夹在两段之间，不能被甩到文末
+        self.assertLess(text.index("单台工作站"), text.index("指标 | 值"))
+        self.assertLess(text.index("指标 | 值"), text.index("表格之后"))
+
+    def test_long_text_is_truncated_at_paragraph_break(self):
+        raw = ("第一段落内容。\n" * 2000).encode("utf-8")
+        d = self._extract("long.txt", raw).get_json()
+        self.assertTrue(d["meta"]["truncated"])
+        self.assertLessEqual(len(d["text"]), rag_lab.MAX_CHARS)
+        self.assertGreater(len(d["text"]), rag_lab.MAX_CHARS * 0.6)
+        self.assertFalse(d["text"].endswith("第一段"))   # 断在换行处，不留半句
+
+    def test_old_doc_points_at_save_as(self):
+        r = self._extract("old.doc", b"\xd0\xcf\x11\xe0abcdef")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("另存为", r.get_json()["error"])
+
+    def test_unsupported_extension(self):
+        r = self._extract("sheet.xlsx", b"PK\x03\x04whatever")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("只支持", r.get_json()["error"])
+
+    def test_missing_payload(self):
+        r = self.post("/api/raglab/extract", {"name": "a.pdf"})
+        self.assertEqual(r.status_code, 400)
+
+
+class ExtractPageTest(unittest.TestCase):
+    """页面侧：文件选择框要真的放开 pdf/docx，且必须走 extract 接口。"""
+
+    def setUp(self):
+        with open(os.path.join(ROOT, "web", "showcase.html"), encoding="utf-8") as f:
+            self.src = f.read()
+
+    def test_accepts_pdf_and_docx(self):
+        self.assertIn('accept=".txt,.md,.markdown,.pdf,.docx', self.src)
+
+    def test_binary_goes_through_extract(self):
+        self.assertIn("/api/raglab/extract", self.src)
+        self.assertIn("readAsDataURL", self.src)       # 二进制转 base64
+        self.assertIn("function clipText", self.src)   # 1 万字截断
+
+    def test_scanned_hint_is_shown(self):
+        """页面上得写清楚「扫描件抽不出字」，否则用户以为是 bug。"""
+        self.assertIn("扫描件", self.src)
+
+
 if __name__ == "__main__":
     unittest.main()

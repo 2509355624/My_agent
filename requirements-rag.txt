@@ -16,3 +16,10 @@ chromadb>=0.5.0
 sentence-transformers>=3.0
 torch>=2.0
 modelscope>=1.9
+
+# ── 展示页「文档问答」的 PDF / Word 抽取（2026-11-15）──────────
+# 只读**文本层**：pypdf 抽 PDF、python-docx 抽 Word，合计约 10MB，不依赖 torch。
+# 扫描件（没有文字层的 PDF）在这条路上抽不出字，会如实报错——视觉识别是另一档。
+# 没装这两个包时 /api/raglab/extract 会 500，页面上「选择文件」只对 txt/md 有效。
+pypdf>=5.0
+python-docx>=1.1
