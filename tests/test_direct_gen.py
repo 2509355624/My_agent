@@ -4137,15 +4137,16 @@ class PresetWebCmdTest(unittest.TestCase):
 
 
 class GalleryCmdTest(unittest.TestCase):
-    """`/画廊`（2026-11-01）：**必须带斜杠且顶在句首**，群里也只回「私聊我发你」。
+    """`/画廊`（2026-11-01）：**这条正则**必须带斜杠且顶在句首。
 
     和 `/预设网页` 的关键差别是触发词。那一条放宽到「关键词命中即可」，
     是因为「预设网页」是个生造组合词、日常对话撞不上；「画廊」不是——
     「这个画廊不错」「P站画廊」都会出现在群聊里，纯关键词等于每聊一次就甩
-    一次链接。用户 2026-11-01 拍板只认带斜杠的写法。
+    一次链接。
 
-    也正因为斜杠已经是门槛，这条**不过 `trigger.called` 那道闸**（群里
-    不用 @ 也不用喊名字）——和 `/直通-` 前缀同理。
+    2026-11-15 补：私聊里「不打斜杠也认」是**另一条路**（`_private_entry_kw`，
+    见 PrivateKeywordEntryTest），群聊仍只走这条斜杠正则——所以本类断言
+    不变，只是理由从「纯关键词一律不认」收窄成「群聊不认」。
     """
 
     URL = "https://calm-otter-1234.trycloudflare.com"
@@ -4163,7 +4164,8 @@ class GalleryCmdTest(unittest.TestCase):
             self.assertTrue(direct_gen._GALLERY_RE.match(t), t)
 
     def test_bare_word_does_not_fire(self):
-        """纯「画廊」交给 AI 正常聊天——这是本类存在的全部理由。"""
+        """这条**正则**不认裸词（群聊口径）；私聊的裸词由
+        `_private_entry_kw` 单独认，别混在一起测。"""
         for t in ("画廊", "这个画廊不错", "P站画廊", "画廊在哪"):
             self.assertIsNone(direct_gen._GALLERY_RE.match(t), t)
 
@@ -4201,8 +4203,10 @@ class GalleryCmdTest(unittest.TestCase):
                                   return_value=("group", "1103174141")), \
                 mock.patch.object(direct_gen.llm, "call_llm") as m_llm:
             out = direct_gen.decide("/画廊", [], False)
+        # 群里的这句就是「教学」：2026-11-15 起不再教斜杠（群友以为 / 是可选的，
+        # 五个人里没一个打对），直接告诉他私聊说「画廊」。
         self.assertEqual(out, "画廊在群友页里，网址我私聊发你——先加我好友，"
-                              "私聊发「/画廊」就行。")
+                              "私聊发「画廊」就行（不用加斜杠）。")
         m_llm.assert_not_called()
 
     def test_bare_word_still_goes_to_ai(self):
@@ -4403,3 +4407,90 @@ class SilverHdUpscaleTest(unittest.TestCase):
                          if v["class_type"] == "SaveImage"]
                 self.assertEqual(len(saves), 1)
                 self.assertEqual(wf[saves[0]]["class_type"], "ImageScaleBy")
+
+
+class PrivateKeywordEntryTest(unittest.TestCase):
+    """私聊不打斜杠也认画廊 / 跑图台 / 换装（2026-11-15 用户要求）。
+
+    来历：当天五次私聊（07:17「画廊」、14:58「跑图台」、17:31「发画廊」、
+    17:33「画廊 指令」、18:53「大大怪发  画廊」）全都没生效，机器人要么回
+    「我这边没有这个功能」、要么模型空回复，群友绕了六分钟才在 17:34:31
+    打对「/画廊」。用户原话：「他们以为/不是必须的，这个是操作习惯的问题」。
+
+    边界（同日用户拍板）：
+    - 只认私聊，群聊仍要斜杠（「画廊」在群里太常见）；
+    - 本轮带图不劫（带图说「换装」是要改图，不是要网页）；
+    - 去标点后 ≤10 字，且关键词落在前 5 个字内。
+    """
+
+    URL = "https://calm-otter-1234.trycloudflare.com"
+
+    def _kw(self, text, where="private", has_image=False):
+        with mock.patch.object(direct_gen.qq_api, "current_context",
+                               return_value=(where, "2509355624")):
+            return direct_gen._private_entry_kw(text, has_image=has_image)
+
+    def _decide(self, text):
+        from app import friend_site
+        with mock.patch.object(direct_gen.qq_api, "current_context",
+                               return_value=("private", "2509355624")), \
+                mock.patch.object(friend_site, "url", return_value=self.URL), \
+                mock.patch.object(direct_gen.llm, "call_llm") as m_llm:
+            out = direct_gen.decide(text, [], False, at_me=True)
+        m_llm.assert_not_called()      # 零 LLM：不能为了个链接烧一次调用
+        return out
+
+    def test_real_private_messages_hit(self):
+        """群里那五条真实私聊原话，加上各自的变体。"""
+        cases = {
+            "画廊": "gallery",
+            "发画廊": "gallery",
+            "画廊 指令": "gallery",
+            "大大怪发  画廊": "gallery",
+            "画廊在哪": "gallery",
+            "我要画廊链接": "gallery",
+            "跑图台": "runbench",
+            "跑图台链接": "runbench",
+            "换装": "outfit",
+            "换装网页": "outfit",
+        }
+        for t, want in cases.items():
+            self.assertEqual(self._kw(t), want, t)
+
+    def test_long_sentence_is_left_to_the_ai(self):
+        """整段话里顺带提到不算——不然每聊一句就甩一次链接。"""
+        for t in ("这个画廊不错我上次去过", "帮我把这张图换装一下",
+                  "说说这个画廊到底是什么东西吧"):
+            self.assertIsNone(self._kw(t), t)
+
+    def test_keyword_must_sit_in_the_head(self):
+        """9 个字、关键词落在第 6 个字：这是改图需求，不是要网页。"""
+        self.assertIsNone(self._kw("帮我把这个图换装"))
+        # 同一句话但关键词靠前 → 命中（确认不是被长度卡掉的）
+        self.assertEqual(self._kw("换装这个图帮我"), "outfit")
+
+    def test_image_turn_goes_to_the_image_pipeline(self):
+        """带图说「换装」= 把这件衣服换上去，照旧走改图。"""
+        self.assertIsNone(self._kw("换装", has_image=True))
+
+    def test_group_never_fires(self):
+        """群里恒不认——`_GALLERY_RE` 那三条斜杠正则才是群聊的唯一入口。"""
+        for t in ("画廊", "跑图台", "换装", "发画廊"):
+            self.assertIsNone(self._kw(t, where="group"), t)
+
+    def test_decide_returns_the_gallery_url(self):
+        out = self._decide("画廊")
+        self.assertIn(self.URL + "/gallery?from=qq", out)
+
+    def test_decide_returns_the_outfit_url(self):
+        out = self._decide("换装")
+        self.assertIn("/outfit?k=", out)
+
+    def test_decide_returns_the_runbench_url(self):
+        out = self._decide("跑图台")
+        self.assertIn("/runbench?k=", out)
+
+    def test_slash_forms_still_work(self):
+        """斜杠没废：老用户和群聊照旧。"""
+        for t in ("/画廊", "／画廊", "/ 画廊"):
+            self.assertIn(self.URL + "/gallery", self._decide(t))

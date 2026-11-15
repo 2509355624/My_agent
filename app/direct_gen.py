@@ -238,6 +238,57 @@ _LIST_PRESET_RE = re.compile(r"^\s*[\/／]\s*预设列表")
 # 「/跑图台」= 随心配预设面板网页（2026-11-13）。斜杠即命令、不用 @、
 # 零 LLM 直回带令牌的链接（与 /换装 同口径：令牌含来源会话 + 过期，免登录）。
 _RUNBENCH_RE = re.compile(r"^\s*[\/／]\s*跑图台")
+
+# ─── 私聊兜底：不打斜杠也认（2026-11-15 用户要求）─────────────────────
+# 起因：群友以为「/」是可选的，私聊里只打「画廊」「跑图台」永远不生效。
+# 11-15 当天实录五次：07:17「画廊」、14:58「跑图台」、17:31「发画廊」、
+# 17:33「画廊 指令」、18:53「大大怪发  画廊」——机器人每次都回「我这边
+# 没有这个功能」，群友绕了六分钟才在 17:34:31 打对「/画廊」。用户原话：
+# 「他们以为/不是必须的，这个是操作习惯的问题」。
+#
+# **只做私聊**：群里「画廊」两个字太常见（「这个画廊不错」「P站画廊」），
+# 放开等于每聊一次甩一次链接。群聊的判定与免 @ 白名单仍只认斜杠（qq_bot
+# 那份 `_GALLERY_RE` / `_OUTFIT_RE` / `_COMIC_STUDIO_RE` 一个字没改）。
+#
+# 三道限制（用户 2026-11-15 拍板）：
+#   1. 本轮带图 → 不劫。带图说「换装」是「把这件衣服换上去」的改图需求，
+#      不是要网页；11-15 08:06 那条裸「换装」就是被当成生图提示词跑了一张图。
+#   2. 去掉空白标点后 ≤10 字：真人打字全是「画廊」「发画廊」「画廊 指令」
+#      这种短句；一整段话里顺带提到不算。
+#   3. 关键词必须落在前 5 个字内：「帮我把这张图换装一下」这种改图需求落在
+#      第 6 个字之后，不劫。
+_PRIVATE_ENTRY_KW = (
+    ("runbench", "跑图台"),
+    ("outfit", "换装"),
+    ("gallery", "画廊"),
+)
+_PRIVATE_KW_MAX_CHARS = 10
+_PRIVATE_KW_HEAD_CHARS = 5
+_KW_STRIP_RE = re.compile(
+    r"[\s，。！？、,.!?~～…·:：;；\"'“”‘’()（）\[\]【】{}<>《》_\-—]+")
+
+
+def _private_entry_kw(text, has_image=False):
+    """私聊里不打斜杠的入口词。命中返回 'gallery' / 'outfit' / 'runbench'。
+
+    判据与来历见上方 `_PRIVATE_ENTRY_KW` 注释；**群里恒返回 None**，群聊的
+    斜杠命令不走这里（由 `_GALLERY_RE` 那三条正则自己管）。
+    """
+    if has_image:
+        return None
+    if qq_api.current_context()[0] != "private":
+        return None
+    flat = _KW_STRIP_RE.sub("", text or "")
+    if not flat or len(flat) > _PRIVATE_KW_MAX_CHARS:
+        return None
+    hits = [(flat.find(word), key) for key, word in _PRIVATE_ENTRY_KW
+            if word in flat]
+    if not hits:
+        return None
+    pos, key = min(hits)
+    return key if pos < _PRIVATE_KW_HEAD_CHARS else None
+
+
 # 生图意图粗判（画图动词）。「生成」后面 0~4 字内接「图」才算，避免
 # 「生成一下总结」误中。
 _INTENT_RE = re.compile(r"画|绘|来张|来一张|来幅|生成.{0,4}图|图.{0,2}一[张幅]")
@@ -1041,7 +1092,7 @@ MENU_TEXT = (
     "\n"
     "「silver-hd」= 3x 超清出图\n"
     "「/更多渠道」= 档位/画风/其他AI ｜ 「使用指南」= 详细玩法\n"
-    "「/画廊」= 看大家出过的图（私聊发你网址）\n"
+    "「/画廊」= 看大家出过的图（私聊发你网址，私聊直接说「画廊」也行）\n"
     "「/漫画台」= 写剧本 + 跑漫画的工作台（私聊发你网址）"
 )
 
@@ -1126,9 +1177,13 @@ GUIDE_TEXT = (
     "\n"
     "【随机口令】今日老婆 ｜ 随机萝莉 / 兽耳 / 女仆\n"
     "\n"
-    "【画廊】私聊发「/画廊」→ 给网址，进去看大家出过的图\n"
+    "【画廊】私聊说「画廊」或发「/画廊」→ 给网址，进去看大家出过的图\n"
+    "　（私聊里不打斜杠也认：「画廊」「发画廊」「画廊链接」都行）\n"
     "　要填 QQ 号 + 私聊验证码才能进 · 能点赞/收藏/下载\n"
     "　群里发只回一句「私聊我发你」，不发链接\n"
+    "\n"
+    "【跑图台】私聊说「跑图台」→ 给带令牌的网址，挑一套随心配预设直接出图\n"
+    "【换装】私聊说「换装」→ 给双图换装/换姿势网页（带图片就不认，照旧改图）\n"
     "\n"
     "【漫画台】私聊发「/漫画台」→ 给网址，进去写剧本 + 跑漫画\n"
     "　一句话出剧本、一键跑 10 格：底图优先队列约 150 秒，跑完自动加气泡台词\n"
@@ -1330,7 +1385,7 @@ def _gallery_text():
     if tgt == "group":
         # 群里只给一句（和「预设网页」同口径）：内容本来就要登录才看得到，
         # 入口也没必要挂在群里。
-        return "画廊在群友页里，网址我私聊发你——先加我好友，私聊发「/画廊」就行。"
+        return "画廊在群友页里，网址我私聊发你——先加我好友，私聊发「画廊」就行（不用加斜杠）。"
     # `?from=qq` 是给 5175 的解锁标记：/play 会在浏览器里种 7 天的 fr_solo，
     # 之后访问 /gallery 会被 _gate 挡回游客页。带这个参数的只可能是刚从 QQ
     # 指令拿到的链接，网关会先清标记再按正常鉴权走（未登录 → 登录页）。
@@ -3069,6 +3124,17 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     # 零 LLM 直回带令牌的链接。
     if _RUNBENCH_RE.match(text):
         return _runbench_text()
+    # ── 私聊兜底：上面三条不打斜杠也认（2026-11-15 用户要求）──────────
+    # 只补「用户没打那个斜杠」这一种情况：私聊 + 没带图 + 短句 + 关键词在
+    # 前 5 字。群聊走不到这儿（`_private_entry_kw` 里判 target）。判据的来历
+    # 和三次实测见常量区注释。
+    _kw = _private_entry_kw(text, has_image=bool(data_urls))
+    if _kw == "gallery":
+        return _gallery_text()
+    if _kw == "outfit":
+        return _outfit_text()
+    if _kw == "runbench":
+        return _runbench_text()
     addressed = trigger.called(own_text, at_me)
     # 「预设网页」= 群友页地址（2026-10-30）。零 LLM，只读一个文件；
     # 放在这里而不是模板里——地址每次重启都变，模型记不住也不该记。
@@ -3430,7 +3496,13 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
             _remember_job(session_key, data["skill"], data["prompt"])
             return _enqueue(data["skill"], data["prompt"], text,
                      character=(data.get("character") or ""))
-        return "这条没转译成生图指令。照格式来：@我 渠道 描述。"
+        # 走到这儿 = `_translate` 拿回 None，也就是**模型调用失败**（`_ask`
+        # 返回空 / 吐的东西解析不成 JSON），不是用户格式打错。
+        # 2026-11-15 现场：主模型 cx_a1b2c3d4 连续返回 200 空正文，群友收到的
+        # 却是「这条没转译成生图指令。照格式来：@我 渠道 描述。」——既看不懂
+        # 「转译」是什么，又以为自己哪儿打错了，还白问一句「这是什么意思」。
+        # 真·格式问题（只打了渠道词没给描述）在上一段就拦下了，不会落到这里。
+        return "刚才没想明白，再发一次试试。"
 
     # 走到这里 = 没图 / 没渠道词 / 没成品串 / 没「再来一张」的纯文本轮
     #（可能带引用）。一律交给 AI 判意图：要画图就出图，是聊天/提问就回话。
