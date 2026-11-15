@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="dark">
+<script>document.documentElement.classList.add("js");</script>
 <meta name="description" content="大大怪 · 多智能体助手的功能展示页：生图、角色扮演、长期记忆、漫画流水线与模型降级链，均可现场体验并查看后端链路。">
 <title>功能展示 | 大大怪 · 多智能体助手</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%23081420'/%3E%3Cpath d='M14 16h36v9H26v7h20v9H14z' fill='%23f3b35f'/%3E%3Cpath d='M14 48h36v5H14z' fill='%237ed3c4'/%3E%3C/svg%3E">
@@ -1049,9 +1050,233 @@ dialog::backdrop {
   .node-state, .chain-state, .hit-tag--selected, .runtime-live { forced-color-adjust: auto; }
   .scene-option:has(input:checked), .mode-option:has(input:checked), .comic-step[aria-pressed="true"] { border-color: Highlight; }
 }
+/* ============================================================
+   标签页（2026-11-15）
+   原来六个板块竖着排一页到底，讲到第三个板块就看不见第一个了。
+   改成点上方标签只显示一块；hash 仍然是 #image / #roleplay 这类，
+   以前发出去的链接照旧能在对应板块打开。
+   ============================================================ */
+.feature[hidden] { display: none !important; }
+/* 先藏再显示：底部脚本要等整页下载完才跑，这之前默认全显示会让访客看到
+   「六个板块同时出现又突然收起」的闪动。head 里那行给 html 加 .js，
+   CSS 立刻生效；底部 showTab 只负责把当前那块标成 is-active。
+   JS 被禁用时 <noscript> 里的样式会把它们放出来。 */
+html.js .feature { display: none; }
+html.js .feature.is-active { display: block; }
+.site-nav a[aria-current="page"] {
+  color: var(--paper);
+  border-block-end-color: var(--amber);
+}
+.site-nav a[aria-current="page"]::before {
+  content: "";
+  inline-size: 0.32rem;
+  block-size: 0.32rem;
+  margin-inline-end: 0.36rem;
+  border-radius: 50%;
+  background: var(--amber);
+}
+
+/* ─── 文档问答（RAG 演示）──────────────────────────── */
+.rag-grid {
+  display: grid;
+  gap: 1.25rem;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  align-items: start;
+}
+@media (max-width: 960px) { .rag-grid { grid-template-columns: 1fr; } }
+
+.rag-drop {
+  display: grid;
+  gap: 0.45rem;
+  justify-items: center;
+  padding: 1.15rem 1rem;
+  border: 1px dashed var(--line-strong);
+  background: rgba(14, 35, 49, 0.55);
+  text-align: center;
+}
+.rag-drop.is-over { border-color: var(--amber); background: var(--amber-soft); }
+.rag-drop strong { font-size: 0.95rem; font-weight: 500; }
+.rag-drop span { color: var(--muted); font-size: 0.8rem; }
+.rag-drop-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; margin-block-start: 0.35rem; }
+
+.rag-step {
+  border: 1px solid var(--line);
+  background: rgba(10, 26, 38, 0.72);
+  padding: 0.8rem 0.9rem;
+}
+.rag-step[data-state="idle"] { opacity: 0.55; }
+.rag-step[data-state="running"] { border-color: var(--amber); }
+.rag-step[data-state="done"] { border-color: var(--sea); }
+.rag-step[data-state="error"] { border-color: var(--danger); }
+.rag-step-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+.rag-step-no {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--amber);
+}
+.rag-step-title { font-size: 0.95rem; font-weight: 500; }
+.rag-step-meta {
+  margin-inline-start: auto;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.rag-step-body { margin-block-start: 0.55rem; font-size: 0.85rem; color: var(--paper-soft); }
+.rag-step-body[hidden] { display: none; }
+.rag-step-toggle {
+  margin-block-start: 0.5rem;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--sea);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.rag-step-toggle:hover { text-decoration: underline; }
+
+.rag-kv {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
+  gap: 0.5rem;
+  margin-block: 0.3rem 0.55rem;
+}
+.rag-kv div { border-inline-start: 1px solid var(--line); padding-inline-start: 0.55rem; }
+.rag-kv dt { color: var(--muted); font-size: 0.72rem; }
+.rag-kv dd { margin: 0; font-family: var(--font-mono); font-size: 0.92rem; color: var(--paper); }
+
+.rag-drop-lines { display: grid; gap: 0.2rem; max-block-size: 9rem; overflow: auto; }
+.rag-drop-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--paper-soft);
+}
+.rag-drop-line em { color: var(--danger); font-style: normal; }
+
+.rag-prompt {
+  margin: 0;
+  padding: 0.6rem 0.7rem;
+  max-block-size: 15rem;
+  overflow: auto;
+  border: 1px solid var(--line);
+  background: rgba(6, 17, 26, 0.8);
+  color: var(--paper-soft);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.rag-chunks { display: grid; gap: 0.5rem; max-block-size: 24rem; overflow: auto; margin-block-start: 0.6rem; }
+.rag-chunk { border: 1px solid var(--line); padding: 0.5rem 0.6rem; background: rgba(6, 17, 26, 0.5); }
+.rag-chunk-head {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.rag-chunk-head b { color: var(--sea); font-weight: 500; }
+.rag-chunk-head .over { color: var(--danger); }
+.rag-chunk p { margin: 0.3rem 0 0; font-size: 0.8rem; line-height: 1.6; color: var(--paper-soft); }
+.rag-chunk .why { color: var(--amber); font-size: 0.72rem; }
+
+.rag-vec { display: grid; gap: 0.45rem; margin-block-start: 0.5rem; }
+.rag-vec-row {
+  display: grid;
+  grid-template-columns: 4.2rem minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.rag-vec-bar { display: flex; gap: 2px; }
+.rag-vec-cell { inline-size: 100%; block-size: 0.85rem; }
+
+.rag-hits { display: grid; gap: 0.45rem; }
+.rag-hit { display: grid; grid-template-columns: 2.2rem minmax(0, 1fr); gap: 0.5rem; align-items: center; }
+.rag-hit-score {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--sea);
+  text-align: end;
+}
+.rag-hit-bar { block-size: 0.5rem; background: rgba(126, 211, 196, 0.16); }
+.rag-hit-bar i { display: block; block-size: 100%; background: var(--sea); }
+.rag-hit-text { font-size: 0.78rem; color: var(--paper-soft); margin-block-start: 0.2rem; }
+
+.rag-chat { border: 1px solid var(--line); background: rgba(10, 26, 38, 0.72); display: grid; }
+.rag-chat-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.65rem 0.8rem;
+  border-block-end: 1px solid var(--line);
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.rag-chat-head b { color: var(--paper); font-weight: 500; }
+.rag-log { display: grid; gap: 0.7rem; padding: 0.8rem; max-block-size: 30rem; overflow: auto; }
+.rag-msg { display: grid; gap: 0.25rem; }
+.rag-msg-role { font-family: var(--font-mono); font-size: 0.7rem; color: var(--muted); }
+.rag-msg-body { font-size: 0.86rem; line-height: 1.7; white-space: pre-wrap; }
+.rag-msg[data-role="user"] .rag-msg-body { color: var(--paper); }
+.rag-msg[data-role="assistant"] .rag-msg-body { color: var(--paper-soft); }
+.rag-msg-cites {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-block-start: 0.15rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+.rag-msg-cites span { border: 1px solid var(--line); padding: 0.05rem 0.35rem; }
+.rag-chat-form { display: grid; gap: 0.5rem; padding: 0.7rem 0.8rem; border-block-start: 1px solid var(--line); }
+.rag-chat-form textarea {
+  inline-size: 100%;
+  min-block-size: 3.2rem;
+  resize: vertical;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--line-strong);
+  background: rgba(6, 17, 26, 0.85);
+  color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 0.86rem;
+}
+.rag-chat-form textarea:focus { outline: 2px solid var(--amber); outline-offset: 1px; }
+.rag-empty { color: var(--muted); font-size: 0.82rem; padding: 0.6rem 0; }
+.rag-status { padding: 0.45rem 0.8rem; border-block-start: 1px solid var(--line); font-size: 0.75rem; color: var(--muted); font-family: var(--font-mono); }
+
+.rag-paste { display: grid; gap: 0.5rem; padding: 0.7rem; border: 1px solid var(--line); background: rgba(10, 26, 38, 0.72); }
+.rag-paste textarea {
+  inline-size: 100%;
+  min-block-size: 8rem;
+  resize: vertical;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--line-strong);
+  background: rgba(6, 17, 26, 0.85);
+  color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+.rag-paste textarea:focus { outline: 2px solid var(--amber); outline-offset: 1px; }
+
 </style>
 </head>
 <body>
+<noscript><style>html.js .feature { display: block !important; }</style></noscript>
 <a class="skip-link" href="#hero-title">跳到主要内容</a>
 
 <svg class="svg-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
@@ -1083,6 +1308,7 @@ dialog::backdrop {
         <li><a href="#memory">记忆</a></li>
         <li><a href="#comic">漫画</a></li>
         <li><a href="#chain">降级链</a></li>
+        <li><a href="#rag">文档问答</a></li>
       </ul>
     </nav>
     <a class="header-action" href="#roleplay">与岚灯对话</a>
@@ -1170,7 +1396,7 @@ dialog::backdrop {
       <div class="feature-intro">
         <p class="feature-kicker">生图 / 真实 GPU 队列</p>
         <h2 id="image-title">选一个预置场景，现场生成一张图</h2>
-        <p class="feature-desc">三个无人物环境场景固定走 <code>moss-qunyou</code> 渠道。页面只提交场景编号，自定义提示词会被忽略；生成完成后还会经过一次图片审核，未过审的图片不会显示。排队位置、耗时、种子和审核状态都在“查看链路”里。</p>
+        <p class="feature-desc">三个无人物环境场景固定走 <code>silver</code>（轻渠道，切换免重启 ComfyUI）渠道。页面只提交场景编号，自定义提示词会被忽略；生成完成后还会经过一次图片审核，未过审的图片不会显示。排队位置、耗时、种子和审核状态都在“查看链路”里。</p>
       </div>
       <div class="feature-tools">
         <button class="btn btn--small" type="button" id="imageChain" disabled><svg class="icon" aria-hidden="true"><use href="#i-chain" xlink:href="#i-chain"/></svg>查看链路</button>
@@ -1381,6 +1607,63 @@ dialog::backdrop {
       </div>
     </div>
   </section>
+
+  <!-- ============================================================
+       功能六：文档问答（RAG 全流程）
+       ============================================================ -->
+  <section class="feature" id="rag" aria-labelledby="rag-title">
+    <div class="feature-head">
+      <div class="feature-intro">
+        <p class="feature-kicker">文档问答 / 检索增强全流程</p>
+        <h2 id="rag-title">上传一份文档，看它怎么变成向量、又怎么被找回来</h2>
+        <p class="feature-desc">四步全部真跑：规则清洗先删掉页眉页码，大模型按语义切块（提示词原样展开给你看），本地小模型把每块压成 512 维向量，最后用你的问题去检索并带引用作答。每一步的中间数据都摊在下面，数字可以自己核对。文档限 1 万字；临时库 30 分钟无人访问自动销毁，同时最多 3 个。</p>
+      </div>
+      <div class="feature-tools">
+        <button class="btn btn--small" type="button" id="ragSample">载入示例文档</button>
+        <button class="btn btn--small" type="button" id="ragReset" hidden>销毁这个库</button>
+      </div>
+    </div>
+
+    <div class="rag-grid">
+      <div class="rag-main">
+        <div class="rag-drop" id="ragDrop">
+          <strong>把 txt / md 文件拖到这里</strong>
+          <span id="ragDropHint">或者选文件、粘贴正文。演示限 1 万字，超出会直接拒收。</span>
+          <div class="rag-drop-actions">
+            <button class="btn btn--primary btn--small" type="button" id="ragPick">选择文件</button>
+            <button class="btn btn--small" type="button" id="ragPaste">粘贴正文</button>
+            <input id="ragFile" type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" hidden>
+          </div>
+        </div>
+
+        <div class="rag-paste" id="ragPasteBox" hidden>
+          <textarea id="ragPasteText" placeholder="把正文粘到这里（最多 1 万字）"></textarea>
+          <div class="rag-drop-actions">
+            <button class="btn btn--primary btn--small" type="button" id="ragPasteGo">用这段正文</button>
+            <button class="btn btn--small" type="button" id="ragPasteCancel">收起</button>
+          </div>
+        </div>
+
+        <p class="field-error" id="ragError" role="alert" hidden></p>
+        <div id="ragSteps"></div>
+      </div>
+
+      <aside class="rag-chat" aria-labelledby="ragChatTitle">
+        <div class="rag-chat-head">
+          <b id="ragChatTitle">问这份文档</b>
+          <span id="ragKb">尚未建库</span>
+        </div>
+        <div class="rag-log" id="ragLog">
+          <p class="rag-empty" id="ragEmpty">先把文档跑进临时向量库，再在下面提问。回答只依据检索到的片段，并标注引用编号。</p>
+        </div>
+        <form class="rag-chat-form" id="ragForm">
+          <textarea id="ragQuestion" rows="2" placeholder="比如：为什么生图要串行执行？" disabled></textarea>
+          <button class="btn btn--primary btn--small" type="submit" id="ragAsk" disabled>提问</button>
+        </form>
+        <div class="rag-status" id="ragStatus">向量模型 bge-small-zh-v1.5 · 512 维 · CPU</div>
+      </aside>
+    </div>
+  </section>
 </main>
 
 <footer class="site-footer">
@@ -1532,6 +1815,8 @@ dialog::backdrop {
     comic: { data: null, view: "script" },
     image: {
       job: null,
+      jobsByScene: {},       // scene_id → job：每个场景留自己最后一次任务（2026-11-14）
+      globalDepth: null,     // 无任务时的全局队列深度（2026-11-14）
       busy: false,
       polling: false,
       timer: null,
@@ -1575,26 +1860,62 @@ dialog::backdrop {
     ui.sessionLabel.textContent = "已建立 · " + state.sessionId.slice(0, 6) + "…" + state.sessionId.slice(-4);
   }
 
+  // 生图任务按「场景」记最后一份（2026-11-14）：切场景不再清空已画好的图，
+  // 每个场景各自留自己的最后一次任务，切回去就能看到那张图。
+  function sceneKeyOfJob(job) {
+    return (job && job.scene && job.scene.id) ? String(job.scene.id) : null;
+  }
+  function readImageJobs() {
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(IMAGE_KEY) || "null");
+      // 兼容旧结构 {job: ...}：退化成按场景 map
+      if (parsed && parsed.job && typeof parsed.job.tag === "string") {
+        const job = parsed.job;
+        const key = sceneKeyOfJob(job) || "_default";
+        const map = {}; map[key] = job; return map;
+      }
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const map = {};
+        for (const k of Object.keys(parsed)) {
+          const j = parsed[k];
+          if (j && typeof j.tag === "string") map[k] = j;
+        }
+        return map;
+      }
+      return {};
+    } catch (_error) {
+      return {};
+    }
+  }
   function rememberImageJob(job) {
     if (!job || typeof job.tag !== "string" || !isSessionId(job.session_id)) return;
     try {
-      window.localStorage.setItem(IMAGE_KEY, JSON.stringify({ job: job }));
+      const map = readImageJobs();
+      const key = sceneKeyOfJob(job) || "_default";
+      map[key] = job;
+      window.localStorage.setItem(IMAGE_KEY, JSON.stringify(map));
     } catch (_error) {}
   }
-
-  function clearImageJobStorage() {
-    try { window.localStorage.removeItem(IMAGE_KEY); } catch (_error) {}
-  }
-
-  function readImageJob() {
-    try {
-      const parsed = JSON.parse(window.localStorage.getItem(IMAGE_KEY) || "null");
-      const job = parsed && parsed.job;
-      if (!job || typeof job.tag !== "string" || !isSessionId(job.session_id)) return null;
-      return job;
-    } catch (_error) {
-      return null;
+  function readImageJob(sceneId) {
+    const map = readImageJobs();
+    if (sceneId != null) {
+      const j = map[String(sceneId)] || map._default;
+      return (j && typeof j.tag === "string" && isSessionId(j.session_id)) ? j : null;
     }
+    // 不指定场景：取任意一个（优先 _default）
+    const j = map._default || Object.values(map)[0];
+    return (j && typeof j.tag === "string" && isSessionId(j.session_id)) ? j : null;
+  }
+  function clearImageJobStorage(sceneId) {
+    try {
+      if (sceneId == null) {
+        window.localStorage.removeItem(IMAGE_KEY);
+        return;
+      }
+      const map = readImageJobs();
+      delete map[String(sceneId)];
+      window.localStorage.setItem(IMAGE_KEY, JSON.stringify(map));
+    } catch (_error) {}
   }
 
   async function jsonRequest(path, options = {}) {
@@ -2078,6 +2399,7 @@ dialog::backdrop {
       state.image.restored = true;
       restoreImageJob();
     }
+    refreshQueueDepth();   // 无任务也显示当前队列深度（2026-11-14）
   }
 
   async function loadConfig() {
@@ -2132,7 +2454,11 @@ dialog::backdrop {
     ui.imageQueue.textContent = trace.queue_position == null
       ? (status === "queued" ? "读取中" : "—")
       : "第 " + formatNumber(trace.queue_position) + " 位";
-    ui.imageDepth.textContent = trace.queue_depth == null ? "—" : formatNumber(trace.queue_depth) + " 个";
+    // 没提交任务时也显示当前全局队列深度（2026-11-14），提交前就知道前面有没有人排
+    const depthVal = (job && trace.queue_depth != null)
+      ? trace.queue_depth
+      : (job ? null : state.image.globalDepth);
+    ui.imageDepth.textContent = depthVal == null ? "—" : formatNumber(depthVal) + " 个";
     ui.imageElapsed.textContent = trace.elapsed_seconds == null ? "—" : formatSeconds(trace.elapsed_seconds);
 
     ui.imageStageTitle.textContent = scene && scene.title ? scene.title : "尚未提交任务";
@@ -2185,6 +2511,8 @@ dialog::backdrop {
   function adoptImageJob(job) {
     if (!job || typeof job.tag !== "string") return;
     state.image.job = job;
+    const sk = sceneKeyOfJob(job);
+    if (sk) state.image.jobsByScene[sk] = job;
     state.image.error = "";
     state.image.errorChecks = 0;
     rememberSession(job.session_id);
@@ -2213,6 +2541,8 @@ dialog::backdrop {
       const next = data && data.job ? data.job : data;
       if (!next || typeof next.tag !== "string") throw new Error("状态响应缺少任务信息");
       state.image.job = next;
+      const sk = sceneKeyOfJob(next);
+      if (sk) state.image.jobsByScene[sk] = next;
       state.image.error = "";
       rememberSession(next.session_id);
       rememberImageJob(next);
@@ -2243,13 +2573,26 @@ dialog::backdrop {
         ? "任务记录已失效，请重新提交生成。"
         : "状态读取失败：" + error.message + "。可点“刷新状态”重试。";
       if (error.status === 404) {
+        const deadScene = sceneKeyOfJob(job);
         state.image.job = null;
-        clearImageJobStorage();
+        if (deadScene) delete state.image.jobsByScene[deadScene];
+        clearImageJobStorage(deadScene);
       }
       renderImagePanel();
       if (manual) showToast(state.image.error, "error");
     } finally {
       state.image.polling = false;
+    }
+  }
+
+  // 无任务时也拉一次全局队列深度（2026-11-14），提交前就知道前面有没有人排
+  async function refreshQueueDepth() {
+    try {
+      const data = await jsonRequest("/api/showcase/image/queue");
+      state.image.globalDepth = (data && data.queue_depth != null) ? data.queue_depth : null;
+      renderImagePanel();
+    } catch (_error) {
+      state.image.globalDepth = null;
     }
   }
 
@@ -2291,7 +2634,13 @@ dialog::backdrop {
 
   function restoreImageJob() {
     if (state.image.job) return;
-    const saved = readImageJob();
+    // 先把所有场景的历史任务读回内存（2026-11-14）
+    const map = readImageJobs();
+    for (const k of Object.keys(map)) {
+      state.image.jobsByScene[k] = map[k];
+    }
+    // 优先恢复「当前选中场景」的那张，没有就退任意一张
+    const saved = readImageJob(state.selectedSceneId);
     if (!saved) return;
     state.image.job = saved;
     if (saved.session_id) rememberSession(saved.session_id);
@@ -2821,13 +3170,23 @@ dialog::backdrop {
     ui.sceneList.addEventListener("change", (event) => {
       const input = event.target;
       if (!(input instanceof HTMLInputElement) || input.name !== "scene_id") return;
-      if (state.image.job && !isActiveImageJob(state.image.job)) {
-        state.image.job = null;
-        state.image.error = "";
-        clearImageJobStorage();
+      // 切场景不再清空已画好的图（2026-11-14）：先把手头这张按当前场景存好，
+      // 再切到新场景；新场景若有自己的历史任务就恢复显示，没有就空着等提交。
+      if (state.image.job) {
+        const curSk = sceneKeyOfJob(state.image.job) || state.selectedSceneId;
+        if (curSk) state.image.jobsByScene[curSk] = state.image.job;
       }
+      stopImagePolling();
       state.selectedSceneId = input.value;
+      const saved = state.image.jobsByScene[input.value];
+      state.image.job = saved || null;
+      state.image.error = "";
+      state.image.errorChecks = 0;
       renderImagePanel();
+      // 切到的新场景若还在排队/在画，继续轮询；否则停下
+      if (state.image.job && isActiveImageJob(state.image.job)) {
+        scheduleImagePoll(1400);
+      }
     });
     ui.imageSubmit.addEventListener("click", submitImage);
     ui.imageRefresh.addEventListener("click", () => refreshImageStatus(true));
@@ -2903,6 +3262,438 @@ dialog::backdrop {
   }
 
   bootstrap();
+})();
+</script>
+
+<!-- ============================================================
+     标签页 + 文档问答（2026-11-15）
+     独立作用域，不碰上面那套（生图/扮演/记忆/漫画/降级链）的逻辑。
+     ============================================================ -->
+<script>
+(() => {
+  "use strict";
+
+  // ─── 标签页 ────────────────────────────────────────────
+  const TABS = ["image", "roleplay", "memory", "comic", "chain", "rag"];
+  const main = document.getElementById("main");
+
+  function showTab(id, sync) {
+    if (!TABS.includes(id)) id = "image";
+    TABS.forEach((t) => {
+      const el = document.getElementById(t);
+      if (!el) return;
+      el.hidden = t !== id;
+      el.classList.toggle("is-active", t === id);
+    });
+    document.querySelectorAll(".site-nav a, .header-action").forEach((a) => {
+      const href = a.getAttribute("href") || "";
+      if (href.charAt(0) !== "#") return;
+      if (href.slice(1) === id) a.setAttribute("aria-current", "page");
+      else a.removeAttribute("aria-current");
+    });
+    if (sync && location.hash !== "#" + id) {
+      history.replaceState(null, "", "#" + id);
+    }
+    // 切完回到内容区顶部：hero 还在，别让人以为没变化
+    if (main) window.scrollTo({ top: 0, behavior: "instant" in window ? "instant" : "auto" });
+  }
+
+  function bindTabs() {
+    document.querySelectorAll(".site-nav a, .header-action").forEach((a) => {
+      const href = a.getAttribute("href") || "";
+      if (href.charAt(0) !== "#" || !TABS.includes(href.slice(1))) return;
+      a.addEventListener("click", (e) => {
+        e.preventDefault();
+        showTab(href.slice(1), true);
+      });
+    });
+    window.addEventListener("hashchange", () => {
+      showTab((location.hash || "").replace("#", ""), false);
+    });
+    showTab((location.hash || "").replace("#", ""), false);
+  }
+
+  // ─── 文档问答 ──────────────────────────────────────────
+  const STEPS = [
+    { key: "clean", no: "01", title: "清洗", idle: "规则去噪 · 去页码 / 页眉 / 重复行" },
+    { key: "split", no: "02", title: "切分", idle: "DeepSeek 官方 · 语义切块" },
+    { key: "ingest", no: "03", title: "向量化", idle: "bge-small-zh-v1.5 · 512 维 · CPU" },
+    { key: "query", no: "04", title: "检索", idle: "余弦距离 · Top 4" },
+  ];
+
+  const S = { sid: null, kb: null, filename: "", ingested: false, busy: false, chunks: [] };
+
+  const $ = (id) => document.getElementById(id);
+  const stepsBox = $("ragSteps");
+  const errBox = $("ragError");
+  const logBox = $("ragLog");
+  const emptyBox = $("ragEmpty");
+  const kbLabel = $("ragKb");
+  const statusBox = $("ragStatus");
+  const question = $("ragQuestion");
+  const askBtn = $("ragAsk");
+  const resetBtn = $("ragReset");
+  const dropBox = $("ragDrop");
+
+  const esc = (s) => String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+  const num = (n) => Number(n || 0).toLocaleString("zh-CN");
+
+  function showErr(msg) {
+    if (!errBox) return;
+    errBox.textContent = msg || "";
+    errBox.hidden = !msg;
+  }
+
+  function renderSteps() {
+    if (!stepsBox) return;
+    stepsBox.innerHTML = STEPS.map((s) => `
+      <article class="rag-step" data-step="${s.key}" data-state="idle">
+        <div class="rag-step-head">
+          <span class="rag-step-no">${s.no}</span>
+          <span class="rag-step-title">${s.title}</span>
+          <span class="rag-step-meta">${esc(s.idle)}</span>
+        </div>
+        <div class="rag-step-body" hidden></div>
+        <button class="rag-step-toggle" type="button" hidden>展开明细</button>
+      </article>`).join("");
+    stepsBox.querySelectorAll(".rag-step-toggle").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const body = btn.parentElement.querySelector(".rag-step-body");
+        const open = body.hidden;
+        body.hidden = !open;
+        btn.textContent = open ? "收起明细" : "展开明细";
+      });
+    });
+  }
+
+  function stepEl(key) {
+    return stepsBox ? stepsBox.querySelector(`.rag-step[data-step="${key}"]`) : null;
+  }
+
+  function setStep(key, state, meta, bodyHTML, open) {
+    const el = stepEl(key);
+    if (!el) return;
+    el.dataset.state = state;
+    const metaEl = el.querySelector(".rag-step-meta");
+    if (meta) metaEl.textContent = meta;
+    const body = el.querySelector(".rag-step-body");
+    const toggle = el.querySelector(".rag-step-toggle");
+    if (bodyHTML != null) {
+      body.innerHTML = bodyHTML;
+      const has = bodyHTML.trim().length > 0;
+      toggle.hidden = !has;
+      body.hidden = !(has && open);
+      toggle.textContent = body.hidden ? "展开明细" : "收起明细";
+    }
+  }
+
+  async function postJSON(path, body) {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    let data = null;
+    try { data = await res.json(); } catch (_) { data = null; }
+    if (!res.ok || !data || data.ok === false) {
+      throw new Error((data && data.error) || `请求失败（HTTP ${res.status}）`);
+    }
+    return data;
+  }
+
+  function kv(pairs) {
+    return `<dl class="rag-kv">${pairs.map(([k, v]) =>
+      `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>`;
+  }
+
+  function setBusy(on) {
+    S.busy = on;
+    document.querySelectorAll("#ragPick, #ragSample, #ragPaste, #ragReset, #ragAsk")
+      .forEach((b) => { if (b) b.disabled = on; });
+    if (!on) {
+      const able = S.ingested;
+      if (askBtn) askBtn.disabled = !able;
+      if (question) question.disabled = !able;
+      if (resetBtn) resetBtn.hidden = !S.sid;
+    }
+  }
+
+  // ── 四步流水线：上传 → 清洗 → 切分 → 入库 ──────────────
+  async function runPipeline(rawText, filename) {
+    if (S.busy) return;
+    showErr("");
+    renderSteps();
+    S.chunks = [];
+    S.ingested = false;
+    if (askBtn) askBtn.disabled = true;
+    if (question) question.disabled = true;
+    setBusy(true);
+
+    try {
+      // ① 清洗
+      setStep("clean", "running", "正在清洗…");
+      const clean = await postJSON("/api/raglab/clean", { text: rawText, filename });
+      S.sid = clean.sid;
+      S.kb = clean.kb;
+      S.filename = clean.filename;
+      if (kbLabel) kbLabel.textContent = clean.kb + " · " + clean.filename;
+      const rep = clean.report;
+      const removed = rep.removed;
+      const dropTotal = removed.page + removed.repeat + removed.blank;
+      const lines = (rep.samples || []).map((s) =>
+        `<div class="rag-drop-line"><span>${esc(s.line)}</span><em>${esc(s.reason)}</em></div>`).join("");
+      setStep("clean", "done",
+        `${num(rep.raw_chars)} → ${num(rep.clean_chars)} 字 · ${clean.secs}s`,
+        kv([["原始", num(rep.raw_chars) + " 字"], ["清洗后", num(rep.clean_chars) + " 字"],
+            ["删除行", dropTotal + " 行"], ["保留行", num(rep.kept_lines)]]) +
+        `<p style="margin:0 0 .35rem;font-size:.78rem;color:var(--muted)">明细：页码 ${removed.page} · 重复短行 ${removed.repeat} · 多余空行 ${removed.blank} · 行尾空白 ${removed.trimmed} · 零宽字符 ${removed.zero_width}</p>` +
+        (lines ? `<div class="rag-drop-lines">${lines}</div>` : ""),
+        true);
+
+      // ② 大模型切分
+      setStep("split", "running", "正在切分（分批送模型，约 20~60 秒）…");
+      const split = await postJSON("/api/raglab/split", { text: clean.text, sid: S.sid });
+      S.chunks = split.chunks || [];
+      const st = split.stats;
+      const batchRows = (split.batches || []).map((b) =>
+        `<p style="margin:.15rem 0;font-size:.75rem;color:${b.error ? "var(--danger)" : "var(--muted)"}">
+           第 ${b.no} 批 · ${num(b.chars)} 字 · ${b.secs}s · 返回 ${num(b.reply_chars)} 字符 · 切出 ${b.count} 块${b.error ? " · " + esc(b.error) : ""}
+         </p>`).join("");
+      const chunkRows = S.chunks.map((c) => `
+        <div class="rag-chunk">
+          <div class="rag-chunk-head">
+            <b>${esc(c.id)}</b>
+            <span>${esc(c.heading || "未命名小节")}</span>
+            <span class="${c.over ? "over" : ""}">${num(c.chars)} 字${c.over ? "（超 500，会被截断）" : ""}</span>
+          </div>
+          ${c.why ? `<div class="why">切分理由：${esc(c.why)}</div>` : ""}
+          <p>${esc(c.content)}</p>
+        </div>`).join("");
+      setStep("split", "done",
+        `${st.count} 块 · 平均 ${st.avg} 字 · ${split.secs}s`,
+        kv([["块数", st.count], ["平均字数", st.avg], ["超过 500 字", st.over],
+            ["批次数", (split.batches || []).length], ["耗时", split.secs + " s"]]) +
+        `<p style="margin:.4rem 0 .25rem;font-size:.78rem;color:var(--amber)">切分提示词（原样展示，未做删改）</p>` +
+        `<pre class="rag-prompt">${esc(split.prompt)}</pre>` +
+        `<p style="margin:.5rem 0 .1rem;font-size:.78rem;color:var(--amber)">每批实际返回</p>` +
+        batchRows +
+        `<div class="rag-chunks">${chunkRows}</div>`,
+        false);
+
+      // ③ 向量化入库
+      setStep("ingest", "running", "正在编码并写入…");
+      const ing = await postJSON("/api/raglab/ingest", { sid: S.sid, chunks: S.chunks.map((c) => ({
+        id: c.id, content: c.content, heading: c.heading })) });
+      S.ingested = true;
+      const cells = (ing.preview || []).map((v, i) => {
+        const blocks = (v.head || []).map((x) => {
+          const a = Math.min(1, Math.abs(Number(x)) * 8);
+          const color = Number(x) >= 0
+            ? `rgba(243,179,95,${(0.15 + a * 0.85).toFixed(2)})`
+            : `rgba(126,211,196,${(0.15 + a * 0.85).toFixed(2)})`;
+          return `<span class="rag-vec-cell" style="background:${color}" title="${esc(x)}"></span>`;
+        }).join("");
+        return `<div class="rag-vec-row"><span>#${i + 1}</span><span class="rag-vec-bar">${blocks}</span></div>`;
+      }).join("");
+      setStep("ingest", "done",
+        `${ing.count} 条 · ${ing.dim} 维 · ${ing.secs}s`,
+        kv([["入库条数", ing.count], ["向量维度", ing.dim],
+            ["模型", ing.model], ["耗时", ing.secs + " s"]]) +
+        `<p style="margin:0 0 .35rem;font-size:.78rem;color:var(--muted)">每块向量的前 8 维（琥珀=正、海沫=负，越深绝对值越大；已 L2 归一化，模长恒为 1）：</p>` +
+        `<div class="rag-vec">${cells}</div>`,
+        false);
+
+      if (statusBox) statusBox.textContent = `${S.kb} · ${ing.count} 条 · 512 维 · 30 分钟无人访问自动销毁`;
+      if (kbLabel) kbLabel.textContent = `${S.kb} · ${ing.count} 条`;
+      if (askBtn) askBtn.disabled = false;
+      if (question) question.disabled = false;
+      if (resetBtn) resetBtn.hidden = false;
+      if (emptyBox) emptyBox.hidden = true;
+      if (question) question.focus();
+    } catch (err) {
+      showErr(err.message || "流程失败");
+      ["clean", "split", "ingest"].forEach((k) => {
+        const el = stepEl(k);
+        if (el && el.dataset.state === "running") {
+          el.dataset.state = "error";
+          el.querySelector(".rag-step-meta").textContent = "失败";
+        }
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ── 提问 ───────────────────────────────────────────────
+  function pushMsg(role, body, cites) {
+    if (emptyBox) emptyBox.hidden = true;
+    const wrap = document.createElement("div");
+    wrap.className = "rag-msg";
+    wrap.dataset.role = role;
+    const label = role === "user" ? "访客" : "回答";
+    wrap.innerHTML = `<span class="rag-msg-role">${esc(label)}</span>` +
+      `<div class="rag-msg-body">${esc(body)}</div>` +
+      (cites && cites.length
+        ? `<div class="rag-msg-cites">${cites.map((c) => `<span>${esc(c)}</span>`).join("")}</div>`
+        : "");
+    if (logBox) {
+      logBox.appendChild(wrap);
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+  }
+
+  async function ask(text) {
+    if (!text || !S.ingested || S.busy) return;
+    setBusy(true);
+    showErr("");
+    pushMsg("user", text);
+    const pending = document.createElement("div");
+    pending.className = "rag-msg";
+    pending.dataset.role = "assistant";
+    pending.innerHTML = `<span class="rag-msg-role">检索中…</span>`;
+    if (logBox) { logBox.appendChild(pending); logBox.scrollTop = logBox.scrollHeight; }
+
+    try {
+      const data = await postJSON("/api/raglab/answer", { sid: S.sid, question: text, k: 4 });
+      const hits = data.hits || [];
+      const bars = hits.map((h) => `
+        <div class="rag-hit">
+          <span class="rag-hit-score">${(h.score * 100).toFixed(1)}%</span>
+          <span>
+            <span class="rag-hit-bar"><i style="width:${Math.max(2, h.score * 100).toFixed(1)}%"></i></span>
+            <span class="rag-hit-text">[${h.no}] ${esc(h.heading || "未命名小节")} · 距离 ${h.distance} · ${h.chars} 字</span>
+          </span>
+        </div>`).join("");
+      setStep("query", hits.length ? "done" : "error",
+        hits.length ? `Top ${hits.length} · 最高 ${(hits[0].score * 100).toFixed(1)}%` : "没有命中",
+        (hits.length
+          ? `<p style="margin:0 0 .5rem;font-size:.78rem;color:var(--muted)">顺序是 MMR 多样性重排后的结果，不是纯相似度排序——所以第 2 名的百分比可能比第 3 名低，那是为了少返回几段重复内容。</p>
+             <div class="rag-hits">${bars}</div>`
+          : `<p>这一问没有检索到片段。</p>`) +
+        (data.prompt
+          ? `<p style="margin:.6rem 0 .25rem;font-size:.78rem;color:var(--amber)">发给模型的 prompt（原样）</p><pre class="rag-prompt">${esc(data.prompt)}</pre>`
+          : ""),
+        true);
+
+      pending.innerHTML = `<span class="rag-msg-role">回答 · ${esc(data.model || "deepseek")} · ${data.secs}s</span>` +
+        `<div class="rag-msg-body">${esc(data.answer)}</div>` +
+        (hits.length ? `<div class="rag-msg-cites">${hits.map((h) => `<span>[${h.no}] ${esc(h.heading || "未命名小节")}</span>`).join("")}</div>` : "");
+      if (logBox) logBox.scrollTop = logBox.scrollHeight;
+    } catch (err) {
+      pending.innerHTML = `<span class="rag-msg-role">失败</span><div class="rag-msg-body">${esc(err.message || "提问失败")}</div>`;
+      showErr(err.message || "提问失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ── 上传入口 ───────────────────────────────────────────
+  async function readFile(file) {
+    if (!file) return;
+    const ok = /\.(txt|md|markdown)$/i.test(file.name) || /^text\//.test(file.type);
+    if (!ok) {
+      showErr("只支持 txt / md 纯文本（PDF 与 Word 暂未接入）");
+      return;
+    }
+    if (file.size > 400 * 1024) {
+      showErr("文件太大：演示限 1 万字，请换小一点的纯文本");
+      return;
+    }
+    const text = await file.text();
+    runPipeline(text, file.name);
+  }
+
+  async function loadSample() {
+    try {
+      const res = await fetch("/raglab-sample.md", { cache: "no-store" });
+      if (!res.ok) throw new Error("示例文档读取失败（HTTP " + res.status + "）");
+      const text = await res.text();
+      runPipeline(text, "raglab-sample.md");
+    } catch (err) {
+      showErr(err.message || "示例文档读取失败");
+    }
+  }
+
+  function bindRag() {
+    if (!stepsBox) return;
+    renderSteps();
+
+    $("ragPick")?.addEventListener("click", () => $("ragFile")?.click());
+    $("ragFile")?.addEventListener("change", (e) => {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = "";
+      readFile(file);
+    });
+    $("ragSample")?.addEventListener("click", loadSample);
+
+    const pasteBox = $("ragPasteBox");
+    $("ragPaste")?.addEventListener("click", () => {
+      if (!pasteBox) return;
+      pasteBox.hidden = !pasteBox.hidden;
+      if (!pasteBox.hidden) $("ragPasteText")?.focus();
+    });
+    $("ragPasteCancel")?.addEventListener("click", () => { if (pasteBox) pasteBox.hidden = true; });
+    $("ragPasteGo")?.addEventListener("click", () => {
+      const text = ($("ragPasteText")?.value || "").trim();
+      if (!text) { showErr("粘一段正文再点"); return; }
+      if (pasteBox) pasteBox.hidden = true;
+      runPipeline(text, "粘贴的正文");
+    });
+
+    if (dropBox) {
+      ["dragenter", "dragover"].forEach((ev) => dropBox.addEventListener(ev, (e) => {
+        e.preventDefault(); dropBox.classList.add("is-over");
+      }));
+      ["dragleave", "drop"].forEach((ev) => dropBox.addEventListener(ev, (e) => {
+        e.preventDefault(); dropBox.classList.remove("is-over");
+      }));
+      dropBox.addEventListener("drop", (e) => {
+        const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        readFile(file);
+      });
+    }
+
+    $("ragForm")?.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const text = (question?.value || "").trim();
+      if (!text) return;
+      if (question) question.value = "";
+      ask(text);
+    });
+    if (question) {
+      question.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          $("ragForm")?.requestSubmit();
+        }
+      });
+    }
+
+    resetBtn?.addEventListener("click", async () => {
+      if (!S.sid) return;
+      try {
+        await postJSON("/api/raglab/reset", { sid: S.sid });
+      } catch (_) { /* 过期了也算清掉 */ }
+      S.sid = null; S.kb = null; S.ingested = false; S.chunks = [];
+      renderSteps();
+      if (logBox) logBox.innerHTML = "";
+      if (emptyBox) { emptyBox.hidden = false; logBox?.appendChild(emptyBox); }
+      if (kbLabel) kbLabel.textContent = "尚未建库";
+      if (askBtn) askBtn.disabled = true;
+      if (question) { question.disabled = true; question.value = ""; }
+      resetBtn.hidden = true;
+      showErr("");
+      if (statusBox) statusBox.textContent = "向量模型 bge-small-zh-v1.5 · 512 维 · CPU";
+    });
+  }
+
+  bindTabs();
+  bindRag();
+  // 页面打开就把小模型拉起来：冷启动约 12 秒，等用户真上传时已经热了
+  fetch("/api/raglab/warm", { method: "POST" }).catch(() => {});
 })();
 </script>
 

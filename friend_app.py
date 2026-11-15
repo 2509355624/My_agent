@@ -114,8 +114,14 @@ LIMITS = {
     "gv_send": (20, 3600),
     "gv_verify": (30, 600),
     # 产品展示页：聊天与状态共用一个宽松桶，真实生图单独限流。
-    "showcase": (120, 600),
+    # 状态轮询 1.6s/次（生图全程 1~3 分钟 ≈ 200+ 次），600/10分钟才够轮询，
+    # 原先 120 会在轮询 3 分钟后被自己掐成 429。
+    "showcase": (600, 600),
     "showimg": (12, 600),
+    # 文档问答（2026-11-15）：一次完整演示 = warm + clean + split + ingest ≈ 4 次，
+    # 之后每问一次 1 次。60/10 分钟够 8~10 轮演示；再紧会被自己的流程卡住。
+    # 真正的成本闸在 5174：单文件 1 万字、最多 200 块、同时最多 3 个临时库。
+    "raglab": (60, 600),
 }
 
 
@@ -187,6 +193,8 @@ def _gate():
         bucket = "showimg"
     elif path.startswith("/api/showcase/"):
         bucket = "showcase"
+    elif path.startswith("/api/raglab/"):
+        bucket = "raglab"
     else:
         bucket = "img" if (path.startswith("/api/gal/img/")
                            or path.startswith("/api/comic/img")
@@ -904,6 +912,17 @@ def showcase():
     return send_from_directory(WEB_DIR, "showcase.html")
 
 
+@app.route("/raglab-sample.md")
+def raglab_sample():
+    """展示页「载入示例文档」用的样本（2026-11-15）。
+
+    网关只反代 `/api/*`，页面自己去 `fetch("/raglab-sample.md")` 不会命中
+    转发规则，必须单独给一条静态路由——这个坑之前踩过（页面里取 json 在手机
+    上 404）。文件本身可以公开：里面没有任何密钥，就是一份技术说明。
+    """
+    return send_from_directory(WEB_DIR, "raglab-sample.md")
+
+
 # ── 跑图台页（2026-11-13）────────────────────────────────
 #
 # 「/跑图台」QQ 命令回的链接指向这里。和 /outfit 同款**免登录令牌制**：令牌
@@ -952,6 +971,17 @@ def proxy_showcase(sub):
     """产品展示接口匿名开放，但不注入 QQ，也不透传内部扮演身份。"""
     return _forward("/api/showcase", sub, allow_guest=True, force_guest=True,
                     post_timeout=180)
+
+
+@app.route("/api/raglab/<path:sub>", methods=["GET", "POST"])
+def proxy_raglab(sub):
+    """文档问答（2026-11-15）：匿名开放，游客各用各的临时库（sid 由 5174 发）。
+
+    `split` 要分批调大模型、`answer` 要检索再加生成，60 秒的默认超时不够——
+    宿主机实测一篇 4 千字文档切 2 批约 40 秒，1 万字打满要更久。
+    """
+    timeout = 300 if sub in ("split", "answer") else 60
+    return _forward("/api/raglab", sub, allow_guest=True, post_timeout=timeout)
 
 
 @app.route("/api/persona/<path:sub>", methods=["GET", "POST", "DELETE"])

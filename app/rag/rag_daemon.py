@@ -143,7 +143,21 @@ def _handle(req: dict, embeddings: LocalEmbeddings, store: VectorStore) -> dict:
                     "embedding": vec,
                 })
             count = store.upsert_entries(kb_name, upsert_rows)
-            return {"id": req_id, "ok": True, "count": count}
+            # 2026-11-15：演示页要展示「一段文字变成了什么样的数字」。
+            # 这里顺手回每块的维度、模长和前 8 维——向量已经在内存里，
+            # 回传这几个数零额外计算。老调用方只读 count，多出的字段不影响。
+            preview = []
+            for vec in vectors[:50]:
+                try:
+                    norm = sum(float(x) * float(x) for x in vec) ** 0.5
+                    head = [round(float(x), 4) for x in vec[:8]]
+                except Exception:                       # noqa: BLE001
+                    norm, head = 0.0, []
+                preview.append({"dim": len(vec), "norm": round(norm, 4),
+                                "head": head})
+            return {"id": req_id, "ok": True, "count": count,
+                    "dim": len(vectors[0]) if vectors else 0,
+                    "preview": preview}
 
         if cmd == "delete_kb":
             kb_name = str(req.get("kb_name") or "").strip()
