@@ -324,11 +324,12 @@ class PageTest(unittest.TestCase):
         with open(SHOWCASE, encoding="utf-8") as f:
             cls.src = f.read()
 
-    def test_six_tabs_declared_and_matched_by_sections(self):
+    def test_five_tabs_declared_and_matched_by_sections(self):
+        """角色扮演与长期记忆已合并成一个「对话与记忆」页（2026-11-15）。"""
         import re
         tabs = re.search(r"const TABS = \[(.*?)\];", self.src, re.S).group(1)
         ids = re.findall(r'"([a-z]+)"', tabs)
-        self.assertEqual(ids, ["image", "roleplay", "memory", "comic", "chain", "rag"])
+        self.assertEqual(ids, ["image", "guide", "comic", "chain", "rag"])
         for tid in ids:
             self.assertIn('id="%s"' % tid, self.src)
             self.assertIn('href="#%s"' % tid, self.src)
@@ -337,7 +338,7 @@ class PageTest(unittest.TestCase):
         import re
         sections = re.findall(r'<section class="feature" id="([a-z]+)"', self.src)
         self.assertEqual(sorted(sections),
-                         sorted(["image", "roleplay", "memory", "comic", "chain", "rag"]))
+                         sorted(["image", "guide", "comic", "chain", "rag"]))
 
     def test_rag_panel_has_every_hook_the_script_uses(self):
         import re

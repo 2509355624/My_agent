@@ -9,7 +9,9 @@
 import copy
 import hashlib
 import hmac
+import json
 import logging
+import os
 import re
 import secrets
 import threading
@@ -24,6 +26,7 @@ from app.config import (
     PERSONA_PROVIDER,
     PERSONA_MODEL,
     PROVIDERS,
+    state_path,
 )
 from app import comfy_out, friend_auth, image_audit, image_jobs, llm, persona_rag
 from app import showcase_prompts
@@ -42,11 +45,34 @@ _JOB_TAG = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _MODES = {item["id"] for item in showcase_prompts.PLAY_MODES}
 _TERMINAL_JOBS = {"ready", "blocked", "error"}
 
+# 只读母本知识库：由 tools/_seed_showcase_guide.py 灌入，250 轮讲解 / 377 条。
+# 展示页只读它，绝不写入；访客自己的对话写进 `_rag_line(session_id)` 私有线。
+_KB_LINE = "showcase_guide_v1"
+
+# 新访客的「上次参观」：直接填满 12 条窗口，一开口就能演长记忆。
+# 刻意不给答案——第 4 轮只说「里面有只亮着的东西，没看清牌子」，
+# 把「那只会发光的是什么」留给检索去答，否则等于把答案写在题目里。
+_PRESET = [
+    {"role": "user", "content": "今天只有一个小时，能走完吗"},
+    {"role": "assistant", "content": "走不完，咱们先挑重点。从门口的大洋池开始，蓝鲸那缸先看一眼，再往里走。"},
+    {"role": "user", "content": "这缸水得多大啊"},
+    {"role": "assistant", "content": "两千多吨。它游一圈要花不少时间，别急，等它自己从你面前过去就行。"},
+    {"role": "user", "content": "蓝鲸真的吃虾吗"},
+    {"role": "assistant", "content": "吃磷虾，一天能吞好几吨。它没有牙，靠鲸须把水滤出去，就像拿筛子捞面条——水走了，面留下。"},
+    {"role": "user", "content": "前面那片黑的区域是什么"},
+    {"role": "assistant", "content": "深海区。那边为了模拟深海基本不开灯，里面有只亮着的东西，上回太暗我没看清牌子，下次带你去看。"},
+    {"role": "user", "content": "那我今天先到这儿"},
+    {"role": "assistant", "content": "行。下次从深海区接着往里走，过了就是水母厅，那片的灯是紫的。"},
+    {"role": "user", "content": "出口在哪，我朋友在等我"},
+    {"role": "assistant", "content": "直走右转，水母厅门口有指示牌。下次早点来，深海区那边值得多待一会儿。"},
+]
+
 # 展示会话和任务只存进程内；长期记忆由 persona_rag 按独立会话线持久化。
 # 不读取内部 persona 存档，也不把访客消息写进任何群聊历史。
 _LOCK = threading.RLock()
 _SESSIONS = {}
 _JOBS = {}
+_STATE_FILE = state_path("showcase_state.json")
 _STATS = {
     "calls": 0,
     "total_tokens": 0,
@@ -54,6 +80,74 @@ _STATS = {
     "miss_tokens": 0,
     "last_call": None,
 }
+
+
+def _persist():
+    """把会话与任务的可序列化部分落盘，刷新/重启后能恢复终态结果。
+
+    只存「无副作用」的字段：会话的 history/turns、任务的 tag/owner/scene/
+    prompt/seed/created/status/images/audit。`job` 是 image_jobs 的 Job 对象
+    （含 threading.Event、entry 等），`audit_thread` 是线程句柄，都不能
+    JSON 序列化，落盘时剔除。恢复后的任务带 job=None，_job_view 走终态分支。
+    """
+    try:
+        with _LOCK:
+            jobs = {}
+            for tag, record in _JOBS.items():
+                jobs[tag] = {
+                    "tag": record.get("tag"),
+                    "owner": record.get("owner"),
+                    "scene": record.get("scene"),
+                    "prompt": record.get("prompt"),
+                    "seed": record.get("seed"),
+                    "created": record.get("created"),
+                    "status": record.get("status"),
+                    "images": record.get("images"),
+                    "audit": record.get("audit"),
+                }
+            sessions = {}
+            for sid, sess in _SESSIONS.items():
+                sessions[sid] = {
+                    "created": sess.get("created"),
+                    "last_active": sess.get("last_active"),
+                    "history": sess.get("history"),
+                    "turns": sess.get("turns"),
+                }
+            payload = {"jobs": jobs, "sessions": sessions}
+        tmp = _STATE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False)
+        os.replace(tmp, _STATE_FILE)
+    except Exception:
+        log.exception("展示页状态落盘失败")
+
+
+def _load_state():
+    """启动时读回上次落盘的会话与任务（终态结果）。"""
+    try:
+        if not os.path.exists(_STATE_FILE):
+            return
+        with open(_STATE_FILE, "r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+        with _LOCK:
+            for sid, sess in (payload.get("sessions") or {}).items():
+                _SESSIONS[sid] = {
+                    "created": sess.get("created") or time.time(),
+                    "last_active": sess.get("last_active") or time.time(),
+                    "history": sess.get("history") or [],
+                    "turns": int(sess.get("turns") or 0),
+                    "lock": threading.Lock(),
+                }
+            for tag, record in (payload.get("jobs") or {}).items():
+                if record.get("status") not in _TERMINAL_JOBS:
+                    # 进程重启后，还在跑/排队的任务句柄已丢失，无法继续推进；
+                    # 与其让访客永远轮询一个死任务，不如只恢复终态结果。
+                    continue
+                record["job"] = None
+                _JOBS[tag] = record
+    except Exception:
+        log.exception("展示页状态读回失败")
+
 
 
 @bp.before_request
@@ -90,7 +184,8 @@ def _session(session_id=None, create=True):
             sess = {
                 "created": time.time(),
                 "last_active": time.time(),
-                "history": [],
+                # 新访客自带「上次参观」的 6 轮窗口，一开口就能演长记忆。
+                "history": copy.deepcopy(_PRESET),
                 "turns": 0,
                 "lock": threading.Lock(),
             }
@@ -108,8 +203,9 @@ def _rag_line(session_id):
 def _history_context(history):
     """短上下文只服务第二路召回；完整注入仍以 messages 为准。"""
     parts = []
+    name = showcase_prompts.ROLE_CARD["name"]
     for item in history[-4:]:
-        role = "访客" if item.get("role") == "user" else "岚灯"
+        role = "访客" if item.get("role") == "user" else name
         parts.append(role + "：" + str(item.get("content") or "")[:180])
     return "\n".join(parts)
 
@@ -119,7 +215,8 @@ def _build_memory(session_id, query, history):
     try:
         block = persona_rag.build_block(
             _rag_line(session_id), query,
-            context=_history_context(history), trace=trace)
+            context=_history_context(history), trace=trace,
+            extra_lines=(_KB_LINE,))
     except Exception:
         # 记忆故障不应让公开聊天整轮不可用；轨迹必须如实标记降级。
         log.exception("展示页记忆检索失败")
@@ -213,7 +310,7 @@ def chain():
 def chat():
     data = request.get_json(silent=True) or {}
     message = str(data.get("message") or "").strip()
-    mode = str(data.get("mode") or "daily").strip()
+    mode = str(data.get("mode") or "guide").strip()
     if not message or len(message) > _MAX_MESSAGE:
         return jsonify({"error": "消息需为 1 到 500 字"}), 400
     if mode not in _MODES:
@@ -260,6 +357,7 @@ def chat():
         ])
         sess["history"] = sess["history"][-_MAX_HISTORY:]
         sess["turns"] += 1
+        _persist()
         try:
             persona_rag.remember(
                 _rag_line(session_id), message, reply,
@@ -273,6 +371,7 @@ def chat():
             "reply": reply,
             "mode": mode,
             "turn": sess["turns"],
+            "preset_turns": len(_PRESET) // 2,
             "usage": usage,
             "trace": trace,
         })
@@ -296,6 +395,226 @@ def memory():
     return jsonify({"session_id": session_id, "rag": trace})
 
 
+def _rag_client():
+    """拿 RAG 客户端；没起就起一次，最多等 4 秒。
+
+    daemon 冷启动要 3~8 秒（加载 torch + bge 模型）。展示页是公开页，
+    访客点开就得看到库，不能让他自己去猜「稍后再试」。等不到也返回
+    客户端，调用方按 `is_ready()` 决定说什么。
+    """
+    client = persona_rag._client()
+    if client.is_ready():
+        return client
+    if not client.start():
+        return client
+    for _ in range(8):
+        if client.is_ready():
+            return client
+        time.sleep(0.5)
+    return client
+
+
+def _kind_of(entry):
+    return str((entry.get("metadata") or {}).get("kind") or "")
+
+
+def _entry_view(entry, line_tag):
+    """只读条目视图：前端要看到「写进库之前的片」，所以正文原样给出。"""
+    meta = entry.get("metadata") or {}
+    content = str(entry.get("content") or "")
+    return {
+        "id": str(entry.get("id") or ""),
+        "line": line_tag,
+        "kind": _kind_of(entry),
+        "turn": meta.get("turn") or meta.get("seq") or 0,
+        "day": meta.get("day") or 0,
+        "chars": len(content),
+        "content": content[:1200],
+    }
+
+
+@bp.get("/api/showcase/guide/state")
+def guide_state():
+    """一次性给出右栏 ① 需要的全部状态：轮次、窗口、库统计。"""
+    try:
+        session_id, sess = _session(request.args.get("session_id"), create=True)
+    except ValueError:
+        return jsonify({"error": "无效展示会话"}), 400
+    client = _rag_client()
+    ready = client.is_ready()
+    kb_entries = []
+    private_entries = []
+    if ready:
+        try:
+            kb_entries = client.list_entries(
+                persona_rag.collection_name(_KB_LINE), timeout=30).get("entries") or []
+        except Exception:
+            log.exception("展示页读取母本库失败")
+        try:
+            private_entries = client.list_entries(
+                persona_rag.collection_name(_rag_line(session_id)),
+                timeout=30).get("entries") or []
+        except Exception:
+            log.exception("展示页读取访客线失败")
+
+    def _count(entries):
+        out = {"raw": 0, "batch": 0, "fact": 0, "total": len(entries)}
+        for entry in entries:
+            kind = _kind_of(entry)
+            if kind in out:
+                out[kind] += 1
+        return out
+
+    with sess["lock"]:
+        history = copy.deepcopy(sess["history"])
+        turns = int(sess["turns"])
+    return jsonify({
+        "session_id": session_id,
+        "ready": ready,
+        "turn": turns,
+        "preset_turns": len(_PRESET) // 2,
+        "window": {
+            "limit": _MAX_HISTORY,
+            "count": len(history),
+            "messages": history,
+        },
+        "kb": {"line": _KB_LINE, "counts": _count(kb_entries)},
+        "private": {"line": _rag_line(session_id), "counts": _count(private_entries)},
+    })
+
+
+@bp.get("/api/showcase/guide/library")
+def guide_library():
+    """分页浏览库里的条目；`line=kb|private|all`，`kind=raw|batch|fact`。"""
+    try:
+        session_id, sess = _session(request.args.get("session_id"), create=False)
+    except ValueError:
+        return jsonify({"error": "无效展示会话"}), 400
+    which = str(request.args.get("line") or "kb").strip().lower()
+    if which not in ("kb", "private", "all"):
+        which = "kb"
+    kind = str(request.args.get("kind") or "").strip().lower()
+    keyword = str(request.args.get("q") or "").strip()
+    try:
+        offset = max(0, int(request.args.get("offset") or 0))
+    except ValueError:
+        offset = 0
+    try:
+        limit = min(60, max(1, int(request.args.get("limit") or 20)))
+    except ValueError:
+        limit = 20
+
+    targets = []
+    if which in ("kb", "all"):
+        targets.append(("kb", _KB_LINE))
+    if which in ("private", "all") and sess is not None:
+        targets.append(("private", _rag_line(session_id)))
+
+    client = _rag_client()
+    if not client.is_ready():
+        return jsonify({"error": "检索服务还没就绪，稍等几秒再试"}), 503
+
+    rows = []
+    for tag, line in targets:
+        try:
+            entries = client.list_entries(
+                persona_rag.collection_name(line), timeout=30).get("entries") or []
+        except Exception:
+            log.exception("展示页列库失败 %s", line)
+            continue
+        for entry in entries:
+            view = _entry_view(entry, tag)
+            if kind and view["kind"] != kind:
+                continue
+            if keyword and keyword not in view["content"]:
+                continue
+            rows.append(view)
+
+    order = {"raw": 0, "batch": 1, "fact": 2}
+    rows.sort(key=lambda item: (order.get(item["kind"], 9),
+                                int(item["turn"] or 0) if str(item["turn"]).isdigit() else 0,
+                                item["id"]))
+    total = len(rows)
+    page = rows[offset:offset + limit]
+    return jsonify({
+        "line": which,
+        "kind": kind,
+        "q": keyword,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "entries": page,
+    })
+
+
+@bp.post("/api/showcase/guide/search")
+def guide_search():
+    """手动查库：只做向量检索，不调模型、不写库。
+
+    阈值按条目类型分开判（原话 0.70 / 提炼 0.60），和注入时一致；阈值外
+    的也返回，前端标成「未过阈值」，否则看不到「为什么这条没被用上」。
+    """
+    data = request.get_json(silent=True) or {}
+    query = str(data.get("query") or "").strip()
+    if not query or len(query) > _MAX_MESSAGE:
+        return jsonify({"error": "检索内容需为 1 到 500 字"}), 400
+    try:
+        session_id, sess = _session(data.get("session_id"), create=False)
+    except ValueError:
+        return jsonify({"error": "无效展示会话"}), 400
+    try:
+        top = min(20, max(1, int(data.get("k") or 8)))
+    except (TypeError, ValueError):
+        top = 8
+
+    targets = [("kb", _KB_LINE)]
+    if sess is not None:
+        targets.append(("private", _rag_line(session_id)))
+
+    client = _rag_client()
+    if not client.is_ready():
+        return jsonify({"error": "检索服务还没就绪，稍等几秒再试"}), 503
+
+    started = time.time()
+    hits = []
+    for tag, line in targets:
+        try:
+            result = client.search(
+                persona_rag.collection_name(line), query, k=max(12, top * 2),
+                timeout=30, allow_start=False)
+        except Exception:
+            log.exception("展示页查库失败 %s", line)
+            continue
+        for doc in result.get("docs") or []:
+            meta = doc.get("metadata") or {}
+            kind = str(meta.get("kind") or "")
+            try:
+                distance = float(doc.get("distance") or 1.0)
+            except (TypeError, ValueError):
+                distance = 1.0
+            limit = (persona_rag.RAW_MAX_DISTANCE if kind == "raw"
+                     else persona_rag.PERSONA_RAG_MAX_DISTANCE)
+            content = str(doc.get("content") or "")
+            hits.append({
+                "line": tag,
+                "kind": kind,
+                "id": str(doc.get("id") or ""),
+                "distance": round(distance, 4),
+                "similarity": round(max(0.0, 1.0 - distance), 4),
+                "threshold": limit,
+                "passed": distance <= limit,
+                "chars": len(content),
+                "content": content[:1200],
+            })
+    hits.sort(key=lambda item: item["distance"])
+    return jsonify({
+        "query": query,
+        "took_ms": int((time.time() - started) * 1000),
+        "scanned": len(hits),
+        "hits": hits[:top],
+    })
+
+
 @bp.get("/api/showcase/comic/replay")
 def comic_replay():
     return jsonify(copy.deepcopy(showcase_prompts.COMIC_REPLAY))
@@ -313,33 +632,45 @@ def _active_job_for(session_id):
 def _job_view(record):
     """把内部 Job 收敛成公开展示字段，不转发其他任务的队列信息。"""
     job = record["job"]
-    if job.entry and not record.get("images"):
-        try:
-            # 必须把 job 交给 output_images：History 里的 subfolder 可能为空
-            # （扮演/批量渠道的老坑），这时要按 job 算出这次提交的输出目录，
-            # 否则图明明出了，接口却读成“没有产物”。
-            record["images"] = image_jobs.output_images(job.entry, job=job)
-        except Exception:
-            log.exception("展示页读取生图产物失败 %s", record["tag"])
-            record["images"] = []
-    if job.error:
-        record["status"] = "error"
-        record["error"] = "生图任务未完成，请稍后重试"
-    elif job.done and record.get("images"):
-        if record["audit"]["state"] == "pending":
-            _start_audit(record)
-        elif record["audit"]["state"] == "running":
-            record["status"] = "reviewing"
-    elif job.done:
-        record["status"] = "error"
-        record["error"] = "图片产物暂不可用，请刷新状态或重新生成"
-    elif job.started:
-        record["status"] = "running"
+    if job is None:
+        # 进程重启后从状态文件恢复的任务：job 句柄已丢失，只能呈现落盘时的
+        # 终态（ready/blocked/error），不再能推进审核或排队位置。产物路径已
+        # 随 record["images"] 一起落盘，可直读。
+        pass
     else:
-        record["status"] = "queued"
+        if job.entry and not record.get("images"):
+            try:
+                # 必须把 job 交给 output_images：History 里的 subfolder 可能为空
+                # （扮演/批量渠道的老坑），这时要按 job 算出这次提交的输出目录，
+                # 否则图明明出了，接口却读成“没有产物”。
+                record["images"] = image_jobs.output_images(job.entry, job=job)
+            except Exception:
+                log.exception("展示页读取生图产物失败 %s", record["tag"])
+                record["images"] = []
+        # job.done 是 threading.Event，不是布尔值：必须用 is_set() 判断「任务已
+        # 终结」，否则 Event 对象永远 truthy，刚入队的任务就被误判成「已完成但没
+        # 产物」→ error。job.started 是时间戳或 None，可直接当布尔用。
+        if job.error:
+            record["status"] = "error"
+            # 把真实失败原因透传出来（2026-11-14）：原来写死「生图任务未完成」，
+            # 用户等 3 分多钟只看到一句废话，看不到是排队没轮到 / 内存重启 /
+            # 超时。image_jobs._reason 已把异常截成一句可读文案。
+            record["error"] = "生图未完成：" + image_jobs._reason(job.error)
+        elif job.done.is_set() and record.get("images"):
+            if record["audit"]["state"] == "pending":
+                _start_audit(record)
+            elif record["audit"]["state"] == "running":
+                record["status"] = "reviewing"
+        elif job.done.is_set():
+            record["status"] = "error"
+            record["error"] = "图片产物暂不可用，请刷新状态或重新生成"
+        elif job.started:
+            record["status"] = "running"
+        else:
+            record["status"] = "queued"
 
     position = None
-    if record["status"] == "queued":
+    if record["status"] == "queued" and job is not None:
         try:
             position = image_jobs.ahead_of(job)
         except Exception:
@@ -410,6 +741,7 @@ def _audit_job(record):
             record["status"] = "ready" if verdict.allow else "blocked"
             if not verdict.allow:
                 record["error"] = "图片未通过公开展示审核"
+        _persist()
     except Exception:
         # 审核服务本身异常也必须关闸，不能先把未审图发出去再补记录。
         log.exception("展示页图片审核失败 %s", record["tag"])
@@ -420,6 +752,7 @@ def _audit_job(record):
             }
             record["status"] = "blocked"
             record["error"] = "图片审核暂未完成"
+        _persist()
 
 
 @bp.post("/api/showcase/image/submit")
@@ -476,6 +809,7 @@ def image_submit():
             for key in terminal[:max(1, len(_JOBS) - _MAX_JOBS + 1)]:
                 _JOBS.pop(key, None)
         _JOBS[job.tag] = record
+    _persist()
     return jsonify({"job": _job_view(record)}), 202
 
 
@@ -503,6 +837,17 @@ def image_status():
     return jsonify({"job": _job_view(record)})
 
 
+@bp.get("/api/showcase/image/queue")
+def image_queue():
+    """当前 GPU 队列深度（无需 tag，供「还没提交任务」时预先显示排队情况）。"""
+    try:
+        depth = image_jobs.queue_depth()
+    except Exception:
+        log.exception("展示页读取队列深度失败")
+        depth = None
+    return jsonify({"queue_depth": depth})
+
+
 @bp.get("/api/showcase/image")
 def image_file():
     record = _owned_job(request.args.get("tag"), request.args.get("session_id"))
@@ -518,4 +863,5 @@ def image_file():
 
 
 def register(app):
+    _load_state()
     app.register_blueprint(bp)

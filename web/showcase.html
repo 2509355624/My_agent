@@ -625,6 +625,56 @@ button { cursor: pointer; }
 .image-rail-note { margin: 0.8rem 0 0; color: var(--muted); font-size: 0.74rem; line-height: 1.65; }
 
 /* ============================================================
+   对话与记忆
+   ============================================================ */
+.guide-layout { display: grid; gap: 1rem; align-items: start; }
+.guide-main { display: grid; gap: 0.9rem; min-inline-size: 0; }
+.guide-side { display: grid; gap: 0.9rem; min-inline-size: 0; align-content: start; }
+.guide-card { padding: 0.85rem 1rem; }
+.guide-card .role-summary { margin-block-start: 0.6rem; padding-block-start: 0.55rem; }
+.guide-card .role-background { font-size: 0.8rem; line-height: 1.6; }
+.guide-card .session-note { margin-block-start: 0.6rem; padding-block-start: 0.55rem; }
+.guide-panel { padding: 0.85rem 0.9rem; }
+.guide-panel .memory-form { padding: 0.5rem 0 0; }
+.guide-panel .memory-summary { margin-block-start: 0.5rem; flex-wrap: wrap; }
+.state-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem 0.75rem;
+  margin: 0.65rem 0 0.5rem;
+}
+.state-grid dt { color: var(--muted); font-size: 0.72rem; }
+.state-grid dd {
+  margin: 0.15rem 0 0;
+  color: var(--paper-soft);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+.lib-tabs { display: flex; gap: 0.35rem; margin: 0.7rem 0 0.5rem; }
+.lib-tab {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.lib-tab[aria-pressed="true"] { border-color: var(--sea); background: var(--sea-soft); color: var(--sea); }
+.lib-list { display: grid; gap: 0.5rem; max-block-size: 21rem; overflow: auto; overscroll-behavior: auto; }
+.lib-entry { padding: 0.5rem 0.6rem; border: 1px solid var(--line); background: rgba(7, 19, 29, 0.5); }
+.lib-entry header { display: flex; justify-content: space-between; gap: 0.5rem; color: var(--muted); font-size: 0.7rem; }
+.lib-entry p { margin: 0.3rem 0 0; color: var(--paper-soft); font-size: 0.8rem; line-height: 1.65; }
+.lib-pager { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-block-start: 0.6rem; }
+.hit-row { padding: 0.55rem 0.6rem; border: 1px solid var(--line); background: rgba(7, 19, 29, 0.5); }
+.hit-row.is-muted { opacity: 0.62; }
+.hit-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.45rem; font-size: 0.74rem; color: var(--muted); }
+.hit-head b { color: var(--paper-soft); font-family: var(--font-mono); font-size: 0.8rem; }
+.hit-badge { padding: 0.05rem 0.35rem; border: 1px solid var(--line-strong); font-size: 0.68rem; }
+.hit-row p { margin: 0.35rem 0 0; color: var(--paper-soft); font-size: 0.8rem; line-height: 1.65; }
+.hit-nodist { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.74rem; }
+
+/* ============================================================
    角色扮演
    ============================================================ */
 .role-layout { display: grid; gap: 1rem; align-items: start; }
@@ -1031,6 +1081,7 @@ dialog::backdrop {
   .image-rail { grid-column: 1 / -1; }
   .role-layout { grid-template-columns: minmax(17rem, 0.66fr) minmax(0, 1.34fr); }
   .memory-layout { grid-template-columns: minmax(16rem, 0.7fr) minmax(0, 1.3fr); }
+  .guide-layout { grid-template-columns: minmax(0, 1.25fr) minmax(20rem, 0.9fr); gap: 1.1rem; }
   .chain-layout { grid-template-columns: minmax(0, 1.3fr) minmax(15rem, 0.7fr); }
   .chain-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
@@ -1039,6 +1090,7 @@ dialog::backdrop {
   .image-workbench { grid-template-columns: minmax(14rem, 0.68fr) minmax(0, 1.32fr) minmax(13rem, 0.56fr); align-items: start; }
   .image-rail { grid-column: auto; }
   .role-layout { grid-template-columns: minmax(17rem, 0.62fr) minmax(0, 1.38fr); gap: 1.25rem; }
+  .guide-layout { grid-template-columns: minmax(0, 1.3fr) minmax(21rem, 0.95fr); gap: 1.25rem; }
   .hero-copy { padding-inline-start: 0.25rem; }
 }
 
@@ -1330,14 +1382,13 @@ html.js .scope-note[hidden] { display: none !important; }
     <nav class="site-nav" aria-label="功能导航">
       <ul>
         <li><a href="#image">生图</a></li>
-        <li><a href="#roleplay">角色扮演</a></li>
-        <li><a href="#memory">记忆</a></li>
+        <li><a href="#guide">对话与记忆</a></li>
         <li><a href="#comic">漫画</a></li>
         <li><a href="#chain">降级链</a></li>
         <li><a href="#rag">文档问答</a></li>
       </ul>
     </nav>
-    <a class="header-action" href="#roleplay">与岚灯对话</a>
+    <a class="header-action" href="#guide">找阿海问一句</a>
   </div>
 </header>
 
@@ -1349,7 +1400,7 @@ html.js .scope-note[hidden] { display: none !important; }
       <p class="hero-summary" data-product-summary>一个多智能体助手，把生图、角色扮演、长期记忆、漫画流水线串在一起。</p>
       <div class="hero-actions">
         <a class="btn btn--primary" href="#image">体验生图<svg class="icon" aria-hidden="true"><use href="#i-arrow" xlink:href="#i-arrow"/></svg></a>
-        <a class="btn btn--sea" href="#roleplay">与岚灯对话<svg class="icon" aria-hidden="true"><use href="#i-chat" xlink:href="#i-chat"/></svg></a>
+        <a class="btn btn--sea" href="#guide">找阿海问一句<svg class="icon" aria-hidden="true"><use href="#i-chat" xlink:href="#i-chat"/></svg></a>
       </div>
       <ul class="hero-notes">
         <li>无需登录，匿名体验</li>
@@ -1372,17 +1423,10 @@ html.js .scope-note[hidden] { display: none !important; }
           </a>
         </li>
         <li>
-          <a href="#roleplay">
+          <a href="#guide">
             <span class="node-icon" aria-hidden="true"><svg class="icon"><use href="#i-chat" xlink:href="#i-chat"/></svg></span>
-            <span class="node-copy"><span class="node-title">角色扮演</span><span class="node-detail">原创角色 · 两套玩法 · 逐轮链路</span></span>
+            <span class="node-copy"><span class="node-title">对话与记忆</span><span class="node-detail">海洋馆讲解 · 窗口 · 召回 · 完整提示词 · 直接查库</span></span>
             <span class="node-state" id="nodeChatState">可体验</span>
-          </a>
-        </li>
-        <li>
-          <a href="#memory">
-            <span class="node-icon" aria-hidden="true"><svg class="icon"><use href="#i-memory" xlink:href="#i-memory"/></svg></span>
-            <span class="node-copy"><span class="node-title">长期记忆</span><span class="node-detail">RAG 检索 · 相似度 · 实际注入块</span></span>
-            <span class="node-state" id="nodeMemoryState">可体验</span>
           </a>
         </li>
         <li>
@@ -1471,106 +1515,136 @@ html.js .scope-note[hidden] { display: none !important; }
   <!-- ============================================================
        功能二：角色扮演
        ============================================================ -->
-  <section class="feature" id="roleplay" aria-labelledby="roleplay-title">
+  <section class="feature" id="guide" aria-labelledby="guide-title">
     <div class="feature-head">
       <div class="feature-intro">
-        <p class="feature-kicker">角色扮演 / 原创角色与两套玩法</p>
-        <h2 id="roleplay-title">和“岚灯”聊一轮，看看模型收到了什么</h2>
-        <p class="feature-desc">岚灯是公开展示页的原创角色，24 岁，海滨城市公共档案馆管理员。日常陪伴与“丧尸末日”小说模式共用同一张角色卡，只切换世界观。每轮回复旁都有“查看本轮链路”，其中列出实际发送给模型的 system、记忆块、短期历史和访客消息。</p>
+        <p class="feature-kicker">对话与记忆 / 海洋馆参观</p>
+        <h2 id="guide-title">跟讲解员走一趟，看见记忆是怎么接上的</h2>
+        <p class="feature-desc">左边是真实对话：讲解员「阿海」带游客走一条 51 个展项的路线，母本里已经走了 250 轮，你上次停在深海区，这次接着聊。右边四个面板全是只读的事实——当前窗口里有哪几句话、这句话在库里召回了什么、最终发给模型的完整提示词长什么样、库里的原文被切成什么样。也可以完全不动模型，直接输一句话查库。</p>
       </div>
       <div class="feature-tools">
-        <button class="btn btn--small" type="button" id="chatChain" disabled><svg class="icon" aria-hidden="true"><use href="#i-chain" xlink:href="#i-chain"/></svg>查看本轮链路</button>
+        <button class="btn btn--small" type="button" id="chatChain" disabled><svg class="icon" aria-hidden="true"><use href="#i-chain" xlink:href="#i-chain"/></svg>本轮原始数据</button>
+        <button class="btn btn--small" type="button" id="memoryChain" disabled><svg class="icon" aria-hidden="true"><use href="#i-chain" xlink:href="#i-chain"/></svg>检索轨迹</button>
       </div>
     </div>
 
-    <div class="role-layout">
-      <aside class="role-dossier" aria-labelledby="roleName">
-        <div class="dossier-top">
-          <div class="role-monogram" aria-hidden="true">岚</div>
-          <div>
-            <h3 class="role-name" id="roleName">岚灯</h3>
-            <p class="role-meta" id="roleMeta">正在读取角色卡</p>
+    <div class="guide-layout">
+      <div class="guide-main">
+        <aside class="role-dossier guide-card" aria-labelledby="roleName">
+          <div class="dossier-top">
+            <div class="role-monogram" aria-hidden="true">海</div>
+            <div>
+              <h3 class="role-name" id="roleName">阿海</h3>
+              <p class="role-meta" id="roleMeta">正在读取角色卡</p>
+            </div>
           </div>
-        </div>
-        <p class="role-summary" id="roleSummary">—</p>
-        <p class="role-background" id="roleBackground">—</p>
-        <fieldset class="mode-picker" id="modeFieldset">
-          <legend>选择玩法</legend>
-          <div class="mode-list" id="modeList">
-            <p class="memory-hint">正在读取玩法配置…</p>
+          <p class="role-summary" id="roleSummary">—</p>
+          <p class="role-background" id="roleBackground">—</p>
+          <fieldset class="mode-picker" id="modeFieldset" hidden>
+            <legend>玩法</legend>
+            <div class="mode-list" id="modeList"><p class="memory-hint">正在读取玩法配置…</p></div>
+          </fieldset>
+          <p class="session-note">会话编号仅在浏览器本地保存；服务端记忆按访客隔离，母本知识库只读。<br>当前：<code id="sessionLabel">尚未建立</code></p>
+        </aside>
+
+        <div class="chat-shell">
+          <div class="chat-head">
+            <h3>现场对话</h3>
+            <span class="chat-turn" id="chatTurn">0 轮</span>
           </div>
-        </fieldset>
-        <p class="session-note">会话编号仅在浏览器本地保存。刷新页面会继续同一段短期历史，服务端记忆按访客隔离。<br>当前：<code id="sessionLabel">尚未建立</code></p>
-      </aside>
-
-      <div class="chat-shell">
-        <div class="chat-head">
-          <h3>现场对话</h3>
-          <span class="chat-turn" id="chatTurn">0 轮</span>
-        </div>
-        <div class="chat-log" id="chatLog" aria-label="与岚灯的对话记录">
-          <p class="chat-empty" id="chatEmpty"><strong>对话尚未开始</strong>选好玩法，发送第一句话。回复只显示模型真实返回的内容；模型不可用时，页面会直接说明本轮失败。</p>
-        </div>
-        <form class="chat-form" id="chatForm" action="/api/showcase/chat" method="post" aria-labelledby="chatInputLabel">
-          <label class="field-label" id="chatInputLabel" for="chatInput">发送给岚灯</label>
-          <p class="field-hint" id="chatHint">Enter 发送，Shift + Enter 换行；中文输入法组合期间不会误发。单条上限 500 字。</p>
-          <textarea class="chat-input" id="chatInput" name="message" rows="3" minlength="1" maxlength="500" required aria-describedby="chatHint chatError chatStatus" placeholder="说说今天想聊什么，或试着描述一个末日场景。"></textarea>
-          <div class="chat-form-bottom">
-            <span class="chat-counter" id="chatCounter">0 / 500</span>
+          <div class="chat-log" id="chatLog" aria-label="与讲解员阿海的对话记录">
+            <p class="chat-empty" id="chatEmpty"><strong>上次的对话已载入</strong>页面打开时已经填入了你上次参观的 6 轮，可以直接问「深海区那个亮着的是什么」。模型不可用时，页面会直接说明本轮失败。</p>
           </div>
-          <p class="field-error" id="chatError" role="alert" hidden></p>
-          <p class="status-line" id="chatStatus" role="status"></p>
-          <button class="btn btn--primary chat-submit" type="submit" id="chatSend" disabled>发送消息</button>
-        </form>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============================================================
-       功能三：长期记忆
-       ============================================================ -->
-  <section class="feature" id="memory" aria-labelledby="memory-title">
-    <div class="feature-head">
-      <div class="feature-intro">
-        <p class="feature-kicker">长期记忆 / RAG 检索轨迹</p>
-        <h2 id="memory-title">同一段对话，检索一次记忆</h2>
-        <p class="feature-desc">记忆接口复用聊天时的 RAG 线，按当前会话的历史构造检索。结果会列出命中条目、来源、距离、相似度和是否最终注入，不把“召回”说成“记得”。先完成一轮聊天，再用这里观察注入过程。</p>
-      </div>
-      <div class="feature-tools">
-        <button class="btn btn--small" type="button" id="memoryChain" disabled><svg class="icon" aria-hidden="true"><use href="#i-chain" xlink:href="#i-chain"/></svg>查看检索链路</button>
-      </div>
-    </div>
-
-    <div class="memory-layout">
-      <search class="memory-form-panel panel" aria-labelledby="memoryFormTitle">
-        <div class="panel-head">
-          <h3 id="memoryFormTitle">检索当前展示会话</h3>
-          <span class="panel-meta">公开查询 · 只读轨迹</span>
+          <form class="chat-form" id="chatForm" action="/api/showcase/chat" method="post" aria-labelledby="chatInputLabel">
+            <label class="field-label" id="chatInputLabel" for="chatInput">发送给阿海</label>
+            <p class="field-hint" id="chatHint">Enter 发送，Shift + Enter 换行；中文输入法组合期间不会误发。单条上限 500 字。</p>
+            <textarea class="chat-input" id="chatInput" name="message" rows="3" minlength="1" maxlength="500" required aria-describedby="chatHint chatError chatStatus" placeholder="比如：深海区那个亮着的是什么？"></textarea>
+            <div class="chat-form-bottom">
+              <span class="chat-counter" id="chatCounter">0 / 500</span>
+            </div>
+            <p class="field-error" id="chatError" role="alert" hidden></p>
+            <p class="status-line" id="chatStatus" role="status"></p>
+            <button class="btn btn--primary chat-submit" type="submit" id="chatSend" disabled>发送消息</button>
+          </form>
         </div>
-        <form class="memory-form" id="memoryForm" action="/api/showcase/memory" method="get" aria-labelledby="memoryFormTitle">
-          <label class="field-label" for="memoryQuery">检索内容</label>
-          <p class="field-hint" id="memoryHint">与上方聊天共用会话编号。服务重启后，如果当前会话还没重新聊天，旧会话可能返回“会话不存在”。</p>
-          <input class="memory-search-input" type="search" id="memoryQuery" name="query" minlength="1" maxlength="500" required aria-describedby="memoryHint memoryError" placeholder="例如：她记得我提过哪本书？">
-          <p class="field-error" id="memoryError" role="alert" hidden></p>
-          <p class="status-line" id="memoryStatus" role="status"></p>
-          <button class="btn btn--sea" type="submit" id="memorySubmit">检索记忆</button>
-        </form>
-      </search>
+      </div>
 
-      <div class="memory-results" aria-labelledby="memoryResultsTitle">
-        <h3 class="visually-hidden" id="memoryResultsTitle">记忆检索结果</h3>
-        <div class="memory-summary" id="memorySummary">
-          <span class="summary-chip">命中 <strong id="memoryHitCount">—</strong></span>
-          <span class="summary-chip">上下文命中 <strong id="memoryContextCount">—</strong></span>
-          <span class="summary-chip">最终注入 <strong id="memoryInjectedCount">—</strong></span>
-        </div>
-        <div id="memoryResults">
-          <p class="memory-hint">还没有检索结果。完成一轮聊天后，在这里查询记忆如何被召回和选用。</p>
-        </div>
-        <details class="memory-block" id="memoryBlockDetails" hidden>
-          <summary>查看实际注入块</summary>
-          <pre class="code-block" id="memoryBlock" role="region" aria-label="实际注入模型的记忆块" tabindex="0"><code id="memoryBlockCode"></code></pre>
-        </details>
+      <div class="guide-side">
+        <section class="panel guide-panel" aria-labelledby="stateTitle">
+          <div class="panel-head">
+            <h3 id="stateTitle">① 当前状态</h3>
+            <span class="panel-meta" id="stateMeta">读取中</span>
+          </div>
+          <dl class="state-grid">
+            <div><dt>本次轮次</dt><dd id="stateTurn">—</dd></div>
+            <div><dt>窗口原话</dt><dd id="stateWindow">—</dd></div>
+            <div><dt>母本知识库</dt><dd id="stateKb">—</dd></div>
+            <div><dt>我的记忆</dt><dd id="statePrivate">—</dd></div>
+          </dl>
+          <p class="memory-hint">窗口只保留最近 12 条消息；更早的已经在库里，靠检索取回，不会整段塞给模型。</p>
+        </section>
+
+        <section class="panel guide-panel" aria-labelledby="recallTitle">
+          <div class="panel-head">
+            <h3 id="recallTitle">② 本次召回</h3>
+            <span class="panel-meta" id="recallMeta">还没提问</span>
+          </div>
+          <div class="memory-summary" id="memorySummary">
+            <span class="summary-chip">命中 <strong id="memoryHitCount">—</strong></span>
+            <span class="summary-chip">上下文命中 <strong id="memoryContextCount">—</strong></span>
+            <span class="summary-chip">最终注入 <strong id="memoryInjectedCount">—</strong></span>
+          </div>
+          <div id="memoryResults">
+            <p class="memory-hint">发一句话，这里会列出召回到的条目、来源和距离，以及哪几条真的进了提示词。</p>
+          </div>
+          <details class="memory-block" id="memoryBlockDetails" hidden>
+            <summary>查看实际注入的记忆块</summary>
+            <pre class="code-block" id="memoryBlock" role="region" aria-label="实际注入模型的记忆块" tabindex="0"><code id="memoryBlockCode"></code></pre>
+          </details>
+        </section>
+
+        <section class="panel guide-panel" aria-labelledby="promptTitle">
+          <div class="panel-head">
+            <h3 id="promptTitle">③ 完整提示词</h3>
+            <span class="panel-meta" id="promptMeta">还没发送</span>
+          </div>
+          <details class="memory-block" id="promptDetails">
+            <summary>展开这一轮实际发出去的 messages</summary>
+            <pre class="code-block" id="promptBlock" role="region" aria-label="本轮发送给模型的完整提示词" tabindex="0"><code id="promptCode">还没有发送过消息。</code></pre>
+          </details>
+        </section>
+
+        <section class="panel guide-panel" aria-labelledby="libraryTitle">
+          <div class="panel-head">
+            <h3 id="libraryTitle">④ 库原文与手动查库</h3>
+            <span class="panel-meta" id="libraryMeta">—</span>
+          </div>
+          <search aria-labelledby="memoryFormTitle">
+            <h4 class="visually-hidden" id="memoryFormTitle">手动查库</h4>
+            <form class="memory-form" id="memoryForm" action="/api/showcase/guide/search" method="post" aria-labelledby="memoryFormTitle">
+              <label class="field-label" for="memoryQuery">直接查库（不调模型）</label>
+              <p class="field-hint" id="memoryHint">只做向量检索：给距离、给阈值、给原话，看看这句话在库里最近的是什么。</p>
+              <input class="memory-search-input" type="search" id="memoryQuery" name="query" minlength="1" maxlength="500" required aria-describedby="memoryHint memoryError" placeholder="例如：深海区那个亮着的是什么">
+              <p class="field-error" id="memoryError" role="alert" hidden></p>
+              <p class="status-line" id="memoryStatus" role="status"></p>
+              <button class="btn btn--sea" type="submit" id="memorySubmit">查库</button>
+            </form>
+          </search>
+          <div class="lib-list" id="searchResults" hidden></div>
+          <div class="lib-tabs" role="group" aria-label="库条目类型">
+            <button class="lib-tab" type="button" data-kind="raw" aria-pressed="true">原文层</button>
+            <button class="lib-tab" type="button" data-kind="batch" aria-pressed="false">批次叙事</button>
+            <button class="lib-tab" type="button" data-kind="fact" aria-pressed="false">原子事实</button>
+          </div>
+          <div class="lib-list" id="libraryList">
+            <p class="memory-hint">正在读取库…</p>
+          </div>
+          <div class="lib-pager" id="libraryPager" hidden>
+            <button class="btn btn--small" type="button" id="libPrev">上一页</button>
+            <span class="panel-meta" id="libPageLabel">—</span>
+            <button class="btn btn--small" type="button" id="libNext">下一页</button>
+          </div>
+        </section>
       </div>
     </div>
   </section>
@@ -1754,7 +1828,6 @@ html.js .scope-note[hidden] { display: none !important; }
     heroModel: $("#heroModel"),
     nodeImageState: $("#nodeImageState"),
     nodeChatState: $("#nodeChatState"),
-    nodeMemoryState: $("#nodeMemoryState"),
     nodeComicState: $("#nodeComicState"),
     nodeChainState: $("#nodeChainState"),
 
@@ -1781,6 +1854,22 @@ html.js .scope-note[hidden] { display: none !important; }
     roleBackground: $("#roleBackground"),
     modeList: $("#modeList"),
     sessionLabel: $("#sessionLabel"),
+    stateMeta: $("#stateMeta"),
+    stateTurn: $("#stateTurn"),
+    stateWindow: $("#stateWindow"),
+    stateKb: $("#stateKb"),
+    statePrivate: $("#statePrivate"),
+    recallMeta: $("#recallMeta"),
+    promptMeta: $("#promptMeta"),
+    promptCode: $("#promptCode"),
+    promptDetails: $("#promptDetails"),
+    searchResults: $("#searchResults"),
+    libraryList: $("#libraryList"),
+    libraryMeta: $("#libraryMeta"),
+    libraryPager: $("#libraryPager"),
+    libPageLabel: $("#libPageLabel"),
+    libPrev: $("#libPrev"),
+    libNext: $("#libNext"),
     chatForm: $("#chatForm"),
     chatLog: $("#chatLog"),
     chatEmpty: $("#chatEmpty"),
@@ -1835,12 +1924,14 @@ html.js .scope-note[hidden] { display: none !important; }
     chain: null,
     chainLoading: false,
     sessionId: readStoredSession(),
-    selectedMode: "daily",
+    selectedMode: "guide",
     selectedSceneId: null,
     chatBusy: false,
     chatTurn: 0,
+    chatPainted: false,
     chatTrace: null,
     memory: { rag: null, query: "" },
+    library: { kind: "raw", offset: 0, limit: 8, total: 0, loading: false },
     comic: { data: null, view: "script" },
     image: {
       job: null,
@@ -2205,20 +2296,28 @@ html.js .scope-note[hidden] { display: none !important; }
             : "检索";
       tags.append(node("span", "hit-tag", source));
       if (hit.kind) tags.append(node("span", "hit-tag", hit.kind));
+      if (hit.line) tags.append(node("span", "hit-tag", hit.line === "kb" || hit.line === "showcase_guide_v1" ? "母本库" : "我的记忆"));
+      if (hit.no_distance) tags.append(node("span", "hit-tag", "无距离"));
       if (isSelected) tags.append(node("span", "hit-tag hit-tag--selected", "已注入"));
       head.append(tags);
       item.append(head);
 
-      const similarity = Math.max(0, Math.min(1, Number(hit.similarity) || 0));
-      const score = node("div", "hit-score");
-      const meter = node("meter");
-      meter.min = 0;
-      meter.max = 1;
-      meter.value = similarity;
-      meter.setAttribute("aria-label", "相似度");
-      meter.setAttribute("aria-valuetext", formatPercent(similarity));
-      score.append(meter, node("span", null, formatPercent(similarity)));
-      item.append(score);
+      // 「最近批次 / 锚点」是按规则无条件补进来的，本来就没有距离，
+      // 不能画成 0% 相似度。
+      if (hit.no_distance) {
+        item.append(node("p", "hit-nodist", "按规则补入（最近批次或锚点），没有检索距离。"));
+      } else {
+        const similarity = Math.max(0, Math.min(1, Number(hit.similarity) || 0));
+        const score = node("div", "hit-score");
+        const meter = node("meter");
+        meter.min = 0;
+        meter.max = 1;
+        meter.value = similarity;
+        meter.setAttribute("aria-label", "相似度");
+        meter.setAttribute("aria-valuetext", formatPercent(similarity));
+        score.append(meter, node("span", null, formatPercent(similarity)));
+        item.append(score);
+      }
 
       item.append(node("p", "hit-content", hit.content || "（条目无正文）"));
       list.append(item);
@@ -2333,7 +2432,7 @@ html.js .scope-note[hidden] { display: none !important; }
 
   function applyRoleCard(role) {
     if (!role) return;
-    ui.roleName.textContent = role.name || "岚灯";
+    ui.roleName.textContent = role.name || "阿海";
     const meta = [];
     if (role.age) meta.push(String(role.age) + " 岁");
     if (role.occupation) meta.push(role.occupation);
@@ -2415,7 +2514,6 @@ html.js .scope-note[hidden] { display: none !important; }
 
     ui.nodeImageState.textContent = "可体验";
     ui.nodeChatState.textContent = "可体验";
-    ui.nodeMemoryState.textContent = "可体验";
     ui.nodeComicState.textContent = state.comic.data ? "只读回放" : "不可用";
     ui.chatInput.disabled = false;
     ui.memorySubmit.disabled = false;
@@ -2445,7 +2543,6 @@ html.js .scope-note[hidden] { display: none !important; }
       ui.pageNotice.hidden = false;
       ui.nodeImageState.textContent = "配置不可用";
       ui.nodeChatState.textContent = "配置不可用";
-      ui.nodeMemoryState.textContent = "配置不可用";
       ui.nodeComicState.textContent = "配置不可用";
       ui.sceneList.replaceChildren(node("p", "memory-hint", "场景配置未读取，暂不能提交生图。"));
       ui.modeList.replaceChildren(node("p", "memory-hint", "玩法配置未读取，暂不能开始对话。"));
@@ -2751,7 +2848,7 @@ html.js .scope-note[hidden] { display: none !important; }
     if (ui.chatEmpty && ui.chatEmpty.isConnected) ui.chatEmpty.remove();
     const article = node("article", "chat-message chat-message--" + role);
     const head = node("div", "chat-message-head");
-    const roleLabel = role === "user" ? "访客" : role === "assistant" ? "岚灯" : "本轮失败";
+    const roleLabel = role === "user" ? "访客" : role === "assistant" ? "阿海" : "本轮失败";
     head.append(node("span", "chat-role", roleLabel));
     if (traceData) {
       const button = node("button", "btn btn--small btn--text chat-trace-btn", traceLabel || "查看本轮链路");
@@ -2795,9 +2892,19 @@ html.js .scope-note[hidden] { display: none !important; }
       state.chatTurn = Number(data.turn) || (state.chatTurn + 1);
       ui.chatTurn.textContent = state.chatTurn + " 轮";
       state.chatTrace = data;
-      appendChatMessage("assistant", data.reply, data, "查看本轮链路");
+      appendChatMessage("assistant", data.reply, data, "本轮原始数据");
       const total = data.usage && Number(data.usage.total_tokens);
       ui.chatStatus.textContent = "第 " + state.chatTurn + " 轮已完成" + (Number.isFinite(total) ? " · " + formatNumber(total) + " tokens" : "") + "。";
+      // 右栏跟着这一轮走：② 本轮召回、③ 完整提示词、① 轮次与窗口。
+      const trace = data.trace || {};
+      state.memory.rag = trace.rag || null;
+      state.memory.query = message;
+      renderMemoryMain();
+      renderPrompt(trace);
+      ui.stateTurn.textContent = state.chatTurn + " 轮";
+      ui.stateWindow.textContent = Math.min(12, (Number(trace.history_count) || 0) + 2) + " / 12 条";
+      // 私有线每 5 轮才写一批，库条目数在这些轮次上才会变。
+      if (state.chatTurn % 5 === 0) loadGuideState();
     } catch (error) {
       if (error.data && error.data.session_id) rememberSession(error.data.session_id);
       const failedData = {
@@ -2817,7 +2924,7 @@ html.js .scope-note[hidden] { display: none !important; }
   }
 
   // ==========================================================
-  // 记忆
+  // 对话与记忆：右栏四块
   // ==========================================================
   function updateMemoryControls() {
     ui.memorySubmit.disabled = !state.config;
@@ -2836,19 +2943,174 @@ html.js .scope-note[hidden] { display: none !important; }
     renderMemorySummary();
     updateMemoryControls();
     if (!rag) {
-      ui.memoryResults.replaceChildren(node("p", "memory-hint", "还没有检索结果。完成一轮聊天后，在这里查询记忆如何被召回和选用。"));
+      ui.recallMeta.textContent = "还没提问";
+      ui.memoryResults.replaceChildren(node("p", "memory-hint", "发一句话，这里会列出召回到的条目、来源和距离，以及哪几条真的进了提示词。"));
       ui.memoryBlockDetails.hidden = true;
       return;
     }
-
-    const info = node("p", "memory-hint", "查询：" + (rag.query || "—"));
-    const hits = buildHitList(rag);
+    ui.recallMeta.textContent = "查询：" + (rag.query || "—");
+    const info = node("p", "memory-hint", "这句话在「母本知识库 + 我的记忆」两路里召回；只有过了阈值、且排进名额的条目才会拼进下方注入块。");
     const wrapper = node("div");
-    wrapper.append(info, hits);
+    wrapper.append(info, buildHitList(rag));
     ui.memoryResults.replaceChildren(wrapper);
 
     ui.memoryBlockCode.textContent = rag.block || "";
     ui.memoryBlockDetails.hidden = !rag.block;
+  }
+
+  // ③ 完整提示词：后端 trace.messages 就是真实发出去的那一份，逐条摊开。
+  function renderPrompt(trace) {
+    const messages = trace && Array.isArray(trace.messages) ? trace.messages : [];
+    if (!messages.length) {
+      ui.promptMeta.textContent = "还没发送";
+      ui.promptCode.textContent = "还没有发送过消息。";
+      return;
+    }
+    let chars = 0;
+    messages.forEach((item) => { chars += String((item && item.content) || "").length; });
+    ui.promptMeta.textContent = messages.length + " 条 · " + formatNumber(chars) + " 字";
+    ui.promptCode.textContent = messages.map((item, index) => {
+      const role = (item && item.role) || "unknown";
+      const label = role === "system" ? "系统" : role === "user" ? "用户" : "助手";
+      return "[" + (index + 1) + " · " + label + "]\n" + String((item && item.content) || "");
+    }).join("\n\n");
+  }
+
+  // ① 当前状态：轮次、窗口条数、两边库的条目数。
+  function renderGuideState(data) {
+    if (!data) return;
+    ui.stateMeta.textContent = data.ready ? (data.turn || 0) + " 轮对话" : "检索服务未就绪";
+    ui.stateTurn.textContent = (data.turn || 0) + " 轮";
+    const win = data.window || {};
+    ui.stateWindow.textContent = (win.count || 0) + " / " + (win.limit || 12) + " 条";
+    const kb = (data.kb && data.kb.counts) || {};
+    ui.stateKb.textContent = kb.total
+      ? formatNumber(kb.total) + " 条（原文 " + formatNumber(kb.raw) + " · 批次 " + formatNumber(kb.batch) + " · 事实 " + formatNumber(kb.fact) + "）"
+      : "0 条";
+    const mine = (data.private && data.private.counts) || {};
+    ui.statePrivate.textContent = mine.total
+      ? formatNumber(mine.total) + " 条"
+      : "0 条（每 5 轮写一批）";
+  }
+
+  // 打开页面就把「上次的 12 条窗口」铺进聊天区，不用先聊才有东西看。
+  // 只铺一次：第 5、10 轮会再拉状态，不能把已经渲染的新消息和链路按钮冲掉。
+  function renderWindowHistory(data) {
+    if (state.chatPainted) return;
+    const messages = data && data.window && Array.isArray(data.window.messages)
+      ? data.window.messages : [];
+    if (!messages.length) return;
+    ui.chatLog.replaceChildren();
+    messages.forEach((item) => {
+      appendChatMessage(item.role === "user" ? "user" : "assistant", item.content || "", null, "");
+    });
+    ui.chatTurn.textContent = (data.turn || 0) + " 轮";
+    state.chatPainted = true;
+  }
+
+  async function loadGuideState() {
+    try {
+      const path = state.sessionId
+        ? "/api/showcase/guide/state?session_id=" + encodeURIComponent(state.sessionId)
+        : "/api/showcase/guide/state";
+      const data = await jsonRequest(path);
+      if (data.session_id) {
+        rememberSession(data.session_id);
+        updateSessionLabel();
+      }
+      renderGuideState(data);
+      renderWindowHistory(data);
+      return data;
+    } catch (error) {
+      ui.stateMeta.textContent = "读取失败：" + error.message;
+      return null;
+    }
+  }
+
+  // ④ 库原文：按类型翻页浏览，看到的就是写进库之前的那些片。
+  async function loadLibrary(offset) {
+    const lib = state.library;
+    if (lib.loading) return;
+    lib.loading = true;
+    lib.offset = Math.max(0, Number(offset) || 0);
+    const params = new URLSearchParams({
+      line: "kb",
+      kind: lib.kind,
+      offset: String(lib.offset),
+      limit: String(lib.limit)
+    });
+    if (state.sessionId) params.set("session_id", state.sessionId);
+    ui.libraryList.replaceChildren(node("p", "memory-hint", "正在读取库…"));
+    try {
+      const data = await jsonRequest("/api/showcase/guide/library?" + params.toString());
+      lib.total = Number(data.total) || 0;
+      renderLibrary(data);
+    } catch (error) {
+      ui.libraryList.replaceChildren(node("p", "memory-hint", "读取失败：" + error.message));
+      ui.libraryMeta.textContent = "读取失败";
+      ui.libraryPager.hidden = true;
+    } finally {
+      lib.loading = false;
+    }
+  }
+
+  function renderLibrary(data) {
+    const lib = state.library;
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+    if (!lib.total) {
+      ui.libraryMeta.textContent = "没有条目";
+      ui.libraryList.replaceChildren(node("p", "memory-hint", "这一类下还没有条目。"));
+      ui.libraryPager.hidden = true;
+      return;
+    }
+    const from = lib.offset + 1;
+    const to = lib.offset + entries.length;
+    ui.libraryMeta.textContent = "共 " + formatNumber(lib.total) + " 条 · " + from + "–" + to;
+    const frag = document.createDocumentFragment();
+    entries.forEach((entry) => {
+      const item = node("article", "lib-entry");
+      const head = node("header");
+      const kindLabel = entry.kind === "raw" ? "原文" : entry.kind === "batch" ? "批次" : "事实";
+      const where = entry.line === "private" ? "我的记忆" : "母本库";
+      head.append(node("span", null, where + " · " + kindLabel + " · 第 " + (entry.turn || "?") + " 轮"));
+      head.append(node("span", null, entry.chars + " 字"));
+      item.append(head, node("p", null, entry.content || "（空）"));
+      frag.append(item);
+    });
+    ui.libraryList.replaceChildren(frag);
+    ui.libraryPager.hidden = lib.total <= lib.limit;
+    ui.libPageLabel.textContent = from + "–" + to + " / " + formatNumber(lib.total);
+    ui.libPrev.disabled = lib.offset <= 0;
+    ui.libNext.disabled = to >= lib.total;
+  }
+
+  // 手动查库的结果：距离、阈值、来源，未过阈值的也列出来（灰掉），
+  // 这样「为什么这条没被用上」看得见。
+  function renderSearchResults(data) {
+    const hits = Array.isArray(data.hits) ? data.hits : [];
+    ui.searchResults.hidden = false;
+    if (!hits.length) {
+      ui.searchResults.replaceChildren(node("p", "memory-hint", "这句在库里一条都没查到。"));
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    frag.append(node("p", "memory-hint",
+      "「" + data.query + "」 · 扫了 " + formatNumber(data.scanned) + " 条 · "
+      + data.took_ms + " ms · 按距离从近到远"));
+    hits.forEach((hit) => {
+      const row = node("article", "hit-row" + (hit.passed ? "" : " is-muted"));
+      const head = node("div", "hit-head");
+      head.append(node("span", "hit-badge", hit.line === "kb" ? "母本库" : "我的记忆"));
+      head.append(node("span", "hit-badge",
+        hit.kind === "raw" ? "原文" : hit.kind === "batch" ? "批次" : "事实"));
+      head.append(node("b", null, Number(hit.distance).toFixed(3)));
+      head.append(node("span", null, hit.passed
+        ? "过阈值 " + hit.threshold
+        : "未过阈值 " + hit.threshold));
+      row.append(head, node("p", null, hit.content || "（空）"));
+      frag.append(row);
+    });
+    ui.searchResults.replaceChildren(frag);
   }
 
   async function submitMemory() {
@@ -2862,41 +3124,34 @@ html.js .scope-note[hidden] { display: none !important; }
       ui.memoryQuery.focus();
       return;
     }
-    if (!state.sessionId) {
-      setFieldError(ui.memoryError, "当前还没有展示会话。请先完成一轮对话或提交一次生图，再检索记忆。");
-      ui.memoryQuery.focus();
-      return;
-    }
     setControlError(ui.memoryQuery, ui.memoryError, "");
     ui.memorySubmit.disabled = true;
-    ui.memoryStatus.textContent = "正在检索记忆…";
+    ui.memoryStatus.textContent = "正在查库…";
     try {
-      const data = await jsonRequest(
-        "/api/showcase/memory?query=" + encodeURIComponent(query) +
-        "&session_id=" + encodeURIComponent(state.sessionId)
-      );
-      rememberSession(data.session_id);
-      state.memory.rag = data.rag || {};
-      state.memory.query = query;
-      ui.memoryStatus.textContent = "检索完成：命中 " + formatNumber(state.memory.rag.hit_count) + " 条，最终注入 " + formatNumber(state.memory.rag.injected_count) + " 条。";
-      renderMemoryMain();
+      const data = await jsonRequest("/api/showcase/guide/search", {
+        method: "POST",
+        body: JSON.stringify({ query: query, session_id: state.sessionId, k: 8 })
+      });
+      renderSearchResults(data);
+      const passed = (data.hits || []).filter((hit) => hit.passed).length;
+      ui.memoryStatus.textContent = "查到 " + formatNumber(data.scanned) + " 条候选，"
+        + passed + " 条过阈值。";
     } catch (error) {
-      setFieldError(ui.memoryError, "检索未完成：" + error.message);
-      ui.memoryStatus.textContent = "本次检索失败。";
-      if (error.status === 404) ui.memoryStatus.textContent = "当前会话不存在。服务可能刚重启，请先发一条新消息再检索。";
+      setFieldError(ui.memoryError, "查库未完成：" + error.message);
+      ui.memoryStatus.textContent = "本次查库失败。";
     } finally {
-      updateMemoryControls();
+      ui.memorySubmit.disabled = !state.config;
     }
   }
 
   function openMemoryTrace() {
     if (!state.memory.rag) {
-      showToast("先检索一次记忆，再查看链路。");
+      showToast("先发一句话，再查看检索轨迹。");
       return;
     }
     const rag = state.memory.rag;
     openTrace({
-      title: "长期记忆 · 检索链路",
+      title: "长期记忆 · 本轮检索轨迹",
       chips: [
         ["查询", state.memory.query || rag.query || "—"],
         ["命中", formatNumber(rag.hit_count) + " 条"],
@@ -3254,6 +3509,23 @@ html.js .scope-note[hidden] { display: none !important; }
     });
     ui.memoryChain.addEventListener("click", openMemoryTrace);
 
+    // ④ 库原文：类型切换 + 翻页。返回顶部避免停在上一页的位置。
+    $$(".lib-tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        state.library.kind = tab.getAttribute("data-kind") || "raw";
+        $$(".lib-tab").forEach((item) => {
+          item.setAttribute("aria-pressed", item === tab ? "true" : "false");
+        });
+        loadLibrary(0);
+      });
+    });
+    ui.libPrev.addEventListener("click", () => {
+      loadLibrary(Math.max(0, state.library.offset - state.library.limit));
+    });
+    ui.libNext.addEventListener("click", () => {
+      loadLibrary(state.library.offset + state.library.limit);
+    });
+
     ui.comicChain.addEventListener("click", openComicTrace);
 
     ui.chainRefresh.addEventListener("click", () => loadChain(true));
@@ -3288,6 +3560,9 @@ html.js .scope-note[hidden] { display: none !important; }
     updateChatControls();
     updateMemoryControls();
     await Promise.allSettled([loadConfig(), loadChain(false)]);
+    // 右栏四块：一进页面就把窗口历史、库条目数、库原文填上，
+    // 不用先聊一轮才看得到东西。
+    await Promise.allSettled([loadGuideState(), loadLibrary(0)]);
   }
 
   bootstrap();
@@ -3303,7 +3578,7 @@ html.js .scope-note[hidden] { display: none !important; }
   "use strict";
 
   // ─── 标签页 ────────────────────────────────────────────
-  const TABS = ["image", "roleplay", "memory", "comic", "chain", "rag"];
+  const TABS = ["image", "guide", "comic", "chain", "rag"];
   // hero + 「公开展示边界」条是首页的一部分，只在默认的生图标签下露脸。
   // 之前它们常驻在 main 第一屏（hero 桌面约 700px），切标签只换下面的 feature，
   // 视口还停在 hero / 那条说明上，点完看到的是同一屏 —— 用户以为没切换。

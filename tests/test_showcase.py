@@ -12,12 +12,25 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app import showcase_api  # noqa: E402
 
 
+class _FakeDone:
+    """对齐真实 image_jobs.Job：done 是 threading.Event，用 is_set() 判终态。"""
+
+    def __init__(self, value=False):
+        self._value = bool(value)
+
+    def is_set(self):
+        return self._value
+
+    def set(self):
+        self._value = True
+
+
 class _FakeJob:
     def __init__(self, tag="HT-00000001"):
         self.tag = tag
         self.entry = None
         self.error = None
-        self.done = False
+        self.done = _FakeDone(False)
         self.started = None
 
 
@@ -62,7 +75,7 @@ class ShowcaseTest(unittest.TestCase):
     def test_config_exposes_only_showcase_material(self):
         response = self.client.get("/api/showcase/config", headers=self.headers)
         data = response.get_json()
-        self.assertEqual(data["role_card"]["id"], "lan_deng")
+        self.assertEqual(data["role_card"]["id"], "a_hai")
         self.assertEqual(len(data["image_scenes"]), 3)
         self.assertNotIn("prompt", data["image_scenes"][0])
         self.assertEqual(data["comic"]["status"], "assets_pending")
@@ -70,7 +83,8 @@ class ShowcaseTest(unittest.TestCase):
                             for p in data["comic"]["panels"]))
 
     def test_chat_isolated_and_returns_actual_injection_trace(self):
-        def fake_build(line, query, k=None, day=None, context="", trace=None):
+        def fake_build(line, query, k=None, day=None, context="", trace=None,
+                       extra_lines=()):
             trace.update({
                 "query": query, "hit_count": 1,
                 "hits": [{"id": "memory-1", "distance": 0.25,
@@ -92,7 +106,7 @@ class ShowcaseTest(unittest.TestCase):
                                                 "hit_rate": 0.8}):
             first = self.client.post(
                 "/api/showcase/chat", headers=self.headers,
-                json={"message": "我喜欢雨天", "mode": "daily"})
+                json={"message": "我喜欢雨天", "mode": "guide"})
             self.assertEqual(first.status_code, 200)
             body = first.get_json()
             session_id = body["session_id"]
@@ -106,22 +120,24 @@ class ShowcaseTest(unittest.TestCase):
             second = self.client.post(
                 "/api/showcase/chat", headers=self.headers,
                 json={"session_id": session_id, "message": "陪我逛逛书店",
-                      "mode": "zombie_survival"})
+                      "mode": "guide"})
             self.assertEqual(second.status_code, 200)
-            self.assertEqual(second.get_json()["trace"]["history_count"], 2)
+            # 会话自带「上次参观」的 12 条窗口，问完一轮仍是 12（_MAX_HISTORY 截断）
+            self.assertEqual(second.get_json()["trace"]["history_count"], 12)
             self.assertEqual(second.get_json()["turn"], 2)
 
             other = self.client.post(
                 "/api/showcase/chat", headers=self.headers,
-                json={"message": "新访客你好", "mode": "daily"})
+                json={"message": "新访客你好", "mode": "guide"})
             self.assertEqual(other.status_code, 200)
             self.assertNotEqual(other.get_json()["session_id"], session_id)
-            self.assertEqual(other.get_json()["trace"]["history_count"], 0)
+            self.assertEqual(other.get_json()["trace"]["history_count"],
+                             len(showcase_api._PRESET))
 
     def test_chat_rejects_bad_input_and_bad_mode(self):
         response = self.client.post(
             "/api/showcase/chat", headers=self.headers,
-            json={"message": "", "mode": "daily"})
+            json={"message": "", "mode": "guide"})
         self.assertEqual(response.status_code, 400)
         response = self.client.post(
             "/api/showcase/chat", headers=self.headers,
@@ -241,6 +257,83 @@ class ShowcaseTest(unittest.TestCase):
                 json={"scene_id": "rainy_bookstore", "session_id": session_id})
         self.assertEqual(retry.status_code, 202)
         self.assertEqual(retry.get_json()["job"]["tag"], "HT-00000002")
+
+    def test_role_card_is_the_aquarium_guide(self):
+        """展示页只有海洋馆讲解员一种玩法，旧的日常 / 末日模式必须清干净。"""
+        prompts = showcase_api.showcase_prompts
+        self.assertEqual(prompts.ROLE_CARD["name"], "阿海")
+        self.assertEqual([m["id"] for m in prompts.PLAY_MODES], ["guide"])
+        system = prompts.roleplay_system("guide")
+        self.assertIn("讲解员", system)
+        self.assertNotIn("丧尸", system)
+        self.assertNotIn("岚灯", system)
+        # 未知玩法回落默认，不抛错也不切换世界观
+        self.assertEqual(prompts.roleplay_system("zombie_survival"),
+                         prompts.roleplay_system("guide"))
+
+    def test_guide_state_preloads_last_visit_window(self):
+        entries = [
+            {"id": "raw-1", "content": "她：欢迎来到海洋馆",
+             "metadata": {"kind": "raw", "turn": 1}},
+            {"id": "batch-1", "content": "批次叙事", "metadata": {"kind": "batch", "seq": 1}},
+        ]
+        fake = mock.Mock()
+        fake.is_ready.return_value = True
+        fake.list_entries.return_value = {"ok": True, "entries": entries}
+        with mock.patch.object(showcase_api, "_rag_client", return_value=fake):
+            response = self.client.get("/api/showcase/guide/state", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        # 新访客一进来就带着「上次参观」的 6 轮，不是空窗口
+        self.assertEqual(data["preset_turns"], 6)
+        self.assertEqual(data["window"]["count"], len(showcase_api._PRESET))
+        self.assertEqual(data["window"]["messages"][0]["role"], "user")
+        self.assertEqual(data["kb"]["counts"]["raw"], 1)
+        self.assertEqual(data["kb"]["counts"]["batch"], 1)
+        self.assertEqual(data["kb"]["counts"]["total"], 2)
+
+    def test_guide_library_filters_kind_and_pages(self):
+        entries = [{"id": "r%d" % i, "content": "第 %d 条" % i,
+                    "metadata": {"kind": "raw", "turn": i}} for i in range(1, 6)]
+        entries.append({"id": "f1", "content": "一条事实",
+                        "metadata": {"kind": "fact", "turn": 1}})
+        fake = mock.Mock()
+        fake.is_ready.return_value = True
+        fake.list_entries.return_value = {"ok": True, "entries": entries}
+        with mock.patch.object(showcase_api, "_rag_client", return_value=fake):
+            response = self.client.get(
+                "/api/showcase/guide/library?line=kb&kind=raw&offset=1&limit=2",
+                headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["total"], 5)
+        self.assertEqual([item["turn"] for item in data["entries"]], [2, 3])
+        self.assertTrue(all(item["kind"] == "raw" for item in data["entries"]))
+
+    def test_guide_search_flags_threshold_and_sorts(self):
+        fake = mock.Mock()
+        fake.is_ready.return_value = True
+        fake.search.return_value = {"ok": True, "docs": [
+            {"id": "far", "content": "远的", "distance": 0.95,
+             "metadata": {"kind": "raw"}},
+            {"id": "near", "content": "近的", "distance": 0.31,
+             "metadata": {"kind": "raw"}},
+        ]}
+        with mock.patch.object(showcase_api, "_rag_client", return_value=fake):
+            response = self.client.post("/api/showcase/guide/search",
+                                        headers=self.headers,
+                                        json={"query": "会发光的鱼", "k": 5})
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual([hit["id"] for hit in data["hits"]], ["near", "far"])
+        self.assertTrue(data["hits"][0]["passed"])
+        self.assertFalse(data["hits"][1]["passed"])
+        self.assertEqual(data["hits"][0]["line"], "kb")
+
+    def test_guide_search_rejects_empty_query(self):
+        response = self.client.post("/api/showcase/guide/search",
+                                    headers=self.headers, json={"query": ""})
+        self.assertEqual(response.status_code, 400)
 
 
 if __name__ == "__main__":

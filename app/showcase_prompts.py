@@ -21,55 +21,51 @@ PRODUCT = {
 
 
 ROLE_CARD = {
-    "id": "lan_deng",
-    "name": "岚灯",
-    "age": 24,
-    "occupation": "海滨城市公共档案馆管理员",
-    "summary": "温和、细心，喜欢把杂乱的信息整理成清楚的小卡片。",
+    "id": "a_hai",
+    "name": "阿海",
+    "age": 26,
+    "occupation": "城市海洋馆讲解员",
+    "summary": "带过两千多场讲解，说话像随口聊天，喜欢用日常的东西打比方。",
     "background": (
-        "岚灯住在一座常有阵雨的海滨城市，白天整理地方志和老照片，"
-        "傍晚会沿着有轨电车线路散步。她喜欢热茶、旧地图和雨天书店，"
-        "说话自然简洁，会认真记住访客提过的喜好与约定。"
+        "阿海在城市海洋馆做讲解员，负责从大洋池一路走到水母厅的固定路线。"
+        "他会记住每位游客上次走到哪里、问过什么，再用自己的话把同一件事讲出新的角度。"
+        "说话自然、不背书，遇到游客说不清名字的时候，会先猜他想说的是哪一种。"
     ),
 }
 
 
 PLAY_MODES = [
     {
-        "id": "daily",
-        "label": "日常陪伴",
-        "description": "围绕生活、阅读和城市散步展开的自由对话。",
-    },
-    {
-        "id": "zombie_survival",
-        "label": "小说模式 · 丧尸末日",
-        "description": "在同一角色卡上切换末日生存世界观，以清理物资、寻找安全屋和互助求生为玩法。",
+        "id": "guide",
+        "label": "海洋馆问答",
+        "description": "跟着讲解员走完整条路线，随时插话问展项、习性和冷知识。",
     },
 ]
 
 
-_ROLE_RULES = """你是公开展示页中的原创角色「岚灯」，24 岁，是海滨城市公共档案馆管理员。
-性格温和、细心、真诚，说话像自然的中文聊天，不堆砌形容词，不反复自我介绍。
-你喜欢热茶、旧地图、雨天书店，擅长把复杂信息整理成容易理解的表达。
-认真接续访客说过的话；有记忆材料时自然使用，没有时不要编造共同经历。
-每次回复通常 1 到 3 个自然段，先回应当前这一拍，再视情况轻轻推进话题。
-这是面向所有访客的公开展示：保持全年龄、非露骨的内容，不写成人情节，不讨论内部版功能。
-不要声称自己是人类，也不要声称拥有真实身体或现实行动；可以角色扮演场景中的动作，但不要混淆现实。
+_ROLE_RULES = """你是城市海洋馆的讲解员「阿海」，26 岁，带游客走一条固定的参观路线。
+说话像自然的中文聊天：先回应游客这一句，再顺着往下讲，一两个自然段就够，不要背书式罗列。
+你擅长用日常的东西打比方（比喻要具体，别用「仿佛」「宛如」这种书面词）。
+记忆中出现的旧对话是你上次带这位游客时真的说过的内容：可以自然接着说「我们上次说到……」，
+也可以直接用它回答问题；记忆里没有的事不要编，可以说「这条线我好像没跟你讲过」。
+游客描述得含糊时（比如「那种会发光的鱼」），先按特征猜一种，说清是哪一种，再补一句区分点。
+这是面向所有访客的公开展示：保持全年龄、非露骨内容，不写成人情节，不讨论内部版功能。
+不要声称自己是人类，也不要声称拥有真实身体；可以演讲解动作，但不要混淆现实。
 访客询问技术链路时，只根据随消息提供的展示轨迹客观说明，不编造模型、接口或系统细节。"""
 
 
 _MODE_PROMPTS = {
-    "daily": "当前是日常陪伴玩法，场景从档案馆、书店与城市生活自然展开。",
-    "zombie_survival": (
-        "当前是小说模式：丧尸末日世界观。重点写物资清点、路线选择、安全屋和互助求生；"
-        "保持紧张但不渲染血腥，不写酷刑或露骨伤害细节。访客与岚灯是互相扶持的同伴。"
+    "guide": (
+        "当前玩法是海洋馆参观。你和游客正走在馆内，路线从入口的大洋池一直往里。"
+        "回答贴近展项本身：是什么、长什么样、怎么活、有什么反常识的地方。"
+        "游客问路线上还没走到的区域时，可以指路，但不要假装已经一起看过。"
     ),
 }
 
 
-def roleplay_system(mode="daily"):
-    """返回展示角色唯一的系统提示词；未知玩法回落日常，不接受自由文本。"""
-    mode = mode if mode in _MODE_PROMPTS else "daily"
+def roleplay_system(mode="guide"):
+    """返回展示角色唯一的系统提示词；未知玩法回落默认，不接受自由文本。"""
+    mode = mode if mode in _MODE_PROMPTS else "guide"
     return _ROLE_RULES + "\n" + _MODE_PROMPTS[mode]
 
 
@@ -80,8 +76,8 @@ IMAGE_SCENES = [
         "id": "rainy_bookstore",
         "title": "雨天书店",
         "brief": "阵雨中的街角书店，暖色灯光映在湿润石板路上。",
-        "skill": "moss-qunyou",
-        "channel": "Moss 群友集 · 动漫插画",
+        "skill": "silver",
+        "channel": "Silver · 现场生成",
         "prompt": (
             "a cozy corner bookstore on a rainy evening, warm amber light through large windows, "
             "wet stone pavement reflecting soft lights, shelves full of books visible inside, "
@@ -93,8 +89,8 @@ IMAGE_SCENES = [
         "id": "rooftop_garden",
         "title": "屋顶花园",
         "brief": "清晨的屋顶小花园，远处是刚醒来的海滨城市。",
-        "skill": "moss-qunyou",
-        "channel": "Moss 群友集 · 动漫插画",
+        "skill": "silver",
+        "channel": "Silver · 现场生成",
         "prompt": (
             "a small rooftop garden at sunrise above a coastal city, wooden planters with herbs "
             "and white flowers, a round table with two empty chairs and a teapot, distant sea "
@@ -106,8 +102,8 @@ IMAGE_SCENES = [
         "id": "night_tram",
         "title": "夜间电车",
         "brief": "空旷的夜间电车站，蓝紫色海面与暖黄车厢灯相映。",
-        "skill": "moss-qunyou",
-        "channel": "Moss 群友集 · 动漫插画",
+        "skill": "silver",
+        "channel": "Silver · 现场生成",
         "prompt": (
             "an empty seaside tram stop at night, a vintage tram with warm yellow interior lights, "
             "dark blue ocean beyond the platform, moonlit clouds, reflections on clean metal rails, "

@@ -628,3 +628,92 @@ class PastTensePromptTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ExtraLinesTest(unittest.TestCase):
+    """展示页的「母本知识库 + 访客私有线」两路合并（2026-11-15）。
+
+    单库路径必须一点不变——那是角色扮演正在跑的生产链路。
+    """
+
+    def _patch(self, retrieve=None, raw=None, anchors=(), recent=()):
+        return [
+            mock.patch.object(rank, "retrieve", side_effect=retrieve or (lambda *a, **k: [])),
+            mock.patch.object(rank, "retrieve_raw", side_effect=raw or (lambda *a, **k: [])),
+            mock.patch.object(rank, "_anchor_docs", return_value=list(anchors)),
+            mock.patch.object(rank, "_recent_docs", return_value=list(recent)),
+        ]
+
+    def test_single_line_still_calls_one_store_only(self):
+        calls = []
+
+        def fake_retrieve(line, query, k=None, day=None):
+            calls.append(line)
+            return [{"id": "a", "content": "用户：怕打雷。", "distance": 0.3,
+                     "metadata": {"kind": "fact", "about": "user"}}]
+
+        patches = self._patch(retrieve=fake_retrieve)
+        for item in patches:
+            item.start()
+            self.addCleanup(item.stop)
+        block = rank.build_block("web_10001__rem", "天气")
+        self.assertIn("怕打雷", block)
+        self.assertEqual(calls, ["web_10001__rem"])
+
+    def test_extra_line_is_searched_and_tagged(self):
+        def fake_retrieve(line, query, k=None, day=None):
+            if line == "showcase_guide_v1":
+                return [{"id": "kb-1", "content": "用户：鮟鱇头顶有发光钓竿。",
+                         "distance": 0.42,
+                         "metadata": {"kind": "fact", "about": "user"}}]
+            return []
+
+        patches = self._patch(retrieve=fake_retrieve)
+        for item in patches:
+            item.start()
+            self.addCleanup(item.stop)
+        trace = {}
+        block = rank.build_block("showcase_abc", "会发光的鱼",
+                                 trace=trace, extra_lines=("showcase_guide_v1",))
+        self.assertIn("鮟鱇", block)
+        self.assertEqual(trace["hits"][0]["line"], "showcase_guide_v1")
+        self.assertEqual(trace["hit_count"], 1)
+
+    def test_missing_distance_is_not_reported_as_perfect_match(self):
+        """`_recent_docs` 补进来的条目没有 distance，不能报成 0.000 或 1.000。"""
+        recent = [{"id": "recent-1", "content": "【第3天】早晨在海洋馆门口集合。",
+                   "metadata": {"kind": "batch"}}]
+        docs = [{"id": "f-1", "content": "用户：喜欢深海区。", "distance": 0.35,
+                 "metadata": {"kind": "fact", "about": "user"}}]
+        patches = self._patch(retrieve=lambda *a, **k: list(docs), recent=recent)
+        for item in patches:
+            item.start()
+            self.addCleanup(item.stop)
+        trace = {}
+        rank.build_block("web_10001__rem", "天气", trace=trace)
+        # recent 不在召回候选（hits）里，它是被规则直接挑进注入块的，
+        # 轨迹写在 selected 上。
+        picked = [hit for hit in trace["selected"] if hit["id"] == "recent-1"]
+        self.assertTrue(picked, "最近批次没进轨迹")
+        self.assertTrue(picked[0]["no_distance"])
+        self.assertIsNone(picked[0]["distance"])
+        self.assertIsNone(picked[0]["similarity"])
+        # 有真实距离的那条照旧报 similarity
+        self.assertAlmostEqual(
+            [h["similarity"] for h in trace["hits"] if h["id"] == "f-1"][0], 0.65)
+
+    def test_merge_dedups_same_id_across_stores(self):
+        shared = {"id": "dup", "content": "同一条", "distance": 0.30,
+                  "metadata": {"kind": "fact"}}
+
+        def fake_retrieve(line, query, k=None, day=None):
+            return [dict(shared, _line=line)]
+
+        patches = self._patch(retrieve=fake_retrieve)
+        for item in patches:
+            item.start()
+            self.addCleanup(item.stop)
+        trace = {}
+        rank.build_block("line-a", "问", trace=trace, extra_lines=("line-b",))
+        ids = [hit["id"] for hit in trace["hits"]]
+        self.assertEqual(ids.count("dup"), 1)
+

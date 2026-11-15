@@ -896,20 +896,69 @@ _FACT_SLOTS = 4
 _RECENT_FACT_SLOTS = 1
 
 
+def _lines_with(line, extra_lines):
+    """主线 + 只读附加库，去重保序。
+
+    2026-11-15：展示页要演「知识库 + 个人记忆」两层，母本库只读、访客线
+    可写，检索时两路合并。这里只做去重，不改任何检索参数。
+    """
+    out = []
+    for item in (line,) + tuple(extra_lines or ()):
+        item = str(item or "").strip()
+        if item and item not in out:
+            out.append(item)
+    return out
+
+
+def _doc_distance(doc):
+    """取距离；缺失按 1.0（最远）算，0.0 是合法值不能当缺失。
+
+    `_recent_docs` 出来的条目没有 distance 字段，用 `or 1.0` 会把真正
+    distance=0（同一段文本）也压到最后。
+    """
+    value = (doc or {}).get("distance")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _rank_merged(docs, limit):
+    """多库合并：按距离升序、id 去重、截断。
+
+    只在 `extra_lines` 非空时使用。单库路径继续用 `retrieve` 自己的 MMR
+    顺序，保证既有角色扮演的表现一点不变。
+    """
+    seen = set()
+    out = []
+    for d in sorted(docs, key=_doc_distance):
+        key = str((d or {}).get("id") or "")
+        if key:
+            if key in seen:
+                continue
+            seen.add(key)
+        out.append(d)
+    return out[:max(1, int(limit))]
+
+
 def _trace_doc(doc, source):
     """展示页用的只读检索轨迹；不参与排序，也不改变原有注入块。"""
     metadata = (doc or {}).get("metadata") or {}
+    # 缺 distance 的条目（`_recent_docs` / `_anchor_docs` 补的）没有真实距离：
+    # 报 0.000 会被读成「完美命中」，报 1.000 又像「最不相关」。单独标出来。
     try:
-        distance = float((doc or {}).get("distance") or 0.0)
+        distance = float((doc or {}).get("distance"))
     except (TypeError, ValueError):
-        distance = 0.0
+        distance = None
     return {
         "id": str((doc or {}).get("id") or ""),
         "source": source,
+        "line": str((doc or {}).get("_line") or ""),
         "kind": str(metadata.get("kind") or ""),
         "content": str((doc or {}).get("content") or "")[:1200],
         "distance": distance,
-        "similarity": max(0.0, 1.0 - distance),
+        "similarity": None if distance is None else max(0.0, 1.0 - distance),
+        "no_distance": distance is None,
     }
 
 
@@ -1016,8 +1065,13 @@ def _raw_block(docs, trace=None):
     return "【当时的原话 · 用来确认说过和做过什么】\n" + "\n".join(lines)
 
 
-def build_block(line, query, k=None, day=None, context="", trace=None):
+def build_block(line, query, k=None, day=None, context="", trace=None,
+                extra_lines=()):
     """拼成能直接塞进最后一条玩家消息的一段；没命中返回空串。
+
+    `extra_lines`（2026-11-15）：额外的只读库。展示页用「母本知识库 +
+    访客私有线」两路合并检索；为空时走原来的单库路径，返回值和顺序
+    与改动前完全一致。
 
     2026-11-06：两路检索——当前用户话 + 最近几轮上下文，合并去重后
     优先取 2 条批次叙事 + 3 条原子事实。问「昨天」这种短句时，
@@ -1030,7 +1084,30 @@ def build_block(line, query, k=None, day=None, context="", trace=None):
     `trace` 是展示页的可选只读输出：传入 dict 时记录 query、召回条目、
     距离与最终入选项；默认 None，原有调用方的行为和返回值完全不变。
     """
-    docs = retrieve(line, query, k=k, day=day)
+    lines = _lines_with(line, extra_lines)
+    multi = len(lines) > 1
+
+    def _rec(q):
+        if not multi:
+            return retrieve(line, q, k=k, day=day)
+        pooled = []
+        for ln in lines:
+            for d in retrieve(ln, q, k=k, day=day):
+                d["_line"] = ln
+                pooled.append(d)
+        return _rank_merged(pooled, k or PERSONA_RAG_K)
+
+    def _rec_raw(q):
+        if not multi:
+            return retrieve_raw(line, q)
+        pooled = []
+        for ln in lines:
+            for d in retrieve_raw(ln, q):
+                d["_line"] = ln
+                pooled.append(d)
+        return _rank_merged(pooled, RAW_BLOCK_ITEMS)
+
+    docs = _rec(query)
     # 锚点（第一次/初夜/关系确认…）不看距离，直接排最前，见 `_anchor_docs`。
     anchor = _anchor_docs(line)
     if anchor:
@@ -1055,7 +1132,7 @@ def build_block(line, query, k=None, day=None, context="", trace=None):
             "block": "",
         })
     if context:
-        extra = retrieve(line, context, k=k, day=day)
+        extra = _rec(context)
         seen = {str(d.get("id") or "") for d in docs}
         docs += [d for d in extra
                  if str(d.get("id") or "") not in seen]
@@ -1066,7 +1143,7 @@ def build_block(line, query, k=None, day=None, context="", trace=None):
     fact = _fact_block(docs, recent, trace=trace)
     if fact:
         parts.append(fact)
-    raw = _raw_block(retrieve_raw(line, query), trace=trace)
+    raw = _raw_block(_rec_raw(query), trace=trace)
     if raw:
         parts.append(raw)
     if not parts:
