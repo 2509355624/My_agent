@@ -78,15 +78,36 @@ _ALL_INFLIGHT = 4                # 全局在途 ≤ 4（不抢 QQ/漫画的独�
 _UPLOAD_MAX = 12 << 20           # 单张上传上限 12MB（前端已压到几十 KB，这是防呆）
 _SUBMIT_PER_IP_HOUR = 8          # 每 IP 每小时最多提交 8 张
 
-# 固定提示词（英文祈使句，主图 + 参考 + 保留项三段式；零 LLM）。
+# 固定提示词（英文，主图 + 参考 + 保留项三段式；零 LLM）。
 # 依据：阿里云 Qwen-Image-Edit 官方例 + Qwen-Image-2.1 提示词手册 +
 # 社区实测 skill——Qwen 图编辑吃「一句祈使指令 + 显式锁定保留项」，
 # 不是场景描述。换装/换姿势是确定性操作，没有要模型临场判断的部分。
+#
+# 2026-11-15 重写换装那段（原版是 "Keep the person in the first image
+# unchanged ... Replace only the clothing with the outfit from the second
+# image"，只有两句）。用户报「两张图都给了，出来的还是原来的衣服」。
+# 同一对图、同一份工作流实测三版：
+#   ① 原版两句祈使句      → 输出几乎逐像素等于主图，参考图等于没进去
+#   ② 明确 Image 1/Image 2 → 换装成功（鲨鱼T恤 + 黑色短裤都对）
+#   ③ 再加「剥离原衣」    → 连主图那件米色外套也去掉了，只剩图2 的整套
+# 差别不在工作流（静态检查过 images.image_1/2 与 latent 都对），在措辞：
+# 两张**都是人物**时，模型会把「the second image 里的衣服」理解成「她已经
+# 穿着的东西」，于是原样还原主图。点名 Image 1/Image 2 并把「图2 里除了
+# 衣服以外的东西全部忽略」写死，才压得住。
 PROMPTS = {
-    "outfit": ("Keep the person in the first image unchanged — face, identity, "
-               "pose, body and background. Replace only the clothing with the "
-               "outfit from the second image, matching its design, color and "
-               "texture faithfully."),
+    "outfit": ("Image 1 is the person who must be preserved: her face, identity, "
+               "hairstyle, body proportions, pose, camera angle, lighting and "
+               "background must stay exactly as in Image 1. Image 2 is a clothing "
+               "reference only. Dress the person in Image 1 in the complete outfit "
+               "from Image 2 - every piece of it, with its exact design, cut, color, "
+               "pattern and material. Strip off everything she is currently wearing, "
+               "including outer layers, tops, bottoms and any accessory that is not "
+               "part of Image 2's outfit; nothing of her original clothing may "
+               "remain on her body. Everything else about Image 2 - the person "
+               "wearing it, her face, hair, body, pose, background and art style - "
+               "must be ignored and must not appear in the result. The final image "
+               "must be the SAME person from Image 1, in the SAME pose and the SAME "
+               "background, wearing ONLY the complete outfit from Image 2."),
     "pose": ("Keep the person in the first image unchanged — face, identity, "
              "outfit and background. Replace only the pose with the pose of the "
              "person in the second image, matching arm and hand positions and "

@@ -93,8 +93,22 @@ class WorkflowBuildTest(unittest.TestCase):
 
     def test_two_modes_only(self):
         self.assertEqual(outfit_api.MODES, ("outfit", "pose"))
-        self.assertIn("first image", outfit_api.PROMPTS["outfit"])  # 主图=保留项
-        self.assertIn("second image", outfit_api.PROMPTS["outfit"])  # 参考=来源
+
+    def test_outfit_prompt_names_both_images(self):
+        """换装那段必须点名 Image 1 / Image 2，且要求剥掉原衣。
+
+        2026-11-15 用户报「两张图都给了，出来还是原来的衣服」。同一对图实测：
+        旧版两句祈使句（"the first image" / "the second image"）模型直接忽略
+        参考图、原样还原主图；改成点名 Image 1/Image 2 + 「strip off everything
+        she is currently wearing」之后稳定换装成功，连主图原有的外套都去掉了。
+        这条守住那两处措辞，别被"精简"回去。
+        """
+        p = outfit_api.PROMPTS["outfit"]
+        self.assertIn("Image 1", p)
+        self.assertIn("Image 2", p)
+        self.assertIn("Strip off everything she is currently wearing", p)
+        # 两句短祈使句就是失效的那版，别再退回去
+        self.assertNotIn("Keep the person in the first image", p)
 
 
 class ApiTest(unittest.TestCase):
