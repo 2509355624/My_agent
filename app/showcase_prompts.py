@@ -116,18 +116,20 @@ IMAGE_SCENES = [
 
 # 漫画区回放数据契约。成品图走展示专用素材（web/showcase/comic/），逐张过
 # 2026-11-16 重做：三格改由**漫画台**正规流程产出（自由视角 pov_mode=free、
-# silver 连续漫画 skill、角色一致性特化），不再是手工搓 prompt 的银色单图。
+# 角色一致性特化），不再是手工搓 prompt 的银色单图。
 # 任务：comics/C20261116-01_末日余晖（silver_only 模式成品在 raw/）。
-# 图片压缩后逐张过 image_audit.check 公开审核才落展示目录，审核没过保持 pending，
-# 绝不借用内部漫画目录原图。对外展示名仍叫《最后一盏灯》。
+# 2026-11-16 晚二次重跑：用户拍板场景图渠道用 silver（稳定性最好），显式
+# scene_skill=silver 走 comic/rerender 逐格重出；全局默认与群友锁仍是 anima-line，
+# 没动。三图 808x1024 竖屏、逐张过 image_audit.check 公开审核才落展示目录，
+# 审核没过保持 pending，绝不借用内部漫画目录原图。对外名仍叫《最后一盏灯》。
 # image_url 带 ?v= 版本号做缓存击穿：素材原地覆盖后 URL 不变，浏览器/网关会拿
-# 旧的缓存字节（max-age=1h），所以换图必须同时改这里的版本号。
+# 旧的缓存字节，所以每次换图必须同步改这里的版本号。
 COMIC_REPLAY = {
     "id": "last_light",
     "title": "最后一盏灯",
     "status": "ready",
     "worldview": "丧尸末日 · 互助求生 · 漫画台自由视角",
-    "source": "漫画台 · 自由视角（pov_mode=free）· 角色一致性特化 · 2026-11-16",
+    "source": "漫画台 · 自由视角（pov_mode=free）· silver 渠道 · 角色一致性特化 · 2026-11-16",
     "steps": [
         {"id": "script", "label": "分镜脚本"},
         {"id": "prompts", "label": "逐格提示词"},
@@ -146,7 +148,7 @@ COMIC_REPLAY = {
                 "boy stepping in behind her raising his flashlight, tense and alert expressions, "
                 "cool dusk light fading into store darkness, wide shot, cinematic widescreen"
             ),
-            "image_url": "/api/showcase/comic/asset/panel_1?v=20261116b",
+            "image_url": "/api/showcase/comic/asset/panel_1?v=20261116c",
             "asset_status": "ready",
         },
         {
@@ -160,7 +162,7 @@ COMIC_REPLAY = {
                 "backpacks, flashlight beams lighting the counter, focused and concentrated expressions, "
                 "cool flashlight glow, medium shot, cinematic widescreen"
             ),
-            "image_url": "/api/showcase/comic/asset/panel_2?v=20261116b",
+            "image_url": "/api/showcase/comic/asset/panel_2?v=20261116c",
             "asset_status": "ready",
         },
         {
@@ -174,7 +176,7 @@ COMIC_REPLAY = {
                 "wet asphalt reflecting blue sky and warm window light, cool blue hour light, full body "
                 "shot from behind, cinematic widescreen"
             ),
-            "image_url": "/api/showcase/comic/asset/panel_3?v=20261116b",
+            "image_url": "/api/showcase/comic/asset/panel_3?v=20261116c",
             "asset_status": "ready",
         },
     ],
