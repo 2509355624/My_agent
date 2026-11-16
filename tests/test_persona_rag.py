@@ -717,3 +717,36 @@ class ExtraLinesTest(unittest.TestCase):
         ids = [hit["id"] for hit in trace["hits"]]
         self.assertEqual(ids.count("dup"), 1)
 
+    def test_max_hits_caps_candidates_without_touching_thresholds(self):
+        """展示页的「召回上限」：只截候选，锚点与最近批次照旧补入。
+
+        2026-11-16 用户反馈召回 19 条太多。截的是距离更远的候选——
+        它们本来也过不了阈值，所以注入块不受影响。
+        """
+        docs = [{"id": "d%d" % i, "content": "用户：事实 %d。" % i,
+                 "distance": 0.30 + i * 0.01,
+                 "metadata": {"kind": "fact", "about": "user"}} for i in range(8)]
+        anchor = [{"id": "anchor-1", "content": "用户：第一次来是在开门那天。",
+                   "distance": 0.20, "metadata": {"kind": "fact", "about": "user"}}]
+        patches = self._patch(retrieve=lambda *a, **k: list(docs), anchors=anchor)
+        for item in patches:
+            item.start()
+            self.addCleanup(item.stop)
+        trace = {}
+        rank.build_block("line-a", "问", trace=trace, max_hits=5)
+        # 5 条检索候选 + 1 条锚点：锚点是规则补入，不吃这个上限
+        self.assertEqual(trace["hit_count"], 6)
+        self.assertEqual(trace["hits"][0]["id"], "anchor-1")
+
+    def test_no_max_hits_keeps_every_candidate(self):
+        """默认 None：生产路径一条都不许截。"""
+        docs = [{"id": "d%d" % i, "content": "用户：事实 %d。" % i,
+                 "distance": 0.30 + i * 0.01,
+                 "metadata": {"kind": "fact", "about": "user"}} for i in range(4)]
+        patches = self._patch(retrieve=lambda *a, **k: list(docs))
+        for item in patches:
+            item.start()
+            self.addCleanup(item.stop)
+        trace = {}
+        rank.build_block("line-a", "问", trace=trace)
+        self.assertEqual(trace["hit_count"], 4)

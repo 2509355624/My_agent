@@ -26,6 +26,7 @@ from app.config import (
     PERSONA_PROVIDER,
     PERSONA_MODEL,
     PROVIDERS,
+    WEB_DIR,
     state_path,
 )
 from app import comfy_out, friend_auth, image_audit, image_jobs, llm, persona_rag
@@ -210,13 +211,13 @@ def _history_context(history):
     return "\n".join(parts)
 
 
-def _build_memory(session_id, query, history):
+def _build_memory(session_id, query, history, max_hits=None):
     trace = {}
     try:
         block = persona_rag.build_block(
             _rag_line(session_id), query,
             context=_history_context(history), trace=trace,
-            extra_lines=(_KB_LINE,))
+            extra_lines=(_KB_LINE,), max_hits=max_hits)
     except Exception:
         # 记忆故障不应让公开聊天整轮不可用；轨迹必须如实标记降级。
         log.exception("展示页记忆检索失败")
@@ -320,10 +321,19 @@ def chat():
     except ValueError:
         return jsonify({"error": "无效展示会话"}), 400
 
+    # 召回候选上限：页面可选 5 / 10 / 20，只截候选、不动阈值
+    # （见 persona_rag.build_block 的 max_hits）。
+    try:
+        top = int(data.get("top") or 0)
+    except (TypeError, ValueError):
+        top = 0
+    top = min(20, max(3, top)) if top else None
+
     # 同一会话串行，避免双击导致历史顺序颠倒；不同访客互不阻塞。
     with sess["lock"]:
         history = copy.deepcopy(sess["history"])
-        memory_block, rag_trace = _build_memory(session_id, message, history)
+        memory_block, rag_trace = _build_memory(session_id, message, history,
+                                                max_hits=top)
         system = showcase_prompts.roleplay_system(mode)
         messages = [{"role": "system", "content": system}]
         if memory_block:
@@ -372,6 +382,7 @@ def chat():
             "mode": mode,
             "turn": sess["turns"],
             "preset_turns": len(_PRESET) // 2,
+            "recall_top": top or 0,
             "usage": usage,
             "trace": trace,
         })
@@ -426,11 +437,116 @@ def _entry_view(entry, line_tag):
         "id": str(entry.get("id") or ""),
         "line": line_tag,
         "kind": _kind_of(entry),
+        "role": str(meta.get("role") or ""),
         "turn": meta.get("turn") or meta.get("seq") or 0,
         "day": meta.get("day") or 0,
         "chars": len(content),
         "content": content[:1200],
     }
+
+
+# ─── 母本完整参观记录（只读） ─────────────────────────────
+# 页面上能看到的「历史」只有窗口里那 12 条，剩下 238 条其实都在母本里。
+# 原本只能靠翻库里的 raw 片段一条条看，读起来不像对话（一条一段，还带着
+# 「她：」「用户说：」的前缀）。这里直接读母本源文件——它才是权威版本，
+# 按「站」每 5 轮一组发给前端，翻起来跟真的参观记录一样。
+_TRANSCRIPT_PATH = os.path.join(WEB_DIR, "showcase_guide.json")
+_TRANSCRIPT_LOCK = threading.Lock()
+_TRANSCRIPT_CACHE = {"mtime": -1.0, "turns": 0, "groups": []}
+_TURNS_PER_STOP = 5
+# 讲解词里的展项名长这样：「第一站就是大洋池·蓝鲸展区」。直接按 `·` 截
+# 会把「前面就是」这种引导语一起带进去，所以左右各自剥掉常见前后缀。
+_STOP_LEAD = ("第一站就是", "这一站是", "前面就是", "这里是", "接下来是",
+              "现在到", "到了", "就是", "这是", "是")
+_STOP_BREAK = re.compile(r"[，。、；：！？\s]")
+
+
+def _stop_name(text):
+    """从一句讲解词里取「展区·展项」，取不到返回空串。"""
+    idx = text.find("·")
+    if idx <= 0:
+        return ""
+    left = _STOP_BREAK.split(text[max(0, idx - 12):idx])[-1]
+    right = _STOP_BREAK.split(text[idx + 1:idx + 14])[0]
+    for lead in _STOP_LEAD:
+        if left.startswith(lead):
+            left = left[len(lead):]
+            break
+    left = re.sub(r"^第[一二三四五六七八九十百]+站?", "", left)
+    left = re.sub(r"^(这个|那个|来到|走进|走到)", "", left)
+    right = re.sub(r"(到了|就在这里|在这儿|了)$", "", right)
+    if not left or not right or len(left) > 8 or len(right) > 12:
+        return ""
+    return left + "·" + right
+
+
+def _transcript_groups():
+    """母本 turns → 按站分组；母本被重新生成（mtime 变了）就重读。"""
+    try:
+        mtime = os.path.getmtime(_TRANSCRIPT_PATH)
+    except OSError:
+        return {"turns": 0, "groups": []}
+    with _TRANSCRIPT_LOCK:
+        if _TRANSCRIPT_CACHE["mtime"] == mtime:
+            return dict(_TRANSCRIPT_CACHE)
+    try:
+        with open(_TRANSCRIPT_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        log.exception("展示页读取母本记录失败")
+        return {"turns": 0, "groups": []}
+
+    turns = data.get("turns") or []
+    groups = []
+    for start in range(0, len(turns), _TURNS_PER_STOP):
+        chunk = turns[start:start + _TURNS_PER_STOP]
+        if not chunk:
+            continue
+        no = len(groups) + 1
+        name = ""
+        for item in chunk:
+            if item.get("role") == "guide":
+                name = _stop_name(str(item.get("text") or ""))
+                if name:
+                    break
+        groups.append({
+            "no": no,
+            "name": name or ("第 %d 站" % no),
+            "turn_start": int(chunk[0].get("r") or start + 1),
+            "turn_end": int(chunk[-1].get("r") or start + len(chunk)),
+            "turns": [{
+                "r": int(item.get("r") or 0),
+                "role": "guide" if item.get("role") == "guide" else "visitor",
+                "text": str(item.get("text") or ""),
+            } for item in chunk],
+        })
+
+    view = {"mtime": mtime, "turns": len(turns), "groups": groups}
+    with _TRANSCRIPT_LOCK:
+        _TRANSCRIPT_CACHE.update(view)
+    return dict(view)
+
+
+@bp.get("/api/showcase/guide/transcript")
+def guide_transcript():
+    """母本 250 轮的完整参观记录，按站翻页；只读 JSON，不碰向量库也不调模型。"""
+    try:
+        offset = max(0, int(request.args.get("offset") or 0))
+    except ValueError:
+        offset = 0
+    try:
+        limit = min(25, max(1, int(request.args.get("limit") or 10)))
+    except ValueError:
+        limit = 10
+    data = _transcript_groups()
+    groups = data["groups"]
+    return jsonify({
+        "total_groups": len(groups),
+        "total_turns": data["turns"],
+        "offset": offset,
+        "limit": limit,
+        "groups": groups[offset:offset + limit],
+    })
 
 
 @bp.get("/api/showcase/guide/state")
@@ -465,6 +581,7 @@ def guide_state():
                 out[kind] += 1
         return out
 
+    wire = _transcript_groups()
     with sess["lock"]:
         history = copy.deepcopy(sess["history"])
         turns = int(sess["turns"])
@@ -478,6 +595,9 @@ def guide_state():
             "count": len(history),
             "messages": history,
         },
+        # 母本全程：250 轮、50 站。页面左边「现场对话」只有窗口那 12 条，
+        # 这个数字才是「整条参观路线已经走了多少」。
+        "transcript": {"turns": wire["turns"], "stops": len(wire["groups"])},
         "kb": {"line": _KB_LINE, "counts": _count(kb_entries)},
         "private": {"line": _rag_line(session_id), "counts": _count(private_entries)},
     })

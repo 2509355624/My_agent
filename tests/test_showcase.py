@@ -84,7 +84,7 @@ class ShowcaseTest(unittest.TestCase):
 
     def test_chat_isolated_and_returns_actual_injection_trace(self):
         def fake_build(line, query, k=None, day=None, context="", trace=None,
-                       extra_lines=()):
+                       extra_lines=(), max_hits=None):
             trace.update({
                 "query": query, "hit_count": 1,
                 "hits": [{"id": "memory-1", "distance": 0.25,
@@ -334,6 +334,115 @@ class ShowcaseTest(unittest.TestCase):
         response = self.client.post("/api/showcase/guide/search",
                                     headers=self.headers, json={"query": ""})
         self.assertEqual(response.status_code, 400)
+
+    def test_transcript_covers_the_whole_route(self):
+        """母本 250 轮必须能整段翻出来。
+
+        2026-11-16 用户反馈：页面「现场对话」只显示窗口里那 12 条，剩下两百多轮
+        藏在库里，用户以为「走了 250 轮」是假的。这条守住「能翻到全部」。
+        """
+        response = self.client.get("/api/showcase/guide/transcript?limit=5",
+                                   headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["total_turns"], 250)
+        self.assertEqual(data["total_groups"], 50)
+        self.assertEqual(len(data["groups"]), 5)
+        first = data["groups"][0]
+        self.assertEqual(first["turn_start"], 1)
+        self.assertEqual(first["turn_end"], 5)
+        # 站名要从讲解词里剥掉「前面就是」这类引导语
+        self.assertEqual(first["name"], "大洋池·蓝鲸展区")
+        self.assertEqual(len(first["turns"]), 5)
+        self.assertEqual(first["turns"][0]["role"], "guide")
+
+    def test_transcript_pages_do_not_overlap(self):
+        a = self.client.get("/api/showcase/guide/transcript?offset=0&limit=3",
+                            headers=self.headers).get_json()
+        b = self.client.get("/api/showcase/guide/transcript?offset=3&limit=3",
+                            headers=self.headers).get_json()
+        self.assertEqual([g["no"] for g in a["groups"]], [1, 2, 3])
+        self.assertEqual([g["no"] for g in b["groups"]], [4, 5, 6])
+
+    def test_chat_honours_recall_cap(self):
+        """页面选了「5 条」就得按 5 条召回，别只在前端画个按钮。"""
+        seen = {}
+
+        def fake_build(line, query, k=None, day=None, context="", trace=None,
+                       extra_lines=(), max_hits=None):
+            seen["max_hits"] = max_hits
+            trace.update({"hit_count": 0, "hits": [], "selected": [],
+                          "injected_count": 0})
+            return ""
+
+        with mock.patch.object(showcase_api.persona_rag, "build_block",
+                               side_effect=fake_build), \
+                mock.patch.object(showcase_api.persona_rag, "remember"), \
+                mock.patch.object(showcase_api.llm, "call_llm",
+                                  return_value="深海区那只是鮟鱇。"), \
+                mock.patch.object(showcase_api.llm, "current_usage",
+                                  return_value={"total_tokens": 10}):
+            response = self.client.post(
+                "/api/showcase/chat", headers=self.headers,
+                json={"message": "深海区那个亮着的是什么", "mode": "guide", "top": 5})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(seen["max_hits"], 5)
+        self.assertEqual(response.get_json()["recall_top"], 5)
+
+    def test_recall_cap_is_clamped(self):
+        """越界值不许透传给检索：1 条没法回答，100 条会撑爆上下文。"""
+        seen = {}
+
+        def fake_build(line, query, k=None, day=None, context="", trace=None,
+                       extra_lines=(), max_hits=None):
+            seen["max_hits"] = max_hits
+            trace.update({"hit_count": 0, "hits": [], "selected": [],
+                          "injected_count": 0})
+            return ""
+
+        with mock.patch.object(showcase_api.persona_rag, "build_block",
+                               side_effect=fake_build), \
+                mock.patch.object(showcase_api.persona_rag, "remember"), \
+                mock.patch.object(showcase_api.llm, "call_llm", return_value="嗯。"), \
+                mock.patch.object(showcase_api.llm, "current_usage",
+                                  return_value={"total_tokens": 10}):
+            self.client.post("/api/showcase/chat", headers=self.headers,
+                             json={"message": "你好", "mode": "guide", "top": 100})
+        self.assertEqual(seen["max_hits"], 20)
+
+
+class GuidePageLayoutTest(unittest.TestCase):
+    """页面侧：右栏改面板切换、历史能翻全、召回上限能点（2026-11-16）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))), "web", "showcase.html"),
+                encoding="utf-8") as f:
+            cls.src = f.read()
+
+    def test_side_panels_switch_instead_of_scrolling(self):
+        self.assertIn('data-pane="recall"', self.src)
+        self.assertIn('data-pane="prompt"', self.src)
+        self.assertIn('data-pane="library"', self.src)
+        self.assertIn("function switchPane", self.src)
+        # 一次只露一个：四个面板不能同时 is-active
+        self.assertEqual(self.src.count('class="panel guide-panel is-active"'), 1)
+
+    def test_transcript_is_reachable_from_the_chat_head(self):
+        self.assertIn('id="btnTranscript"', self.src)
+        self.assertIn('id="transcriptDialog"', self.src)
+        self.assertIn("/api/showcase/guide/transcript", self.src)
+
+    def test_recall_cap_is_explained_and_adjustable(self):
+        self.assertIn('data-top="5"', self.src)
+        self.assertIn("state.recallTop", self.src)
+        # 必须写清「召回不花 token，进提示词才算」，否则用户以为按条数烧钱
+        self.assertIn("不花 token", self.src)
+
+    def test_library_explains_what_the_377_entries_are(self):
+        self.assertIn("不是 377 轮对话", self.src)
+        self.assertIn("原文 284 块", self.src)
 
 
 if __name__ == "__main__":

@@ -637,6 +637,54 @@ button { cursor: pointer; }
 .guide-panel { padding: 0.85rem 0.9rem; }
 .guide-panel .memory-form { padding: 0.5rem 0 0; }
 .guide-panel .memory-summary { margin-block-start: 0.5rem; flex-wrap: wrap; }
+
+/* 右栏四个面板：一次只露一个，整页就不用一路往下拖了（2026-11-16） */
+.side-tabs { display: flex; gap: 0.25rem; padding: 0.25rem; border: 1px solid var(--line); background: rgba(7, 19, 29, 0.6); }
+.side-tab {
+  flex: 1; padding: 0.42rem 0.3rem; border: 0; background: transparent;
+  color: var(--muted); font-family: inherit; font-size: 0.78rem; cursor: pointer;
+}
+.side-tab:hover { color: var(--paper); }
+.side-tab.is-active { background: rgba(56, 189, 214, 0.14); color: var(--sea); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.guide-side [data-panel] { display: none; }
+.guide-side [data-panel].is-active { display: block; }
+.pane-scroll { max-block-size: 19rem; overflow: auto; overscroll-behavior: auto; }
+.pane-scroll--lib .lib-list { max-block-size: none; overflow: visible; }
+
+/* 操作区和只读展示区在视觉上分开：虚线框里的都是「能点的」 */
+.tool-strip { margin-block-start: 0.55rem; padding: 0.6rem 0.65rem; border: 1px dashed var(--line-strong); background: rgba(56, 189, 214, 0.05); }
+.tool-strip--tight { padding: 0.5rem 0.6rem; }
+.tool-strip .tool-title { margin: 0 0 0.3rem; font-size: 0.8rem; color: var(--paper); }
+.tool-row { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; }
+.tool-label { color: var(--muted); font-size: 0.74rem; }
+.tool-hint { margin: 0.3rem 0 0; color: var(--muted); font-size: 0.72rem; line-height: 1.55; }
+.seg { display: inline-flex; border: 1px solid var(--line); }
+.seg-btn { padding: 0.26rem 0.55rem; border: 0; background: transparent; color: var(--muted); font-family: inherit; font-size: 0.74rem; cursor: pointer; }
+.seg-btn[aria-pressed="true"] { background: var(--sea-soft); color: var(--sea); }
+/* .memory-form 在后面被定义成 grid，这里要压住它 */
+.memory-form.memory-form--inline { display: flex; align-items: center; gap: 0.4rem; margin-block-start: 0.45rem; padding: 0; }
+.memory-form--inline .memory-search-input { flex: 1; min-inline-size: 0; min-block-size: 2.5rem; }
+.memory-form--inline .btn { flex: 0 0 auto; }
+.lib-browse { margin-block-start: 0.7rem; padding-block-start: 0.6rem; border-block-start: 1px solid var(--line); }
+.chat-head-tools { display: flex; align-items: center; gap: 0.5rem; }
+
+/* 「377 条怎么来的」：数字不解释就是天书 */
+.explain { margin-block-start: 0.65rem; color: var(--paper-soft); font-size: 0.78rem; }
+.explain summary { cursor: pointer; color: var(--sea); font-size: 0.78rem; }
+.explain p { margin: 0.4rem 0; line-height: 1.65; }
+.explain ul { margin: 0.4rem 0; padding-inline-start: 1.1rem; }
+.explain li { margin-block-start: 0.22rem; line-height: 1.6; }
+
+/* 母本完整记录弹窗：按站分块，左边阿海右边游客 */
+.transcript-dialog { inline-size: min(46rem, calc(100% - 1.5rem)); }
+.transcript-body { display: grid; gap: 0.8rem; }
+.stop-block { padding: 0.55rem 0.65rem; border: 1px solid var(--line); background: rgba(7, 19, 29, 0.5); }
+.stop-head { display: flex; justify-content: space-between; gap: 0.5rem; margin-block-end: 0.35rem; color: var(--muted); font-size: 0.72rem; }
+.stop-name { color: var(--sea); font-size: 0.8rem; }
+.msg { margin-block-start: 0.35rem; font-size: 0.8rem; line-height: 1.68; }
+.msg b { margin-inline-end: 0.35rem; color: var(--amber); font-weight: 600; }
+.msg.is-visitor { color: var(--paper); }
+.msg.is-guide { color: var(--paper-soft); }
 .state-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1520,11 +1568,11 @@ html.js .scope-note[hidden] { display: none !important; }
       <div class="feature-intro">
         <p class="feature-kicker">对话与记忆 / 海洋馆参观</p>
         <h2 id="guide-title">跟讲解员走一趟，看见记忆是怎么接上的</h2>
-        <p class="feature-desc">左边是真实对话：讲解员「阿海」带游客走一条 51 个展项的路线，母本里已经走了 250 轮，你上次停在深海区，这次接着聊。右边四个面板全是只读的事实——当前窗口里有哪几句话、这句话在库里召回了什么、最终发给模型的完整提示词长什么样、库里的原文被切成什么样。也可以完全不动模型，直接输一句话查库。</p>
+        <p class="feature-desc">左边是真实对话：讲解员「阿海」带游客走一条 51 个展项的路线，母本里已经走了 250 轮，你上次停在深海区，这次接着聊。右边四个标签全是只读的事实，点一下换一个：这轮召回了什么、真正发给模型的完整提示词、库里存了哪些片段、这场对话走到了哪。也可以完全不动模型，直接输一句话查库。</p>
       </div>
       <div class="feature-tools">
-        <button class="btn btn--small" type="button" id="chatChain" disabled><svg class="icon" aria-hidden="true"><use href="#i-chain" xlink:href="#i-chain"/></svg>本轮原始数据</button>
-        <button class="btn btn--small" type="button" id="memoryChain" disabled><svg class="icon" aria-hidden="true"><use href="#i-chain" xlink:href="#i-chain"/></svg>检索轨迹</button>
+        <button class="btn btn--small" type="button" id="chatChain" disabled title="这一轮真正发出去的 messages 和召回轨迹，原始 JSON，给排查用"><svg class="icon" aria-hidden="true"><use href="#i-chain" xlink:href="#i-chain"/></svg>本轮原始 JSON</button>
+        <button class="btn btn--small" type="button" id="memoryChain" disabled title="这一轮召回了哪些条目、距离多少、哪些真进了提示词"><svg class="icon" aria-hidden="true"><use href="#i-chain" xlink:href="#i-chain"/></svg>召回明细</button>
       </div>
     </div>
 
@@ -1550,10 +1598,13 @@ html.js .scope-note[hidden] { display: none !important; }
         <div class="chat-shell">
           <div class="chat-head">
             <h3>现场对话</h3>
-            <span class="chat-turn" id="chatTurn">0 轮</span>
+            <div class="chat-head-tools">
+              <span class="chat-turn" id="chatTurn">本次 0 轮</span>
+              <button class="btn btn--small" type="button" id="btnTranscript" title="翻看母本里已经走完的 250 轮参观记录">完整参观记录</button>
+            </div>
           </div>
           <div class="chat-log" id="chatLog" aria-label="与讲解员阿海的对话记录">
-            <p class="chat-empty" id="chatEmpty"><strong>上次的对话已载入</strong>页面打开时已经填入了你上次参观的 6 轮，可以直接问「深海区那个亮着的是什么」。模型不可用时，页面会直接说明本轮失败。</p>
+            <p class="chat-empty" id="chatEmpty"><strong>上次的对话已载入</strong>窗口里是最近 6 轮（12 条）。更早的两百多轮在母本里，点右上角「完整参观记录」能翻到；真问起来时，靠检索把它们取回来。模型不可用时，页面会直接说明本轮失败。</p>
           </div>
           <form class="chat-form" id="chatForm" action="/api/showcase/chat" method="post" aria-labelledby="chatInputLabel">
             <label class="field-label" id="chatInputLabel" for="chatInput">发送给阿海</label>
@@ -1570,80 +1621,117 @@ html.js .scope-note[hidden] { display: none !important; }
       </div>
 
       <div class="guide-side">
-        <section class="panel guide-panel" aria-labelledby="stateTitle">
-          <div class="panel-head">
-            <h3 id="stateTitle">① 当前状态</h3>
-            <span class="panel-meta" id="stateMeta">读取中</span>
-          </div>
-          <dl class="state-grid">
-            <div><dt>本次轮次</dt><dd id="stateTurn">—</dd></div>
-            <div><dt>窗口原话</dt><dd id="stateWindow">—</dd></div>
-            <div><dt>母本知识库</dt><dd id="stateKb">—</dd></div>
-            <div><dt>我的记忆</dt><dd id="statePrivate">—</dd></div>
-          </dl>
-          <p class="memory-hint">窗口只保留最近 12 条消息；更早的已经在库里，靠检索取回，不会整段塞给模型。</p>
-        </section>
+        <div class="side-tabs" role="tablist" aria-label="右侧四个面板">
+          <button class="side-tab is-active" type="button" role="tab" data-pane="recall" aria-selected="true">本轮召回</button>
+          <button class="side-tab" type="button" role="tab" data-pane="prompt" aria-selected="false">完整提示词</button>
+          <button class="side-tab" type="button" role="tab" data-pane="library" aria-selected="false">库内容</button>
+          <button class="side-tab" type="button" role="tab" data-pane="state" aria-selected="false">状态</button>
+        </div>
 
-        <section class="panel guide-panel" aria-labelledby="recallTitle">
+        <section class="panel guide-panel is-active" data-panel="recall" aria-labelledby="recallTitle">
           <div class="panel-head">
-            <h3 id="recallTitle">② 本次召回</h3>
+            <h3 id="recallTitle">这一轮召回了什么</h3>
             <span class="panel-meta" id="recallMeta">还没提问</span>
           </div>
-          <div class="memory-summary" id="memorySummary">
-            <span class="summary-chip">命中 <strong id="memoryHitCount">—</strong></span>
-            <span class="summary-chip">上下文命中 <strong id="memoryContextCount">—</strong></span>
-            <span class="summary-chip">最终注入 <strong id="memoryInjectedCount">—</strong></span>
+          <div class="tool-strip tool-strip--tight">
+            <div class="tool-row">
+              <span class="tool-label">召回上限</span>
+              <div class="seg" role="group" aria-label="召回候选上限">
+                <button class="seg-btn" type="button" data-top="5" aria-pressed="false">5 条</button>
+                <button class="seg-btn" type="button" data-top="10" aria-pressed="true">10 条</button>
+                <button class="seg-btn" type="button" data-top="20" aria-pressed="false">20 条</button>
+              </div>
+              <span class="tool-hint" id="recallTopHint">下一句话生效</span>
+            </div>
+            <p class="tool-hint">召回只负责「把候选项捞出来」，不花 token；过了距离阈值、真正写进提示词的那几条才算数。</p>
           </div>
-          <div id="memoryResults">
+          <div class="memory-summary" id="memorySummary">
+            <span class="summary-chip">召回候选 <strong id="memoryHitCount">—</strong></span>
+            <span class="summary-chip">上下文补充 <strong id="memoryContextCount">—</strong></span>
+            <span class="summary-chip">进提示词 <strong id="memoryInjectedCount">—</strong></span>
+          </div>
+          <div class="pane-scroll" id="memoryResults">
             <p class="memory-hint">发一句话，这里会列出召回到的条目、来源和距离，以及哪几条真的进了提示词。</p>
           </div>
           <details class="memory-block" id="memoryBlockDetails" hidden>
-            <summary>查看实际注入的记忆块</summary>
+            <summary>这段记忆块实际长什么样（会插在提示词里）</summary>
             <pre class="code-block" id="memoryBlock" role="region" aria-label="实际注入模型的记忆块" tabindex="0"><code id="memoryBlockCode"></code></pre>
           </details>
         </section>
 
-        <section class="panel guide-panel" aria-labelledby="promptTitle">
+        <section class="panel guide-panel" data-panel="prompt" aria-labelledby="promptTitle">
           <div class="panel-head">
-            <h3 id="promptTitle">③ 完整提示词</h3>
+            <h3 id="promptTitle">真正发出去的全部内容</h3>
             <span class="panel-meta" id="promptMeta">还没发送</span>
           </div>
-          <details class="memory-block" id="promptDetails">
-            <summary>展开这一轮实际发出去的 messages</summary>
+          <p class="memory-hint">系统提示、记忆块、窗口里的历史、你刚打的那句话，按顺序逐条列出，中间没有省略。</p>
+          <div class="pane-scroll">
             <pre class="code-block" id="promptBlock" role="region" aria-label="本轮发送给模型的完整提示词" tabindex="0"><code id="promptCode">还没有发送过消息。</code></pre>
-          </details>
+          </div>
         </section>
 
-        <section class="panel guide-panel" aria-labelledby="libraryTitle">
+        <section class="panel guide-panel" data-panel="library" aria-labelledby="libraryTitle">
           <div class="panel-head">
-            <h3 id="libraryTitle">④ 库原文与手动查库</h3>
+            <h3 id="libraryTitle">库里到底存了什么</h3>
             <span class="panel-meta" id="libraryMeta">—</span>
           </div>
-          <search aria-labelledby="memoryFormTitle">
-            <h4 class="visually-hidden" id="memoryFormTitle">手动查库</h4>
-            <form class="memory-form" id="memoryForm" action="/api/showcase/guide/search" method="post" aria-labelledby="memoryFormTitle">
-              <label class="field-label" for="memoryQuery">直接查库（不调模型）</label>
-              <p class="field-hint" id="memoryHint">只做向量检索：给距离、给阈值、给原话，看看这句话在库里最近的是什么。</p>
-              <input class="memory-search-input" type="search" id="memoryQuery" name="query" minlength="1" maxlength="500" required aria-describedby="memoryHint memoryError" placeholder="例如：深海区那个亮着的是什么">
-              <p class="field-error" id="memoryError" role="alert" hidden></p>
-              <p class="status-line" id="memoryStatus" role="status"></p>
-              <button class="btn btn--sea" type="submit" id="memorySubmit">查库</button>
+
+          <div class="tool-strip">
+            <h4 class="tool-title">直接查库</h4>
+            <p class="tool-hint">不调模型、不花钱。给你向量距离：越接近 0 越像，过了 0.70 基本就不相关了。</p>
+            <form class="memory-form memory-form--inline" id="memoryForm" action="/api/showcase/guide/search" method="post" aria-labelledby="memoryFormTitle">
+              <label class="visually-hidden" id="memoryFormTitle" for="memoryQuery">查库关键词</label>
+              <input class="memory-search-input" type="search" id="memoryQuery" name="query" minlength="1" maxlength="500" required aria-describedby="memoryError" placeholder="一句话，比如：深海区那个亮着的是什么">
+              <button class="btn btn--sea" type="submit" id="memorySubmit">查一下</button>
             </form>
-          </search>
-          <div class="lib-list" id="searchResults" hidden></div>
-          <div class="lib-tabs" role="group" aria-label="库条目类型">
-            <button class="lib-tab" type="button" data-kind="raw" aria-pressed="true">原文层</button>
-            <button class="lib-tab" type="button" data-kind="batch" aria-pressed="false">批次叙事</button>
-            <button class="lib-tab" type="button" data-kind="fact" aria-pressed="false">原子事实</button>
+            <p class="field-error" id="memoryError" role="alert" hidden></p>
+            <p class="status-line" id="memoryStatus" role="status"></p>
           </div>
-          <div class="lib-list" id="libraryList">
-            <p class="memory-hint">正在读取库…</p>
+          <div class="pane-scroll" id="searchResults" hidden></div>
+
+          <div class="lib-browse">
+            <div class="tool-row">
+              <span class="tool-label">按类型看</span>
+              <div class="lib-tabs" role="group" aria-label="库条目类型">
+                <button class="lib-tab" type="button" data-kind="raw" aria-pressed="true">原文层</button>
+                <button class="lib-tab" type="button" data-kind="batch" aria-pressed="false">批次叙事</button>
+                <button class="lib-tab" type="button" data-kind="fact" aria-pressed="false">原子事实</button>
+              </div>
+            </div>
+            <div class="pane-scroll pane-scroll--lib">
+              <div class="lib-list" id="libraryList">
+                <p class="memory-hint">正在读取库…</p>
+              </div>
+            </div>
+            <div class="lib-pager" id="libraryPager" hidden>
+              <button class="btn btn--small" type="button" id="libPrev">上一页</button>
+              <span class="panel-meta" id="libPageLabel">—</span>
+              <button class="btn btn--small" type="button" id="libNext">下一页</button>
+            </div>
           </div>
-          <div class="lib-pager" id="libraryPager" hidden>
-            <button class="btn btn--small" type="button" id="libPrev">上一页</button>
-            <span class="panel-meta" id="libPageLabel">—</span>
-            <button class="btn btn--small" type="button" id="libNext">下一页</button>
+        </section>
+
+        <section class="panel guide-panel" data-panel="state" aria-labelledby="stateTitle">
+          <div class="panel-head">
+            <h3 id="stateTitle">这场对话现在到哪了</h3>
+            <span class="panel-meta" id="stateMeta">读取中</span>
           </div>
+          <dl class="state-grid">
+            <div><dt>这次聊了</dt><dd id="stateTurn">—</dd></div>
+            <div><dt>窗口里的原话</dt><dd id="stateWindow">—</dd></div>
+            <div><dt>母本全程</dt><dd id="stateTrip">—</dd></div>
+            <div><dt>我的记忆</dt><dd id="statePrivate">—</dd></div>
+          </dl>
+          <details class="explain">
+            <summary>母本知识库那 377 条，是怎么算出来的</summary>
+            <p>阿海走完的这条路线一共 <b>250 轮</b>对话。为了让人能按片段取回，它被切成 <b>377 个可检索条目</b>——不是 377 轮对话，是 250 轮被拆成了 377 块：</p>
+            <ul>
+              <li><b>原文 284 块</b>：每一句原话单独一块，你问什么、他怎么答，一字不改。</li>
+              <li><b>原子事实 73 条</b>：每 5 轮由提炼 AI 抽一遍「谁、在哪、说了什么」。</li>
+              <li><b>批次叙事 20 条</b>：每 5 轮压成一小段经过，用来回答「上次说到哪了」。</li>
+            </ul>
+            <p>提问时只从这 377 块里挑几条进提示词，几万字的母本不会整段塞给模型。</p>
+          </details>
         </section>
       </div>
     </div>
@@ -1804,6 +1892,27 @@ html.js .scope-note[hidden] { display: none !important; }
   </div>
 </dialog>
 
+<dialog class="trace-dialog transcript-dialog" id="transcriptDialog" closedby="any" aria-labelledby="transcriptTitle">
+  <div class="dialog-head">
+    <div>
+      <p>母本 · 完整参观记录</p>
+      <h2 id="transcriptTitle">阿海走过的那条路线</h2>
+    </div>
+    <form method="dialog">
+      <button class="btn btn--small dialog-close" type="submit">关闭</button>
+    </form>
+  </div>
+  <div class="dialog-body">
+    <p class="memory-hint" id="transcriptNote">正在读取母本…</p>
+    <div class="transcript-body" id="transcriptBody"></div>
+    <div class="lib-pager" id="transcriptPager" hidden>
+      <button class="btn btn--small" type="button" id="trPrev">上一页</button>
+      <span class="panel-meta" id="trPageLabel">—</span>
+      <button class="btn btn--small" type="button" id="trNext">下一页</button>
+    </div>
+  </div>
+</dialog>
+
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
 <!-- ===== 页面脚本：数据渲染、五个真实交互与安全链路弹窗 ===== -->
@@ -1857,12 +1966,12 @@ html.js .scope-note[hidden] { display: none !important; }
     stateMeta: $("#stateMeta"),
     stateTurn: $("#stateTurn"),
     stateWindow: $("#stateWindow"),
-    stateKb: $("#stateKb"),
+    stateTrip: $("#stateTrip"),
     statePrivate: $("#statePrivate"),
     recallMeta: $("#recallMeta"),
+    recallTopHint: $("#recallTopHint"),
     promptMeta: $("#promptMeta"),
     promptCode: $("#promptCode"),
-    promptDetails: $("#promptDetails"),
     searchResults: $("#searchResults"),
     libraryList: $("#libraryList"),
     libraryMeta: $("#libraryMeta"),
@@ -1881,6 +1990,14 @@ html.js .scope-note[hidden] { display: none !important; }
     chatSend: $("#chatSend"),
     chatTurn: $("#chatTurn"),
     chatChain: $("#chatChain"),
+    btnTranscript: $("#btnTranscript"),
+    transcriptDialog: $("#transcriptDialog"),
+    transcriptBody: $("#transcriptBody"),
+    transcriptNote: $("#transcriptNote"),
+    transcriptPager: $("#transcriptPager"),
+    trPageLabel: $("#trPageLabel"),
+    trPrev: $("#trPrev"),
+    trNext: $("#trNext"),
 
     memoryForm: $("#memoryForm"),
     memoryQuery: $("#memoryQuery"),
@@ -1930,6 +2047,8 @@ html.js .scope-note[hidden] { display: none !important; }
     chatTurn: 0,
     chatPainted: false,
     chatTrace: null,
+    recallTop: 10,
+    transcript: { offset: 0, limit: 10, total: 0, loading: false },
     memory: { rag: null, query: "" },
     library: { kind: "raw", offset: 0, limit: 8, total: 0, loading: false },
     comic: { data: null, view: "script" },
@@ -2882,7 +3001,7 @@ html.js .scope-note[hidden] { display: none !important; }
     updateChatCounter();
 
     try {
-      const payload = { message: message, mode: requestMode };
+      const payload = { message: message, mode: requestMode, top: state.recallTop };
       if (state.sessionId) payload.session_id = state.sessionId;
       const data = await jsonRequest("/api/showcase/chat", {
         method: "POST",
@@ -2890,7 +3009,7 @@ html.js .scope-note[hidden] { display: none !important; }
       });
       rememberSession(data.session_id);
       state.chatTurn = Number(data.turn) || (state.chatTurn + 1);
-      ui.chatTurn.textContent = state.chatTurn + " 轮";
+      ui.chatTurn.textContent = "本次 " + state.chatTurn + " 轮";
       state.chatTrace = data;
       appendChatMessage("assistant", data.reply, data, "本轮原始数据");
       const total = data.usage && Number(data.usage.total_tokens);
@@ -2976,21 +3095,23 @@ html.js .scope-note[hidden] { display: none !important; }
     }).join("\n\n");
   }
 
-  // ① 当前状态：轮次、窗口条数、两边库的条目数。
+  // 状态：这次聊了几轮、窗口里留了几条、母本走完全程多少轮、自己的记忆多少条。
   function renderGuideState(data) {
     if (!data) return;
-    ui.stateMeta.textContent = data.ready ? (data.turn || 0) + " 轮对话" : "检索服务未就绪";
+    ui.stateMeta.textContent = data.ready ? "检索服务就绪" : "检索服务未就绪";
     ui.stateTurn.textContent = (data.turn || 0) + " 轮";
     const win = data.window || {};
     ui.stateWindow.textContent = (win.count || 0) + " / " + (win.limit || 12) + " 条";
+    const trip = data.transcript || {};
     const kb = (data.kb && data.kb.counts) || {};
-    ui.stateKb.textContent = kb.total
-      ? formatNumber(kb.total) + " 条（原文 " + formatNumber(kb.raw) + " · 批次 " + formatNumber(kb.batch) + " · 事实 " + formatNumber(kb.fact) + "）"
-      : "0 条";
+    ui.stateTrip.textContent = trip.turns
+      ? formatNumber(trip.turns) + " 轮 / " + formatNumber(trip.stops) + " 站"
+        + (kb.total ? "（库里切成 " + formatNumber(kb.total) + " 块）" : "")
+      : "—";
     const mine = (data.private && data.private.counts) || {};
     ui.statePrivate.textContent = mine.total
       ? formatNumber(mine.total) + " 条"
-      : "0 条（每 5 轮写一批）";
+      : "0 条（聊满 5 轮才写一批）";
   }
 
   // 打开页面就把「上次的 12 条窗口」铺进聊天区，不用先聊才有东西看。
@@ -3004,7 +3125,7 @@ html.js .scope-note[hidden] { display: none !important; }
     messages.forEach((item) => {
       appendChatMessage(item.role === "user" ? "user" : "assistant", item.content || "", null, "");
     });
-    ui.chatTurn.textContent = (data.turn || 0) + " 轮";
+    ui.chatTurn.textContent = "本次 " + (data.turn || 0) + " 轮";
     state.chatPainted = true;
   }
 
@@ -3025,6 +3146,85 @@ html.js .scope-note[hidden] { display: none !important; }
       ui.stateMeta.textContent = "读取失败：" + error.message;
       return null;
     }
+  }
+
+  // 右栏四个面板一次只露一个：看提示词不用从顶上一路滚到底（2026-11-16）。
+  function switchPane(name) {
+    $$(".side-tab").forEach((btn) => {
+      const on = btn.dataset.pane === name;
+      btn.classList.toggle("is-active", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    $$(".guide-side [data-panel]").forEach((pane) => {
+      pane.classList.toggle("is-active", pane.dataset.panel === name);
+    });
+    if (name === "library" && !state.library.total) loadLibrary(0);
+  }
+
+  // 母本完整记录：250 轮按站分块，翻页看。只读 JSON，不碰向量库。
+  async function loadTranscript(offset) {
+    const box = state.transcript;
+    if (box.loading) return;
+    box.loading = true;
+    box.offset = Math.max(0, Number(offset) || 0);
+    ui.transcriptNote.textContent = "正在读取母本…";
+    ui.transcriptBody.replaceChildren();
+    try {
+      const params = new URLSearchParams({
+        offset: String(box.offset), limit: String(box.limit)
+      });
+      const data = await jsonRequest("/api/showcase/guide/transcript?" + params.toString());
+      box.total = Number(data.total_groups) || 0;
+      renderTranscript(data);
+    } catch (error) {
+      ui.transcriptNote.textContent = "读取失败：" + error.message;
+      ui.transcriptPager.hidden = true;
+    } finally {
+      box.loading = false;
+    }
+  }
+
+  function renderTranscript(data) {
+    const box = state.transcript;
+    const groups = Array.isArray(data.groups) ? data.groups : [];
+    ui.transcriptNote.textContent = "母本一共 " + formatNumber(data.total_turns)
+      + " 轮、走完 " + formatNumber(data.total_groups) + " 站，这里能翻到全部。"
+      + "左边聊天窗口只保留最近 12 条，其余提问时靠检索取回。";
+    if (!groups.length) {
+      ui.transcriptBody.replaceChildren(node("p", "memory-hint", "这一页没有记录。"));
+      ui.transcriptPager.hidden = true;
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    groups.forEach((group) => {
+      const block = node("article", "stop-block");
+      const head = node("div", "stop-head");
+      head.append(node("span", "stop-name", "第 " + group.no + " 站 · " + group.name));
+      head.append(node("span", null, "第 " + group.turn_start + "–" + group.turn_end + " 轮"));
+      block.append(head);
+      (group.turns || []).forEach((turn) => {
+        const isGuide = turn.role === "guide";
+        const line = node("p", "msg " + (isGuide ? "is-guide" : "is-visitor"));
+        line.append(node("b", null, isGuide ? "阿海" : "游客"));
+        line.append(document.createTextNode(turn.text || ""));
+        block.append(line);
+      });
+      frag.append(block);
+    });
+    ui.transcriptBody.replaceChildren(frag);
+    const from = box.offset + 1;
+    const to = box.offset + groups.length;
+    ui.transcriptPager.hidden = box.total <= box.limit;
+    ui.trPageLabel.textContent = from + "–" + to + " / " + formatNumber(box.total) + " 站";
+    ui.trPrev.disabled = box.offset <= 0;
+    ui.trNext.disabled = to >= box.total;
+    if (ui.transcriptDialog) ui.transcriptDialog.scrollTop = 0;
+  }
+
+  function openTranscript() {
+    if (!ui.transcriptDialog) return;
+    if (!ui.transcriptDialog.open) ui.transcriptDialog.showModal();
+    loadTranscript(0);
   }
 
   // ④ 库原文：按类型翻页浏览，看到的就是写进库之前的那些片。
@@ -3054,6 +3254,20 @@ html.js .scope-note[hidden] { display: none !important; }
     }
   }
 
+  // 库里原文带着「她：」「用户说：」的前缀（写库时的角色标记）。翻库时
+  // 这些前缀只会让人读不懂，改成「第 N 轮 · 游客问 / 阿海答」放在标题上。
+  function rawSpeaker(entry) {
+    if (entry.kind !== "raw") return "";
+    return entry.role === "user" ? "游客问" : "阿海答";
+  }
+
+  function stripRawPrefix(text, entry) {
+    let out = String(text || "");
+    if (entry.kind !== "raw") return out;
+    // 不靠 role 判：老库里 role 可能缺失，前缀本身就在正文开头。
+    return out.replace(/^用户说：/, "").replace(/^用户：/, "").replace(/^她：/, "");
+  }
+
   function renderLibrary(data) {
     const lib = state.library;
     const entries = Array.isArray(data.entries) ? data.entries : [];
@@ -3070,11 +3284,15 @@ html.js .scope-note[hidden] { display: none !important; }
     entries.forEach((entry) => {
       const item = node("article", "lib-entry");
       const head = node("header");
-      const kindLabel = entry.kind === "raw" ? "原文" : entry.kind === "batch" ? "批次" : "事实";
       const where = entry.line === "private" ? "我的记忆" : "母本库";
-      head.append(node("span", null, where + " · " + kindLabel + " · 第 " + (entry.turn || "?") + " 轮"));
+      const speaker = rawSpeaker(entry);
+      const label = speaker
+        ? "第 " + (entry.turn || "?") + " 轮 · " + speaker
+        : (entry.kind === "batch" ? "批次叙事" : "原子事实")
+          + " · 第 " + (entry.turn || "?") + " 轮";
+      head.append(node("span", "lib-who", where + " · " + label));
       head.append(node("span", null, entry.chars + " 字"));
-      item.append(head, node("p", null, entry.content || "（空）"));
+      item.append(head, node("p", null, stripRawPrefix(entry.content, entry) || "（空）"));
       frag.append(item);
     });
     ui.libraryList.replaceChildren(frag);
@@ -3499,6 +3717,23 @@ html.js .scope-note[hidden] { display: none !important; }
       submitChat();
     });
     ui.chatChain.addEventListener("click", () => openChatTrace(state.chatTrace));
+    ui.btnTranscript.addEventListener("click", openTranscript);
+    ui.trPrev.addEventListener("click", () => loadTranscript(state.transcript.offset - state.transcript.limit));
+    ui.trNext.addEventListener("click", () => loadTranscript(state.transcript.offset + state.transcript.limit));
+
+    // 右栏四个面板 + 召回上限：面板一次只露一个，召回上限下一句话生效。
+    $$(".side-tab").forEach((btn) => {
+      btn.addEventListener("click", () => switchPane(btn.dataset.pane));
+    });
+    $$(".seg-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.recallTop = Number(btn.dataset.top) || 10;
+        $$(".seg-btn").forEach((item) => {
+          item.setAttribute("aria-pressed", item === btn ? "true" : "false");
+        });
+        ui.recallTopHint.textContent = "下一句话按 " + state.recallTop + " 条召回";
+      });
+    });
 
     ui.memoryQuery.addEventListener("input", () => {
       setControlError(ui.memoryQuery, ui.memoryError, "");

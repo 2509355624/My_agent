@@ -1066,12 +1066,17 @@ def _raw_block(docs, trace=None):
 
 
 def build_block(line, query, k=None, day=None, context="", trace=None,
-                extra_lines=()):
+                extra_lines=(), max_hits=None):
     """拼成能直接塞进最后一条玩家消息的一段；没命中返回空串。
 
     `extra_lines`（2026-11-15）：额外的只读库。展示页用「母本知识库 +
     访客私有线」两路合并检索；为空时走原来的单库路径，返回值和顺序
     与改动前完全一致。
+
+    `max_hits`（2026-11-16）：召回候选的上限，展示页把它做成可调项
+    （5 / 10 / 20）。只截候选，不动阈值——被截掉的是距离更远的那些，
+    本来也进不了注入块。锚点与最近批次是规则补入，不受这个上限约束。
+    默认 None = 不截断，生产路径一点不变。
 
     2026-11-06：两路检索——当前用户话 + 最近几轮上下文，合并去重后
     优先取 2 条批次叙事 + 3 条原子事实。问「昨天」这种短句时，
@@ -1108,6 +1113,8 @@ def build_block(line, query, k=None, day=None, context="", trace=None,
         return _rank_merged(pooled, RAW_BLOCK_ITEMS)
 
     docs = _rec(query)
+    if max_hits:
+        docs = docs[:max_hits]
     # 锚点（第一次/初夜/关系确认…）不看距离，直接排最前，见 `_anchor_docs`。
     anchor = _anchor_docs(line)
     if anchor:
@@ -1133,6 +1140,8 @@ def build_block(line, query, k=None, day=None, context="", trace=None,
         })
     if context:
         extra = _rec(context)
+        if max_hits:
+            extra = extra[:max_hits]
         seen = {str(d.get("id") or "") for d in docs}
         docs += [d for d in extra
                  if str(d.get("id") or "") not in seen]
