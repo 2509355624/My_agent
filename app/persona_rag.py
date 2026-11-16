@@ -48,6 +48,7 @@ import sys
 import threading
 import time
 
+from app import rerank
 from app.config import (
     PERSONA_MODEL, PERSONA_PROVIDER,
     PERSONA_RAG, PERSONA_RAG_DATA_DIR, PERSONA_RAG_INGEST_EVERY,
@@ -741,6 +742,19 @@ def mmr_select(docs, k, lam=0.7, dup=0.30):
     return picked
 
 
+def _rerank_before_mmr(docs, k, query):
+    """重排候选 → 再交给 MMR 去重（2026-11-16）。
+
+    向量召回粗排出来的候选先经 cross-encoder 逐对精算，再按原来的 MMR
+    规则挑不重复的 k 条。重排只是增强：模型没就绪时 rerank 原样返回，
+    行为与以前完全一致。打日志只为演示页/排查能看到这一层是否生效。
+    """
+    ranked = rerank.rerank(query, docs)
+    if ranked is not docs and ranked != docs:
+        log.info("[回忆] cross-encoder 重排 %d 条候选", len(ranked))
+    return mmr_select(ranked, k)
+
+
 def retrieve(line, query, k=None, day=None):
     """按当前用户的话找几条提炼过的记忆；daemon 没 ready 就返回空。
 
@@ -800,7 +814,7 @@ def retrieve(line, query, k=None, day=None):
             if out:
                 log.info("[回忆] %s 按第 %d 天命中 %d 条（query=%r）",
                          line, day_q, len(out), query[:40])
-                return mmr_select(out, kk_out)
+                return _rerank_before_mmr(out, kk_out, query)
     # 普通路径 / 天数过滤无结果时回退
     try:
         r = client.search(collection_name(line), query,
@@ -829,7 +843,7 @@ def retrieve(line, query, k=None, day=None):
         out = merged[:12]
     log.info("[回忆] %s 命中 %d 条（query=%r，阈值=%.2f，时间问法=%s）",
              line, len(out), query[:40], limit, time_q)
-    return mmr_select(out, kk_out)
+    return _rerank_before_mmr(out, kk_out, query)
 
 
 def retrieve_raw(line, query, k=None):
@@ -880,8 +894,8 @@ def retrieve_raw(line, query, k=None):
             out.append(d)
     if out:
         log.info("[原话] %s 命中 %d 条（query=%r）", line, len(out), query[:40])
-    # 原话层重复更凶（同一个场景被记三四遍），MMR 挑完再给。
-    return mmr_select(out, kk)
+    # 原话层重复更凶（同一个场景被记三四遍），重排后 MMR 挑完再给。
+    return _rerank_before_mmr(out, kk, query)
 
 
 # 注入块名额（2026-11-09）：锚点不看相关性、最多 8 条；批次叙事 2 条；

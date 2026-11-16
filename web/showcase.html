@@ -1863,7 +1863,7 @@ html.js .scope-note[hidden] { display: none !important; }
           <textarea id="ragQuestion" rows="2" placeholder="比如：为什么生图要串行执行？" disabled></textarea>
           <button class="btn btn--primary btn--small" type="submit" id="ragAsk" disabled>提问</button>
         </form>
-        <div class="rag-status" id="ragStatus">向量模型 bge-small-zh-v1.5 · 输入上限 512 token · 输出 512 维向量 · CPU</div>
+        <div class="rag-status" id="ragStatus">向量模型 bge-small-zh-v1.5 · 512 维 · CPU ｜ 检索：扩大召回 → 本地 cross-encoder 精排 → MMR 去重</div>
       </aside>
     </div>
   </section>
@@ -3911,7 +3911,7 @@ html.js .scope-note[hidden] { display: none !important; }
   // 现在它渲染在右栏「问这份文档」正下方，提问后自动展开。
   const QUERY_STEP = {
     key: "query", no: "04", title: "检索",
-    idle: "提问后在这里展开：余弦距离取 Top 4，再做 MMR 去重",
+    idle: "提问后在这里展开：扩大召回 → 本地 cross-encoder 精排 → MMR 去重取 Top 4",
   };
 
   const S = { sid: null, kb: null, filename: "", ingested: false, busy: false, chunks: [], steps: {} };
@@ -4259,7 +4259,7 @@ html.js .scope-note[hidden] { display: none !important; }
       setStep("query", hits.length ? "done" : "error",
         hits.length ? `Top ${hits.length} · 最高 ${(hits[0].score * 100).toFixed(1)}%` : "没有命中",
         (hits.length
-          ? `<p style="margin:0 0 .5rem;font-size:.78rem;color:var(--muted)">顺序是 MMR 多样性重排后的结果，不是纯相似度排序——所以第 2 名的百分比可能比第 3 名低，那是为了少返回几段重复内容。</p>
+          ? `<p style="margin:0 0 .5rem;font-size:.78rem;color:var(--muted)">先把向量召回的候选池扩大，再用本地 cross-encoder 逐对精排把对的捞上来，最后 MMR 去重踢掉重复——所以顺序不是纯相似度排序，第 2 名的百分比可能比第 3 名低，那是为了少返回几段重复内容。</p>
              <div class="rag-hits">${bars}</div>`
           : `<p>这一问没有检索到片段。</p>`) +
         (data.prompt
@@ -4519,7 +4519,7 @@ html.js .scope-note[hidden] { display: none !important; }
       if (question) { question.disabled = true; question.value = ""; }
       resetBtn.hidden = true;
       showErr("");
-      if (statusBox) statusBox.textContent = "向量模型 bge-small-zh-v1.5 · 输入上限 512 token · 输出 512 维向量 · CPU";
+      if (statusBox) statusBox.textContent = "向量模型 bge-small-zh-v1.5 · 512 维 · CPU ｜ 检索：扩大召回 → 本地 cross-encoder 精排 → MMR 去重";
     });
   }
 

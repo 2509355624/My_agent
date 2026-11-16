@@ -105,3 +105,6 @@ comics/
 
 # 导出给别人的包（含 zip，别进仓库）
 dist/
+
+# 本地重排模型权重（~1GB，不进仓库；从 ModelScope 下载）
+models/

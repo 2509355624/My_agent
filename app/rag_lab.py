@@ -40,7 +40,7 @@ import uuid
 
 from flask import Blueprint, jsonify, request
 
-from app import llm, vision
+from app import llm, rerank, vision
 from app.config import DEEPSEEK_MODEL, state_path
 
 log = logging.getLogger("rag_lab")
@@ -724,14 +724,16 @@ def split_with_llm(text):
 # ③ 检索 / ④ 回答
 # ══════════════════════════════════════════════════════
 def _hits_of(rec, question, k=4):
-    res = _client().search(rec["kb"], question, k=k)
+    # 候选池放大给重排挑：向量召回粗排 + MMR 先给一批，cross-encoder 再精排
+    # 取 top k。模型没就绪时重排原样返回，行为与旧的「直接取前 k」一致。
+    pool = max(k * 4, 12)
+    res = _client().search(rec["kb"], question, k=pool)
     if not res.get("ok"):
         raise RuntimeError(res.get("error") or "检索失败")
     out = []
-    for i, doc in enumerate(res.get("docs") or [], 1):
+    for doc in (res.get("docs") or []):
         dist = float(doc.get("distance") or 0.0)
         out.append({
-            "no": i,
             "id": doc.get("id") or "",
             "content": (doc.get("content") or "")[:800],
             "chars": len(doc.get("content") or ""),
@@ -739,6 +741,9 @@ def _hits_of(rec, question, k=4):
             "distance": round(dist, 4),
             "score": round(1.0 - dist, 4),
         })
+    out = rerank.rerank(question, out, top_n=k)   # 精排后重新编号，[n] 引用才对得上
+    for i, hit in enumerate(out, 1):
+        hit["no"] = i
     return out
 
 
