@@ -1402,5 +1402,53 @@ class TaskDirTitleTest(unittest.TestCase):
                          "web/漫画_C20261018-06_加了料的饮料")
 
 
+class PanelNoPrefixTest(unittest.TestCase):
+    """2026-11-16：保存名带分镜格号，重跑的图不再按生成顺序乱编号。"""
+
+    def _wf(self, prefix="Anima"):
+        return {"9": {"class_type": "SaveImage",
+                      "inputs": {"images": ["3", 0],
+                                 "filename_prefix": prefix}},
+                "3": {"class_type": "KSampler", "inputs": {"cfg": 1}}}
+
+    def test_stamp_adds_zero_padded_panel_no(self):
+        wf = comic._stamp_panel_no(self._wf(), "04")
+        self.assertEqual("Anima_04", wf["9"]["inputs"]["filename_prefix"])
+
+    def test_stamp_keeps_other_nodes(self):
+        wf = comic._stamp_panel_no(self._wf(), "12")
+        self.assertEqual(1, wf["3"]["inputs"]["cfg"])
+
+    def test_stamp_is_idempotent(self):
+        wf = comic._stamp_panel_no(self._wf(), "04")
+        wf = comic._stamp_panel_no(wf, "04")
+        self.assertEqual("Anima_04", wf["9"]["inputs"]["filename_prefix"])
+
+    def test_stamp_keeps_subdir_prefix_last_segment(self):
+        wf = comic._stamp_panel_no(self._wf("qq/群_1/Anima"), "7")
+        # basename 后带格号；comfy_out.stamp 会再拼 body 目录
+        self.assertEqual("Anima_07", wf["9"]["inputs"]["filename_prefix"])
+
+    def test_no_panel_no_leaves_wf_untouched(self):
+        wf = self._wf()
+        comic._stamp_panel_no(wf, None)
+        self.assertEqual("Anima", wf["9"]["inputs"]["filename_prefix"])
+
+    def test_no_save_image_node_is_tolerated(self):
+        wf = {"1": {"class_type": "KSampler", "inputs": {}}}
+        comic._stamp_panel_no(wf, "04")     # 不抛异常
+        self.assertNotIn("filename_prefix", wf["1"]["inputs"])
+
+    def test_stamp_real_qwen_workflow(self):
+        """真实 qwen workflow 的 SaveImage 节点被正确加上格号。"""
+        from app import skills as _skills
+        sd = _skills.load_skill("qwen_image_v1")
+        self.assertTrue(sd)
+        wf = comic.load_workflow(
+            os.path.join(sd["path"], "workflow_i2i.json"))
+        wf = comic._stamp_panel_no(wf, "04")
+        self.assertEqual("QwenI2I_04", wf["50"]["inputs"]["filename_prefix"])
+
+
 if __name__ == "__main__":
     unittest.main()

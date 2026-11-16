@@ -1228,6 +1228,48 @@ def scene_prompt(p):
     return comic_prompt_suffix.apply(p.scene)
 
 
+def _stamp_panel_no(wf, no):
+    """把分镜格号写进 SaveImage 的 filename_prefix（2026-11-16）。
+
+    ComfyUI 的 SaveImage 会在前缀后追加**全局递增序号**（`Anima_00045_.png`），
+    哪张图第几个生成序号就是几。于是一格失败、后面的照跑、回头单格重跑时，
+    重跑的那张就成了第 N 个生成 → 编号跳到末尾，output 文件夹里排序全乱
+    （用户实测：4 号格因 ComfyUI 断连失败，重跑后编号变 10，只能手改成 4.5
+    插回 4 和 5 之间）。把格号写进前缀后，`comfy_out.stamp` 拼出
+    `<body>/Anima_04`，SaveImage 再追加序号 → `Anima_04_00010_.png`，
+    排序按格号走，重跑也不乱。
+
+    **只改运行时的 wf 对象，不改 skills/*/workflow.json**（仓库测试钉死了
+    所有 skill 的前缀必须是原值，见 test_comfy_out / test_image_channels）。
+    `comfy_out.stamp` 只取 basename，所以这里的 `Anima_04` 会被原样当作目录
+    体最后一段，不会被覆盖。找不到 SaveImage（云端渠道 / 非常规工作流）时
+    原样返回，不误伤。
+    """
+    if not no or not isinstance(wf, dict):
+        return wf
+    suffix = "_%02d" % int(no) if str(no).isdigit() else "_%s" % no
+    hit = False
+    for node in wf.values():
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("class_type") or "") != "SaveImage":
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict) or "filename_prefix" not in inputs:
+            continue
+        cur = str(inputs.get("filename_prefix") or "ComfyUI")
+        # 只取最后一段：前缀可能带子目录，格号跟在原名后面（Anima → Anima_04）
+        name = os.path.basename(cur.replace("\\", "/")) or "ComfyUI"
+        # 幂等：同一个 wf 被重复 stamp 时不叠成 Anima_04_04（重试 / 复用场景）。
+        if name.endswith(suffix):
+            continue
+        inputs["filename_prefix"] = name + suffix
+        hit = True
+    if not hit:
+        log.warning("[格 %s] 工作流没有 SaveImage 前缀，跳过格号命名", no)
+    return wf
+
+
 def _scene_wf(task, p, scene_skill, opts=None):
     """阶段一本机渠道的公共前段：读参数覆盖、开种子、建文生图工作流。
 
@@ -1241,6 +1283,7 @@ def _scene_wf(task, p, scene_skill, opts=None):
     if wf is None:
         raise RuntimeError("skill %s 没有文生图工作流" % scene_skill)
     wf = comic_render_opts.apply(wf, opts)
+    _stamp_panel_no(wf, p.no)              # 保存名带格号，重跑不乱序
     log.info("[格 %s] 场景渲染（%s，seed %s，%s）", p.no, scene_skill, seed,
              comic_render_opts.describe(opts))
     return seed, wf
@@ -1375,6 +1418,9 @@ def _build_i2i(skill, prompt, seed, uploaded, denoise=I2I_DENOISE):
 
     denoise 可覆盖：管线自己的两遍 i2i 都用 I2I_DENOISE(0.60)，而**手动改字**
     要的是「只重画那几个字、别动人物和已有气泡」，强度得能调低（见 render_manual）。
+
+    格号不在这里写进前缀：很多测试把 `_build_i2i` 换成固定签名的替身，加关键字
+    参数会弄红它们。调用方拿到 wf 后自己调 `_stamp_panel_no(wf, p.no)` 即可。
     """
     sd = load_skill(skill)
     if not sd:
@@ -1412,6 +1458,7 @@ def render_bubble(task, p, split=False, prompt=None, abort=None):
     seed = _new_seed()
     uploaded = _upload_source(raw_path)
     wf = _build_i2i(BUBBLE_SKILL, prompt, seed, uploaded)
+    _stamp_panel_no(wf, p.no)              # 保存名带格号，重跑不乱序
     log.info("[格 %s] 加气泡（%s，seed %s%s%s）", p.no, BUBBLE_SKILL, seed,
              "，分开画" if split else "", "，提示词已手改" if overridden else "")
     # 同 render_scene：abort 只在真给了才传，别动那些固定签名的替身
@@ -1430,6 +1477,7 @@ def render_bubble(task, p, split=False, prompt=None, abort=None):
         seed2 = _new_seed()
         uploaded2 = _upload_source(task.final_path(p))   # 源图=第一遍的成图
         wf2 = _build_i2i(BUBBLE_SKILL, prompt2, seed2, uploaded2)
+        _stamp_panel_no(wf2, p.no)
         log.info("[格 %s] 加第二个气泡（%s，seed %s）", p.no, BUBBLE_SKILL, seed2)
         name2, exec2, wall2 = _submit_retry(
             lambda: _submit_timed(wf2, BUBBLE_SKILL, prompt2, seed2, **_kw),
@@ -1476,6 +1524,7 @@ def render_manual(task, p, instruction, denoise=I2I_DENOISE):
     seed = _new_seed()
     uploaded = _upload_source(src)
     wf = _build_i2i(BUBBLE_SKILL, prompt, seed, uploaded, denoise)
+    _stamp_panel_no(wf, p.no)
     log.info("[格 %s] 手动修复（%s，seed %s，强度 %s）",
              p.no, BUBBLE_SKILL, seed, denoise)
     name = _submit_retry(lambda: _submit(wf, BUBBLE_SKILL, prompt, seed, task=task),
