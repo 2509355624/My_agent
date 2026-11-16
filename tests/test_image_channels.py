@@ -1255,11 +1255,15 @@ class Krea2ChannelTest(unittest.TestCase):
             self.assertEqual(len(_all(wf, "UpscaleModelLoader")), 1, name)
             self.assertEqual(len(_all(wf, "ImageUpscaleWithModel")), 1, name)
 
-    def test_latent_upscale_is_2x_and_sits_between_the_two_passes(self):
+    def test_latent_upscale_is_1_5x_and_sits_between_the_two_passes(self):
         """链路必须是一段 → LatentUpscaleBy → 二段 → 解码。
 
         解码**吃错一段**就等于第二遍白加（图还是 1.01 MP 的真实细节），
         所以这里逐个连线钉住，而不只是数节点个数。
+
+        倍率演进：2.0（2026-10-09 加第二遍扩散时）→ **1.2**（2026-11-15 降口径）
+        → **1.5**（2026-11-16 用户拍板「一次采样之后 1.5x 放大，然后二次采样，
+        最后 2x 放大」）。二段 denoise 同步是 0.3，不是初版那个 0.5。
         """
         for name in KREA2_CHANNELS:
             wf = _load(name)
@@ -1267,9 +1271,9 @@ class Krea2ChannelTest(unittest.TestCase):
             s1, s2 = _stage1(wf), _stage2(wf)
             self.assertEqual(wf[up]["inputs"]["samples"][0], s1, name)
             self.assertEqual(wf[up]["inputs"]["upscale_method"], "nearest-exact", name)
-            self.assertEqual(wf[up]["inputs"]["scale_by"], 2.0, name)
+            self.assertEqual(wf[up]["inputs"]["scale_by"], 1.5, name)
             self.assertEqual(wf[s2]["inputs"]["latent_image"][0], up, name)
-            self.assertEqual(wf[s2]["inputs"]["denoise"], 0.5, name)
+            self.assertEqual(wf[s2]["inputs"]["denoise"], 0.3, name)
             self.assertEqual(wf[_one(wf, "VAEDecode")]["inputs"]["samples"][0], s2, name)
 
     def test_stage2_runs_two_steps(self):
@@ -1297,13 +1301,14 @@ class Krea2ChannelTest(unittest.TestCase):
 
         一段仍锁 8 步（见 `test_cfg_is_one_and_negative_is_empty`）：它跑在
         832×1216 上只占 24~32s，砍它省不了多少却直接动成图质量。
-        `denoise` 也仍锁 0.5（见上一条）——改它等于换掉整个 sigma 区间。
+        `denoise` 现锁 **0.3**（初版 0.5，2026-11-15 连同 latent 倍率一起降下来）
+        ——改它等于换掉整个 sigma 区间。
         """
         for name in KREA2_CHANNELS:
             wf = _load(name)
             s2 = _stage2(wf)
             self.assertEqual(wf[s2]["inputs"]["steps"], 2, name)
-            self.assertEqual(wf[s2]["inputs"]["denoise"], 0.5, name)
+            self.assertEqual(wf[s2]["inputs"]["denoise"], 0.3, name)
 
     def test_skill_md_steps_match_the_workflow(self):
         """文档里的步数必须等于 workflow.json 里的步数——**骨架 `krea2` 也算**。
@@ -1325,9 +1330,16 @@ class Krea2ChannelTest(unittest.TestCase):
                 with open(os.path.join(SKILLS, name, "skill.md"),
                           encoding="utf-8") as f:
                     text = f.read()
-                # 二段那句「N 步 / denoise 0.5」是文档里唯一写死步数的地方
-                self.assertIn("%d 步 / denoise 0.5" % wf[s2]["inputs"]["steps"],
-                              text, "%s 的 skill.md 二段步数跟 workflow 对不上" % name)
+                # 二段那句「N 步 / denoise X」是文档里唯一写死采样参数的地方。
+                # **步数和 denoise 都从 workflow 读**：这里原来把 denoise 硬编码成
+                # 0.5，用户 2026-11-15 调成 0.3 之后这一片就全红了（测试逼着文档
+                # 写错的数字），11-16 改倍率时一并改成动态比对。
+                den = wf[s2]["inputs"]["denoise"]
+                want = "%d 步 / denoise %s" % (wf[s2]["inputs"]["steps"],
+                                               "%g" % den)
+                self.assertIn(want, text,
+                              "%s 的 skill.md 二段参数跟 workflow 对不上（应为「%s」）"
+                              % (name, want))
                 self.assertIn("%d 步 / " % wf[s1]["inputs"]["steps"], text,
                               "%s 的 skill.md 一段步数跟 workflow 对不上" % name)
                 self.assertNotIn("python _make_krea2_channels.py", text,
@@ -1350,15 +1362,24 @@ class Krea2ChannelTest(unittest.TestCase):
             self.assertNotIn("4x", model,
                              "%s 末尾又挂回 4x 了——第二遍之后 4x 会越过 32 MiB" % name)
 
-    def test_final_size_is_still_3328x4864(self):
-        """最终尺寸必须和改造前一致（不然用户会发现图变小了）。"""
+    def test_final_size_is_2496x3648(self):
+        """最终尺寸 = 画布 × latent 倍率 × 末尾 2x。
+
+        演进：4x 时代 3328×4864（真实细节只有 1.01 MP）→ 插第二遍扩散后仍
+        3328×4864（2.0× latent）→ 2026-11-15 降成 1.2× 出 2000×2912 →
+        **2026-11-16 用户拍板 1.5×**：832×1216 → 二段 1248×1824 →
+        末尾 2x → **2496×3648**（9.1 MP）。
+
+        注意这里按「画布 × 倍率」直算，不带 ComfyUI 那层 8 对齐取整；
+        832/8=104、1216/8=152，乘 1.5 后是 156 / 228，全是整数，无取整误差。
+        """
         for name in KREA2_CHANNELS:
             wf = _load(name)
             lat = wf[_one(wf, "EmptyLatentImage")]["inputs"]
             scale = wf[_upscale(wf)]["inputs"]["scale_by"]
             fw = lat["width"] * scale * 2      # 末尾那道 2x 像素放大
             fh = lat["height"] * scale * 2
-            self.assertEqual((fw, fh), (3328.0, 4864.0),
+            self.assertEqual((fw, fh), (2496.0, 3648.0),
                              "%s 最终尺寸算出来是 %gx%g" % (name, fw, fh))
             # 竖屏：高 > 宽（横屏由 image_jobs.landscape_workflow 对调宽高）
             self.assertGreater(lat["height"], lat["width"], name)
