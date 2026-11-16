@@ -95,6 +95,18 @@ class ShowcaseTest(unittest.TestCase):
             path = os.path.join(root, p["id"] + ".jpg")
             self.assertTrue(os.path.isfile(path), path)
 
+    def test_comic_asset_url_has_cache_bust_version(self):
+        """换图靠 ?v= 版本号击穿缓存；素材接口不得再长缓存 1 小时。"""
+        for p in showcase_prompts.COMIC_REPLAY["panels"]:
+            url = p["image_url"]
+            self.assertIn("?v=", url, url)
+        response = self.client.get("/api/showcase/comic/asset/panel_1",
+                                   headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        cache = response.headers.get("Cache-Control", "")
+        self.assertIn("max-age=0", cache)
+        response.close()
+
     def test_chat_isolated_and_returns_actual_injection_trace(self):
         def fake_build(line, query, k=None, day=None, context="", trace=None,
                        extra_lines=(), max_hits=None):

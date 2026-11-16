@@ -120,6 +120,8 @@ IMAGE_SCENES = [
 # 任务：comics/C20261116-01_末日余晖（silver_only 模式成品在 raw/）。
 # 图片压缩后逐张过 image_audit.check 公开审核才落展示目录，审核没过保持 pending，
 # 绝不借用内部漫画目录原图。对外展示名仍叫《最后一盏灯》。
+# image_url 带 ?v= 版本号做缓存击穿：素材原地覆盖后 URL 不变，浏览器/网关会拿
+# 旧的缓存字节（max-age=1h），所以换图必须同时改这里的版本号。
 COMIC_REPLAY = {
     "id": "last_light",
     "title": "最后一盏灯",
@@ -144,7 +146,7 @@ COMIC_REPLAY = {
                 "boy stepping in behind her raising his flashlight, tense and alert expressions, "
                 "cool dusk light fading into store darkness, wide shot, cinematic widescreen"
             ),
-            "image_url": "/api/showcase/comic/asset/panel_1",
+            "image_url": "/api/showcase/comic/asset/panel_1?v=20261116b",
             "asset_status": "ready",
         },
         {
@@ -158,7 +160,7 @@ COMIC_REPLAY = {
                 "backpacks, flashlight beams lighting the counter, focused and concentrated expressions, "
                 "cool flashlight glow, medium shot, cinematic widescreen"
             ),
-            "image_url": "/api/showcase/comic/asset/panel_2",
+            "image_url": "/api/showcase/comic/asset/panel_2?v=20261116b",
             "asset_status": "ready",
         },
         {
@@ -172,7 +174,7 @@ COMIC_REPLAY = {
                 "wet asphalt reflecting blue sky and warm window light, cool blue hour light, full body "
                 "shot from behind, cinematic widescreen"
             ),
-            "image_url": "/api/showcase/comic/asset/panel_3",
+            "image_url": "/api/showcase/comic/asset/panel_3?v=20261116b",
             "asset_status": "ready",
         },
     ],

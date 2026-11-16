@@ -779,7 +779,9 @@ def comic_asset(panel_id):
     local = os.path.join(_COMIC_ASSET_DIR, panel_id + ".jpg")
     if not os.path.isfile(local):
         return jsonify({"error": "素材尚未就绪"}), 404
-    return send_file(local, conditional=True, max_age=3600)
+    # 素材原地覆盖后靠契约里的 ?v= 版本号击穿缓存；这里不再额外缓存 1 小时，
+    # 否则换图后浏览器/CDF 仍会拿旧字节，用户以为“成品图没换”。
+    return send_file(local, conditional=True, max_age=0)
 
 
 def _active_job_for(session_id):
