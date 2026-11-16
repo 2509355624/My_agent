@@ -441,6 +441,29 @@ class PageTest(unittest.TestCase):
         self.assertIn("@keyframes cue-bob", self.src)
         self.assertIn("prefers-reduced-motion", self.src)
 
+    def test_no_optional_chaining_for_old_mobile_engines(self):
+        """2026-11-16 用户反馈：小米自带浏览器打开是纯黑屏。
+
+        根因：script[2] 里有 ES2020 可选链，老内核整段解析失败 → bindTabs()
+        没执行 → head 里的 .js 把板块全藏了 → 黑屏。两条防线：
+        1) 脚本里不能有可选链 / 空值合并；2) head 加看门狗，主脚本没跑也会
+        在 2 秒后摘掉 .js，宁可内容堆着也不黑屏。
+        """
+        import re
+        scripts = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>",
+                             self.src, re.S)
+        for i, block in enumerate(scripts):
+            self.assertNotRegex(block, r"\?\.", "script[%d] 出现可选链" % i)
+            self.assertNotRegex(block, r"\?\?", "script[%d] 出现空值合并" % i)
+        self.assertIn("__showcaseReady", self.src)
+        self.assertIn("setTimeout", self.src)
+        self.assertIn("window.__showcaseReady", self.src)
+
+    def test_mobile_font_scaling_is_locked(self):
+        """国产手机浏览器会放大网页字号，撑爆手机端排版。锁定 text-size-adjust。"""
+        self.assertIn("-webkit-text-size-adjust: 100%", self.src)
+        self.assertIn("text-size-adjust: 100%", self.src)
+
     def test_custom_prompt_box_lives_under_image_stage(self):
         """2026-11-16 用户反馈：输入框放在左侧场景列表底部不好用，
         改到中间出图框（.image-stage）里、信息条下方，跟出图框同宽。"""

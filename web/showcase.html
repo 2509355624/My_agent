@@ -2,9 +2,24 @@
 <html lang="zh-CN" xmlns:xlink="http://www.w3.org/1999/xlink">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+<meta name="format-detection" content="telephone=no">
 <meta name="color-scheme" content="dark">
-<script>document.documentElement.classList.add("js");</script>
+<script>
+/* 先藏板块、再由底部脚本显示，避免加载时六块同时闪出来。
+   但老内核（小米自带浏览器等）若解析不动下方脚本，藏了就再也显示不出来 → 纯黑。
+   看门狗：2 秒内主脚本没标记 ready，就把 .js 摘掉，宁可内容全堆着也不黑屏。 */
+(function () {
+  var d = document.documentElement;
+  d.className += " js";
+  var done = false;
+  function ready() { done = true; }
+  window.__showcaseReady = ready;
+  setTimeout(function () {
+    if (!done) { d.className = d.className.replace(/\bjs\b/, "").replace(/^\s+|\s+$/g, ""); }
+  }, 2000);
+})();
+</script>
 <meta name="description" content="大大怪 · 多智能体助手的功能展示页：生图、角色扮演、长期记忆、漫画流水线与模型降级链，均可现场体验并查看后端链路。">
 <title>功能展示 | 大大怪 · 多智能体助手</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%23081420'/%3E%3Cpath d='M14 16h36v9H26v7h20v9H14z' fill='%23f3b35f'/%3E%3Cpath d='M14 48h36v5H14z' fill='%237ed3c4'/%3E%3C/svg%3E">
@@ -38,7 +53,10 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
+/* 小米 / X 浏览器等国产内核会自作主张放大网页文字，导致手机端字号奇大、
+   排版挤成一团。锁定字号缩放，让 clamp() 的响应式字号按我们的设计走。 */
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body {
   margin: 0;
   min-block-size: 100dvb;
@@ -4599,27 +4617,35 @@ html.js .scroll-cue[hidden] { display: none !important; }
     }
   }
 
+  // 老内核（小米自带浏览器等）不认 ES2020 的可选链语法，一段脚本里只要出现
+  // 它就会整段解析失败。这里统一用函数式绑定，语义等价但只用 ES5 语法。
+  function on(sel, type, fn) {
+    var el = $(sel);
+    if (el) el.addEventListener(type, fn);
+  }
+
   function bindRag() {
     if (!stepsBox) return;
     renderSteps();
 
-    $("ragPick")?.addEventListener("click", () => $("ragFile")?.click());
-    $("ragFile")?.addEventListener("change", (e) => {
+    on("ragPick", "click", () => { on("ragFile", "click", (e) => e.target && e.target.click()); });
+    on("ragFile", "change", (e) => {
       const file = e.target.files && e.target.files[0];
       e.target.value = "";
       readFile(file);
     });
-    $("ragSample")?.addEventListener("click", loadSample);
+    on("ragSample", "click", loadSample);
 
     const pasteBox = $("ragPasteBox");
-    $("ragPaste")?.addEventListener("click", () => {
+    on("ragPaste", "click", () => {
       if (!pasteBox) return;
       pasteBox.hidden = !pasteBox.hidden;
-      if (!pasteBox.hidden) $("ragPasteText")?.focus();
+      if (!pasteBox.hidden) { const t = $("ragPasteText"); if (t) t.focus(); }
     });
-    $("ragPasteCancel")?.addEventListener("click", () => { if (pasteBox) pasteBox.hidden = true; });
-    $("ragPasteGo")?.addEventListener("click", () => {
-      const raw = ($("ragPasteText")?.value || "").trim();
+    on("ragPasteCancel", "click", () => { if (pasteBox) pasteBox.hidden = true; });
+    on("ragPasteGo", "click", () => {
+      const t = $("ragPasteText");
+      const raw = ((t && t.value) || "").trim();
       if (!raw) { showErr("粘一段正文再点"); return; }
       if (pasteBox) pasteBox.hidden = true;
       const [text, meta] = clipText(raw, "text");
@@ -4639,9 +4665,9 @@ html.js .scroll-cue[hidden] { display: none !important; }
       });
     }
 
-    $("ragForm")?.addEventListener("submit", (e) => {
+    on("ragForm", "submit", (e) => {
       e.preventDefault();
-      const text = (question?.value || "").trim();
+      const text = ((question && question.value) || "").trim();
       if (!text) return;
       if (question) question.value = "";
       ask(text);
@@ -4650,12 +4676,13 @@ html.js .scroll-cue[hidden] { display: none !important; }
       question.addEventListener("keydown", (e) => {
         if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
           e.preventDefault();
-          $("ragForm")?.requestSubmit();
+          const form = $("ragForm");
+          if (form && form.requestSubmit) form.requestSubmit();
         }
       });
     }
 
-    resetBtn?.addEventListener("click", async () => {
+    if (resetBtn) resetBtn.addEventListener("click", async () => {
       if (!S.sid) return;
       try {
         await postJSON("/api/raglab/reset", { sid: S.sid });
@@ -4665,7 +4692,7 @@ html.js .scroll-cue[hidden] { display: none !important; }
       clearSteps();
       renderSteps();
       if (logBox) logBox.innerHTML = "";
-      if (emptyBox) { emptyBox.hidden = false; logBox?.appendChild(emptyBox); }
+      if (emptyBox) { emptyBox.hidden = false; if (logBox) logBox.appendChild(emptyBox); }
       if (kbLabel) kbLabel.textContent = "尚未建库";
       if (askBtn) askBtn.disabled = true;
       if (question) { question.disabled = true; question.value = ""; }
@@ -4675,6 +4702,9 @@ html.js .scroll-cue[hidden] { display: none !important; }
     });
   }
 
+  // 主脚本跑到这儿说明解析成功，通知 head 里的看门狗取消兜底。
+  // 放在 bindTabs 之前：一旦 UI 装好就能显示，别让计时器下面还藏着内容。
+  if (window.__showcaseReady) window.__showcaseReady();
   bindTabs();
   bindRag();
   restoreLib();   // 刷新后认回上次的库：sid 存在 localStorage 里
