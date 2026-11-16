@@ -101,6 +101,29 @@ _CQ_RE = re.compile(r"\[CQ:([a-z_]+)((?:,[^\]]*)?)\]")
 # （2026-09-29）——够它回答「刚才那张好了没」，又不至于把尾巴撑长。
 IMAGE_RECALL_COUNT = 3
 
+# 整轮一个字都没说时的兜底回复（2026-11-15 用户要求：「大大怪必须有回应，
+# 不然我觉得出 bug 了怎么不回复」）。
+# 触发场景：主模型连续返回 200 空正文，`agent.py` 的 `[llm-empty]` 原地重试
+# 预算用尽后 break，这一轮没有任何正文 → `_deliver` 见 reply 为空就什么都不发，
+# 群里「@ 了却不理」跟死机在用户眼里一模一样。
+# 语气跟人设一致：一句话、口语、不解释为什么。
+_EMPTY_TURN_REPLY = "刚才走神了，再说一遍？"
+
+
+def _needs_empty_fallback(reply, sent_by_tool, receipt_spoke, images, voluntary):
+    """整轮一个字都没说、也没做过任何事 → 该补一句兜底回复。
+
+    只补**确实没开过口**的轮：
+      sent_by_tool   模型自己调 send_qq_message 发过话
+      receipt_spoke  后台已经把生图回执直发进会话
+      images         本轮有图要发（图本身就是回应）
+      voluntary      这轮本来就是它自己跳出来接话，没回是正常
+    其余一律放行——「@ 了你却一个字都不说」才是要救的那个场景。
+    """
+    return (not (reply or "").strip()
+            and not sent_by_tool and not receipt_spoke
+            and not images and not voluntary)
+
 
 def _norm_reply(text):
     """回复正文的归一化形式，用于同轮去重：只抹平空白差异，不改字。"""
@@ -716,6 +739,40 @@ _OUTFIT_RE = re.compile(r"^\s*[\/／]\s*换装")
 # 「/漫画台」= 群友漫画工作台地址（2026-11-11），同 /画廊：斜杠即命令、群里
 # 免 @。正则与 `app/direct_gen.py` 那份保持一字不差。正文在 _comic_studio_text。
 _COMIC_STUDIO_RE = re.compile(r"^\s*[\/／]\s*漫画台")
+
+# 「/管理页」= 5174 管理后台的公网地址（2026-11-16），**站主私聊专属**。
+# 和上面几条链接指令不同：这条不进 direct_gen.decide()（那边没有发送者 QQ
+# 号，做不了权限判断），而是在 _dispatch 拿到 user_id 之后就地处理。斜杠
+# 即命令、零 LLM、不过私聊白名单闸；非站主和群聊一律静默不理——链接一旦
+# 发到群里就是所有人可见，管理后台不能这么暴露。
+_ADMIN_LINK_RE = re.compile(r"^\s*[\/／]\s*管理页")
+
+
+def _maybe_admin_link(ev, text, user_id, target, target_id):
+    """/管理页：站主私聊回管理页公网地址。命中并返回 True 表示这条已吞掉。
+
+    权限判据复用 `config.GALLERY_OWNER_QQ`（.env 里配的站主 QQ），**不在这里
+    写死账号**；该常量留空 = 管理功能整体关闭，宁可谁都拿不到也不猜。
+    非站主 / 群聊命中了也是静默不理，连「有这个指令」都不暴露，所以返回
+    True 后调用方直接 return。
+    """
+    if not _ADMIN_LINK_RE.match(text or ""):
+        return False
+    from app.config import GALLERY_OWNER_QQ
+    if (target == "private" and GALLERY_OWNER_QQ
+            and str(user_id) == str(GALLERY_OWNER_QQ)):
+        from app import admin_site
+        url = admin_site.url()
+        if url:
+            body = "管理页（公网）：%s" % url
+        else:
+            body = ("管理页隧道还没起来：state/admin_url.txt 里没有地址，"
+                    "先跑「启动管理页隧道.bat」。")
+        qq_api.send_private(
+            target_id, body,
+            reply_to=str(ev.get("message_id") or "") or None)
+        log.info("站主 %s 私聊索取管理页地址：%s", user_id, url or "未启动")
+    return True
 
 
 def _private_gate(user_id):
@@ -1945,6 +2002,15 @@ class SessionRunner:
         # 同一轮的多段正文用换行分隔——空串直接拼会把「图在路上了」和
         # 「你要的图来了」黏成一行，群里看着像说错了话。
         reply = "\n".join(p for p in reply_parts if p.strip())
+        # 空回复兜底（2026-11-15）：主模型连续返回 200 空正文时，agent 的
+        # `[llm-empty]` 重试预算用尽会 break，这一轮一个字都没有 → 直接进
+        # `_deliver` 会因 `reply` 为空而**什么都不发**（群里「@ 了却不理」
+        # 在用户眼里就是死机）。判据见 `_needs_empty_fallback`。
+        if _needs_empty_fallback(reply, sent_by_tool, receipt_spoke,
+                                 images, voluntary):
+            log.warning("整轮无正文（模型连续空回复），发兜底：%s",
+                        self.session_key)
+            reply = _EMPTY_TURN_REPLY
         self._deliver(sent_by_tool, reply, images, receipt_spoke)
 
     def _deliver(self, sent_by_tool, reply, images, receipt_spoke="",
@@ -2166,6 +2232,12 @@ class QQBot:
         if target == "private" and sender:
             from app import qq_names
             qq_names.note_private(target_id, sender)
+
+        # ── /管理页（站主私聊专属）─────────────────────────────
+        # 拦在 _should_reply 之前：这是零成本直回指令，不该进私聊白名单闸，
+        # 也不该进模型队列。非站主 / 群聊由 _maybe_admin_link 静默吞掉。
+        if _maybe_admin_link(ev, text, user_id, target, target_id):
+            return
 
         # 群消息**一律**先记进「最近群聊」缓存，不管回不回、也不管是不是自己
         # 发的。原先不 @ 机器人的消息在这里就直接丢了，模型每轮只看得到「有人
