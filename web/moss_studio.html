@@ -6,6 +6,7 @@
 <title>moss 漫画台</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%2334d399'/></svg>">
 <style>
+  html, body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   :root {
     --bg: #0a0a0f; --bg-elev: #12121a; --bg-input: #1a1a24;
@@ -23,6 +24,12 @@
   .topbar h1 { font-size: 17px; font-weight: 500; }
   .topbar .pill { font-size: 11px; color: var(--accent); border: 1px solid var(--accent-dim);
     border-radius: 10px; padding: 2px 8px; }
+  /* 手机上长 pill + 历史下拉把顶栏撑到 163px：pill 收起、下拉限宽 */
+  @media (max-width: 640px) {
+    .topbar { gap: 8px 12px; padding: 10px 0 14px; }
+    .topbar .pill, .topbar .spacer { display: none; }
+    #hist select { max-width: 150px; }
+  }
   .spacer { flex: 1; }
   a.back { color: var(--text-dim); text-decoration: none; font-size: 13px; }
   a.back:hover { color: var(--accent); }

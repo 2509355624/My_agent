@@ -6,6 +6,7 @@
 <title>人设卡池</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23d4537e'/></svg>">
 <style>
+  html, body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   :root {
     --bg: #0a0a0f;
@@ -37,6 +38,16 @@
   }
   header h1 { font-size: 15px; font-weight: 500; }
   header .hint { color: var(--text-dim); font-size: 13px; flex: 1; min-width: 240px; }
+  /* 手机上这行长说明会把顶栏撑到 164px：限两行、让位给按钮（2026-11-16） */
+  @media (max-width: 640px) {
+    header { gap: 8px 12px; padding: 10px 14px; }
+    header .hint {
+      flex: 1 1 100%; min-width: 0; font-size: 12px;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    header button { white-space: nowrap; }
+  }
   button {
     background: var(--bg-input); color: var(--text); border: 1px solid var(--border);
     border-radius: 8px; padding: 6px 14px; font-size: 13px; cursor: pointer;

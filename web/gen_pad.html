@@ -6,6 +6,7 @@
 <title>跑图台</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%237c5cff'/></svg>">
 <style>
+  html, body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   :root {
     --bg: #0a0a0f; --bg-elev: #12121a; --bg-input: #1a1a24;
@@ -231,6 +232,10 @@
   .lightbox.full img { max-width: none; max-height: none; cursor: zoom-out; }
   .lb-hint { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
     color: #999; font-size: 12px; pointer-events: none; z-index: 41; }
+  /* 手机输入框 ≥16px，否则 Safari/部分安卓内核聚焦时整页自动放大（2026-11-16） */
+  @media (max-width: 640px) {
+    textarea, input[type="text"], input:not([type]), select { font-size: 16px; }
+  }
 </style>
 </head>
 <body>
