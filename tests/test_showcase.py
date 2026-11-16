@@ -310,6 +310,30 @@ class ShowcaseTest(unittest.TestCase):
         self.assertEqual([item["turn"] for item in data["entries"]], [2, 3])
         self.assertTrue(all(item["kind"] == "raw" for item in data["entries"]))
 
+    def test_guide_library_labels_batch_and_fact_with_turn_span(self):
+        """批次叙事和原子事实只有 turn_start/turn_end，不能显示成「第 ? 轮」。"""
+        entries = [
+            {"id": "batch-6-10-0", "content": "第二批",
+             "metadata": {"kind": "batch", "turn_start": 6, "turn_end": 10}},
+            {"id": "batch-1-5-0", "content": "第一批",
+             "metadata": {"kind": "batch", "turn_start": 1, "turn_end": 5}},
+            {"id": "1-5-0", "content": "一条事实",
+             "metadata": {"kind": "fact", "turn_start": 1, "turn_end": 5}},
+        ]
+        fake = mock.Mock()
+        fake.is_ready.return_value = True
+        fake.list_entries.return_value = {"ok": True, "entries": entries}
+        with mock.patch.object(showcase_api, "_rag_client", return_value=fake):
+            data = self.client.get("/api/showcase/guide/library?line=kb",
+                                   headers=self.headers).get_json()
+        self.assertEqual([item["id"] for item in data["entries"]],
+                         ["batch-1-5-0", "batch-6-10-0", "1-5-0"])
+        for item in data["entries"]:
+            self.assertTrue(item["turn"], item["id"])
+            self.assertTrue(item["turn_start"])
+        self.assertEqual(data["entries"][0]["turn_end"], 5)
+        self.assertEqual(data["entries"][1]["turn"], 6)
+
     def test_guide_search_flags_threshold_and_sorts(self):
         fake = mock.Mock()
         fake.is_ready.return_value = True
@@ -443,6 +467,12 @@ class GuidePageLayoutTest(unittest.TestCase):
     def test_library_explains_what_the_377_entries_are(self):
         self.assertIn("不是 377 轮对话", self.src)
         self.assertIn("原文 284 块", self.src)
+
+    def test_library_never_prints_a_placeholder_turn(self):
+        """批次/事实没有 `turn`，旧代码就渲染成「第 ? 轮」（2026-11-16 反馈）。"""
+        self.assertIn("function turnLabel", self.src)
+        self.assertIn("entry.turn_end", self.src)
+        self.assertNotIn('entry.turn || "?"', self.src)
 
 
 if __name__ == "__main__":

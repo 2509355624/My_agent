@@ -429,16 +429,42 @@ def _kind_of(entry):
     return str((entry.get("metadata") or {}).get("kind") or "")
 
 
+def _turn_span(meta):
+    """条目覆盖的轮次区间 `(start, end)`，取不到返回 `(0, 0)`。
+
+    原文层一条就是一轮（`turn`）；批次叙事和原子事实是每 5 轮压出来的，
+    元数据里只有 `turn_start`/`turn_end`、没有 `turn`。之前这里只读 `turn`
+    和 `seq`，于是批次/事实在页面上全显示成「第 ? 轮」（2026-11-16 反馈）。
+    """
+    def _as_int(key):
+        try:
+            return int(meta.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    for key in ("turn", "seq"):
+        value = _as_int(key)
+        if value:
+            return value, value
+    start, end = _as_int("turn_start"), _as_int("turn_end")
+    if start and end and end < start:
+        start, end = end, start
+    return start, (end or start)
+
+
 def _entry_view(entry, line_tag):
     """只读条目视图：前端要看到「写进库之前的片」，所以正文原样给出。"""
     meta = entry.get("metadata") or {}
     content = str(entry.get("content") or "")
+    start, end = _turn_span(meta)
     return {
         "id": str(entry.get("id") or ""),
         "line": line_tag,
         "kind": _kind_of(entry),
         "role": str(meta.get("role") or ""),
-        "turn": meta.get("turn") or meta.get("seq") or 0,
+        "turn": start,
+        "turn_start": start,
+        "turn_end": end,
         "day": meta.get("day") or 0,
         "chars": len(content),
         "content": content[:1200],

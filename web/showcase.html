@@ -3256,6 +3256,17 @@ html.js .scope-note[hidden] { display: none !important; }
 
   // 库里原文带着「她：」「用户说：」的前缀（写库时的角色标记）。翻库时
   // 这些前缀只会让人读不懂，改成「第 N 轮 · 游客问 / 阿海答」放在标题上。
+  // 轮次：原文一条就是一轮；批次叙事和原子事实是每 5 轮压出来的，覆盖一段
+  // 区间。取不到轮次就整段不写——别显示「第 ? 轮」（2026-11-16 反馈）。
+  function turnLabel(entry) {
+    const start = Number(entry.turn_start || entry.turn || 0);
+    const end = Number(entry.turn_end || start || 0);
+    if (!start) return "";
+    return end > start ? "第 " + start + "–" + end + " 轮" : "第 " + start + " 轮";
+  }
+
+  const LIB_KIND = { raw: "原文", batch: "批次叙事", fact: "原子事实", anchor: "锚点事实" };
+
   function rawSpeaker(entry) {
     if (entry.kind !== "raw") return "";
     return entry.role === "user" ? "游客问" : "阿海答";
@@ -3285,11 +3296,10 @@ html.js .scope-note[hidden] { display: none !important; }
       const item = node("article", "lib-entry");
       const head = node("header");
       const where = entry.line === "private" ? "我的记忆" : "母本库";
-      const speaker = rawSpeaker(entry);
-      const label = speaker
-        ? "第 " + (entry.turn || "?") + " 轮 · " + speaker
-        : (entry.kind === "batch" ? "批次叙事" : "原子事实")
-          + " · 第 " + (entry.turn || "?") + " 轮";
+      const turn = turnLabel(entry);
+      const label = entry.kind === "raw"
+        ? [turn, rawSpeaker(entry)].filter(Boolean).join(" · ")
+        : [LIB_KIND[entry.kind] || "片段", turn].filter(Boolean).join(" · ");
       head.append(node("span", "lib-who", where + " · " + label));
       head.append(node("span", null, entry.chars + " 字"));
       item.append(head, node("p", null, stripRawPrefix(entry.content, entry) || "（空）"));
