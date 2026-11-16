@@ -19,28 +19,33 @@ if not defined PY if exist "D:\AI\confyui_env\Scripts\python.exe" set "PY=D:\AI\
 if not defined PY if exist "D:\AI\comfy_env\Scripts\python.exe" set "PY=D:\AI\comfy_env\Scripts\python.exe"
 if not defined PY set "PY=python"
 
-rem ---- start clean: kill every cloudflared and drop the stale URL ------
-rem Closing this window is a hard kill, so friend_tunnel.py never runs its
-rem cleanup and state\friend_url.txt keeps a hostname that is already dead.
-rem Two tunnels at once also means two random hostnames, and Cloudflare
-rem usually refuses the second one. The symptom is a 530 page behind a link
-rem that still looks perfectly normal - so clean up before every start.
-taskkill /F /IM cloudflared.exe >nul 2>&1
-if errorlevel 1 (echo [OK] no cloudflared was running) else (echo [OK] stopped every old cloudflared)
-
-rem taskkill returns before the process lets go of its socket, and a
-rem lingering one can steal the new tunnel's port. Wait until the list is
-rem empty before starting, max 10s so a stuck one cannot hang this window.
+rem ---- start clean: kill ONLY this tunnel's old cloudflared ------------
+rem Two tunnels run at once now (friend 5175 + admin 5176). Never use
+rem `taskkill /IM cloudflared.exe` here - that would kill the admin tunnel
+rem too. friend_tunnel.py writes this tunnel's PID to state\friend_url.pid;
+rem read it and stop just that one. Each tunnel owns its own pid file.
+set "OLDTUN="
+if exist "state\friend_url.pid" (
+    set /p OLDTUN=<"state\friend_url.pid"
+)
+if defined OLDTUN (
+    taskkill /F /PID %OLDTUN% >nul 2>&1
+    if errorlevel 1 (echo [OK] old friend tunnel pid %OLDTUN% was gone) else (echo [OK] stopped old friend tunnel pid %OLDTUN%)
+    del /q "state\friend_url.pid" >nul 2>&1
+) else (
+    echo [OK] no old friend tunnel recorded
+)
 set "WAITN=0"
 :WAIT_CF
-tasklist /FI "IMAGENAME eq cloudflared.exe" 2>nul | findstr /I "cloudflared.exe" >nul
+if not defined OLDTUN goto CF_GONE
+tasklist /FI "PID eq %OLDTUN%" 2>nul | findstr /I "%OLDTUN%" >nul
 if errorlevel 1 goto CF_GONE
 set /a WAITN+=1
 if %WAITN% geq 10 goto CF_STUCK
 timeout /t 1 /nobreak >nul
 goto WAIT_CF
 :CF_STUCK
-echo [WARN] a cloudflared is still alive after 10s - starting anyway
+echo [WARN] old friend tunnel still alive after 10s - starting anyway
 :CF_GONE
 if exist "state\friend_url.txt" (
     del /q "state\friend_url.txt" >nul 2>&1

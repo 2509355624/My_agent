@@ -33,6 +33,11 @@ URL_RE = re.compile(r"https://[a-z0-9][a-z0-9-]*\.trycloudflare\.com")
 
 TARGET = os.getenv("FRIEND_TUNNEL_TARGET", "http://127.0.0.1:5175")
 
+# 地址写到哪个文件。默认还是群友页的 friend_url.txt；管理页网关那条隧道
+# 设 FRIEND_TUNNEL_URL_FILE=admin_url.txt 复用本脚本、各写各的文件，互不覆盖。
+# 只取文件名，强制放 state/ 下，别让环境变量把地址写到仓库别处。
+URL_FILE = os.getenv("FRIEND_TUNNEL_URL_FILE", "friend_url.txt")
+
 # 传输协议：http2（TCP）而不是默认的 quic（UDP）。
 #
 # 不是口味问题，是实测：同一个 5175、同一台机器、同一时刻，
@@ -57,8 +62,40 @@ def _find_bin():
     return "cloudflared"
 
 
+def _url_path():
+    # 只取 basename，杜绝 ../ 之类把地址写到 state/ 外面。
+    return os.path.join(ROOT, "state", os.path.basename(URL_FILE))
+
+
+def _pid_path():
+    """与地址文件配套的 PID 文件（friend_url.txt -> friend_url.pid）。
+
+    两条隧道（群友页 5175 / 管理页 5176）同时跑，各自的 bat 启动时只按
+    这个文件杀自己上一条 cloudflared，不再 `taskkill /IM cloudflared.exe`
+    把对方也杀了。谁能拿到自己的 PID？只有启动它的这个脚本。
+    """
+    base = os.path.basename(URL_FILE)
+    return os.path.join(ROOT, "state", os.path.splitext(base)[0] + ".pid")
+
+
+def _write_pid(pid):
+    path = _pid_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(str(pid))
+    os.replace(tmp, path)
+
+
+def _clear_pid():
+    try:
+        os.remove(_pid_path())
+    except OSError:
+        pass
+
+
 def _write_url(url):
-    path = os.path.join(ROOT, "state", "friend_url.txt")
+    path = _url_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -79,7 +116,7 @@ def _clear_url(url=""):
     新隧道刚写进去的地址一起抹掉，于是「刚显示 [OK] 就又变成没有地址」。
     文件里存的不是自己的域名，就说明这轮已经被别人接手了，闭嘴让路。
     """
-    path = os.path.join(ROOT, "state", "friend_url.txt")
+    path = _url_path()
     try:
         with open(path, encoding="utf-8") as f:
             cur = f.read().strip()
@@ -96,7 +133,7 @@ def _clear_url(url=""):
 def main():
     exe = _find_bin()
     print("=" * 50)
-    print("  FRIEND TUNNEL  ->  %s" % TARGET)
+    print("  TUNNEL  ->  %s   [url file: %s]" % (TARGET, URL_FILE))
     print("=" * 50)
     print("bin : %s" % exe)
     print("协议: %s" % PROTOCOL)
@@ -111,6 +148,7 @@ def main():
         print("[ERROR] 起不来：%s" % e)
         print("        装 cloudflared：winget install Cloudflare.cloudflared")
         return 1
+    _write_pid(proc.pid)
 
     got = ""
     assert proc.stdout is not None
@@ -127,7 +165,6 @@ def main():
                 print("")
                 print("[OK] 地址已写入 %s" % path)
                 print("[OK] %s" % got)
-                print("[OK] 群友私聊机器人发 /预设网页 就能拿到这个地址")
                 print("")
     except KeyboardInterrupt:
         print("\n[BYE] 收到中断，正在收隧道…")
@@ -136,9 +173,10 @@ def main():
         # 打断），地址必然失效，所以无条件清掉。
         # ⚠️ 直接关 bat 窗口时 Windows 会硬杀进程，`finally` 跑不到，文件会
         # 残留——那种情况下 `/预设网页` 可能发一次死链，重开隧道就被覆盖了。
+        _clear_pid()
         if got:
             _clear_url(got)
-            print("[BYE] 隧道已断，已清掉 state/friend_url.txt（旧地址不再发出）")
+            print("[BYE] 隧道已断，已清掉 %s（旧地址不再发出）" % _url_path())
     if not got:
         print("")
         print("[WARN] 整条隧道没抓到地址（进程已退出 code=%s）。"

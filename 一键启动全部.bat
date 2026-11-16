@@ -14,6 +14,8 @@ set "SNOWLUMA_BAT=%~dp0启动SnowLuma.bat"
 set "BOT_BAT=%~dp0启动QQ机器人.bat"
 set "FRIEND_BAT=%~dp0启动群友页.bat"
 set "TUNNEL_BAT=%~dp0启动群友隧道.bat"
+set "ADMIN_WEB_BAT=%~dp0启动管理页网关.bat"
+set "ADMIN_TUNNEL_BAT=%~dp0启动管理页隧道.bat"
 rem ComfyUI 是**可选**的：缺了只影响生图，聊天照常，所以下面只 WARN 不 exit。
 set "COMFY_BAT=%~dp0启动ComfyUI.bat"
 
@@ -60,7 +62,7 @@ set "AUTO_RUN="
 if /i "%~2"=="auto" set "AUTO_RUN=1"
 
 echo ==================================================
-echo   全部启动 : Agent 网页 + 群友页 + 公网隧道 + %PROTO_NAME% + QQ 适配层 + ComfyUI + llama.cpp
+echo   全部启动 : Agent 网页 + 群友页 + 公网隧道 + %PROTO_NAME% + QQ 适配层 + ComfyUI + 管理页 + llama.cpp
 echo ==================================================
 echo.
 echo   【注意】会强制结束 QQ 客户端
@@ -109,6 +111,13 @@ taskkill /FI "WINDOWTITLE eq FRIEND-WEB" /F >nul 2>&1
 rem 隧道同理：不收掉会同时挂两条，state\friend_url.txt 里留下的可能是
 rem 上一条的地址，群友点开就是 1033。
 taskkill /FI "WINDOWTITLE eq FRIEND-TUNNEL" /F >nul 2>&1
+rem 管理页网关(5176)与隧道(ADMIN-TUNNEL)同理，重启前先收掉
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":5176 " ^| findstr "LISTENING"') do (
+    echo       关闭管理页网关 PID %%a
+    taskkill /PID %%a /F >nul 2>&1
+)
+taskkill /FI "WINDOWTITLE eq ADMIN-WEB" /F >nul 2>&1
+taskkill /FI "WINDOWTITLE eq ADMIN-TUNNEL" /F >nul 2>&1
 rem 关掉上一次的网页端窗口（cmd 会跟着命令改名，所以 一键启动.bat 里显式 title 了）
 rem 不带 /T：那个窗口里还挂着 start 拉起来的浏览器，别顺手把人家的浏览器关了
 taskkill /FI "WINDOWTITLE eq AGENT-WEB" /F >nul 2>&1
@@ -188,6 +197,17 @@ if exist "%TUNNEL_BAT%" (
     ping -n 3 127.0.0.1 >nul
     start "FRIEND-TUNNEL" cmd /k "%TUNNEL_BAT%"
     echo       FRIEND-TUNNEL    公网隧道（随机地址，重启就换）
+)
+rem 管理页公网演示：网关(5176) + 独立隧道，地址写 state\admin_url.txt
+if exist "%ADMIN_WEB_BAT%" (
+    ping -n 2 127.0.0.1 >nul
+    start "ADMIN-WEB" cmd /k "%ADMIN_WEB_BAT%"
+    echo       ADMIN-WEB       管理页网关  http://127.0.0.1:5176
+)
+if exist "%ADMIN_TUNNEL_BAT%" (
+    ping -n 3 127.0.0.1 >nul
+    start "ADMIN-TUNNEL" cmd /k "%ADMIN_TUNNEL_BAT%"
+    echo       ADMIN-TUNNEL    管理页公网隧道（地址见 state\admin_url.txt）
 )
 if defined FORCE_RESTART (
     start "%PROTO_NAME%" cmd /k "%PROTO_BAT%"
