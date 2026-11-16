@@ -183,6 +183,27 @@ COMIC_REPLAY = {
 }
 
 
+# 自定义提示词上限（2026-11-16）：展示页公开展示，输入不能无限长。
+# 跑图台私用上限是 10 万，这里只出一张图、还要在链路里原样展示，2000 字足够。
+CUSTOM_PROMPT_MAX = 2000
+
+
+def custom_image_scene(prompt):
+    """用户自写提示词的场景：固定 silver 渠道、固定竖屏，其余链路同预置场景。"""
+    text = str(prompt or "").strip()
+    if not text or len(text) > CUSTOM_PROMPT_MAX:
+        return None
+    return {
+        "id": "custom",
+        "title": "自定义提示词",
+        "brief": "你自己的提示词，原文送进工作流。",
+        "skill": "silver",
+        "channel": "Silver · 自定义提示词",
+        "prompt": text,
+        "custom": True,
+    }
+
+
 def image_scene(scene_id):
     """按白名单取场景；返回副本，调用方改不到契约本体。"""
     for scene in IMAGE_SCENES:

@@ -574,6 +574,33 @@ button { cursor: pointer; }
 .scene-option-title { display: block; font-size: 0.9rem; font-weight: 700; }
 .scene-option-brief { display: block; margin-block-start: 0.2rem; color: var(--muted); font-size: 0.78rem; line-height: 1.55; }
 .scene-option-channel { display: block; margin-block-start: 0.3rem; color: var(--sea); font-size: 0.72rem; }
+.custom-prompt-box {
+  margin-block-start: 0.6rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line-strong);
+  background: rgba(10, 26, 38, 0.7);
+}
+.custom-prompt-box label {
+  display: block;
+  margin-block-end: 0.45rem;
+  color: var(--paper-soft);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.custom-prompt-box textarea {
+  inline-size: 100%;
+  min-block-size: 6.5rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--line-strong);
+  background: #061019;
+  color: var(--paper-soft);
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  resize: vertical;
+}
+.custom-prompt-box textarea:focus-visible { outline: 2px solid var(--sea); outline-offset: 1px; }
+.custom-prompt-hint { margin: 0.4rem 0 0; color: var(--muted); font-size: 0.73rem; line-height: 1.6; }
 
 .image-stage {
   position: relative;
@@ -1525,8 +1552,8 @@ html.js .scope-note[hidden] { display: none !important; }
     <div class="feature-head">
       <div class="feature-intro">
         <p class="feature-kicker">生图 / 真实 GPU 队列</p>
-        <h2 id="image-title">选一个预置场景，现场生成一张图</h2>
-        <p class="feature-desc">三个无人物环境场景固定走 <code>silver</code>（轻渠道，切换免重启 ComfyUI）渠道。页面只提交场景编号，自定义提示词会被忽略；生成完成后还会经过一次图片审核，未过审的图片不会显示。排队位置、耗时、种子和审核状态都在“查看链路”里。</p>
+        <h2 id="image-title">选预置场景，或自己写提示词，现场生成一张图</h2>
+        <p class="feature-desc">三个无人物环境场景固定走 <code>silver</code>（轻渠道，切换免重启 ComfyUI）；选「自定义提示词」就能自己写画面，同样固定 silver、固定竖屏。生成完成后经过一次图片审核，未过审的图片不会显示。排队位置、耗时、种子和审核状态都在“查看链路”里，自定义模式还能看到你提交的原文。</p>
       </div>
       <div class="feature-tools">
         <button class="btn btn--small" type="button" id="imageChain" disabled><svg class="icon" aria-hidden="true"><use href="#i-chain" xlink:href="#i-chain"/></svg>查看链路</button>
@@ -1535,9 +1562,14 @@ html.js .scope-note[hidden] { display: none !important; }
 
     <div class="image-workbench">
       <fieldset class="scene-picker" id="sceneFieldset">
-        <legend>选择预置场景</legend>
+        <legend>选择场景或自己写提示词</legend>
         <div class="scene-list" id="sceneList" aria-describedby="sceneHint">
           <p class="memory-hint" id="sceneHint">正在读取场景配置…</p>
+        </div>
+        <div class="custom-prompt-box" id="customPromptBox" hidden>
+          <label for="customPromptText">你的提示词（英文更稳 · 固定 silver 竖屏）</label>
+          <textarea id="customPromptText" rows="5" maxlength="2000" placeholder="例如：a quiet bookshop on a rainy evening, warm amber light, no people"></textarea>
+          <p class="custom-prompt-hint"><span id="customPromptCount">0 / 2000</span> 字 · 与预置场景一样经过出图审核，链路里可查看原文</p>
         </div>
       </fieldset>
 
@@ -1954,6 +1986,9 @@ html.js .scope-note[hidden] { display: none !important; }
 
     sceneList: $("#sceneList"),
     sceneHint: $("#sceneHint"),
+    customPromptBox: $("#customPromptBox"),
+    customPromptText: $("#customPromptText"),
+    customPromptCount: $("#customPromptCount"),
     imageFrame: $("#imageFrame"),
     imageEmpty: $("#imageEmpty"),
     imageResult: $("#imageResult"),
@@ -2623,6 +2658,28 @@ html.js .scope-note[hidden] { display: none !important; }
       label.append(input, copy);
       ui.sceneList.append(label);
     });
+    // 自定义提示词和预置场景共用一组 radio（2026-11-16）
+    const customLabel = node("label", "scene-option");
+    const customInput = node("input");
+    customInput.type = "radio";
+    customInput.name = "scene_id";
+    customInput.value = "custom";
+    customInput.checked = state.selectedSceneId === "custom";
+    const customCopy = node("div");
+    customCopy.append(node("span", "scene-option-title", "自定义提示词"));
+    customCopy.append(node("span", "scene-option-brief", "自己写画面，原文送进工作流。"));
+    customCopy.append(node("span", "scene-option-channel", "Silver · 固定竖屏"));
+    customLabel.append(customInput, customCopy);
+    ui.sceneList.append(customLabel);
+    syncCustomPromptBox();
+  }
+
+  function syncCustomPromptBox() {
+    const isCustom = state.selectedSceneId === "custom";
+    if (ui.customPromptBox) ui.customPromptBox.hidden = !isCustom;
+    if (ui.customPromptCount && ui.customPromptText) {
+      ui.customPromptCount.textContent = ui.customPromptText.value.length + " / 2000";
+    }
   }
 
   function renderConfig() {
@@ -2691,6 +2748,14 @@ html.js .scope-note[hidden] { display: none !important; }
   // 生图
   // ==========================================================
   function currentScene() {
+    if (state.selectedSceneId === "custom") {
+      const prompt = ui.customPromptText ? ui.customPromptText.value.trim() : "";
+      return {
+        id: "custom", title: "自定义提示词",
+        channel: "Silver · 自定义提示词",
+        prompt: prompt, custom: true
+      };
+    }
     const scenes = state.config && Array.isArray(state.config.image_scenes) ? state.config.image_scenes : [];
     return scenes.find((scene) => scene && scene.id === state.selectedSceneId) || null;
   }
@@ -2753,7 +2818,7 @@ html.js .scope-note[hidden] { display: none !important; }
     setFieldError(ui.imageError, errorMessage);
 
     const buttonsBusy = state.image.busy;
-    const sceneReady = Boolean(state.selectedSceneId && state.config);
+    const sceneReady = Boolean(state.config && scene && (scene.custom ? scene.prompt : scene.id));
     ui.imageSubmit.disabled = buttonsBusy || active || !sceneReady;
     ui.imageSubmit.textContent = buttonsBusy ? "提交中…" : active ? "任务进行中" : (status === "ready" ? "再生成一张" : (status === "blocked" || status === "error" ? "重新生成" : "提交生图"));
     ui.imageChain.disabled = !job;
@@ -2857,7 +2922,11 @@ html.js .scope-note[hidden] { display: none !important; }
     if (state.image.busy) return;
     const scene = currentScene();
     if (!scene) {
-      showToast("先生成或读取一个可用的预置场景。", "error");
+      showToast("先选一个场景，或切换到自定义提示词。", "error");
+      return;
+    }
+    if (scene.custom && !scene.prompt) {
+      showToast("先输入提示词再提交生图。", "error");
       return;
     }
     state.image.busy = true;
@@ -2865,6 +2934,10 @@ html.js .scope-note[hidden] { display: none !important; }
     renderImagePanel();
     try {
       const payload = { scene_id: scene.id };
+      if (scene.custom) {
+        payload.mode = "custom";
+        payload.prompt = scene.prompt;
+      }
       if (state.sessionId) payload.session_id = state.sessionId;
       const data = await jsonRequest("/api/showcase/image/submit", {
         method: "POST",
@@ -3709,6 +3782,7 @@ html.js .scope-note[hidden] { display: none !important; }
       }
       stopImagePolling();
       state.selectedSceneId = input.value;
+      syncCustomPromptBox();
       const saved = state.image.jobsByScene[input.value];
       state.image.job = saved || null;
       state.image.error = "";
@@ -3720,6 +3794,14 @@ html.js .scope-note[hidden] { display: none !important; }
       }
     });
     ui.imageSubmit.addEventListener("click", submitImage);
+    if (ui.customPromptText) {
+      ui.customPromptText.addEventListener("input", () => {
+        if (ui.customPromptCount) {
+          ui.customPromptCount.textContent = ui.customPromptText.value.length + " / 2000";
+        }
+        renderImagePanel();
+      });
+    }
     ui.imageRefresh.addEventListener("click", () => refreshImageStatus(true));
     ui.imageChain.addEventListener("click", openImageTrace);
     ui.imageResult.addEventListener("error", () => {

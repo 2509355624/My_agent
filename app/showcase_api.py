@@ -851,7 +851,10 @@ def _job_view(record):
         "scene": copy.deepcopy(record["scene"]),
         "trace": {
             "prompt": record["prompt"],
-            "prompt_contract": "预置干净场景；请求体不接受自定义提示词",
+            "prompt_contract": (
+                "自定义提示词（原文直送 silver 工作流）" if record.get("custom")
+                else "预置干净场景；请求体不接受自定义提示词"
+            ),
             "prompt_review": "passed",
             "seed": record["seed"],
             "queue_position": position,
@@ -922,7 +925,19 @@ def _audit_job(record):
 @bp.post("/api/showcase/image/submit")
 def image_submit():
     data = request.get_json(silent=True) or {}
-    scene = showcase_prompts.image_scene(str(data.get("scene_id") or ""))
+    # 自定义提示词走显式 mode=custom（2026-11-16）：不传 mode 时仍按老规矩
+    # 只认 scene_id 白名单、忽略 prompt，原有守卫测试与安全边界都不变。
+    mode = str(data.get("mode") or "").strip()
+    if mode == "custom":
+        prompt = str(data.get("prompt") or "").strip()
+        if not prompt:
+            return jsonify({"error": "请先输入提示词"}), 400
+        if len(prompt) > showcase_prompts.CUSTOM_PROMPT_MAX:
+            return jsonify({"error": "提示词太长了（上限 %d 字）"
+                            % showcase_prompts.CUSTOM_PROMPT_MAX}), 400
+        scene = showcase_prompts.custom_image_scene(prompt)
+    else:
+        scene = showcase_prompts.image_scene(str(data.get("scene_id") or ""))
     if scene is None:
         return jsonify({"error": "请选择预置展示场景"}), 400
     try:
@@ -958,6 +973,7 @@ def image_submit():
         "tag": job.tag,
         "owner": session_id,
         "scene": scene,
+        "custom": mode == "custom",
         "prompt": scene["prompt"],
         "seed": seed,
         "job": job,

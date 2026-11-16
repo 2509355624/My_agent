@@ -224,6 +224,52 @@ class ShowcaseTest(unittest.TestCase):
             query_string={"tag": job.tag, "session_id": other_id})
         self.assertEqual(denied.status_code, 404)
 
+    def test_custom_prompt_is_used_with_fixed_silver_channel(self):
+        """显式 mode=custom：用户提示词原文送工作流，固定 silver，链路标明来源。"""
+        job = _FakeJob()
+        with mock.patch.object(showcase_api, "build_t2i_workflow",
+                               return_value={"1": {"class_type": "SaveImage"}}) as build, \
+                mock.patch.object(showcase_api.image_jobs, "enqueue",
+                                  return_value=(job, None)) as enqueue:
+            response = self.client.post(
+                "/api/showcase/image/submit", headers=self.headers,
+                json={"mode": "custom",
+                      "prompt": "  a lonely lighthouse in a storm  "})
+        self.assertEqual(response.status_code, 202)
+        body = response.get_json()["job"]
+        self.assertEqual(build.call_args.args[0], "silver")
+        self.assertEqual(build.call_args.args[1], "a lonely lighthouse in a storm")
+        self.assertEqual(enqueue.call_args.kwargs["skill"], "silver")
+        self.assertEqual(body["scene"]["id"], "custom")
+        self.assertIn("自定义", body["trace"]["prompt_contract"])
+        self.assertTrue(body["trace"]["prompt"])
+
+    def test_custom_prompt_requires_text_and_respects_length_cap(self):
+        empty = self.client.post(
+            "/api/showcase/image/submit", headers=self.headers,
+            json={"mode": "custom", "prompt": "   "})
+        self.assertEqual(empty.status_code, 400)
+        self.assertIn("提示词", empty.get_json()["error"])
+        too_long = self.client.post(
+            "/api/showcase/image/submit", headers=self.headers,
+            json={"mode": "custom", "prompt": "x" * 2001})
+        self.assertEqual(too_long.status_code, 400)
+        self.assertIn("2000", too_long.get_json()["error"])
+
+    def test_predefined_scene_still_ignores_prompt_without_mode(self):
+        """不传 mode=custom 时老规矩不变：只认白名单场景，prompt 仍被忽略。"""
+        job = _FakeJob()
+        with mock.patch.object(showcase_api, "build_t2i_workflow",
+                               return_value={"1": {"class_type": "SaveImage"}}) as build, \
+                mock.patch.object(showcase_api.image_jobs, "enqueue",
+                                  return_value=(job, None)):
+            response = self.client.post(
+                "/api/showcase/image/submit", headers=self.headers,
+                json={"scene_id": "rainy_bookstore", "prompt": "should be ignored"})
+        self.assertEqual(response.status_code, 202)
+        self.assertIn("cozy corner bookstore", build.call_args.args[1])
+        self.assertNotEqual(build.call_args.args[1], "should be ignored")
+
     def test_output_must_pass_audit_before_image_can_be_read(self):
         job = _FakeJob()
         with mock.patch.object(showcase_api, "build_t2i_workflow",
