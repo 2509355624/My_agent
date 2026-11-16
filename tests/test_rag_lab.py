@@ -421,13 +421,25 @@ class PageTest(unittest.TestCase):
         走 showTab」+「切完瞬时归零（CSS 是 scroll-behavior: smooth）」。
         """
         self.assertIn("html.js .hero[hidden]", self.src)
-        self.assertIn("html.js .scope-note[hidden] { display: none !important; }",
+        self.assertIn("html.js .scroll-cue[hidden] { display: none !important; }",
                       self.src)
-        self.assertIn("#main > .hero, #main > .scope-note", self.src)
+        self.assertIn("#main > .hero, #main > .scope-note, #main > .scroll-cue", self.src)
         self.assertIn('el.hidden = id !== "image"', self.src)
         self.assertIn("""target.closest('a[href^="#"]')""", self.src)
         self.assertIn('root.style.scrollBehavior = "auto"', self.src)
         self.assertNotIn('"instant" in window', self.src)
+
+    def test_homepage_tells_users_to_scroll_down_to_image_workbench(self):
+        """2026-11-16 用户反馈：第一屏只有概览，不知道下面还有生图操作区。
+
+        提示条做成 href="#image" 锚点（点一下直接跳到操作区），并跟 hero 一样
+        只在生图标签显示；下滑箭头带轻微呼吸动画，尊重 prefers-reduced-motion。
+        """
+        self.assertIn('class="scroll-cue" href="#image"', self.src)
+        self.assertIn("继续往下滑动", self.src)
+        self.assertIn("scroll-cue-arrow", self.src)
+        self.assertIn("@keyframes cue-bob", self.src)
+        self.assertIn("prefers-reduced-motion", self.src)
 
     def test_scrolling_panels_do_not_trap_the_wheel(self):
         """固定高度的滚动容器别写 overscroll-behavior: contain。

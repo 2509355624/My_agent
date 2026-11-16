@@ -408,6 +408,33 @@ button { cursor: pointer; }
 }
 .scope-note strong { color: var(--paper-soft); }
 
+/* 首页提示：概览屏下方还有真正的生图操作区，别让用户以为第一屏到底了。 */
+.scroll-cue {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-block: 0.5rem 1.8rem;
+  padding: 0.85rem 1rem;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  color: var(--amber);
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-align: center;
+  text-decoration: none;
+}
+.scroll-cue:hover { border-color: var(--amber); background: rgba(232, 176, 84, 0.06); }
+.scroll-cue-arrow { display: inline-block; font-size: 1.15rem; line-height: 1; animation: cue-bob 1.5s ease-in-out infinite; }
+@keyframes cue-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(5px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scroll-cue-arrow { animation: none; }
+}
+
 /* ============================================================
    功能区块通用结构
    ============================================================ */
@@ -1213,7 +1240,8 @@ html.js .feature.is-active { display: block; min-block-size: calc(100vh - var(--
 /* hero 和「公开展示边界」条都是首页（默认的生图标签）的内容，切到别的标签要一起收。
    宽屏媒体查询里 .hero 是 grid，会盖掉 [hidden] 的 UA 样式，所以带 !important。 */
 html.js .hero[hidden],
-html.js .scope-note[hidden] { display: none !important; }
+html.js .scope-note[hidden],
+html.js .scroll-cue[hidden] { display: none !important; }
 .site-nav a[aria-current="page"] {
   color: var(--paper);
   border-block-end-color: var(--amber);
@@ -1544,6 +1572,11 @@ html.js .scope-note[hidden] { display: none !important; }
   </div>
 
   <p class="scope-note"><strong>公开展示边界：</strong>本页只调用 <code>/api/showcase/*</code>，素材来自独立的展示命名空间；内部角色卡、成人档位、群友私聊与内部小说漫画不参与公开展示，公网也无法访问。</p>
+
+  <a class="scroll-cue" href="#image" aria-label="继续向下滚动，进入下方的生图操作区">
+    <span>继续往下滑动，下面才是生图操作区（选场景 / 自己写提示词 / 现场出图）</span>
+    <span class="scroll-cue-arrow" aria-hidden="true">↓</span>
+  </a>
 
   <!-- ============================================================
        功能一：生图
@@ -3964,7 +3997,7 @@ html.js .scope-note[hidden] { display: none !important; }
   // hero + 「公开展示边界」条是首页的一部分，只在默认的生图标签下露脸。
   // 之前它们常驻在 main 第一屏（hero 桌面约 700px），切标签只换下面的 feature，
   // 视口还停在 hero / 那条说明上，点完看到的是同一屏 —— 用户以为没切换。
-  const homeOnly = document.querySelectorAll("#main > .hero, #main > .scope-note");
+  const homeOnly = document.querySelectorAll("#main > .hero, #main > .scope-note, #main > .scroll-cue");
 
   function showTab(id, sync) {
     if (!TABS.includes(id)) id = "image";
