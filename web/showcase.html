@@ -4130,7 +4130,7 @@ html.js .scope-note[hidden] { display: none !important; }
         true);
 
       // ② 大模型切分
-      setStep("split", "running", "正在切分（分批送模型，约 20~60 秒）…");
+      setStep("split", "running", "正在切分（整篇送模型看全貌，表格整块保留，约 20~60 秒）…");
       const split = await postJSON("/api/raglab/split", { text: clean.text, sid: S.sid });
       S.chunks = split.chunks || [];
       const st = split.stats;
@@ -4154,7 +4154,8 @@ html.js .scope-note[hidden] { display: none !important; }
             ["批次数", (split.batches || []).length], ["耗时", split.secs + " s"]]) +
         `<p style="margin:.4rem 0 .25rem;font-size:.78rem;color:var(--amber)">切分提示词（原样展示，未做删改）</p>` +
         `<pre class="rag-prompt">${esc(split.prompt)}</pre>` +
-        `<p style="margin:.5rem 0 .1rem;font-size:.78rem;color:var(--amber)">每批实际返回</p>` +
+        `<p style="margin:.5rem 0 .1rem;font-size:.78rem;color:var(--muted)">整篇一次送模型（不再物理分批）；表格整块保留、相邻块约 15% 重叠，均由模型看全貌后切分</p>` +
+        `<p style="margin:.3rem 0 .1rem;font-size:.78rem;color:var(--amber)">模型返回</p>` +
         batchRows +
         `<div class="rag-chunks">${chunkRows}</div>`,
         false);

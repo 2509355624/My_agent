@@ -131,24 +131,30 @@ class CleanTest(LabBase):
 
 
 class BatchTest(unittest.TestCase):
-    """分批是为了让模型输出不被截断，切分点必须在段落边界上。"""
+    """分批只按空行聚合做展示，绝不按句子/\\n 二次硬切（会切碎 Markdown 表格）。"""
 
     def test_batches_respect_limit_and_keep_every_paragraph(self):
         paras = ["第%d段。" % i + "内容" * 120 for i in range(12)]
         text = "\n\n".join(paras)
         batches = rag_lab._split_batches(text, 800)
         self.assertGreater(len(batches), 1)
-        for b in batches:
-            self.assertLessEqual(len(b), 800 * 1.6)
         joined = "\n\n".join(batches)
         for p in paras:
             self.assertIn(p, joined)
 
-    def test_no_blank_line_falls_back_to_sentence_split(self):
-        text = "这是一句话。" * 400
-        batches = rag_lab._split_batches(text, 500)
-        self.assertGreater(len(batches), 1)
-        self.assertEqual("".join(batches).count("。"), 400)
+    def test_long_table_row_is_never_split_across_batches(self):
+        # 一张 12 行的 Markdown 表格，整体作为一个段落，不该被 \n 切散
+        rows = ["| 指标 | 值 |", "| --- | --- |"] + \
+               ["| 第%d项 | %s |" % (i, "x" * 60) for i in range(10)]
+        table = "\n".join(rows)
+        text = "开头一段。\n\n" + table + "\n\n结尾一段。"
+        batches = rag_lab._split_batches(text, 100)
+        # 每一行都完整地待在同一个 batch 里
+        for row in rows:
+            owners = [b for b in batches if row in b]
+            self.assertEqual(len(owners), 1, "表格行 %r 被切散/重复了" % row)
+        # 且整张表格没被拆到两个 batch
+        self.assertEqual(sum(1 for b in batches if "| 指标 | 值 |" in b), 1)
 
 
 class JsonTest(unittest.TestCase):
@@ -188,6 +194,60 @@ class SplitTest(LabBase):
             r = self.post("/api/raglab/split", {"text": "正文" * 100})
         self.assertEqual(r.status_code, 502)
         self.assertIn("boom", r.get_json()["error"])
+
+    def test_whole_document_sent_to_llm_once(self):
+        # 1 万字内的文档整篇一次送模型，不再按 BATCH_CHARS 物理分批
+        text = "这是一段有表格的正文。" * 200  # 2400+ 字，旧实现会切成 2 批
+        reply = json.dumps([{"heading": "甲", "content": "完整一段。", "why": "语义完整"}],
+                           ensure_ascii=False)
+        with mock.patch.object(rag_lab, "_call_split_llm", return_value=reply) as call:
+            r = self.post("/api/raglab/split", {"text": text})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(call.call_count, 1)          # 只调一次
+        self.assertEqual(call.call_args[0][0], text)  # 且送进去的是完整原文
+        self.assertTrue(r.get_json()["batches"][0].get("whole"))
+
+    def test_split_prompt_keeps_table_whole_and_requires_overlap(self):
+        # 提示词必须写死「表格整块保留」和「10~20% 重叠」两条规则
+        self.assertIn("表格必须整块保留", rag_lab.SPLIT_SYSTEM)
+        self.assertIn("重叠", rag_lab.SPLIT_SYSTEM)
+        self.assertIn("10%~20%", rag_lab.SPLIT_SYSTEM)
+
+    def test_overlap_is_added_by_code_not_trusted_to_model(self):
+        # 模型只给干净块，代码机械补上一块结尾做引子（确定性，不靠模型照做）
+        chunks = [
+            {"id": "b1_01", "content": "第一段讲需求。" * 20, "chars": 0, "over": False},
+            {"id": "b1_02", "content": "第二段讲方案。", "chars": 0, "over": False},
+        ]
+        out = rag_lab._add_overlap(chunks)
+        self.assertTrue(out[1]["content"].startswith("第一段讲需求"))
+        self.assertTrue(out[1].get("overlap"))
+        self.assertGreater(out[1]["chars"], len("第二段讲方案。"))
+        self.assertNotIn("overlap", out[0])   # 第一块不加引子
+
+    def test_overlap_never_copies_table_row_as_lead(self):
+        # 上一块以表格结尾时，引子不能抄表格行，否则下一块开头冒出孤立 |...|
+        body = "结论：这是正文段落。" * 20
+        tail_table = "| 指标 | 值 |\n| --- | --- |\n| 甲 | 1 |"
+        chunks = [
+            {"id": "b1_01", "content": body + "\n" + tail_table, "chars": 0, "over": False},
+            {"id": "b1_02", "content": "## 下一节\n\n新的正文。", "chars": 0, "over": False},
+        ]
+        out = rag_lab._add_overlap(chunks)
+        lead_lines = out[1]["content"].split("\n")[:3]
+        self.assertFalse(any(l.strip().startswith("|") for l in lead_lines),
+                         "引子里混进了表格行")
+
+    def test_overlap_never_snowballs(self):
+        # 引子基于原始内容算，第二块的引子不会把第一块的引子再抄一遍
+        chunks = [
+            {"id": "b1_01", "content": "甲" * 100, "chars": 100, "over": False},
+            {"id": "b1_02", "content": "乙" * 100, "chars": 100, "over": False},
+            {"id": "b1_03", "content": "丙" * 100, "chars": 100, "over": False},
+        ]
+        out = rag_lab._add_overlap(chunks)
+        self.assertNotIn("甲", out[2]["overlap"])  # 第三块引子只来自第二块（乙）
+        self.assertIn("乙", out[2]["overlap"])
 
 
 class LimitsTest(LabBase):

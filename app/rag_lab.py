@@ -554,7 +554,8 @@ def extract_document(name, raw):
 # ══════════════════════════════════════════════════════
 # ② 大模型切分
 # ══════════════════════════════════════════════════════
-SPLIT_SYSTEM = """你是文档切分器。把用户给的正文切成若干语义完整的片段，供向量检索使用。
+SPLIT_SYSTEM = """你是文档切分器。下面给你的正文是**完整的一篇文档**（通常 1 万字以内），
+请先通读全文、看清结构，再切成若干语义完整的片段，供向量检索使用。
 
 1. 每段目标 350 字左右，一般不要低于 250 字；硬上限 500 字（超过会被向量模型截断，尾部直接丢失）。
 2. 只有在「主题确实变了」或「接着合并会超过 500 字」时才断开；同一个标题下讲同一件事的
@@ -562,16 +563,33 @@ SPLIT_SYSTEM = """你是文档切分器。把用户给的正文切成若干语�
 3. 一段只讲一件事；不把两个主题塞进一段，也不把一句话拆到两段。
 4. 原文照抄，不改写、不总结、不补内容。
 5. 段落开头若是小标题，把标题留在该段第一行。
-6. 表格按行拆，表头复制到每一段。
-7. 只输出 JSON 数组，不要任何解释、不要 Markdown 代码块。
+
+【表格必须整块保留——这是最重要的规则】
+6. Markdown 表格（连续的以 | 开头、| 结尾的行，含 |---| 分隔行）是不可分割的整体：
+   一张表格必须完整待在同一段里，绝不能把行拆到两段。哪怕表格超过 500 字也不要拆——
+   宁可这一段超长，也不能让一张表格被腰斩成两截互不相干的碎片。
+   表格前后的正文若并入会超 500 字，就让正文另起一段、表格单独成段。
+
+【相邻段留重叠，保证上下文连贯】
+7. 这不是硬切：相邻两段在交界处要有重叠。每一段开头的 10%~20%（最多 80 字）应是
+   上一段末尾的原文句子，作为上下文引子——这样单独检索到任何一段都能读懂它在讲什么。
+   第一段不加引子。引子必须原文照抄，不许改写。
+
+8. 只输出 JSON 数组，不要任何解释、不要 Markdown 代码块。
 
 输出格式：
-[{"heading": "所属小节", "content": "片段原文", "why": "为什么在这里断开（≤20字）"}]
+[{"heading": "所属小节", "content": "片段原文（可含开头的重叠引子）", "why": "为什么在这里断开（≤20字）"}]
 """
 
 
 def _split_batches(text, limit=BATCH_CHARS):
-    """按段落聚合到 limit 附近，尽量在空行处断开。"""
+    """整篇文档按空行聚合成一批批，供 debug 展示；不再按句子/\n 硬切。
+
+    2026-11-16 改：原来单段超 limit 会 re.split(r"(?<=[。！？；\\n])", b) 按
+    \\n 再切一刀——Markdown 表格每行都以 \\n 结尾，长表格会被逐行切成多个 batch，
+    每个 batch 单独送模型，表格就散了。现在切分整体交给大模型（见 split_with_llm
+    整篇喂），这里只保留「按空行聚合」做展示，不做任何会切断表格的二次分割。
+    """
     paras = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
     batches, cur = [], ""
     for para in paras:
@@ -582,22 +600,7 @@ def _split_batches(text, limit=BATCH_CHARS):
             cur = (cur + "\n\n" + para) if cur else para
     if cur:
         batches.append(cur)
-    # 单段本身超 limit（比如整篇没空行）：按句子再切一刀
-    fixed = []
-    for b in batches:
-        if len(b) <= limit * 1.6:
-            fixed.append(b)
-            continue
-        buf = ""
-        for sent in re.split(r"(?<=[。！？；\n])", b):
-            if buf and len(buf) + len(sent) > limit:
-                fixed.append(buf)
-                buf = sent
-            else:
-                buf += sent
-        if buf.strip():
-            fixed.append(buf)
-    return fixed
+    return batches or [text]
 
 
 def _extract_json_array(reply):
@@ -619,53 +622,102 @@ def _extract_json_array(reply):
     return data
 
 
+def _add_overlap(chunks, ratio=0.15, cap=80):
+    """给每块补一段真正的字面重叠（上一块结尾），保证跨边界上下文不断。
+
+    提示词里要求模型带引子，但模型常只做语义衔接、不照抄字面（实测相邻块
+    相似度仅 0.1）。重叠是确定性机械操作、不涉及判断，所以代码兜底：基于
+    **原始** chunks 算出每块的引子（避免滚雪球），再统一拼到 content 前。
+    """
+    if len(chunks) < 2:
+        return chunks
+    originals = [c["content"] for c in chunks]
+    for i in range(1, len(chunks)):
+        prev = originals[i - 1]
+        n = min(cap, max(0, int(len(prev) * ratio)))
+        if n < 8:                      # 上一块太短，补了没意义
+            continue
+        # 上一块若以表格结尾，引子不能抄表格行——否则下一块开头会冒出一行
+        # 孤立的 |...|，看着像表格被拆了出去。从末尾剔除连续表格行，只从
+        # 正文取引子；整块都是表格就不加。
+        lines = prev.split("\n")
+        end = len(lines)
+        while end > 0 and lines[end - 1].strip().startswith("|"):
+            end -= 1
+        if end == 0:
+            continue
+        lead = "\n".join(lines[:end])[-n:]
+        # 尽量从一个完整句子开头起，读起来是「上一句的延续」而非硬拼半句
+        for mark in ("。", "！", "？", "；", "\n"):
+            p = lead.find(mark)
+            if 0 <= p < len(lead) - 8:
+                lead = lead[p + 1:]
+                break
+        lead = lead.strip()
+        if not lead:
+            continue
+        chunks[i]["overlap"] = lead
+        chunks[i]["content"] = lead + "\n" + originals[i]
+        chunks[i]["chars"] = len(chunks[i]["content"])
+        chunks[i]["over"] = len(chunks[i]["content"]) > CHUNK_HARD_MAX
+    return chunks
+
+
 def _call_split_llm(batch, no, total):
     """单独一层是为了单测能直接 patch 掉，不打真模型。"""
-    user = "以下是第 %d/%d 批正文（本批 %d 字）：\n\n%s" % (no, total, len(batch), batch)
+    if total == 1:
+        user = "以下是完整正文（共 %d 字），请通读后切分：\n\n%s" % (len(batch), batch)
+    else:
+        user = "以下是第 %d/%d 批正文（本批 %d 字）：\n\n%s" % (no, total, len(batch), batch)
     return llm.call_llm(
         [{"role": "system", "content": SPLIT_SYSTEM},
          {"role": "user", "content": user}],
         provider="deepseek", model=DEEPSEEK_MODEL, strict=True,
-        max_tokens=4096, temperature=0.2, timeout=180,
+        max_tokens=8192, temperature=0.2, timeout=240,
     )
 
 
 def split_with_llm(text):
-    """分批切分。返回 (chunks, batches_debug)。"""
-    batches = _split_batches(text)
+    """整篇交给大模型做语义切分。返回 (chunks, batches_debug)。
+
+    2026-11-16 改：1 万字正文约 8000 token，DeepSeek 完全吃得下。以前先按
+    BATCH_CHARS=2400 物理分批、每批单独送模型，长表格在分批时就被拦腰切断，
+    模型拿到残缺片段没法还原。    现在整篇一次喂（batches 只作展示用），表格和
+    上下文由模型看全貌后自己判断边界。
+    """
+    batches = _split_batches(text)  # 仅用于前端展示「原文分几段」，不参与送模型
     total = len(batches)
     chunks, debug = [], []
-    for i, batch in enumerate(batches, 1):
-        started = time.time()
-        reply = _call_split_llm(batch, i, total)
-        secs = round(time.time() - started, 2)
-        try:
-            raw = _extract_json_array(reply)
-            err = ""
-        except ValueError as exc:
-            raw, err = [], str(exc)
-        debug.append({
-            "no": i, "chars": len(batch), "secs": secs,
-            "reply_chars": len(reply or ""), "error": err,
-            "raw_tail": (reply or "")[-600:],
-            "count": len(raw),
+    started = time.time()
+    reply = _call_split_llm(text, 1, 1)
+    secs = round(time.time() - started, 2)
+    try:
+        raw = _extract_json_array(reply)
+        err = ""
+    except ValueError as exc:
+        raw, err = [], str(exc)
+    debug.append({
+        "no": 1, "chars": len(text), "secs": secs,
+        "reply_chars": len(reply or ""), "error": err,
+        "raw_tail": (reply or "")[-600:],
+        "count": len(raw), "whole": True,
+    })
+    for idx, item in enumerate(raw, 1):
+        if not isinstance(item, dict):
+            continue
+        content = str(item.get("content") or "").strip()
+        if not content:
+            continue
+        chunks.append({
+            "id": "b1_%02d" % idx,
+            "heading": str(item.get("heading") or "").strip(),
+            "content": content,
+            "chars": len(content),
+            "why": str(item.get("why") or "").strip(),
+            # 只标事实：超了就是超了，改不改由页面告诉用户，不替模型重切
+            "over": len(content) > CHUNK_HARD_MAX,
         })
-        for idx, item in enumerate(raw, 1):
-            if not isinstance(item, dict):
-                continue
-            content = str(item.get("content") or "").strip()
-            if not content:
-                continue
-            chunks.append({
-                "id": "b%d_%02d" % (i, idx),
-                "heading": str(item.get("heading") or "").strip(),
-                "content": content,
-                "chars": len(content),
-                "why": str(item.get("why") or "").strip(),
-                # 只标事实：超了就是超了，改不改由页面告诉用户，不替模型重切
-                "over": len(content) > CHUNK_HARD_MAX,
-            })
-    return chunks, debug
+    return _add_overlap(chunks), debug
 
 
 # ══════════════════════════════════════════════════════
