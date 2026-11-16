@@ -9,7 +9,7 @@ from unittest import mock
 from flask import Flask
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from app import showcase_api  # noqa: E402
+from app import showcase_api, showcase_prompts  # noqa: E402
 
 
 class _FakeDone:
@@ -78,9 +78,22 @@ class ShowcaseTest(unittest.TestCase):
         self.assertEqual(data["role_card"]["id"], "a_hai")
         self.assertEqual(len(data["image_scenes"]), 3)
         self.assertNotIn("prompt", data["image_scenes"][0])
-        self.assertEqual(data["comic"]["status"], "assets_pending")
-        self.assertTrue(all(p["image_url"] is None
+        self.assertEqual(data["comic"]["status"], "ready")
+        self.assertTrue(all(p["asset_status"] == "ready"
                             for p in data["comic"]["panels"]))
+
+    def test_comic_asset_serves_only_contracted_panels(self):
+        """成品图接口只认契约里登记的分镜 id，且文件必须真实存在。"""
+        response = self.client.get("/api/showcase/comic/asset/panel_9",
+                                   headers=self.headers)
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.get_json()["error"], "未知分镜")
+        # 契约里每个 ready 的格子都必须有真实素材文件（目录 = web/showcase/comic）
+        root = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "web", "showcase", "comic")
+        for p in showcase_prompts.COMIC_REPLAY["panels"]:
+            path = os.path.join(root, p["id"] + ".jpg")
+            self.assertTrue(os.path.isfile(path), path)
 
     def test_chat_isolated_and_returns_actual_injection_trace(self):
         def fake_build(line, query, k=None, day=None, context="", trace=None,

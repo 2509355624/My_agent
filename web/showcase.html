@@ -934,7 +934,7 @@ button { cursor: pointer; }
 .comic-panel-head h3 { margin: 0; font-size: 0.82rem; }
 .comic-panel-state { color: var(--muted); font-size: 0.875rem; }
 .comic-panel-body { padding: 0.7rem; }
-.comic-panel-body img { inline-size: 100%; block-size: auto; aspect-ratio: 1 / 1; object-fit: contain; }
+.comic-panel-body img { inline-size: 100%; block-size: auto; aspect-ratio: 16 / 9; object-fit: cover; }
 .comic-script { margin: 0; color: var(--paper-soft); font-size: 0.9rem; line-height: 1.75; }
 .comic-prompt { margin: 0; color: var(--muted); font-family: var(--font-mono); font-size: 0.74rem; line-height: 1.65; overflow-wrap: anywhere; }
 .comic-pending {
@@ -3450,6 +3450,9 @@ html.js .scope-note[hidden] { display: none !important; }
         body.append(node("p", "comic-script", panel.script || "（本格没有分镜文本）"));
       } else if (view === "prompts") {
         body.append(codeBlock(panel.prompt || "（本格没有提示词）", "第 " + (index + 1) + " 格提示词", "en"));
+        if (panel.negative) {
+          body.append(node("p", "memory-hint", "负向：" + panel.negative));
+        }
       } else {
         const imageUrl = safeSameOriginUrl(panel.image_url);
         if (imageUrl) {
@@ -3489,7 +3492,11 @@ html.js .scope-note[hidden] { display: none !important; }
     const ready = (Array.isArray(data.panels) ? data.panels : []).filter((panel) => safeSameOriginUrl(panel && panel.image_url)).length;
     ui.comicNote.replaceChildren();
     ui.comicNote.append(node("strong", null, "素材状态："));
-    ui.comicNote.append(document.createTextNode("公开接口返回 " + (data.status || "未标注") + "，三格中 " + ready + " 格有成品图。未完成的格子明确显示待补，不显示占位图冒充成品。"));
+    const total = (data.panels || []).length;
+    ui.comicNote.append(document.createTextNode(
+      ready === total && total > 0
+        ? "全部 " + total + " 格成品图已生成并通过公开展示审核，切换到「成品图」查看。"
+        : "公开接口返回 " + (data.status || "未标注") + "，三格中 " + ready + " 格有成品图。未完成的格子明确显示待补，不显示占位图冒充成品。"));
     ui.comicChain.disabled = false;
   }
 

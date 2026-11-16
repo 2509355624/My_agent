@@ -766,6 +766,22 @@ def comic_replay():
     return jsonify(copy.deepcopy(showcase_prompts.COMIC_REPLAY))
 
 
+# 回放成品图只认契约里登记过的分镜 id，文件必须真实躺在展示素材目录里；
+# 目录里的图是生成后逐张过公开审核（image_audit.check）才落盘的。
+_COMIC_ASSET_DIR = os.path.join(WEB_DIR, "showcase", "comic")
+
+
+@bp.get("/api/showcase/comic/asset/<panel_id>")
+def comic_asset(panel_id):
+    allowed = {p["id"] for p in showcase_prompts.COMIC_REPLAY["panels"]}
+    if panel_id not in allowed:
+        return jsonify({"error": "未知分镜"}), 404
+    local = os.path.join(_COMIC_ASSET_DIR, panel_id + ".jpg")
+    if not os.path.isfile(local):
+        return jsonify({"error": "素材尚未就绪"}), 404
+    return send_file(local, conditional=True, max_age=3600)
+
+
 def _active_job_for(session_id):
     with _LOCK:
         for record in _JOBS.values():

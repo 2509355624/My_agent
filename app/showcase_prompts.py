@@ -114,12 +114,13 @@ IMAGE_SCENES = [
 ]
 
 
-# 漫画区首版提供可回放的数据契约。成品图必须后续放入展示专用素材并逐张审核，
-# 在素材就绪前 image_url 保持 None，绝不能借用内部漫画目录中的图片。
+# 漫画区回放数据契约。成品图走展示专用素材（web/showcase/comic/），逐张过
+# 公开审核后才允许把 image_url 从 None 改成素材地址；审核没过的格子保持
+# pending，绝不借用内部漫画目录中的图片（2026-11-16 三格已生成并过审）。
 COMIC_REPLAY = {
     "id": "last_light",
     "title": "最后一盏灯",
-    "status": "assets_pending",
+    "status": "ready",
     "worldview": "丧尸末日 · 互助求生",
     "steps": [
         {"id": "script", "label": "分镜脚本"},
@@ -131,34 +132,40 @@ COMIC_REPLAY = {
             "id": "panel_1",
             "script": "傍晚，岚灯和同伴抵达断电的社区便利店，先检查入口与货架通道。",
             "prompt": (
-                "two adult survivors cautiously entering a dark convenience store at dusk, "
-                "checking aisles and exits, backpacks and flashlight, quiet tension, "
-                "non-graphic post-apocalyptic storyboard, cinematic wide panel, no blood, no text"
+                "1boy, 1girl, two survivors inside a dark convenience store during a power outage, "
+                "checking shelves, flashlight beam cutting through darkness, shelves of canned food "
+                "and bottles, backpacks, cinematic interior wide shot, detailed anime illustration, "
+                "muted colors, no blood, no gore, no text, no logo"
             ),
-            "image_url": None,
-            "asset_status": "pending",
+            "negative": "3people, 3girls, 3boys, multiple boys, crowd, extra people",
+            "image_url": "/api/showcase/comic/asset/panel_1",
+            "asset_status": "ready",
         },
         {
             "id": "panel_2",
             "script": "他们把电池、饮用水和罐头分成两份，在地图上标出通往安全屋的路线。",
             "prompt": (
-                "two adult survivors organizing bottled water, canned food and batteries on a counter, "
-                "marking a safe route on a paper map, flashlight illuminating their hands, "
-                "cooperative mood, detailed comic panel, no blood, no readable text"
+                "1boy, 1girl, two survivors inside a dark convenience store during a power outage, "
+                "sorting bottled water, canned food and batteries on a checkout counter, marking a "
+                "safe route on a paper map, flashlight beam, cooperative mood, cinematic interior "
+                "wide shot, detailed anime illustration, muted colors, no blood, no gore, no text, no logo"
             ),
-            "image_url": None,
-            "asset_status": "pending",
+            "negative": "2girls, 3girls, 3people, extra people, crowd, child",
+            "image_url": "/api/showcase/comic/asset/panel_2",
+            "asset_status": "ready",
         },
         {
             "id": "panel_3",
             "script": "远处安全屋亮起一盏灯，两人带着物资穿过雨后街道，准备迎接下一页。",
             "prompt": (
-                "two adult survivors walking through a rain-washed street toward a small safe house "
-                "with one warm window light, blue hour after rain, hopeful ending, "
-                "cinematic comic panel, non-graphic, no blood, no text"
+                "1boy, 1girl, two survivors walking away down a rain-washed street at blue hour "
+                "after the rain, toward a small safe house with one warm glowing window, reflections "
+                "on wet asphalt, distant dark city skyline, hopeful mood, cinematic wide shot, "
+                "detailed anime illustration, muted colors, no blood, no gore, no text, no logo"
             ),
-            "image_url": None,
-            "asset_status": "pending",
+            "negative": "3people, 3girls, 3boys, multiple boys, crowd, extra people",
+            "image_url": "/api/showcase/comic/asset/panel_3",
+            "asset_status": "ready",
         },
     ],
 }
