@@ -2458,8 +2458,14 @@ class HeavySwitchRestartTest(unittest.TestCase):
         """冷启动 / 刚重启完本身就是干净进程。"""
         self.assertEqual(self._run("moss", None), [])
 
-    def test_light_channels_never_restart(self):
+    def test_light_to_light_never_restarts(self):
+        """轻→轻两边都不沾重渠道，不重启（2026-11-14 口径）。"""
         self.assertEqual(self._run("sd", "anima-line"), [])
+
+    def test_heavy_to_light_restarts(self):
+        """重→轻也要重启：krea2 跑完切 silver，旧进程里还压着 krea2 权重。"""
+        self.assertEqual(self._run("silver", "krea2-real"), ["restart"])
+        self.assertEqual(self._run("anima-line", "moss"), ["restart"])
 
     def test_restart_refused_does_not_block_submit(self):
         """重启被漫画台占用挡下时只记日志，不抛、不阻断这一张。"""
@@ -3461,10 +3467,16 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
         # 2026-10-29 加 `moss-light`(420)：原默认那套多 LoRA 组合搬到独立渠道，
         #   同骨架同像素数 → 同档。同日下架 `moss-wide` / `moss-light1/2`
         #   （目录已移到 `skills/_off/`，不该再出现在这张表里）。
+        # 2026-11-16 加 `krea2-jiguang`(300)：用户把极光的 latent 放大单独从
+        #   1.5 → **2.0**（「2x 这个是最完美的形态」），二段 1664×2432、
+        #   末尾 2x → 3328×4864（16.19 MP，1.5× 的 1.78 倍）。同日 1.5× 实测
+        #   51.7~131.8 秒（37 张，中位 ≈77），2.0× 估 90~210 ⇒ 180 接不住。
+        #   ⚠️ 只这一条，其余 krea2 仍 1.5× / 180。
         self.assertEqual(sorted(image_jobs.SKILL_TIMEOUTS),
-                         ["_comic_batch", "moss", "moss-light", "moss-qunyou",
-                          "moss50", "moss8", "moss_page",
-                          "qwen-charsheet", "qwen-hd", "qwen-restore", "qwen30",
+                         ["_comic_batch", "krea2-jiguang", "moss", "moss-light",
+                          "moss-qunyou", "moss50", "moss8", "moss_page",
+                          "qwen-charsheet", "qwen-hd", "qwen-real",
+                          "qwen-restore", "qwen30",
                           "qwen_image_v1", "sf"])
         for skill in ("qwen_image_v1", "qwen-hd", "qwen-charsheet", "qwen30"):
             self.assertEqual(image_jobs.task_timeout(skill), 220, skill)
@@ -3476,8 +3488,15 @@ class TaskTimeoutBySkillTest(unittest.TestCase):
         # 2026-10-29 光影档：同骨架同像素数 → 同档超时
         self.assertEqual(image_jobs.task_timeout("moss-light"), 420)
         self.assertEqual(image_jobs.task_timeout("_comic_batch"), 240)
-        self.assertEqual(image_jobs.task_timeout("qwen-restore"), 300)
+        # 2026-11-15 修复链加了「1.2× latent 放大 + 二次采样 + 末尾 2× 超分」
+        # ⇒ 300 装不下（≈272 s 估算），单独抬到 420。
+        self.assertEqual(image_jobs.task_timeout("qwen-restore"), 420)
         self.assertEqual(image_jobs.task_timeout("sf"), 360)
+        # 2026-11-16 极光单独 2.0× → 300（见上面键清单那条注释）
+        self.assertEqual(image_jobs.task_timeout("krea2-jiguang"), 300)
+        # 其余 krea2 渠道没进表，照旧回落全局 180
+        self.assertEqual(image_jobs.task_timeout("krea2-general"),
+                         image_jobs.TASK_TIMEOUT)
 
     def test_unknown_skill_falls_back_to_global(self):
         """没配的渠道仍走 TASK_TIMEOUT——新渠道不能因为漏配就变慢。"""
