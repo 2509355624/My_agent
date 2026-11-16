@@ -447,6 +447,16 @@ button { cursor: pointer; }
   font-size: 0.95rem;
   line-height: 1.75;
 }
+/* 文档字数上限——用户 2026-11-16 要求写清楚并加亮，避免误以为整篇都进库 */
+.rag-limit {
+  color: var(--amber);
+  background: var(--amber-soft);
+  border: 1px solid var(--amber);
+  border-radius: 4px;
+  padding: 0.1rem 0.4rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
 .feature-tools { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 
 .panel {
@@ -1804,7 +1814,7 @@ html.js .scope-note[hidden] { display: none !important; }
       <div class="feature-intro">
         <p class="feature-kicker">文档问答 / 检索增强全流程</p>
         <h2 id="rag-title">上传一份文档，看它怎么变成向量、又怎么被找回来</h2>
-        <p class="feature-desc">四步全部真跑：规则清洗先删掉页眉页码，大模型按语义切块（提示词原样展开给你看），本地小模型把每块压成 512 维向量，最后用你的问题去检索并带引用作答。左边三步是建库，中间数据全摊开；检索这一步跟着提问走，就在右边问题区上方，问完立刻能看到命中了哪几块、发给模型的 prompt 长什么样。支持 txt / md / PDF / Word（PDF 与 Word 优先读文本层，零 token 零幻觉；没有文字层的扫描页会自动渲染成图、交视觉模型抄成 Markdown，最多 10 页）。文档限 1 万字，超出按段落截断；临时库 30 分钟无人访问自动销毁，同时最多 3 个。</p>
+        <p class="feature-desc">四步全部真跑：规则清洗先删掉页眉页码，大模型按语义切块（提示词原样展开给你看），本地小模型把每块压成 512 维向量，最后用你的问题去检索并带引用作答。左边三步是建库，中间数据全摊开；检索这一步跟着提问走，就在右边问题区上方，问完立刻能看到命中了哪几块、发给模型的 prompt 长什么样。支持 txt / md / PDF / Word（PDF 与 Word 优先读文本层，零 token 零幻觉；没有文字层的扫描页会自动渲染成图、交视觉模型抄成 Markdown，最多 10 页）。<span class="rag-limit">⚠ 单次仅处理前 1 万字——超出部分按段落截断、后面不进库和检索，请拆成多份</span>；临时库 30 分钟无人访问自动销毁，同时最多 3 个。</p>
       </div>
       <div class="feature-tools">
         <button class="btn btn--small" type="button" id="ragSample">载入示例文档</button>
@@ -1816,7 +1826,7 @@ html.js .scope-note[hidden] { display: none !important; }
       <div class="rag-main">
         <div class="rag-drop" id="ragDrop">
           <strong>把 txt / md / PDF / Word 拖到这里</strong>
-          <span id="ragDropHint">或者选文件、粘贴正文。PDF / Word 先读文本层；扫描页自动走视觉识别，每页约 3~9 秒。演示限 1 万字，超出按段落截断。</span>
+          <span id="ragDropHint">或者选文件、粘贴正文。PDF / Word 先读文本层；扫描页自动走视觉识别，每页约 3~9 秒。<span class="rag-limit">⚠ 仅前 1 万字入库，超出按段落截断</span></span>
           <div class="rag-drop-actions">
             <button class="btn btn--primary btn--small" type="button" id="ragPick">选择文件</button>
             <button class="btn btn--small" type="button" id="ragPaste">粘贴正文</button>
@@ -4335,7 +4345,7 @@ html.js .scope-note[hidden] { display: none !important; }
     // 二进制（PDF / docx）：交给后端解析文本层；PDF 里没有文字层的页会自动
     // 走视觉识别（最多 10 页），所以提示里把「可能要等」说在前面。
     const hint = $("ragDropHint");
-    const old = hint ? hint.textContent : "";
+    const old = hint ? hint.innerHTML : "";   // 保住里面的 1 万字高亮 span
     if (hint) {
       hint.textContent = /\.pdf$/i.test(name) || /pdf/i.test(file.type)
         ? "正在解析 " + name + " …（扫描页会走视觉识别，可能要几十秒）"
@@ -4348,7 +4358,7 @@ html.js .scope-note[hidden] { display: none !important; }
     } catch (err) {
       showErr(err.message || "文件解析失败");
     } finally {
-      if (hint) hint.textContent = old;
+      if (hint) hint.innerHTML = old;
     }
   }
 
