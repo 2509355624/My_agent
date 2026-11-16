@@ -852,9 +852,11 @@ def _job_view(record):
         "trace": {
             "prompt": record["prompt"],
             "prompt_contract": (
-                "自定义提示词（原文直送 silver 工作流）" if record.get("custom")
+                "DeepSeek 扩写（你的原话 → 英文提示词）" if record.get("ai")
+                else "自定义提示词（原文直送 silver 工作流）" if record.get("custom")
                 else "预置干净场景；请求体不接受自定义提示词"
             ),
+            "original": record.get("original") or "",
             "prompt_review": "passed",
             "seed": record["seed"],
             "queue_position": position,
@@ -925,10 +927,33 @@ def _audit_job(record):
 @bp.post("/api/showcase/image/submit")
 def image_submit():
     data = request.get_json(silent=True) or {}
-    # 自定义提示词走显式 mode=custom（2026-11-16）：不传 mode 时仍按老规矩
-    # 只认 scene_id 白名单、忽略 prompt，原有守卫测试与安全边界都不变。
+    # mode=custom 原文直送；mode=ai 走 DeepSeek 扩写（大大怪同款 _translate）。
+    # 不传 mode 时仍按老规矩只认 scene_id 白名单、忽略 prompt，原安全边界不变。
     mode = str(data.get("mode") or "").strip()
-    if mode == "custom":
+    original = ""
+    if mode == "ai":
+        brief = str(data.get("prompt") or "").strip()
+        if not brief:
+            return jsonify({"error": "先写一句你想画什么"}), 400
+        if len(brief) > showcase_prompts.CUSTOM_PROMPT_MAX:
+            return jsonify({"error": "需求太长了（上限 %d 字）"
+                            % showcase_prompts.CUSTOM_PROMPT_MAX}), 400
+        try:
+            # 局部导入避免启动期加载大模块；点名 silver，走大大的默认回落档。
+            from app import direct_gen
+            translated = direct_gen._translate(brief, [], skill="silver")
+        except Exception:
+            log.exception("展示页 AI 扩写调用失败")
+            return jsonify({"error": "AI 扩写暂时不可用，请稍后重试"}), 503
+        expanded = ""
+        if isinstance(translated, dict):
+            expanded = str(translated.get("prompt") or "").strip()
+        if not expanded:
+            return jsonify({"error": "AI 没能把这句变成画面，写具体一点再试"
+                            "（比如「雨天的旧书店，暖光，没有人」）"}), 400
+        scene = showcase_prompts.ai_image_scene(expanded)
+        original = brief
+    elif mode == "custom":
         prompt = str(data.get("prompt") or "").strip()
         if not prompt:
             return jsonify({"error": "请先输入提示词"}), 400
@@ -974,6 +999,8 @@ def image_submit():
         "owner": session_id,
         "scene": scene,
         "custom": mode == "custom",
+        "ai": mode == "ai",
+        "original": original,
         "prompt": scene["prompt"],
         "seed": seed,
         "job": job,

@@ -204,6 +204,22 @@ def custom_image_scene(prompt):
     }
 
 
+def ai_image_scene(prompt):
+    """AI 扩写模式的场景：DeepSeek 补好的英文提示词，固定 silver / 竖屏。"""
+    text = str(prompt or "").strip()
+    if not text or len(text) > CUSTOM_PROMPT_MAX * 2:
+        return None
+    return {
+        "id": "ai",
+        "title": "AI 扩写",
+        "brief": "你的需求经 DeepSeek 补充后的画面。",
+        "skill": "silver",
+        "channel": "DeepSeek → Silver · 固定竖屏",
+        "prompt": text,
+        "ai": True,
+    }
+
+
 def image_scene(scene_id):
     """按白名单取场景；返回副本，调用方改不到契约本体。"""
     for scene in IMAGE_SCENES:

@@ -1553,7 +1553,7 @@ html.js .scope-note[hidden] { display: none !important; }
       <div class="feature-intro">
         <p class="feature-kicker">生图 / 真实 GPU 队列</p>
         <h2 id="image-title">选预置场景，或自己写提示词，现场生成一张图</h2>
-        <p class="feature-desc">三个无人物环境场景固定走 <code>silver</code>（轻渠道，切换免重启 ComfyUI）；选「自定义提示词」就能自己写画面，同样固定 silver、固定竖屏。生成完成后经过一次图片审核，未过审的图片不会显示。排队位置、耗时、种子和审核状态都在“查看链路”里，自定义模式还能看到你提交的原文。</p>
+        <p class="feature-desc">三个无人物环境场景固定走 <code>silver</code>（轻渠道，切换免重启 ComfyUI）。想自己定画面：选「自定义提示词」写英文，或选「AI 扩写」只写一句中文需求——后者会交给 DeepSeek（大大怪同款）补成完整提示词，再一起固定 silver、固定竖屏出图。生成完成后经过一次图片审核，未过审的图片不会显示。排队位置、耗时、种子和审核状态都在“查看链路”里，AI 扩写还能对照你的原话和它补出的提示词。</p>
       </div>
       <div class="feature-tools">
         <button class="btn btn--small" type="button" id="imageChain" disabled><svg class="icon" aria-hidden="true"><use href="#i-chain" xlink:href="#i-chain"/></svg>查看链路</button>
@@ -1567,9 +1567,9 @@ html.js .scope-note[hidden] { display: none !important; }
           <p class="memory-hint" id="sceneHint">正在读取场景配置…</p>
         </div>
         <div class="custom-prompt-box" id="customPromptBox" hidden>
-          <label for="customPromptText">你的提示词（英文更稳 · 固定 silver 竖屏）</label>
+          <label for="customPromptText" id="customPromptLabel">你的提示词（英文更稳 · 固定 silver 竖屏）</label>
           <textarea id="customPromptText" rows="5" maxlength="2000" placeholder="例如：a quiet bookshop on a rainy evening, warm amber light, no people"></textarea>
-          <p class="custom-prompt-hint"><span id="customPromptCount">0 / 2000</span> 字 · 与预置场景一样经过出图审核，链路里可查看原文</p>
+          <p class="custom-prompt-hint"><span id="customPromptCount">0 / 2000</span> 字 · <span id="customPromptNote">与预置场景一样经过出图审核，链路里可查看原文</span></p>
         </div>
       </fieldset>
 
@@ -1989,6 +1989,8 @@ html.js .scope-note[hidden] { display: none !important; }
     customPromptBox: $("#customPromptBox"),
     customPromptText: $("#customPromptText"),
     customPromptCount: $("#customPromptCount"),
+    customPromptLabel: $("#customPromptLabel"),
+    customPromptNote: $("#customPromptNote"),
     imageFrame: $("#imageFrame"),
     imageEmpty: $("#imageEmpty"),
     imageResult: $("#imageResult"),
@@ -2671,12 +2673,42 @@ html.js .scope-note[hidden] { display: none !important; }
     customCopy.append(node("span", "scene-option-channel", "Silver · 固定竖屏"));
     customLabel.append(customInput, customCopy);
     ui.sceneList.append(customLabel);
+    // AI 扩写：写一句需求，DeepSeek 补成完整提示词（大大怪同款 _translate）
+    const aiLabel = node("label", "scene-option");
+    const aiInput = node("input");
+    aiInput.type = "radio";
+    aiInput.name = "scene_id";
+    aiInput.value = "ai";
+    aiInput.checked = state.selectedSceneId === "ai";
+    const aiCopy = node("div");
+    aiCopy.append(node("span", "scene-option-title", "AI 扩写提示词"));
+    aiCopy.append(node("span", "scene-option-brief", "写一句需求，DeepSeek 补成完整英文画面。"));
+    aiCopy.append(node("span", "scene-option-channel", "DeepSeek → Silver · 固定竖屏"));
+    aiLabel.append(aiInput, aiCopy);
+    ui.sceneList.append(aiLabel);
     syncCustomPromptBox();
   }
 
   function syncCustomPromptBox() {
-    const isCustom = state.selectedSceneId === "custom";
-    if (ui.customPromptBox) ui.customPromptBox.hidden = !isCustom;
+    const sel = state.selectedSceneId;
+    const isAi = sel === "ai";
+    const showBox = isAi || sel === "custom";
+    if (ui.customPromptBox) ui.customPromptBox.hidden = !showBox;
+    if (ui.customPromptText) {
+      ui.customPromptText.placeholder = isAi
+        ? "例如：雨天的旧书店，暖色灯光，湿漉漉的石板路，没有人"
+        : "例如：a quiet bookshop on a rainy evening, warm amber light, no people";
+    }
+    if (ui.customPromptLabel) {
+      ui.customPromptLabel.textContent = isAi
+        ? "你的需求（中文也行 · DeepSeek 补成提示词）"
+        : "你的提示词（英文更稳 · 固定 silver 竖屏）";
+    }
+    if (ui.customPromptNote) {
+      ui.customPromptNote.textContent = isAi
+        ? "AI 会把这句补成完整英文提示词；照旧审核，链路里可对照原话"
+        : "与预置场景一样经过出图审核，链路里可查看原文";
+    }
     if (ui.customPromptCount && ui.customPromptText) {
       ui.customPromptCount.textContent = ui.customPromptText.value.length + " / 2000";
     }
@@ -2748,12 +2780,14 @@ html.js .scope-note[hidden] { display: none !important; }
   // 生图
   // ==========================================================
   function currentScene() {
-    if (state.selectedSceneId === "custom") {
+    if (state.selectedSceneId === "custom" || state.selectedSceneId === "ai") {
       const prompt = ui.customPromptText ? ui.customPromptText.value.trim() : "";
+      const isAi = state.selectedSceneId === "ai";
       return {
-        id: "custom", title: "自定义提示词",
-        channel: "Silver · 自定义提示词",
-        prompt: prompt, custom: true
+        id: state.selectedSceneId,
+        title: isAi ? "AI 扩写" : "自定义提示词",
+        channel: isAi ? "DeepSeek → Silver · 固定竖屏" : "Silver · 自定义提示词",
+        prompt: prompt, custom: !isAi, ai: isAi
       };
     }
     const scenes = state.config && Array.isArray(state.config.image_scenes) ? state.config.image_scenes : [];
@@ -2818,7 +2852,7 @@ html.js .scope-note[hidden] { display: none !important; }
     setFieldError(ui.imageError, errorMessage);
 
     const buttonsBusy = state.image.busy;
-    const sceneReady = Boolean(state.config && scene && (scene.custom ? scene.prompt : scene.id));
+    const sceneReady = Boolean(state.config && scene && ((scene.custom || scene.ai) ? scene.prompt : scene.id));
     ui.imageSubmit.disabled = buttonsBusy || active || !sceneReady;
     ui.imageSubmit.textContent = buttonsBusy ? "提交中…" : active ? "任务进行中" : (status === "ready" ? "再生成一张" : (status === "blocked" || status === "error" ? "重新生成" : "提交生图"));
     ui.imageChain.disabled = !job;
@@ -2925,8 +2959,8 @@ html.js .scope-note[hidden] { display: none !important; }
       showToast("先选一个场景，或切换到自定义提示词。", "error");
       return;
     }
-    if (scene.custom && !scene.prompt) {
-      showToast("先输入提示词再提交生图。", "error");
+    if ((scene.custom || scene.ai) && !scene.prompt) {
+      showToast(scene.ai ? "先写一句你想画什么。" : "先输入提示词再提交生图。", "error");
       return;
     }
     state.image.busy = true;
@@ -2934,8 +2968,8 @@ html.js .scope-note[hidden] { display: none !important; }
     renderImagePanel();
     try {
       const payload = { scene_id: scene.id };
-      if (scene.custom) {
-        payload.mode = "custom";
+      if (scene.custom || scene.ai) {
+        payload.mode = scene.ai ? "ai" : "custom";
         payload.prompt = scene.prompt;
       }
       if (state.sessionId) payload.session_id = state.sessionId;
@@ -2995,12 +3029,14 @@ html.js .scope-note[hidden] { display: none !important; }
       ],
       build(container) {
         const contractSection = traceSection(container, "提示词与种子");
-        appendKv(contractSection, [
+        const promptKv = [
           ["提示词契约", trace.prompt_contract],
           ["提示词审核", trace.prompt_review],
           ["随机种子", trace.seed],
           ["固定渠道", job.scene && job.scene.channel]
-        ]);
+        ];
+        if (trace.original) promptKv.unshift(["你的原话", trace.original]);
+        appendKv(contractSection, promptKv);
         contractSection.append(codeBlock(trace.prompt || "（链路未返回最终提示词）", "提交给工作流的最终提示词", "en"));
 
         const queueSection = traceSection(container, "队列与耗时");

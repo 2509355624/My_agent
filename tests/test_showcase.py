@@ -270,6 +270,50 @@ class ShowcaseTest(unittest.TestCase):
         self.assertIn("cozy corner bookstore", build.call_args.args[1])
         self.assertNotEqual(build.call_args.args[1], "should be ignored")
 
+    def test_ai_mode_uses_deepseek_expanded_prompt_and_keeps_original(self):
+        """mode=ai：走大大怪同款扩写，用补出的英文提示词入队，原话留在链路。"""
+        job = _FakeJob()
+        expanded = ("a rainy old bookshop, warm amber light, wet stone "
+                    "pavement, no people")
+        with mock.patch("app.direct_gen._translate",
+                        return_value={"skill": "silver", "prompt": expanded}) as translate, \
+                mock.patch.object(showcase_api, "build_t2i_workflow",
+                                  return_value={"1": {"class_type": "SaveImage"}}) as build, \
+                mock.patch.object(showcase_api.image_jobs, "enqueue",
+                                  return_value=(job, None)):
+            response = self.client.post(
+                "/api/showcase/image/submit", headers=self.headers,
+                json={"mode": "ai", "prompt": "雨天的旧书店，暖光，没有人"})
+        self.assertEqual(response.status_code, 202)
+        body = response.get_json()["job"]
+        self.assertEqual(translate.call_args.args[0], "雨天的旧书店，暖光，没有人")
+        self.assertEqual(translate.call_args.kwargs["skill"], "silver")
+        self.assertEqual(build.call_args.args[1], expanded)
+        self.assertEqual(body["scene"]["id"], "ai")
+        self.assertEqual(body["trace"]["original"], "雨天的旧书店，暖光，没有人")
+        self.assertIn("DeepSeek", body["trace"]["prompt_contract"])
+
+    def test_ai_mode_rejects_when_ai_does_not_produce_prompt(self):
+        """AI 判成聊天 / 返回空 → 友好提示重来，绝不拿空 prompt 入队。"""
+        with mock.patch("app.direct_gen._translate",
+                        return_value={"reply": "这个我不会画"}), \
+                mock.patch.object(showcase_api.image_jobs, "enqueue") as enqueue:
+            response = self.client.post(
+                "/api/showcase/image/submit", headers=self.headers,
+                json={"mode": "ai", "prompt": "你好"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("写具体一点", response.get_json()["error"])
+        enqueue.assert_not_called()
+
+    def test_ai_mode_degrades_when_llm_fails(self):
+        with mock.patch("app.direct_gen._translate",
+                        side_effect=RuntimeError("llm down")):
+            response = self.client.post(
+                "/api/showcase/image/submit", headers=self.headers,
+                json={"mode": "ai", "prompt": "雨天的书店"})
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("AI 扩写", response.get_json()["error"])
+
     def test_output_must_pass_audit_before_image_can_be_read(self):
         job = _FakeJob()
         with mock.patch.object(showcase_api, "build_t2i_workflow",
