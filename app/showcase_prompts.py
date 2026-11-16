@@ -115,13 +115,17 @@ IMAGE_SCENES = [
 
 
 # 漫画区回放数据契约。成品图走展示专用素材（web/showcase/comic/），逐张过
-# 公开审核后才允许把 image_url 从 None 改成素材地址；审核没过的格子保持
-# pending，绝不借用内部漫画目录中的图片（2026-11-16 三格已生成并过审）。
+# 2026-11-16 重做：三格改由**漫画台**正规流程产出（自由视角 pov_mode=free、
+# silver 连续漫画 skill、角色一致性特化），不再是手工搓 prompt 的银色单图。
+# 任务：comics/C20261116-01_末日余晖（silver_only 模式成品在 raw/）。
+# 图片压缩后逐张过 image_audit.check 公开审核才落展示目录，审核没过保持 pending，
+# 绝不借用内部漫画目录原图。对外展示名仍叫《最后一盏灯》。
 COMIC_REPLAY = {
     "id": "last_light",
     "title": "最后一盏灯",
     "status": "ready",
-    "worldview": "丧尸末日 · 互助求生",
+    "worldview": "丧尸末日 · 互助求生 · 漫画台自由视角",
+    "source": "漫画台 · 自由视角（pov_mode=free）· 角色一致性特化 · 2026-11-16",
     "steps": [
         {"id": "script", "label": "分镜脚本"},
         {"id": "prompts", "label": "逐格提示词"},
@@ -130,40 +134,44 @@ COMIC_REPLAY = {
     "panels": [
         {
             "id": "panel_1",
-            "script": "傍晚，岚灯和同伴抵达断电的社区便利店，先检查入口与货架通道。",
+            "script": "傍晚，安娜和伊森抵达断电的社区便利店：她推门、他举起手电，两人警惕地检查入口与货架。",
             "prompt": (
-                "1boy, 1girl, two survivors inside a dark convenience store during a power outage, "
-                "checking shelves, flashlight beam cutting through darkness, shelves of canned food "
-                "and bottles, backpacks, cinematic interior wide shot, detailed anime illustration, "
-                "muted colors, no blood, no gore, no text, no logo"
+                "1girl, 1boy, Anna, dark brown short hair in a ponytail, amber eyes, black hair tie, "
+                "Ethan, black short hair with messy fringe, grey eyes, dusk, dim abandoned convenience "
+                "store entrance, girl wearing a dark green waterproof jacket and black cargo pants with "
+                "a black backpack, boy wearing a grey hooded jacket and dark blue cargo pants with a "
+                "black backpack, girl pushing the glass door open with one hand holding a flashlight, "
+                "boy stepping in behind her raising his flashlight, tense and alert expressions, "
+                "cool dusk light fading into store darkness, wide shot, cinematic widescreen"
             ),
-            "negative": "3people, 3girls, 3boys, multiple boys, crowd, extra people",
             "image_url": "/api/showcase/comic/asset/panel_1",
             "asset_status": "ready",
         },
         {
             "id": "panel_2",
-            "script": "他们把电池、饮用水和罐头分成两份，在地图上标出通往安全屋的路线。",
+            "script": "收银台前，安娜把饮用水和罐头摆成一排，伊森俯身在纸地图上标出通往安全屋的路线。",
             "prompt": (
-                "1boy, 1girl, two survivors inside a dark convenience store during a power outage, "
-                "sorting bottled water, canned food and batteries on a checkout counter, marking a "
-                "safe route on a paper map, flashlight beam, cooperative mood, cinematic interior "
-                "wide shot, detailed anime illustration, muted colors, no blood, no gore, no text, no logo"
+                "1girl, 1boy, Anna, dark brown ponytail, amber eyes, Ethan, black short hair, grey eyes, "
+                "convenience store counter, girl in a dark green waterproof jacket and black cargo pants "
+                "kneeling by the counter lining up bottled water and canned food, boy in a grey hooded "
+                "jacket leaning over the counter marking a paper map with a pen, both with black "
+                "backpacks, flashlight beams lighting the counter, focused and concentrated expressions, "
+                "cool flashlight glow, medium shot, cinematic widescreen"
             ),
-            "negative": "2girls, 3girls, 3people, extra people, crowd, child",
             "image_url": "/api/showcase/comic/asset/panel_2",
             "asset_status": "ready",
         },
         {
             "id": "panel_3",
-            "script": "远处安全屋亮起一盏灯，两人带着物资穿过雨后街道，准备迎接下一页。",
+            "script": "雨后的蓝调时刻，两人提着物资走向远处亮着一扇暖窗的安全屋，伊森抬手指向前方。",
             "prompt": (
-                "1boy, 1girl, two survivors walking away down a rain-washed street at blue hour "
-                "after the rain, toward a small safe house with one warm glowing window, reflections "
-                "on wet asphalt, distant dark city skyline, hopeful mood, cinematic wide shot, "
-                "detailed anime illustration, muted colors, no blood, no gore, no text, no logo"
+                "1girl, 1boy, Anna, dark brown ponytail, Ethan, black short hair, wet street after rain, "
+                "blue hour, girl in a dark green waterproof jacket and black cargo pants walking beside "
+                "boy in a grey hooded jacket, both carrying backpacks, girl carrying a supply bag, boy "
+                "pointing toward a distant warm lit window, hopeful faint smile and relieved expression, "
+                "wet asphalt reflecting blue sky and warm window light, cool blue hour light, full body "
+                "shot from behind, cinematic widescreen"
             ),
-            "negative": "3people, 3girls, 3boys, multiple boys, crowd, extra people",
             "image_url": "/api/showcase/comic/asset/panel_3",
             "asset_status": "ready",
         },

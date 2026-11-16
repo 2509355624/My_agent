@@ -944,7 +944,9 @@ button { cursor: pointer; }
 .comic-panel-head h3 { margin: 0; font-size: 0.82rem; }
 .comic-panel-state { color: var(--muted); font-size: 0.875rem; }
 .comic-panel-body { padding: 0.7rem; }
-.comic-panel-body img { inline-size: 100%; block-size: auto; aspect-ratio: 16 / 9; object-fit: cover; }
+/* 2026-11-16：三格改漫画台自由视角产出，原图 2464×3680 竖屏（压缩后
+   1080×1613）。竖图塞进 16:9 会被上下裁掉大半，故按 2:3 完整展示。 */
+.comic-panel-body img { inline-size: 100%; block-size: auto; aspect-ratio: 2 / 3; object-fit: cover; }
 .comic-script { margin: 0; color: var(--paper-soft); font-size: 0.9rem; line-height: 1.75; }
 .comic-prompt { margin: 0; color: var(--muted); font-family: var(--font-mono); font-size: 0.74rem; line-height: 1.65; overflow-wrap: anywhere; }
 .comic-pending {
