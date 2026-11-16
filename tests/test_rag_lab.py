@@ -441,6 +441,18 @@ class PageTest(unittest.TestCase):
         self.assertIn("@keyframes cue-bob", self.src)
         self.assertIn("prefers-reduced-motion", self.src)
 
+    def test_custom_prompt_box_lives_under_image_stage(self):
+        """2026-11-16 用户反馈：输入框放在左侧场景列表底部不好用，
+        改到中间出图框（.image-stage）里、信息条下方，跟出图框同宽。"""
+        self.assertIn('<div class="image-stage">', self.src)
+        # 输入框必须出现在 image-stage 之后、guide section 之前，
+        # 且 image-stage-foot 在它前面（即出图框 → 信息条 → 输入框的顺序）。
+        stage = self.src.index('<div class="image-stage">')
+        guide = self.src.index('<section class="feature" id="guide"')
+        foot = self.src.index('class="image-stage-foot"')
+        box = self.src.index('class="custom-prompt-box" id="customPromptBox"')
+        self.assertTrue(stage < foot < box < guide)
+
     def test_scrolling_panels_do_not_trap_the_wheel(self):
         """固定高度的滚动容器别写 overscroll-behavior: contain。
 

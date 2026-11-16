@@ -601,11 +601,12 @@ button { cursor: pointer; }
 .scene-option-title { display: block; font-size: 0.9rem; font-weight: 700; }
 .scene-option-brief { display: block; margin-block-start: 0.2rem; color: var(--muted); font-size: 0.78rem; line-height: 1.55; }
 .scene-option-channel { display: block; margin-block-start: 0.3rem; color: var(--sea); font-size: 0.72rem; }
+/* 输入框放在出图框（.image-stage）内部底部：与上方信息条共用一条分隔线，
+   不再是左侧场景列表里那块浮起来的框。 */
 .custom-prompt-box {
-  margin-block-start: 0.6rem;
-  padding: 0.75rem;
-  border: 1px solid var(--line-strong);
-  background: rgba(10, 26, 38, 0.7);
+  padding: 0.85rem 0.8rem;
+  border-block-start: 1px solid var(--line);
+  background: #061019;
 }
 .custom-prompt-box label {
   display: block;
@@ -1599,11 +1600,6 @@ html.js .scroll-cue[hidden] { display: none !important; }
         <div class="scene-list" id="sceneList" aria-describedby="sceneHint">
           <p class="memory-hint" id="sceneHint">正在读取场景配置…</p>
         </div>
-        <div class="custom-prompt-box" id="customPromptBox" hidden>
-          <label for="customPromptText" id="customPromptLabel">你的提示词（英文更稳 · 固定 silver 竖屏）</label>
-          <textarea id="customPromptText" rows="5" maxlength="2000" placeholder="例如：a quiet bookshop on a rainy evening, warm amber light, no people"></textarea>
-          <p class="custom-prompt-hint"><span id="customPromptCount">0 / 2000</span> 字 · <span id="customPromptNote">与预置场景一样经过出图审核，链路里可查看原文</span></p>
-        </div>
       </fieldset>
 
       <div class="image-stage">
@@ -1617,6 +1613,11 @@ html.js .scroll-cue[hidden] { display: none !important; }
         <div class="image-stage-foot">
           <strong id="imageStageTitle">尚未提交任务</strong>
           <span id="imageStageChannel">固定渠道 · 预置提示词</span>
+        </div>
+        <div class="custom-prompt-box" id="customPromptBox" hidden>
+          <label for="customPromptText" id="customPromptLabel">你的提示词（英文更稳 · 固定 silver 竖屏）</label>
+          <textarea id="customPromptText" rows="5" maxlength="2000" placeholder="例如：a quiet bookshop on a rainy evening, warm amber light, no people"></textarea>
+          <p class="custom-prompt-hint"><span id="customPromptCount">0 / 2000</span> 字 · <span id="customPromptNote">与预置场景一样经过出图审核，链路里可查看原文</span></p>
         </div>
       </div>
 
