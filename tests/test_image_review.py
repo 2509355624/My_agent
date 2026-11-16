@@ -535,3 +535,63 @@ class GlobalRoutesTest(_TmpCase):
         r = self.client.post("/api/image_review/RV-nope/approve")
         self.assertEqual(400, r.status_code)
         self.assertFalse(r.get_json()["ok"])
+
+
+class ThumbnailTest(_TmpCase):
+    """2026-11-16：审核列表改 480px WEBP 缩略图，不再拉几 MB 原图。"""
+
+    def setUp(self):
+        _TmpCase.setUp(self)
+        from app import main
+        self.client = main.app.test_client()
+        # 默认那张 self.src 是假 jpeg（PIL 打不开），这里是真图。
+        from PIL import Image
+        im = Image.new("RGB", (1200, 1600), (200, 100, 50))
+        im.save(self.src, "JPEG")
+
+    def _blocked(self):
+        return image_review.record(self.src, "group", "233",
+                                   verdict=Verdict(False, reason="擦边",
+                                                   category="clothing"))
+
+    def test_thumb_for_makes_a_480px_webp(self):
+        rid = self._blocked()
+        name = os.path.basename(image_review.get(rid)["path"])
+        t = image_review.thumb_for(name)
+        self.assertTrue(t)
+        self.assertTrue(os.path.isfile(t))
+        from PIL import Image
+        with Image.open(t) as ti:
+            self.assertEqual("WEBP", ti.format)
+            self.assertLessEqual(max(ti.size), image_review.THUMB_EDGE)
+
+    def test_thumb_route_serves_webp(self):
+        rid = self._blocked()
+        name = os.path.basename(image_review.get(rid)["path"])
+        r = self.client.get("/api/review/image/" + name + "?thumb=1")
+        self.assertEqual(200, r.status_code)
+        self.assertEqual("image/webp", r.mimetype)
+        with open(image_review.thumb_for(name), "rb") as f:
+            self.assertEqual(f.read(), r.data)
+        r.close()
+
+    def test_thumb_falls_back_to_original_when_pil_fails(self):
+        """假 jpeg 生成不了缩略图 → 退回原图，判图不受影响。"""
+        # 用一例没有真图的目录：直接写一张假图进 REVIEW_DIR。
+        with open(self.src, "wb") as f:
+            f.write(b"\xff\xd8\xff\xe0fake-jpeg-bytes")
+        rid = image_review.record(self.src, "group", "233")
+        name = os.path.basename(image_review.get(rid)["path"])
+        r = self.client.get("/api/review/image/" + name + "?thumb=1")
+        self.assertEqual(200, r.status_code)
+        with open(self.src, "rb") as f:
+            self.assertEqual(f.read(), r.data)   # 退回原图
+
+    def test_thumb_lives_in_subdir_and_sweep_never_deletes_it(self):
+        """缩略图在 .thumb/ 子目录，_drop_file 只认 REVIEW_DIR 这一层。"""
+        rid = self._blocked()
+        name = os.path.basename(image_review.get(rid)["path"])
+        t = image_review.thumb_for(name)
+        self.assertIn(image_review.THUMB_SUBDIR, t.replace("\\", "/"))
+        image_review._drop_file(t)
+        self.assertTrue(os.path.isfile(t))       # 清理原图碰不到缩略图

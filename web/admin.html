@@ -2186,8 +2186,10 @@ const AUDIT_SCOPES = [
 
 function reviewImgSrc(p) {
   // 后端存的是绝对路径，接口只要最后一截文件名。
+  // ?thumb=1 = 480px WEBP（几十 KB）；原图几 MB、列表铺 50 条走隧道会卡死。
+  // 点开看大图也用这张（用户 2026-11-16 拍板「点开也只给缩略图」，省流量）。
   return '/api/review/image/'
-    + encodeURIComponent(String(p || '').split(/[\\/]/).pop());
+    + encodeURIComponent(String(p || '').split(/[\\/]/).pop()) + '?thumb=1';
 }
 
 async function loadReview() {

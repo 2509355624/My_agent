@@ -50,7 +50,37 @@ PATH = state_path("image_review.jsonl")
 # 留图的目录（**不是系统 temp**，见上面「图必须拷出 temp」）。
 REVIEW_DIR = state_path("review")
 
+# 缩略图目录（2026-11-16）：审核列表只显示 120px，却拉几 MB 原图，50 条就是
+# 上百 MB、走隧道卡死。列表统一看 480px WEBP（几十 KB）。放在 .thumb/ 子目录
+# 是因为 _sweep() 只删队列记录里的原图路径、且 _drop_file 只认 REVIEW_DIR 这一
+# 层，子目录里的缩略图不会被误删；删原图后残留的缩略图无害，下次按 mtime 重画。
+THUMB_SUBDIR = ".thumb"
+THUMB_EDGE = 480
+
 _lock = threading.Lock()
+
+
+def thumb_for(name):
+    """审核图 name（basename）的 480px WEBP 缩略图绝对路径；失败返回 ""。
+
+    生成逻辑复用 comic_thumb.ensure_file（同一套 LANCZOS + WEBP + 原子写），
+    不另写一份 PIL 代码。原图 / 缩略图都不在就返回 ""，调用方退回原图。
+    目录每次按当前 REVIEW_DIR 现算（测试会 patch 它，别用模块加载时的旧值）。
+    """
+    safe = os.path.basename(str(name or ""))
+    if not safe:
+        return ""
+    src = os.path.join(REVIEW_DIR, safe)
+    thumb_dir = os.path.join(REVIEW_DIR, THUMB_SUBDIR)
+    dst = os.path.join(thumb_dir, os.path.splitext(safe)[0] + ".webp")
+    try:
+        from app import comic_thumb
+        made = comic_thumb.ensure_file(src, dst, edge=THUMB_EDGE)
+        return made or ""
+    except Exception as exc:
+        log.warning("审核缩略图生成失败 %s：%s", safe, exc)
+        return ""
+
 
 # 正在处理中的 id（2026-10-18）。
 #

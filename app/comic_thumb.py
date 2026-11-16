@@ -80,16 +80,13 @@ def _fresh(src, dst):
         return False
 
 
-def ensure(task_dir, no, kind):
-    """保证这张缩略图是最新的 → 绝对路径；原图不存在/生成失败返回 None。
+def ensure_file(src, dst, edge=THUMB_EDGE, quality=THUMB_QUALITY):
+    """通用的单张 WEBP 缩略图生成（审核缩略图等场景复用，不另写一套 PIL）。
 
-    原子写：先写 .tmp 再 replace，避免群友正好在重跑时读到半张 WEBP。
+    缓存有效（dst 不比 src 旧）直接用；否则 LANCZOS 缩放 + WEBP 原子写。
+    原图不存在 / PIL 打不开 / 磁盘满都只记 warning、返回 None（或旧缓存），
+    不该让调用它的页面 500。`edge` 可覆盖默认边长。
     """
-    if kind not in _KINDS:
-        return None
-    task_dir = str(task_dir)
-    src = os.path.join(task_dir, *src_rel(no, kind).split("/"))
-    dst = thumb_path(task_dir, no, kind)
     if not os.path.isfile(src):
         return None
     if _fresh(src, dst):
@@ -103,16 +100,29 @@ def ensure(task_dir, no, kind):
                 pass
             if im.mode != "RGB":
                 im = im.convert("RGB")
-            im.thumbnail((THUMB_EDGE, THUMB_EDGE), Image.LANCZOS)
+            im.thumbnail((edge, edge), Image.LANCZOS)
             tmp = dst + ".tmp"
-            im.save(tmp, "WEBP", quality=THUMB_QUALITY, method=4)
+            im.save(tmp, "WEBP", quality=quality, method=4)
         os.replace(tmp, dst)
         return dst
-    except Exception as exc:            # PIL 打不开 / 磁盘满都不该让整页 500
+    except Exception as exc:
         import logging
         logging.getLogger("comic_thumb").warning(
             "缩略图生成失败 %s：%s", src, exc)
         return dst if os.path.isfile(dst) else None
+
+
+def ensure(task_dir, no, kind):
+    """保证这张缩略图是最新的 → 绝对路径；原图不存在/生成失败返回 None。
+
+    原子写：先写 .tmp 再 replace，避免群友正好在重跑时读到半张 WEBP。
+    """
+    if kind not in _KINDS:
+        return None
+    task_dir = str(task_dir)
+    src = os.path.join(task_dir, *src_rel(no, kind).split("/"))
+    dst = thumb_path(task_dir, no, kind)
+    return ensure_file(src, dst)
 
 
 def ensure_all(task_dir, panels=None, portraits=None):

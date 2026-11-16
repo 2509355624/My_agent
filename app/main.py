@@ -1781,12 +1781,21 @@ def reject_image_review(agent_id, item_id):
 
 @app.route("/api/review/image/<path:name>")
 def serve_review_image(name):
-    """二审队列里那张图。只认 state/review 这一层目录下的文件名。"""
+    """二审队列里那张图。只认 state/review 这一层目录下的文件名。
+
+    `?thumb=1` 返回 480px WEBP 缩略图（列表与点开都用它，见 web/review.html
+    与 admin.html）——原图 2000px 级、单张几 MB，列表铺 50 条走隧道卡死。
+    缩略图生成失败自动退回原图，不影响判图。
+    """
     from app import image_review
     d = image_review.REVIEW_DIR
     safe = os.path.basename(name)
     if not os.path.isfile(os.path.join(d, safe)):
         return jsonify({"error": "没有这张图"}), 404
+    if request.args.get("thumb") == "1":
+        thumb = image_review.thumb_for(safe)
+        if thumb:
+            return send_file(thumb, mimetype="image/webp")
     return send_from_directory(d, safe)
 
 

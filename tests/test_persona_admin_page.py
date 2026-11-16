@@ -47,5 +47,39 @@ class DialogHighlightTest(unittest.TestCase):
         self.assertNotIn("m.text || \"\")", body.replace("fmtDlg(m.text || \"\")", ""))
 
 
+class MobileDrawerTest(unittest.TestCase):
+    """2026-11-16：手机端左列表抽屉 + 右完整记录占满屏。
+
+    钉住几件容易被改回的事：☰/遮罩存在、桌面隐藏、抽屉 class 开关、
+    选中会话后收起、桌面两列布局没被动。
+    """
+
+    def setUp(self):
+        self.html = _read()
+
+    def test_menu_and_mask_exist(self):
+        self.assertIn('id="menuBtn"', self.html)
+        self.assertIn('id="mask"', self.html)
+
+    def test_drawer_only_on_mobile(self):
+        self.assertIn("@media (max-width: 820px)", self.html)
+        self.assertIn("#menuBtn { display: none; }", self.html)
+        self.assertIn("body.drawer .side { transform: none; }", self.html)
+        self.assertIn("body.drawer #mask { display: block; }", self.html)
+
+    def test_desktop_two_column_untouched(self):
+        self.assertIn("grid-template-columns: 360px 1fr", self.html)
+        self.assertIn(".app { grid-template-columns: 1fr; }", self.html)
+
+    def test_open_closes_drawer(self):
+        fn = self.html[self.html.index("async function open(r)"):]
+        fn = fn[:fn.index("\n}\n") + 3]
+        self.assertIn("closeDrawer()", fn)
+
+    def test_toggle_and_mask_wiring(self):
+        self.assertIn('$("menuBtn").onclick', self.html)
+        self.assertIn('$("mask").onclick = closeDrawer', self.html)
+
+
 if __name__ == "__main__":
     unittest.main()

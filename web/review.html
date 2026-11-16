@@ -179,8 +179,9 @@ function fmtAgo(ts) {
 }
 
 function reviewImgSrc(p) {
+  // ?thumb=1 = 480px WEBP（几十 KB），列表和点开都用它，原图几 MB 太慢。
   return '/api/review/image/'
-    + encodeURIComponent(String(p || '').split(/[\\/]/).pop());
+    + encodeURIComponent(String(p || '').split(/[\\/]/).pop()) + '?thumb=1';
 }
 
 function typeBadge(target) {
