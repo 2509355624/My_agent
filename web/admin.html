@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
 <title>Agent 管理</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%237c5cff'/></svg>">
 <style>
@@ -304,6 +304,38 @@
                max-height: 360px; }
     textarea { min-height: 240px; }
     .row { flex-direction: column; gap: 12px; }
+  }
+
+  /* ── 手机（≤640px）：顶栏不再逐字竖排，表格不再撑宽页面 ──
+     390px 实测：顶栏 5 个链接被 .spacer 挤成窄列，"漫画台管理 →" 变成
+     竖排单字；裸表格 425px 把文档撑到 569px。 */
+  @media (max-width: 640px) {
+    html, body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+    .wrap { padding: 16px 12px 40px; }
+    /* 允许换行、去掉撑位的 spacer、每个链接整体不折行 */
+    header { flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+    header .spacer { display: none; }
+    header h1 { font-size: 16px; }
+    header a.back, header button.ghost {
+      white-space: nowrap;
+      margin-right: 0 !important;   /* 覆盖 HTML 里的内联 margin */
+    }
+    /* agent 列表保持横滑，名字别被挤成竖排 */
+    .list { padding: 6px; }
+    .list-item { white-space: nowrap; }
+    /* 裸表格改为自身横滑，而不是把整个页面撑宽 */
+    table {
+      display: block; width: 100%;
+      overflow-x: auto; -webkit-overflow-scrolling: touch;
+    }
+    table th, table td { white-space: nowrap; }
+    /* 会话列的提示长文本含 <b>，flex item 默认 min-width:auto 不肯收缩，
+       实测把页面撑到 618px。允许收缩 + 任意处断行。 */
+    .sess-foot { flex-wrap: wrap; gap: 8px; }
+    .sess-foot > * { min-width: 0; max-width: 100%; }
+    .sess-foot .hint { white-space: normal; overflow-wrap: anywhere; }
+    .card { padding: 12px; }
+    .panel { gap: 12px; }
   }
 </style>
 </head>
