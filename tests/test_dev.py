@@ -16,7 +16,7 @@ import unittest
 
 import app.affection as affection
 import app.persona as persona
-import app.writing_skills as ws
+import app.features.persona.writing_skills as ws
 
 
 def _full(v=100):

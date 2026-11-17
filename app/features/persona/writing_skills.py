@@ -38,11 +38,12 @@
 import logging
 import os
 
+from app.config import BASE_DIR
+
 log = logging.getLogger(__name__)
 
 # 规范库根目录。和 app/config.py 的 BASE_DIR 同一个锚，别各自写一份。
-_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                     "skills", "writing")
+_ROOT = os.path.join(BASE_DIR, "skills", "writing")
 
 # 拼进提示词的总字数上界。为什么是 1400：一段亲密场景单轮回复通常在
 # 800~1200 字，规范超过这个量级，模型就会开始「照着规范写」而不是

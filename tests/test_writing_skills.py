@@ -12,7 +12,7 @@
 import unittest
 
 import app.persona as persona
-import app.writing_skills as ws
+import app.features.persona.writing_skills as ws
 
 
 def _state(**kw):

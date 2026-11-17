@@ -984,7 +984,7 @@ class DrawTest(unittest.TestCase):
                             skill="anima-line", landscape=True)
         self.assertEqual(name, "a.png")
         import app.image_jobs as ij
-        from app import comfy_out
+        from app.features.image import comfy_out
         args, kw = ij.enqueue.call_args
         self.assertEqual(args[:2], (None, "2509355624"))   # 网页侧 + 本人在途额度
         self.assertTrue(kw["quiet"])                       # 不往 QQ 发
@@ -1908,7 +1908,7 @@ class NoteBudgetTest(unittest.TestCase):
         # 保留断言是为了防「又有人往 head 里塞一万字动态内容」：全书必须在
         # 冻结段，所以这里同时检查它确实来自 state_guide（可缓存），
         # 而不是每轮现拼的。
-        from app import writing_skills
+        from app.features.persona import writing_skills
         self.assertIn(writing_skills.state_guide(), head)
         self.assertLess(approx_tokens, 20000,
                         "扮演一轮 %.0f token，超过缓存前预算" % approx_tokens)
