@@ -384,21 +384,26 @@ class PageTest(unittest.TestCase):
         with open(SHOWCASE, encoding="utf-8") as f:
             cls.src = f.read()
 
-    def test_five_tabs_declared_and_matched_by_sections(self):
-        """角色扮演与长期记忆已合并成一个「对话与记忆」页（2026-11-15）。"""
+    def test_home_shell_and_four_feature_tabs_are_declared(self):
+        """2026-11-17：展示页改成「首页四个入口，一功能一页」，角色扮演下线。"""
         import re
         tabs = re.search(r"const TABS = \[(.*?)\];", self.src, re.S).group(1)
         ids = re.findall(r'"([a-z]+)"', tabs)
-        self.assertEqual(ids, ["image", "guide", "comic", "chain", "rag"])
+        self.assertEqual(ids, ["home", "image", "comic", "chain", "rag"])
         for tid in ids:
             self.assertIn('id="%s"' % tid, self.src)
             self.assertIn('href="#%s"' % tid, self.src)
 
-    def test_every_section_has_a_tab(self):
+    def test_every_visible_section_has_a_home_or_tab_entry(self):
         import re
-        sections = re.findall(r'<section class="feature" id="([a-z]+)"', self.src)
+        sections = re.findall(r'<section class="feature[^"]*" id="([a-z]+)"', self.src)
         self.assertEqual(sorted(sections),
-                         sorted(["image", "guide", "comic", "chain", "rag"]))
+                         sorted(["home", "image", "guide", "comic", "chain", "rag"]))
+        # 角色扮演只留隐藏 DOM 给旧脚本取字段，不再作为可见页签/入口。
+        self.assertRegex(
+            self.src,
+            r'<section class="feature" id="guide"[^>]*\bhidden\b',
+        )
 
     def test_rag_panel_has_every_hook_the_script_uses(self):
         import re
@@ -412,34 +417,27 @@ class PageTest(unittest.TestCase):
         for tag in ("section", "div", "aside", "form", "article"):
             self.assertEqual(self.src.count("<" + tag), self.src.count("</" + tag + ">"), tag)
 
-    def test_switching_a_tab_also_collapses_the_hero(self):
-        """hero 占满第一屏：切标签时它不收起，点了「降级链」看到的还是同一张大标题。
+    def test_switching_a_tab_keeps_the_home_shell_stable(self):
+        """首页只做入口：任何 #xxx 都走 showTab，回首页时页脚才出现。
 
-        2026-11-15 用户反馈「点标签下面没切」——切换其实生效了，是视口停在
-        hero 上。第二条反馈又指出 hero 下面的「公开展示边界」条也常驻，切过去
-        还挂在内容上方。这几条守住「首页内容跟随默认标签」+「所有 #xxx 链接都
-        走 showTab」+「切完瞬时归零（CSS 是 scroll-behavior: smooth）」。
+        主页不再是长页 + hero + scroll-cue 的旧结构；切换时仍然瞬时归零，
+        避免 CSS 的 scroll-behavior: smooth 让用户以为没切过去。
         """
-        self.assertIn("html.js .hero[hidden]", self.src)
-        self.assertIn("html.js .scroll-cue[hidden] { display: none !important; }",
+        self.assertIn('const TABS = ["home", "image", "comic", "chain", "rag"];',
                       self.src)
-        self.assertIn("#main > .hero, #main > .scope-note, #main > .scroll-cue", self.src)
-        self.assertIn('el.hidden = id !== "image"', self.src)
+        self.assertIn('if (!TABS.includes(id)) id = "home";', self.src)
+        self.assertIn('siteFooter.hidden = id !== "home";', self.src)
         self.assertIn("""target.closest('a[href^="#"]')""", self.src)
         self.assertIn('root.style.scrollBehavior = "auto"', self.src)
         self.assertNotIn('"instant" in window', self.src)
 
-    def test_homepage_tells_users_to_scroll_down_to_image_workbench(self):
-        """2026-11-16 用户反馈：第一屏只有概览，不知道下面还有生图操作区。
-
-        提示条做成 href="#image" 锚点（点一下直接跳到操作区），并跟 hero 一样
-        只在生图标签显示；下滑箭头带轻微呼吸动画，尊重 prefers-reduced-motion。
-        """
-        self.assertIn('class="scroll-cue" href="#image"', self.src)
-        self.assertIn("继续往下滑动", self.src)
-        self.assertIn("scroll-cue-arrow", self.src)
-        self.assertIn("@keyframes cue-bob", self.src)
-        self.assertIn("prefers-reduced-motion", self.src)
+    def test_homepage_has_four_entry_cards_and_no_roleplay_link(self):
+        """首页只做四张入口卡；角色扮演入口已下线。"""
+        self.assertIn('id="home"', self.src)
+        self.assertEqual(self.src.count('class="home-card"'), 4)
+        self.assertIn("四个功能，点开就能试", self.src)
+        self.assertNotIn('class="home-card" href="#guide"', self.src)
+        self.assertIn('class="home-grid"', self.src)
 
     def test_no_optional_chaining_for_old_mobile_engines(self):
         """2026-11-16 用户反馈：小米自带浏览器打开是纯黑屏。
@@ -721,7 +719,7 @@ class ExtractPageTest(unittest.TestCase):
 
     def test_scanned_hint_is_shown(self):
         """页面上得写清楚「扫描页走视觉识别」，否则用户以为这类文件传不了。"""
-        self.assertIn("扫描页自动走视觉识别", self.src)
+        self.assertIn("扫描页自动识别", self.src)
 
 
 class LibraryPersistenceTest(unittest.TestCase):

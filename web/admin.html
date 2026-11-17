@@ -337,6 +337,141 @@
     .card { padding: 12px; }
     .panel { gap: 12px; }
   }
+
+/* ============================================================
+   2026-11-17 傻瓜式管理页
+   只做视觉收口：卡片标题、两列布局、长说明自动收起、中央设置区独立滚动。
+   所有 id、按钮文案和请求路径保持原样。
+   ============================================================ */
+body::before { display: none; }
+html, body {
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  line-height: 1.5;
+}
+.wrap { max-width: 1600px; padding: 20px 24px 32px; }
+header { margin-bottom: 14px; }
+h1 { font-size: 20px; }
+.card {
+  padding: 14px 16px;
+  border-radius: 10px;
+  min-width: 0;
+}
+.card h2 {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 10px;
+}
+.card h2 .file { font-size: 11px; }
+textarea { min-height: 180px; }
+#prompt { min-height: 260px; }
+
+/* 基础设置两列；人设和会话开关占满整行。 */
+.panel {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+  max-block-size: calc(100vh - 96px);
+  overflow: auto;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+.panel > .meta,
+.panel > .actions,
+.panel > .card--wide { grid-column: 1 / -1; }
+.panel > .actions {
+  order: 99;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--bg);
+  padding: 8px 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+/* 长解释不在页面上铺开，短标签（张、每人每天等）继续保留。 */
+.hint-off { display: none !important; }
+.sess-foot { row-gap: 6px; }
+.sess-foot > * { min-width: 0; max-width: 100%; }
+
+@media (max-width: 1180px) {
+  .panel {
+    display: flex;
+    max-block-size: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+  .panel > .actions { order: 0; }
+}
+@media (max-width: 640px) {
+  .wrap { padding: 14px 12px 24px; }
+  .panel { gap: 10px; }
+  .card { padding: 12px; }
+  .actions { position: static; }
+}
+
+
+/* ============================================================
+   2026-11-17 页内小界面：基础 / 群聊 / 私聊 / 审核 / 用量 / 会话
+   ============================================================ */
+.view-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 5px;
+  margin: 0 0 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--bg-elev);
+}
+.view-tabs button {
+  flex: 0 0 auto;
+  padding: 7px 15px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.view-tabs button:hover { color: var(--text); opacity: 1; }
+.view-tabs button.on {
+  color: var(--text);
+  background: rgba(124, 92, 255, 0.16);
+  border-color: rgba(124, 92, 255, 0.45);
+}
+
+.panel > [data-view] { display: none !important; }
+.panel > [data-view].is-on { display: block !important; }
+
+.layout.view-sessions .panel { display: none; }
+.layout.view-sessions .sessCol {
+  width: auto;
+  flex: 1 1 auto;
+  max-height: calc(100vh - 128px);
+}
+
+#usageTable, #billTable { overflow-x: auto; max-width: 100%; }
+
+@media (max-width: 1100px) {
+  .view-tabs { position: sticky; top: 0; z-index: 10; margin-bottom: 10px; }
+  .sessCol { display: none; }
+  .layout.view-sessions .sessCol {
+    display: flex;
+    width: 100%;
+    flex: 1 0 100%;
+    max-height: calc(100vh - 150px);
+    position: static;
+  }
+}
+@media (max-width: 900px) {
+  .panel { display: flex; max-block-size: none; overflow: visible; }
+  .panel > [data-view].is-on { display: block !important; }
+  .layout.view-sessions .panel { display: none; }
+  .view-tabs { padding: 4px; }
+}
+
 </style>
 </head>
 <body>
@@ -352,19 +487,28 @@
     <a class="back" href="/">返回聊天</a>
   </header>
 
+  <nav class="view-tabs" id="adminTabs" aria-label="管理页分区">
+    <button type="button" data-view="basic" class="on">基础</button>
+    <button type="button" data-view="group">群聊</button>
+    <button type="button" data-view="private">私聊</button>
+    <button type="button" data-view="audit">审核</button>
+    <button type="button" data-view="usage">用量</button>
+    <button type="button" data-view="sessions">会话</button>
+  </nav>
+
   <div class="layout">
     <div class="list" id="list"></div>
 
     <div class="panel">
-      <div class="meta" id="meta"></div>
+      <div class="meta" id="meta" data-view="basic"></div>
 
-      <div class="card">
+      <div class="card card--wide" data-view="basic">
         <h2>人设 <span class="file" id="promptFile"></span></h2>
         <div class="hint">写进 system prompt 的 Role 段，决定这个 agent 怎么说话。保存后下一轮对话即生效，不用重启。</div>
         <textarea id="prompt" spellcheck="false" placeholder="（人设文件为空）"></textarea>
       </div>
 
-      <div class="card">
+      <div class="card" data-view="basic">
         <h2>模型</h2>
         <div class="hint">留空即继承 .env 的全局默认。给单个 agent 指定，比如让带图对话的 agent 用 DeepSeek、其余走火山。</div>
         <div class="row">
@@ -383,8 +527,8 @@
         <div class="warn hidden" id="novisual"></div>
       </div>
 
-      <div class="card">
-        <h2>上下文预算</h2>
+      <div class="card" data-view="basic">
+        <h2>预算</h2>
         <div class="hint">单次请求最多携带多少 prompt token，超过就压缩旧历史。管的是「每轮愿意花多少钱」，
           不是模型的物理上限——模型能装几十万，不代表你愿意每轮都付这个钱。留空即继承全局。</div>
         <div class="row">
@@ -397,18 +541,15 @@
         <div class="eff" id="budgetEff"></div>
       </div>
 
-      <div class="actions">
+      <div class="actions" data-view="basic">
         <button id="save">保存</button>
         <button class="ghost" id="reload">放弃修改</button>
         <span class="status" id="status"></span>
       </div>
 
-      <div class="card">
-        <h2>会话管理</h2>
-        <div class="hint">每个群、每个私聊各有一条独立的会话线，互不影响。删掉某一条 = 重置那条对话，
-          这个 agent 的人设、工具与技能白名单都不动。删除不可恢复。
-          <b>会话列表已挪到右侧那一列</b>（可搜 QQ 号 / 群名，点行展开该会话的开关）。</div>
-        <div class="hint" style="font-weight:600;margin:8px 0 4px;">全部</div>
+      <div class="card card--wide" data-view="group">
+        <h2>群聊</h2>
+<div class="hint" style="font-weight:600;margin:8px 0 4px;">总开关</div>
         <div class="sess-foot" style="margin-bottom: 8px;">
           <button class="toggle" id="groupsMutedAll">群聊总开关·开</button>
           <span class="hint">一键让这个 agent <b>不理任何群</b>（群里连 @ 都不回），私聊照常。
@@ -433,7 +574,95 @@
             只影响发出去那一张，ComfyUI output 里的原图永远不动。
             某个群想单独用别的格式，用群行里的「格式」开关。</span>
         </div>
+        <div class="hint" style="font-weight:600;margin:8px 0 4px;">主动发言</div>
         <div class="sess-foot" style="margin-bottom: 8px;">
+          <label class="hint" for="coolAll">主动发言间隔</label>
+          <input id="coolAll" type="number" min="0" max="3600" step="10"
+                 style="width:76px;" />
+          <span class="hint">秒</span>
+          <button class="ghost" id="coolAllSave">保存</button>
+          <span class="hint">没被 @ 时最多每这么多秒主动接一次话，0 = 不限频。
+            想让某个群单独不同，点群行里的「频率」按钮。</span>
+        </div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
+          <label class="hint" for="chanceAll">触发概率</label>
+          <input id="chanceAll" type="number" min="0" max="100" step="1"
+                 style="width:76px;" />
+          <span class="hint">%</span>
+          <button class="ghost" id="chanceAllSave">保存</button>
+          <span class="hint">收到一批消息后去问一次模型的概率，默认 12（≈1/8）。
+            0 = 从不主动开口，100 = 每批都问。单群可单独设，见群行的「概率」。</span>
+        </div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
+          <label class="hint" for="gapAll">判断间隔</label>
+          <input id="gapAll" type="number" min="0" max="3600" step="5"
+                 style="width:76px;" />
+          <span class="hint">秒</span>
+          <button class="ghost" id="gapAllSave">保存</button>
+          <span class="hint">两次「要不要接话」的判断之间至少隔这么久——判断也是一次调用。
+            0 = 不做这道闸（那就只剩概率门挡着）。</span>
+        </div>
+      </div>
+
+      <div class="card card--wide" data-view="private">
+        <h2>私聊</h2>
+<div class="hint" style="font-weight:600;margin:8px 0 4px;">总开关</div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
+          <button class="toggle" id="privAll">私聊·开</button>
+          <span class="hint">私聊总开关：关掉 = 任何人的私聊都不再回复（白名单也不看），群聊不受影响。热生效。</span>
+        </div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
+          <button class="toggle" id="privWlOn">白名单·开</button>
+          <label class="hint" for="privUser">添加</label>
+          <input id="privUser" placeholder="QQ 号" style="width:110px;"
+                 spellcheck="false" autocomplete="off">
+          <button class="ghost" id="privAdd">添加</button>
+        </div>
+        <div style="margin:0 0 6px 2px; display:flex; gap:8px;
+                    align-items:center; flex-wrap:wrap;">
+          <input id="privWlSearch" placeholder="搜 QQ 号 / 昵称"
+                 style="width:150px;" spellcheck="false" autocomplete="off">
+          <button class="ghost" id="privWlFAll" style="padding:2px 10px;">全部</button>
+          <button class="ghost" id="privWlFOn" style="padding:2px 10px;">审核·开</button>
+          <button class="ghost" id="privWlFOff" style="padding:2px 10px;">审核·关</button>
+          <span class="hint" id="privWlCount"></span>
+        </div>
+        <div id="privWlList" style="margin:0 2px 8px 2px; max-height:260px;
+                    overflow-y:auto; background:var(--bg-elev);
+                    border:1px solid var(--border-soft);
+                    border-radius:var(--radius);"></div>
+        <div class="hint" style="margin:0 0 8px 2px;">白名单开关关掉 = 名单不生效，
+          任何人的私聊都能聊（黑名单和上面的私聊总开关照常拦）。
+          开着时：名单外的 QQ（包括陌生人临时会话）一律静默不回、不出图，
+          清空名单 = 谁都私聊不了。「未聊过」= 名单里有号但还没聊过天，没有会话
+          可查审核状态。点行内「审核·开/关」直接改，和会话列表里的开关是同一个。
+          热生效，不用重启。</div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
+          <button class="toggle" id="privQuotaOn">生图额度·开</button>
+          <label class="hint" for="privQuotaLimit">每人每天</label>
+          <input id="privQuotaLimit" type="number" min="0" max="9999" step="1"
+                 style="width:76px;" />
+          <span class="hint">张</span>
+          <button class="ghost" id="privQuotaSave">保存</button>
+          <span class="hint">0 = 不限量。只算私聊，群聊一张都不占。</span>
+        </div>
+        <div class="sess-foot" style="margin-bottom: 8px;">
+          <label class="hint" for="privQuotaUser">免额名单</label>
+          <input id="privQuotaUser" placeholder="QQ 号" style="width:110px;"
+                 spellcheck="false" autocomplete="off">
+          <button class="ghost" id="privQuotaAdd">添加</button>
+          <span id="privQuotaWl" style="margin-left:6px;"></span>
+        </div>
+        <div class="hint" style="margin:0 0 8px 2px;">名单里的 QQ 私聊生图不限量；
+          其余人每天最多上面那个张数。跑失败的那张会退还，跨天自动归零（按本机日期）。
+          额度是「接单就扣」，所以连点刷队列也拦得住。
+          这里管的是「谁生图不限量」，跟上面的私聊白名单（管「谁能私聊」）是两回事，
+          刻意没合并。热生效，不用重启。</div>
+              </div>
+
+      <div class="card card--wide" data-view="audit">
+        <h2>审核、识图、附言</h2>
+<div class="sess-foot" style="margin-bottom: 8px;">
           <button class="toggle" id="auditGroups">群聊审核·关</button>
           <button class="toggle" id="auditPrivate">私聊审核·关</button>
           <button class="ghost" id="auditPromptBtn">审核提示词</button>
@@ -536,91 +765,9 @@
             <span class="hint" id="noteState"></span>
           </div>
         </div>
-        <div class="hint" style="font-weight:600;margin:8px 0 4px;">私聊</div>
-        <div class="sess-foot" style="margin-bottom: 8px;">
-          <button class="toggle" id="privAll">私聊·开</button>
-          <span class="hint">私聊总开关：关掉 = 任何人的私聊都不再回复（白名单也不看），群聊不受影响。热生效。</span>
-        </div>
-        <div class="sess-foot" style="margin-bottom: 8px;">
-          <button class="toggle" id="privWlOn">白名单·开</button>
-          <label class="hint" for="privUser">添加</label>
-          <input id="privUser" placeholder="QQ 号" style="width:110px;"
-                 spellcheck="false" autocomplete="off">
-          <button class="ghost" id="privAdd">添加</button>
-        </div>
-        <div style="margin:0 0 6px 2px; display:flex; gap:8px;
-                    align-items:center; flex-wrap:wrap;">
-          <input id="privWlSearch" placeholder="搜 QQ 号 / 昵称"
-                 style="width:150px;" spellcheck="false" autocomplete="off">
-          <button class="ghost" id="privWlFAll" style="padding:2px 10px;">全部</button>
-          <button class="ghost" id="privWlFOn" style="padding:2px 10px;">审核·开</button>
-          <button class="ghost" id="privWlFOff" style="padding:2px 10px;">审核·关</button>
-          <span class="hint" id="privWlCount"></span>
-        </div>
-        <div id="privWlList" style="margin:0 2px 8px 2px; max-height:260px;
-                    overflow-y:auto; background:var(--bg-elev);
-                    border:1px solid var(--border-soft);
-                    border-radius:var(--radius);"></div>
-        <div class="hint" style="margin:0 0 8px 2px;">白名单开关关掉 = 名单不生效，
-          任何人的私聊都能聊（黑名单和上面的私聊总开关照常拦）。
-          开着时：名单外的 QQ（包括陌生人临时会话）一律静默不回、不出图，
-          清空名单 = 谁都私聊不了。「未聊过」= 名单里有号但还没聊过天，没有会话
-          可查审核状态。点行内「审核·开/关」直接改，和会话列表里的开关是同一个。
-          热生效，不用重启。</div>
-        <div class="sess-foot" style="margin-bottom: 8px;">
-          <button class="toggle" id="privQuotaOn">生图额度·开</button>
-          <label class="hint" for="privQuotaLimit">每人每天</label>
-          <input id="privQuotaLimit" type="number" min="0" max="9999" step="1"
-                 style="width:76px;" />
-          <span class="hint">张</span>
-          <button class="ghost" id="privQuotaSave">保存</button>
-          <span class="hint">0 = 不限量。只算私聊，群聊一张都不占。</span>
-        </div>
-        <div class="sess-foot" style="margin-bottom: 8px;">
-          <label class="hint" for="privQuotaUser">免额名单</label>
-          <input id="privQuotaUser" placeholder="QQ 号" style="width:110px;"
-                 spellcheck="false" autocomplete="off">
-          <button class="ghost" id="privQuotaAdd">添加</button>
-          <span id="privQuotaWl" style="margin-left:6px;"></span>
-        </div>
-        <div class="hint" style="margin:0 0 8px 2px;">名单里的 QQ 私聊生图不限量；
-          其余人每天最多上面那个张数。跑失败的那张会退还，跨天自动归零（按本机日期）。
-          额度是「接单就扣」，所以连点刷队列也拦得住。
-          这里管的是「谁生图不限量」，跟上面的私聊白名单（管「谁能私聊」）是两回事，
-          刻意没合并。热生效，不用重启。</div>
-        <div class="hint" style="font-weight:600;margin:8px 0 4px;">群聊</div>
-        <div class="sess-foot" style="margin-bottom: 8px;">
-          <label class="hint" for="coolAll">主动发言间隔</label>
-          <input id="coolAll" type="number" min="0" max="3600" step="10"
-                 style="width:76px;" />
-          <span class="hint">秒</span>
-          <button class="ghost" id="coolAllSave">保存</button>
-          <span class="hint">没被 @ 时最多每这么多秒主动接一次话，0 = 不限频。
-            想让某个群单独不同，点群行里的「频率」按钮。</span>
-        </div>
-        <div class="sess-foot" style="margin-bottom: 8px;">
-          <label class="hint" for="chanceAll">触发概率</label>
-          <input id="chanceAll" type="number" min="0" max="100" step="1"
-                 style="width:76px;" />
-          <span class="hint">%</span>
-          <button class="ghost" id="chanceAllSave">保存</button>
-          <span class="hint">收到一批消息后去问一次模型的概率，默认 12（≈1/8）。
-            0 = 从不主动开口，100 = 每批都问。单群可单独设，见群行的「概率」。</span>
-        </div>
-        <div class="sess-foot" style="margin-bottom: 8px;">
-          <label class="hint" for="gapAll">判断间隔</label>
-          <input id="gapAll" type="number" min="0" max="3600" step="5"
-                 style="width:76px;" />
-          <span class="hint">秒</span>
-          <button class="ghost" id="gapAllSave">保存</button>
-          <span class="hint">两次「要不要接话」的判断之间至少隔这么久——判断也是一次调用。
-            0 = 不做这道闸（那就只剩概率门挡着）。</span>
-        </div>
-        <!-- 批量人设面板已改成居中浮层（#bulkMask，挂在 .wrap 之后）——
-             原先放这儿时，点右列的按钮它弹在中间列，用户看不见。 -->
-      </div>
+              </div>
 
-      <div class="card">
+      <div class="card card--wide" data-view="usage">
         <h2>今日用量 <span class="file"><select id="usageDate"
             style="margin-left:8px;"></select></span></h2>
         <div class="hint">按「会话 / 隐形调用」聚合的 token 消耗。命中率 = 命中 ÷（命中+未命中），
@@ -629,7 +776,7 @@
         <div class="sess" id="usageTable"></div>
       </div>
 
-      <div class="card">
+      <div class="card card--wide" data-view="usage">
         <h2>QQ 账单 <span class="file"><select id="billDate"
             style="margin-left:8px;"></select></span>
           <button class="ghost" id="billExport" style="margin-left:8px;">导出 CSV</button></h2>
@@ -3402,5 +3549,66 @@ loadUsage().catch(() => {});
 loadBill().catch(() => {});
 boot();
 </script>
+
+<script>
+(function () {
+  var LIVE = {
+    sub: 1, status: 1, reviewBadge: 1, reviewBadgeTop: 1, reviewState: 1,
+    auditPromptState: 1, visionModelState: 1, visionPromptState: 1,
+    noteState: 1, privWlCount: 1, privQuotaWl: 1
+  };
+  function tidyAdminCopy() {
+    document.querySelectorAll(".hint, .pick-note").forEach(function (el) {
+      if (el.classList.contains("err") || LIVE[el.id]) return;
+      var text = (el.textContent || "").replace(/\s+/g, " ").trim();
+      if (text.length > 30) el.classList.add("hint-off");
+    });
+  }
+  function scheduleTidy() {
+    clearTimeout(scheduleTidy.timer);
+    scheduleTidy.timer = setTimeout(tidyAdminCopy, 80);
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", tidyAdminCopy);
+  } else {
+    tidyAdminCopy();
+  }
+  if (window.MutationObserver) {
+    new MutationObserver(scheduleTidy).observe(document.body, {
+      childList: true, subtree: true
+    });
+  }
+})();
+</script>
+
+
+<script>
+(function () {
+  var tabs = document.getElementById("adminTabs");
+  var panel = document.querySelector(".panel");
+  var layout = document.querySelector(".layout");
+  if (!tabs || !panel || !layout) return;
+  var views = ["basic", "group", "private", "audit", "usage", "sessions"];
+
+  function pick(view) {
+    if (views.indexOf(view) < 0) view = "basic";
+    tabs.querySelectorAll("button[data-view]").forEach(function (btn) {
+      btn.classList.toggle("on", btn.getAttribute("data-view") === view);
+    });
+    panel.querySelectorAll("[data-view]").forEach(function (el) {
+      el.classList.toggle("is-on", el.getAttribute("data-view") === view);
+    });
+    layout.classList.toggle("view-sessions", view === "sessions");
+  }
+
+  tabs.addEventListener("click", function (e) {
+    var btn = e.target.closest("button[data-view]");
+    if (!btn) return;
+    pick(btn.getAttribute("data-view"));
+  });
+  pick("basic");
+})();
+</script>
+
 </body>
 </html>

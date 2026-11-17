@@ -20,7 +20,8 @@
   }, 2000);
 })();
 </script>
-<meta name="description" content="大大怪 · 多智能体助手的功能展示页：生图、角色扮演、长期记忆、漫画流水线与模型降级链，均可现场体验并查看后端链路。">
+<meta name="robots" content="noindex">
+<meta name="description" content="大大怪 · 多智能体助手的功能展示页视觉预览。">
 <title>功能展示 | 大大怪 · 多智能体助手</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%23081420'/%3E%3Cpath d='M14 16h36v9H26v7h20v9H14z' fill='%23f3b35f'/%3E%3Cpath d='M14 48h36v5H14z' fill='%237ed3c4'/%3E%3C/svg%3E">
 <style>
@@ -70,18 +71,6 @@ body {
   line-height: 1.65;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-}
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background-image:
-    linear-gradient(to right, rgba(151, 185, 199, 0.055) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(151, 185, 199, 0.04) 1px, transparent 1px);
-  background-size: 96px 96px;
-  mask-image: linear-gradient(to bottom, #000 0%, rgba(0,0,0,0.72) 60%, transparent 100%);
 }
 [hidden] { display: none !important; }
 ::selection { background: var(--amber); color: var(--ink); }
@@ -207,7 +196,7 @@ button { cursor: pointer; }
   font-size: 0.87rem;
   text-decoration: none;
 }
-.header-action:hover { background: var(--amber); color: var(--ink); }
+.header-action:hover { background: transparent; color: var(--amber); }
 
 /* ============================================================
    首屏
@@ -283,8 +272,8 @@ button { cursor: pointer; }
 .btn:hover { border-color: var(--paper-soft); background: rgba(232, 228, 216, 0.06); color: var(--paper); }
 .btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: 0.48; cursor: not-allowed; transform: none; }
-.btn--primary { background: var(--amber); border-color: var(--amber); color: var(--ink); }
-.btn--primary:hover { background: #ffd08d; border-color: #ffd08d; color: var(--ink); }
+.btn--primary { background: transparent; border-color: var(--amber); color: var(--paper); }
+.btn--primary:hover { background: var(--surface-2); border-color: var(--amber); color: var(--paper); }
 .btn--sea { border-color: var(--sea); color: var(--sea); }
 .btn--sea:hover { background: var(--sea); color: var(--ink); }
 .btn--small { min-block-size: 2.75rem; padding: 0.42rem 0.72rem; font-size: 0.84rem; }
@@ -495,7 +484,7 @@ button { cursor: pointer; }
 /* 文档字数上限——用户 2026-11-16 要求写清楚并加亮，避免误以为整篇都进库 */
 .rag-limit {
   color: var(--amber);
-  background: var(--amber-soft);
+  background: transparent;
   border: 1px solid var(--amber);
   border-radius: 4px;
   padding: 0.1rem 0.4rem;
@@ -632,8 +621,8 @@ button { cursor: pointer; }
 .channel-btn:focus-visible { outline: 2px solid var(--sea); outline-offset: 2px; }
 .channel-btn[aria-pressed="true"] {
   border-color: var(--amber);
-  background: var(--amber);
-  color: #1a1205;
+  background: var(--surface-2);
+  color: var(--paper);
 }
 .channel-btn:disabled { cursor: not-allowed; opacity: 0.55; }
 .channel-btn-label { display: block; font-size: 0.86rem; font-weight: 700; }
@@ -658,7 +647,7 @@ button { cursor: pointer; }
   cursor: pointer;
 }
 .scene-option:hover { border-color: var(--line-strong); }
-.scene-option:has(input:checked) { border-color: var(--amber); background: var(--amber-soft); }
+.scene-option:has(input:checked) { border-color: var(--amber); background: var(--surface-2); }
 .scene-option:has(input:focus-visible) { outline: 2px solid var(--sea); outline-offset: 2px; }
 .scene-option input {
   inline-size: 1.05rem;
@@ -948,7 +937,7 @@ button { cursor: pointer; }
   border-inline-start: 2px solid var(--line-strong);
   background: rgba(18, 44, 61, 0.42);
 }
-.chat-message--user { border-inline-start-color: var(--amber); background: var(--amber-soft); }
+.chat-message--user { border-inline-start-color: var(--amber); background: var(--surface-2); }
 .chat-message--assistant { border-inline-start-color: var(--sea); background: rgba(126, 211, 196, 0.07); }
 .chat-message--error { border-inline-start-color: var(--danger); background: var(--danger-soft); }
 .chat-message-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.4rem 1rem; margin-block-end: 0.35rem; }
@@ -1059,7 +1048,7 @@ button { cursor: pointer; }
 .comic-status::before { content: ""; inline-size: 0.4rem; block-size: 0.4rem; background: var(--amber); }
 .comic-stepbar { display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0.75rem 1rem; border-block-end: 1px solid var(--line); }
 .comic-step { min-block-size: 2.75rem; padding: 0.4rem 0.75rem; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 0.875rem; }
-.comic-step[aria-pressed="true"] { border-color: var(--amber); background: var(--amber-soft); color: var(--paper); }
+.comic-step[aria-pressed="true"] { border-color: var(--amber); background: var(--surface-2); color: var(--paper); }
 .comic-step-hint { margin: 0; padding: 0.55rem 1rem 0; color: var(--muted); font-size: 0.78rem; }
 .comic-panels { display: grid; gap: 0.7rem; margin: 0; padding: 1rem; list-style: none; }
 .comic-panel { min-inline-size: 0; border: 1px solid var(--line); background: rgba(6, 17, 26, 0.6); }
@@ -1342,7 +1331,7 @@ html.js .scroll-cue[hidden] { display: none !important; }
   background: rgba(14, 35, 49, 0.55);
   text-align: center;
 }
-.rag-drop.is-over { border-color: var(--amber); background: var(--amber-soft); }
+.rag-drop.is-over { border-color: var(--amber); background: var(--surface-2); }
 .rag-drop strong { font-size: 0.95rem; font-weight: 500; }
 .rag-drop span { color: var(--muted); font-size: 0.8rem; }
 .rag-drop-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; margin-block-start: 0.35rem; }
@@ -1535,11 +1524,892 @@ html.js .scroll-cue[hidden] { display: none !important; }
 }
 .rag-paste textarea:focus { outline: 2px solid var(--amber); outline-offset: 1px; }
 
+
+
+/* ============================================================
+   v2 视觉预览 · Operate 模式
+   只改视觉：保留深墨蓝 / 暖琥珀 / 海沫绿的世界，不换产品身份。
+   目标：
+   - 一套正文无衬线 + 一套等宽数据字体，取消 display 字体；
+   - 正文 16px、界面文字 14px、代码 14px，不再出现 11~12px；
+   - 去掉 hero 眉标、功能小标题、装饰网格、渐变和嵌套卡片；
+   - 首屏运行蓝图压成横向状态条，减少首屏高度。
+   不改任何 DOM id、API 路径、交互逻辑。
+   ============================================================ */
+:root {
+  --ink: #081116;
+  --ink-2: #0d1a20;
+  --surface: #101f25;
+  --surface-2: #15282f;
+  --paper: #f3f0e7;
+  --paper-soft: #d8dcd6;
+  --muted: #a4b0ad;
+  --line: rgba(220, 231, 225, 0.14);
+  --line-strong: rgba(220, 231, 225, 0.28);
+  --amber: #e5b268;
+  --amber-soft: rgba(229, 178, 104, 0.12);
+  --sea: #8ac7b7;
+  --sea-soft: rgba(138, 199, 183, 0.10);
+  --danger: #ef8d7e;
+  --danger-soft: rgba(239, 141, 126, 0.12);
+  --font-sans: "Segoe UI Variable Text", "Noto Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --font-display: var(--font-sans);
+  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --page-pad: clamp(1.1rem, 3.6vw, 2.25rem);
+  --radius: 3px;
+  --header-h: 3.5rem;
+}
+
+html { scroll-padding-block-start: calc(var(--header-h) + 1rem); }
+body { background: var(--ink); font-size: 1rem; line-height: 1.65; }
+body::before { display: none; }
+
+.site-header { background: var(--ink); }
+.header-inner { max-inline-size: 74rem; padding-block: 0.45rem; gap: 0.45rem 0.9rem; }
+.brand { min-block-size: 2.5rem; font-size: 1.0625rem; letter-spacing: 0; }
+.brand-mark { inline-size: 1.75rem; block-size: 1.75rem; border: 0; background: transparent; }
+.site-nav a {
+  min-block-size: 2.5rem;
+  padding: 0.25rem 0.5rem;
+  border-block-end-width: 2px;
+  font-size: 0.875rem;
+}
+.site-nav a[aria-current="page"] { color: var(--paper); border-block-end-color: var(--amber); }
+.site-nav a[aria-current="page"]::before { display: none; }
+.header-action {
+  min-block-size: 2.5rem;
+  padding: 0.25rem 0.35rem;
+  border: 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+.header-action:hover { background: transparent; color: var(--amber); }
+
+.page-shell, .footer-inner { max-inline-size: 74rem; }
+.hero { display: block; padding-block: clamp(2.2rem, 5vw, 4rem) 1.5rem; }
+.hero-copy { max-inline-size: 46rem; }
+.eyebrow, .feature-kicker, .scroll-cue { display: none; }
+.hero h1 {
+  max-inline-size: 17em;
+  font-size: clamp(2.35rem, 1.5rem + 3.2vw, 3.6rem);
+  font-weight: 700;
+  line-height: 1.06;
+  letter-spacing: -0.032em;
+}
+.hero-summary {
+  max-inline-size: 52ch;
+  margin-block-start: 1rem;
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  color: var(--paper-soft);
+  text-wrap: pretty;
+}
+.hero-actions { margin-block-start: 1.4rem; }
+.hero-notes { margin-block-start: 1.1rem; gap: 0.35rem 1rem; font-size: 0.875rem; }
+
+.runtime-panel {
+  margin-block-start: 2.4rem;
+  padding: 0;
+  border: 0;
+  border-block-start: 1px solid var(--line);
+  background: transparent;
+}
+.runtime-head { padding-block: 0.7rem; border-block-end: 0; }
+.runtime-title { font-size: 0.9375rem; font-weight: 600; letter-spacing: 0; }
+.runtime-live { font-size: 0.8125rem; }
+.blueprint { display: grid; grid-template-columns: 1fr; gap: 0; margin: 0; }
+.blueprint li + li { margin-block-start: 0; }
+.blueprint a {
+  display: grid;
+  grid-template-columns: 1.9rem minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  gap: 0.1rem 0.6rem;
+  align-items: start;
+  min-block-size: 0;
+  padding-block: 0.8rem;
+  border-block-start: 1px solid var(--line);
+}
+.node-icon {
+  grid-row: 1 / span 2;
+  inline-size: 1.9rem;
+  block-size: 1.9rem;
+  border: 0;
+  background: transparent;
+}
+.node-icon::after { display: none; }
+.node-copy { grid-column: 2; }
+.node-title { font-size: 0.9375rem; font-weight: 600; }
+.node-detail { font-size: 0.8125rem; line-height: 1.45; }
+.node-state { grid-column: 2; margin-block-start: 0.1rem; font-size: 0.8125rem; }
+.runtime-foot { margin-block-start: 0.75rem; padding-block-start: 0.7rem; }
+.runtime-foot span { font-size: 0.8125rem; }
+.runtime-foot strong { font-size: 0.875rem; }
+
+.page-notice {
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgba(239, 141, 126, 0.4);
+  border-inline-start-width: 1px;
+  background: var(--danger-soft);
+}
+.page-notice p { font-size: 0.875rem; }
+
+.scope-note {
+  margin-block: 1rem 0;
+  padding-block: 0.75rem;
+  border: 0;
+  border-block: 1px solid var(--line);
+  font-size: 0.875rem;
+  line-height: 1.65;
+}
+
+.feature { padding-block: clamp(2.4rem, 4.5vw, 3.75rem); }
+.feature-head { align-items: flex-start; margin-block-end: 1.75rem; gap: 0.9rem 1.5rem; }
+.feature-intro { max-inline-size: 64ch; }
+.feature h2 {
+  font-size: clamp(1.55rem, 1.2rem + 1.2vw, 2.05rem);
+  font-weight: 600;
+  line-height: 1.18;
+  letter-spacing: -0.022em;
+}
+.feature-desc {
+  max-inline-size: 62ch;
+  margin-block-start: 0.6rem;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.68;
+  text-wrap: pretty;
+}
+.feature-tools { gap: 0.45rem; }
+.feature-tools .btn--small { font-size: 0.875rem; }
+
+.skip-link:hover { background: var(--amber); color: var(--ink); }
+.btn { min-block-size: 2.75rem; font-size: 0.9375rem; }
+.btn--small { min-block-size: 2.75rem; font-size: 0.875rem; }
+.btn--primary { background: transparent; border-color: var(--amber); color: var(--paper); }
+.btn--primary:hover { background: var(--surface-2); border-color: var(--amber); color: var(--paper); }
+
+.panel { border: 0; background: transparent; padding: 0.75rem; }
+.panel-head { padding: 0.7rem 0; border-block-end: 1px solid var(--line); }
+.panel-head h3, .panel-title { font-size: 1rem; font-weight: 600; letter-spacing: 0; }
+.panel-meta { font-size: 0.875rem; }
+.field-hint, .status-line, .memory-hint { font-size: 0.875rem; }
+.field-error { font-size: 0.875rem; }
+.empty-state { font-size: 0.9375rem; }
+.code-block {
+  border: 1px solid var(--line);
+  background: #061019;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+/* 生图：渠道与场景改成分隔线列表，不再一层层套卡片 */
+.image-workbench { gap: 1.25rem; }
+.scene-picker legend { font-size: 0.875rem; font-weight: 600; }
+.channel-switch {
+  margin-block-start: 0.75rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--line);
+  background: transparent;
+}
+.channel-switch-title { font-size: 0.875rem; font-weight: 600; }
+.channel-switch-btns { gap: 0.35rem; }
+.channel-btn {
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line);
+  background: transparent;
+}
+.channel-btn[aria-pressed="true"] {
+  border-color: var(--amber);
+  background: var(--surface-2);
+  color: var(--paper);
+}
+.channel-btn-label { font-size: 0.875rem; font-weight: 600; }
+.channel-btn-note { font-size: 0.8125rem; }
+.scene-list { gap: 0; margin-block-start: 0.5rem; }
+.scene-option {
+  padding: 0.7rem 0;
+  border: 0;
+  border-block-start: 1px solid var(--line);
+  background: transparent;
+}
+.scene-option:has(input:checked) {
+  border-block-start-color: var(--amber);
+  background: var(--surface-2);
+}
+.scene-option-title { font-size: 0.9375rem; font-weight: 600; }
+.scene-option-brief, .scene-option-channel { font-size: 0.875rem; }
+.image-stage { border: 1px solid var(--line); background: #061019; }
+.image-stage-foot { padding: 0.65rem 0.8rem; font-size: 0.875rem; }
+.custom-prompt-box {
+  padding: 0.8rem;
+  border-block-start: 1px solid var(--line);
+  background: transparent;
+}
+.custom-prompt-box label { font-size: 0.875rem; font-weight: 600; }
+.custom-prompt-box textarea { font-size: 1rem; }
+.custom-prompt-hint { font-size: 0.8125rem; }
+.image-rail { padding: 0.85rem 0.75rem; border-block-start: 1px solid var(--line); }
+.image-rail h3 { font-size: 1rem; font-weight: 600; }
+.image-status-grid { font-size: 0.875rem; }
+.image-rail-note { font-size: 0.8125rem; }
+
+/* 对话与记忆：聊天是一个工作面，右栏用分隔线而不是卡片堆 */
+.guide-layout { grid-template-columns: 1fr; gap: 1.5rem; }
+.guide-main, .guide-side { gap: 1rem; }
+.guide-card { padding: 1rem; }
+.role-dossier {
+  border: 1px solid var(--line);
+  border-block-start: 1px solid var(--line);
+  background: var(--surface);
+}
+.role-monogram {
+  inline-size: 2.75rem;
+  block-size: 2.75rem;
+  border: 0;
+  background: var(--surface-2);
+  font-size: 1.25rem;
+}
+.role-name { font-size: 1.25rem; }
+.role-meta, .role-background { font-size: 0.875rem; }
+.role-summary { font-size: 0.9375rem; }
+.mode-picker legend { font-size: 0.875rem; font-weight: 600; }
+.mode-option {
+  padding: 0.6rem 0;
+  border: 0;
+  border-block-start: 1px solid var(--line);
+  background: transparent;
+}
+.mode-option:has(input:checked) {
+  border-block-start-color: var(--sea);
+  background: var(--sea-soft);
+}
+.mode-option strong { font-size: 0.9375rem; }
+.mode-option span { font-size: 0.875rem; }
+.session-note { font-size: 0.8125rem; }
+.chat-shell { border: 1px solid var(--line); background: var(--surface); }
+.chat-head { padding: 0.75rem 0.9rem; }
+.chat-head h3 { font-size: 1rem; font-weight: 600; }
+.chat-turn { font-size: 0.8125rem; }
+.chat-log { padding: 0.9rem; }
+.chat-empty { font-size: 0.9375rem; }
+.chat-message {
+  border-inline-start: 1px solid var(--line-strong);
+  background: transparent;
+}
+.chat-message--user { border-inline-start-color: var(--amber); background: var(--surface-2); }
+.chat-message--assistant { border-inline-start-color: var(--sea); background: var(--sea-soft); }
+.chat-message--error { border-inline-start-color: var(--danger); background: var(--danger-soft); }
+.chat-role { font-size: 0.875rem; }
+.chat-text { font-size: 0.9375rem; }
+.chat-trace-btn { font-size: 0.8125rem; }
+.chat-counter { font-size: 0.8125rem; }
+.chat-form { padding: 0.85rem 0.9rem; }
+.chat-input { font-size: 1rem; }
+
+.side-tabs {
+  padding: 0.25rem;
+  border: 1px solid var(--line);
+  background: transparent;
+  gap: 0;
+}
+.side-tab {
+  padding: 0.6rem 0.1rem;
+  border-block-end: 2px solid transparent;
+  font-size: 0.875rem;
+}
+.side-tab.is-active {
+  background: transparent;
+  color: var(--paper);
+  box-shadow: none;
+  border-block-end-color: var(--amber);
+}
+.guide-panel { padding: 0.9rem 0.75rem; border-block-start: 1px solid var(--line); }
+.tool-strip {
+  margin-block-start: 0.6rem;
+  padding: 0.7rem 0.75rem;
+  border: 0;
+  border-block: 1px solid var(--line);
+  background: transparent;
+}
+.tool-strip--tight { padding: 0.65rem 0.75rem; }
+.tool-strip .tool-title { font-size: 0.9375rem; font-weight: 600; }
+.tool-label, .tool-hint { font-size: 0.8125rem; }
+.seg { border: 1px solid var(--line); }
+.seg-btn { padding: 0.35rem 0.55rem; font-size: 0.875rem; }
+.explain, .explain summary { font-size: 0.9375rem; }
+.memory-summary { gap: 0.35rem 1.1rem; }
+.summary-chip {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 0.875rem;
+}
+.hit-item, .lib-entry, .hit-row, .stop-block {
+  padding: 0.7rem 0;
+  border: 0;
+  border-block-start: 1px solid var(--line);
+  background: transparent;
+}
+.hit-head, .lib-entry header { font-size: 0.8125rem; }
+.hit-id, .hit-head b { font-size: 0.8125rem; }
+.hit-row p, .lib-entry p, .hit-content { font-size: 0.9375rem; }
+.hit-tag, .hit-badge { font-size: 0.8125rem; }
+.lib-tab { font-size: 0.875rem; }
+.state-grid dt { font-size: 0.8125rem; }
+.state-grid dd { font-size: 0.875rem; }
+.stop-head { font-size: 0.8125rem; }
+.stop-name { font-size: 0.875rem; }
+.msg { font-size: 0.9375rem; }
+
+/* 漫画：只保留一个外壳，三格本身仍是边界清楚的独立格 */
+.comic-shell { border: 0; border-block: 1px solid var(--line); background: transparent; }
+.comic-masthead { padding: 1rem 0; border-block-end: 1px solid var(--line); }
+.comic-title { font-size: 1.25rem; font-weight: 600; }
+.comic-world { font-size: 0.875rem; }
+.comic-status {
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--amber);
+  background: transparent;
+  font-size: 0.8125rem;
+}
+.comic-stepbar { padding: 0.75rem 0; border-block-end: 1px solid var(--line); gap: 0.3rem; }
+.comic-step {
+  min-block-size: 2.75rem;
+  padding: 0.4rem 0.2rem;
+  border: 0;
+  border-block-end: 2px solid transparent;
+  font-size: 0.875rem;
+}
+.comic-step[aria-pressed="true"] {
+  border-block-end-color: var(--amber);
+  background: var(--surface-2);
+  color: var(--paper);
+}
+.comic-step-hint { padding: 0.55rem 0 0; font-size: 0.8125rem; }
+.comic-panels { padding: 1rem 0; gap: 0.6rem; }
+.comic-panel { border: 1px solid var(--line); background: transparent; }
+.comic-panel-head { padding: 0.55rem 0.7rem; }
+.comic-panel-head h3 { font-size: 0.9375rem; }
+.comic-panel-state { font-size: 0.875rem; }
+.comic-panel-body { padding: 0.7rem; }
+.comic-script { font-size: 0.9375rem; }
+.comic-prompt { font-size: 0.8125rem; }
+.comic-note { padding: 0 0 1rem; font-size: 0.875rem; }
+
+/* 降级链：统计条保留，候选列表用节奏而不是卡片 */
+.chain-stats { gap: 1px; border: 1px solid var(--line); background: var(--line); }
+.chain-stat { padding: 0.8rem; background: var(--surface); }
+.chain-stat dt { font-size: 0.8125rem; }
+.chain-stat dd { font-size: 0.875rem; }
+.chain-panel { padding: 0.9rem 0.75rem; }
+.chain-panel h3 { font-size: 1rem; font-weight: 600; }
+.chain-provider { font-size: 0.875rem; }
+.chain-position { font-size: 0.8125rem; }
+.chain-state, .chain-next { font-size: 0.875rem; }
+.cache-item dt { font-size: 0.8125rem; }
+.cache-item dd { font-size: 0.875rem; }
+.blacklist li { font-size: 0.8125rem; }
+.chain-policy { font-size: 0.875rem; }
+
+/* 文档问答 */
+.rag-drop {
+  padding: 1rem;
+  border: 1px dashed var(--line);
+  background: transparent;
+}
+.rag-drop strong { font-size: 1rem; font-weight: 600; }
+.rag-drop span { font-size: 0.8125rem; }
+.rag-step {
+  padding: 0.8rem 0;
+  border: 0;
+  border-block-start: 1px solid var(--line);
+  background: transparent;
+}
+.rag-step-no, .rag-step-meta, .rag-step-toggle { font-size: 0.8125rem; }
+.rag-step-title { font-size: 0.9375rem; }
+.rag-step-body { font-size: 0.9375rem; }
+.rag-kv dt { font-size: 0.8125rem; }
+.rag-kv dd { font-size: 0.875rem; }
+.rag-prompt { font-size: 0.875rem; }
+.rag-chunk-head, .rag-chunk .why { font-size: 0.8125rem; }
+.rag-chunk p { font-size: 0.875rem; }
+.rag-vec-row { font-size: 0.8125rem; }
+.rag-hit-score, .rag-hit-text { font-size: 0.8125rem; }
+.rag-chat { border: 1px solid var(--line); background: var(--surface); }
+.rag-retrieve .rag-step { padding: 0.7rem 0.8rem; border-inline-start: 1px solid transparent; }
+.rag-chat-head { padding: 0.65rem 0.9rem; font-size: 0.875rem; }
+.rag-chat-head b { font-weight: 600; }
+.rag-log { padding: 0.9rem; }
+.rag-msg-role { font-size: 0.8125rem; }
+.rag-msg-body { font-size: 0.9375rem; }
+.rag-msg-cites { font-size: 0.8125rem; }
+.rag-chat-form { padding: 0.7rem 0.9rem; }
+.rag-chat-form textarea, .rag-paste textarea { font-size: 1rem; }
+.rag-empty { font-size: 0.875rem; }
+.rag-status { font-size: 0.8125rem; }
+.rag-paste { border: 1px solid var(--line); background: transparent; }
+.rag-retrieve summary { font-size: 0.8125rem; }
+
+/* 页脚与弹窗：去掉阴影和 3px 装饰边 */
+.site-footer { padding-block: 2rem 1.25rem; background: transparent; border-block-start: 1px solid var(--line); }
+.footer-brand { font-size: 1.1rem; font-weight: 600; }
+.footer-summary { font-size: 0.875rem; }
+.footer-bottom { font-size: 0.8125rem; }
+dialog.trace-dialog {
+  border: 1px solid var(--line-strong);
+  border-block-start-width: 1px;
+  background: var(--ink-2);
+}
+.dialog-head { padding: 0.8rem 1rem; background: var(--ink-2); }
+.dialog-head p { font-size: 0.875rem; }
+.dialog-head h2 { font-size: 1.35rem; font-weight: 600; }
+.dialog-body { padding: 1rem; }
+.trace-section h3 { font-size: 1rem; }
+.trace-kv, .trace-message-role, .trace-message-size, .trace-raw summary { font-size: 0.875rem; }
+.toast { border-inline-start-width: 1px; box-shadow: none; font-size: 0.875rem; }
+
+/* 响应式：先窄屏，再向上扩。5 个蓝图节点用 3 / 5 列，避免最后一行只剩 1 个。 */
+@media (min-width: 640px) {
+  .blueprint { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (min-width: 760px) {
+  .image-workbench { grid-template-columns: minmax(16rem, 0.85fr) minmax(0, 1.15fr); }
+  .image-rail { grid-column: 1 / -1; }
+  .chain-layout { grid-template-columns: minmax(0, 1.35fr) minmax(15rem, 0.65fr); }
+}
+@media (min-width: 980px) {
+  .blueprint { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .image-workbench { grid-template-columns: minmax(15rem, 0.8fr) minmax(0, 1.35fr) minmax(14rem, 0.6fr); }
+  .image-rail { grid-column: auto; }
+  .guide-layout { grid-template-columns: minmax(0, 1.3fr) minmax(22rem, 0.9fr); gap: 1.5rem; }
+  .chain-layout { grid-template-columns: minmax(0, 1.4fr) minmax(17rem, 0.6fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scroll-cue-arrow { animation: none; }
+}
+
+
+/* ============================================================
+   Unslop 样张 · 去玻璃，按间距 / 文案 / 类型 / 布局四层收
+   ============================================================ */
+.site-header {
+  background: var(--ink);
+  border-block-end: 1px solid var(--line);
+  box-shadow: none;
+}
+
+.runtime-panel {
+  margin-block-start: 1.8rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: none;
+}
+
+.runtime-head {
+  border-block-end-color: var(--line);
+}
+
+/* 视觉上只保留主按钮；其余次级操作降为文字链接。 */
+.btn--small:not(.btn--primary):not(.btn--sea) {
+  min-block-size: 2.5rem;
+  padding: 0.25rem 0.1rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  text-decoration-thickness: 1px;
+}
+
+.btn--small:not(.btn--primary):not(.btn--sea):hover {
+  background: transparent;
+  color: var(--paper);
+}
+
+.btn--small:not(.btn--primary):not(.btn--sea):disabled {
+  opacity: 0.45;
+  text-decoration: none;
+}
+
+#ragReset { color: var(--danger); }
+
+/* 标题降字重、收字号；不靠 700/800 撑层级。 */
+.hero h1 {
+  max-inline-size: 15em;
+  font-size: clamp(2rem, 1.25rem + 1.8vw, 2.4rem);
+  font-weight: 500;
+  line-height: 1.1;
+}
+
+.hero-summary {
+  max-inline-size: 46ch;
+  margin-block-start: 0.8rem;
+  font-size: 1rem;
+}
+
+.feature h2 {
+  font-size: clamp(1.3rem, 1.1rem + 0.7vw, 1.55rem);
+  font-weight: 500;
+}
+
+.feature-desc {
+  max-inline-size: 58ch;
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.runtime-title { font-weight: 500; }
+.panel-head h3, .panel-title { font-weight: 500; }
+
+.scope-note {
+  padding-block: 0.7rem;
+  border-block-color: var(--line);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+
+/* RAG：上传区收成一块，步骤变成紧凑列表，不再每条一张卡。 */
+.rag-drop {
+  padding: 1.25rem;
+  border: 1px dashed var(--line-strong);
+  background: var(--surface);
+  border-radius: 10px;
+}
+
+.rag-drop strong {
+  display: block;
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--paper);
+}
+
+.rag-drop span {
+  display: block;
+  max-inline-size: 46ch;
+  margin-block-start: 0.4rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.rag-limit {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: inherit;
+  font-weight: 400;
+  white-space: normal;
+}
+
+.rag-limit::before { content: " · "; }
+
+.rag-drop-actions {
+  margin-block-start: 0.9rem;
+  gap: 0.6rem;
+}
+
+.rag-step {
+  border: 0;
+  border-block-start: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  padding: 0.75rem 0;
+}
+
+.rag-step[data-state="idle"] { opacity: 0.55; }
+.rag-step[data-state="running"] .rag-step-no { color: var(--amber); }
+.rag-step[data-state="done"] .rag-step-no { color: var(--sea); }
+.rag-step[data-state="error"] .rag-step-no { color: var(--danger); }
+
+.rag-step-head {
+  gap: 0.5rem 0.75rem;
+  min-block-size: 2.25rem;
+}
+
+.rag-step-no {
+  inline-size: 1.75rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.rag-step-title {
+  font-size: 0.9375rem;
+  font-weight: 500;
+}
+
+.rag-step-meta {
+  max-inline-size: 62%;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  text-align: end;
+}
+
+.rag-step-toggle {
+  margin-block-start: 0.35rem;
+  color: var(--sea);
+  font-size: 0.8125rem;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.rag-step-body {
+  margin-block-start: 0.5rem;
+  padding-block-start: 0.6rem;
+  border-block-start: 1px solid var(--line);
+  font-size: 0.9375rem;
+}
+
+.rag-grid { gap: 1.5rem; }
+
+.rag-chat {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: none;
+}
+
+.rag-chat-head {
+  padding: 0.7rem 1rem;
+  font-size: 0.875rem;
+}
+
+.rag-chat-head b { font-weight: 500; }
+.rag-log { padding: 1rem; }
+.rag-empty { max-inline-size: 38ch; font-size: 0.875rem; }
+.rag-status {
+  padding: 0.55rem 1rem;
+  border-block-start: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 639px) {
+  .rag-drop { padding: 1rem; }
+  .rag-step-meta { max-inline-size: 100%; text-align: start; }
+  .rag-step-head { align-items: flex-start; }
+}
+
+
+/* ============================================================
+   四个功能各自一页，首页只做入口
+   ============================================================ */
+#main > .hero,
+#main > .scope-note,
+.site-nav,
+.header-action {
+  display: none !important;
+}
+
+.site-footer[hidden] { display: none !important; }
+
+.home-view {
+  max-inline-size: 64rem;
+  margin-inline: auto;
+  padding-block: 3rem 2rem;
+}
+
+.home-head h1 {
+  margin: 0;
+  font-size: clamp(2.1rem, 1.4rem + 2.2vw, 2.8rem);
+  font-weight: 500;
+  line-height: 1.1;
+}
+
+.home-head p {
+  max-inline-size: 30ch;
+  margin-block-start: 0.7rem;
+  color: var(--muted);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+}
+
+.home-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-block-start: 2rem;
+}
+
+.home-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-block-size: 7.5rem;
+  padding: 1.1rem 1.2rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--paper);
+  text-decoration: none;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+.home-card:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-2);
+}
+
+.home-card-title { font-size: 1.05rem; font-weight: 500; }
+.home-card-desc { color: var(--muted); font-size: 0.875rem; line-height: 1.5; }
+
+.simple-back {
+  display: inline-flex;
+  margin-block-end: 1rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  text-decoration: none;
+}
+
+.simple-back:hover { color: var(--paper); }
+
+.feature { padding-block: 1rem 3rem; }
+.feature-head { margin-block-end: 1.25rem; }
+.feature-head .feature-desc { display: none; }
+.feature-tools { display: none; }
+.feature h2 { font-size: clamp(1.6rem, 1.25rem + 1.1vw, 2rem); font-weight: 500; }
+
+/* 生图：渠道 + 场景 + 舞台 + 一条底部操作栏 */
+#image { max-inline-size: 68rem; margin-inline: auto; }
+
+#image .image-workbench {
+  grid-template-columns: minmax(14rem, 0.72fr) minmax(0, 1.28fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+#image .image-rail {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding: 0.7rem 0.9rem;
+}
+
+#image .image-rail h3 { display: none; }
+#image .image-status-grid { display: flex; gap: 0.45rem; margin: 0; align-items: baseline; }
+#image .image-status-grid dt:not(:first-of-type),
+#image .image-status-grid dd:not(:first-of-type) { display: none; }
+#image .image-status-grid dd { margin: 0; font-size: 0.875rem; }
+#image .image-rail-note { display: none; }
+#image .image-rail .btn--primary { margin-inline-start: auto; }
+#image .image-progress { flex-basis: 100%; }
+#image .image-stage-foot { display: none; }
+#image .scene-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
+#image .scene-option { min-block-size: 3.25rem; padding: 0.55rem 0.65rem; }
+#image .scene-option-brief,
+#image .scene-option-channel { display: none; }
+#image .channel-switch {
+  margin-block: 0 0.6rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+#image .channel-switch-title { display: none; }
+#image .channel-btn-note { display: none; }
+#image .scene-picker legend { color: var(--muted); font-size: 0.8125rem; font-weight: 400; }
+
+/* 角色扮演：只留角色名 + 对话，右侧调试面板收起 */
+#guide { max-inline-size: 58rem; margin-inline: auto; }
+#guide .guide-layout { grid-template-columns: 1fr; }
+#guide .guide-side { display: none; }
+#guide .role-dossier {
+  padding: 0.65rem 0;
+  border: 0;
+  border-block-end: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+#guide .role-summary,
+#guide .role-background,
+#guide .mode-picker,
+#guide .session-note { display: none; }
+#guide .role-name { font-size: 1rem; font-weight: 500; }
+#guide .role-meta { color: var(--muted); font-size: 0.8125rem; }
+#guide .chat-shell { border-radius: 12px; background: var(--surface); }
+#guide .chat-head { padding: 0.7rem 1rem; }
+#guide .chat-head h3 { font-size: 0.9375rem; font-weight: 500; }
+#guide .chat-head-tools { display: none; }
+#guide .chat-log {
+  block-size: calc(100dvh - 22rem);
+  min-block-size: 15rem;
+  padding: 1rem;
+}
+#guide .field-label,
+#guide .field-hint,
+#guide .chat-counter { display: none; }
+#guide .chat-form { padding: 0.75rem 1rem 1rem; border-block-start: 1px solid var(--line); }
+#guide .chat-input { min-block-size: 3.2rem; }
+#guide .chat-submit { inline-size: 100%; }
+
+/* 漫画：标题 + 三格，步骤条只做视图切换 */
+#comic { max-inline-size: 68rem; margin-inline: auto; }
+#comic .comic-masthead { padding: 0 0 1rem; border-block-end: 1px solid var(--line); }
+#comic .comic-world,
+#comic .comic-status,
+#comic .comic-step-hint,
+#comic .comic-note { display: none; }
+#comic .comic-stepbar { margin-block: 0.9rem; }
+#comic .comic-step { min-block-size: 2rem; padding: 0.25rem 0.7rem; }
+#comic .comic-panels { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; }
+
+/* 降级链：只留当前链头、候选顺序、刷新 */
+#chain { max-inline-size: 56rem; margin-inline: auto; }
+#chain .feature-tools { display: flex; }
+#chain #chainDetails { display: none; }
+#chain .chain-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+#chain .chain-stats > :last-child { display: none; }
+#chain .chain-layout { grid-template-columns: 1fr; }
+#chain .chain-side { display: none; }
+#chain .chain-panel { padding: 0; border: 0; background: transparent; }
+#chain .chain-panel h3 { font-size: 0.9375rem; font-weight: 500; }
+
+/* 文档问答：桌面端一屏，内部滚动，不再让用户上下滑找按钮 */
+#rag { max-inline-size: 76rem; margin-inline: auto; }
+#rag .rag-grid {
+  grid-template-columns: minmax(19rem, 0.82fr) minmax(0, 1.18fr);
+  align-items: stretch;
+  min-block-size: calc(100dvh - 12rem);
+}
+#rag .rag-main { display: flex; flex-direction: column; min-block-size: 0; }
+#rag #ragSteps { flex: 1; overflow: auto; min-block-size: 0; }
+#rag .rag-drop { flex-shrink: 0; padding: 1rem; }
+#rag .rag-chat { display: flex; flex-direction: column; min-block-size: 0; }
+#rag #ragKb {
+  max-inline-size: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#rag .rag-log { flex: 1; max-block-size: none; min-block-size: 0; overflow: auto; }
+#rag .rag-chat-form,
+#rag .rag-retrieve,
+#rag .rag-status { flex-shrink: 0; }
+#rag .feature-head { margin-block-end: 0.75rem; }
+
+@media (max-width: 760px) {
+  .home-grid { grid-template-columns: 1fr; }
+  .home-card { min-block-size: 5.5rem; }
+  #image .image-workbench,
+  #comic .comic-panels,
+  #rag .rag-grid { grid-template-columns: 1fr; }
+  #guide .chat-log { block-size: 50dvh; }
+  #rag .rag-grid { min-block-size: 0; }
+  #rag .rag-chat { min-block-size: 32rem; }
+}
+
 </style>
 </head>
 <body>
 <noscript><style>html.js .feature { display: block !important; }</style></noscript>
-<a class="skip-link" href="#hero-title">跳到主要内容</a>
+<a class="skip-link" href="#home-title">跳到主要内容</a>
 
 <svg class="svg-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
   <symbol id="i-logo" viewBox="0 0 24 24"><path d="M4 5h16v4H10v3h10v4H4z"/><path d="M4 18h16v2H4z"/></symbol>
@@ -1559,38 +2429,21 @@ html.js .scroll-cue[hidden] { display: none !important; }
 
 <header class="site-header">
   <div class="header-inner">
-    <a class="brand" href="#top" aria-label="大大怪 · 多智能体助手，回到页面顶部">
+    <a class="brand" href="#top" aria-label="大大怪 · 多智能体助手，回到功能列表">
       <span class="brand-mark" aria-hidden="true"><svg class="icon"><use href="#i-logo" xlink:href="#i-logo"/></svg></span>
       <span class="brand-name">大大怪</span>
     </a>
-    <nav class="site-nav" aria-label="功能导航">
-      <ul>
-        <li><a href="#image">生图</a></li>
-        <li><a href="#guide">对话与记忆</a></li>
-        <li><a href="#comic">漫画</a></li>
-        <li><a href="#chain">降级链</a></li>
-        <li><a href="#rag">文档问答</a></li>
-      </ul>
-    </nav>
-    <a class="header-action" href="#guide">找阿海问一句</a>
   </div>
 </header>
 
 <main id="main" class="page-shell">
   <section class="hero" id="top" aria-labelledby="hero-title">
     <div class="hero-copy">
-      <p class="eyebrow">产品功能与运行链路</p>
       <h1 id="hero-title" tabindex="-1" data-product-name>大大怪 · 多智能体助手</h1>
       <p class="hero-summary" data-product-summary>一个多智能体助手，把生图、角色扮演、长期记忆、漫画流水线串在一起。</p>
       <div class="hero-actions">
         <a class="btn btn--primary" href="#image">体验生图<svg class="icon" aria-hidden="true"><use href="#i-arrow" xlink:href="#i-arrow"/></svg></a>
-        <a class="btn btn--sea" href="#guide">找阿海问一句<svg class="icon" aria-hidden="true"><use href="#i-chat" xlink:href="#i-chat"/></svg></a>
       </div>
-      <ul class="hero-notes">
-        <li>无需登录，匿名体验</li>
-        <li>每个访客独立会话</li>
-        <li>五个功能均连接真实后端</li>
-      </ul>
     </div>
 
     <aside class="runtime-panel" aria-labelledby="runtime-title">
@@ -1640,22 +2493,46 @@ html.js .scroll-cue[hidden] { display: none !important; }
     <button class="btn btn--small" type="button" id="configRetry"><svg class="icon" aria-hidden="true"><use href="#i-refresh" xlink:href="#i-refresh"/></svg>重新读取</button>
   </div>
 
-  <p class="scope-note"><strong>公开展示边界：</strong>本页只调用 <code>/api/showcase/*</code>，素材来自独立的展示命名空间；内部角色卡、成人档位、群友私聊与内部小说漫画不参与公开展示，公网也无法访问。</p>
+  <p class="scope-note"><strong>公开展示边界：</strong>只调用 <code>/api/showcase/*</code>，使用独立展示素材；内部角色卡与私聊不参与公开展示。</p>
 
-  <a class="scroll-cue" href="#image" aria-label="继续向下滚动，进入下方的生图操作区">
-    <span>继续往下滑动，下面才是生图操作区（选场景 / 自己写提示词 / 现场出图）</span>
-    <span class="scroll-cue-arrow" aria-hidden="true">↓</span>
-  </a>
+
+  <!-- ============================================================
+       首页：五个入口
+       ============================================================ -->
+  <section class="feature home-view" id="home" aria-labelledby="home-title">
+    <div class="home-head">
+      <h1 id="home-title">多智能体助手</h1>
+      <p>四个功能，点开就能试。结果都来自真实接口。</p>
+    </div>
+    <nav class="home-grid" aria-label="功能入口">
+      <a class="home-card" href="#image">
+        <span class="home-card-title">生图</span>
+        <span class="home-card-desc">选场景，生成一张图</span>
+      </a>
+      <a class="home-card" href="#comic">
+        <span class="home-card-title">漫画回放</span>
+        <span class="home-card-desc">看三格怎么生成</span>
+      </a>
+      <a class="home-card" href="#chain">
+        <span class="home-card-title">模型降级</span>
+        <span class="home-card-desc">看模型怎么切换</span>
+      </a>
+      <a class="home-card" href="#rag">
+        <span class="home-card-title">文档问答</span>
+        <span class="home-card-desc">上传文档，直接提问</span>
+      </a>
+    </nav>
+  </section>
 
   <!-- ============================================================
        功能一：生图
        ============================================================ -->
   <section class="feature" id="image" aria-labelledby="image-title">
+    <a class="simple-back" href="#home">← 全部功能</a>
     <div class="feature-head">
       <div class="feature-intro">
-        <p class="feature-kicker">生图 / 真实 GPU 队列</p>
-        <h2 id="image-title">选预置场景，或自己写提示词，现场生成一张图</h2>
-        <p class="feature-desc">先选生图渠道：<code>Silver</code> 是轻渠道（秒级、切换免重启 ComfyUI），<code>krea2 极光</code> 是 1024×1536 的精细档（会慢一些）。渠道对下面五张卡全部生效——三个无人物环境场景 / 自定义提示词 / AI 扩写，写完就能出图。想自己定画面：选「自定义提示词」写英文，或选「AI 扩写」只写一句中文需求——后者会交给 DeepSeek（大大怪同款）补成完整提示词，再按当前渠道、固定竖屏出图。生成完成后经过一次图片审核，未过审的图片不会显示。排队位置、耗时、种子和审核状态都在“查看链路”里，AI 扩写还能对照你的原话和它补出的提示词。</p>
+        <h2 id="image-title">生成一张图</h2>
+        <p class="feature-desc">选场景或写提示词，现场出一张图；渠道、排队、种子和审核状态都在链路里。</p>
       </div>
       <div class="feature-tools">
         <button class="btn btn--small" type="button" id="imageChain" disabled><svg class="icon" aria-hidden="true"><use href="#i-chain" xlink:href="#i-chain"/></svg>查看链路</button>
@@ -1664,7 +2541,7 @@ html.js .scroll-cue[hidden] { display: none !important; }
 
     <div class="image-workbench">
       <fieldset class="scene-picker" id="sceneFieldset">
-        <legend>选择场景或自己写提示词</legend>
+        <legend>场景</legend>
         <!-- 生图渠道（2026-11-17）：默认 Silver，可切 krea2 极光单次。
              切换粒度是整页——下面五张卡全跟着走。 -->
         <div class="channel-switch" id="channelSwitch" role="group" aria-label="选择生图渠道">
@@ -1682,9 +2559,9 @@ html.js .scroll-cue[hidden] { display: none !important; }
         <div class="image-frame" id="imageFrame">
           <div class="empty-state" id="imageEmpty">
             <svg class="icon icon--xl" aria-hidden="true"><use href="#i-image" xlink:href="#i-image"/></svg>
-            <p>选择左侧场景并提交。真实图片生成后会显示在这里，不用占位图或示例图冒充。</p>
+            <p>选一个场景，然后生成</p>
           </div>
-          <img id="imageResult" alt="" width="1200" height="900" hidden>
+          <img id="imageResult" alt="" width="1200" height="900" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" hidden>
         </div>
         <div class="image-stage-foot">
           <strong id="imageStageTitle">尚未提交任务</strong>
@@ -1707,7 +2584,7 @@ html.js .scroll-cue[hidden] { display: none !important; }
         </dl>
         <progress class="image-progress" id="imageProgress" aria-label="生图任务处理进度" hidden></progress>
         <p class="field-error" id="imageError" role="alert" hidden></p>
-        <button class="btn btn--primary" type="button" id="imageSubmit" disabled>提交生图</button>
+        <button class="btn btn--primary" type="button" id="imageSubmit" disabled>生成图片</button>
         <button class="btn btn--small" type="button" id="imageRefresh" hidden><svg class="icon" aria-hidden="true"><use href="#i-refresh" xlink:href="#i-refresh"/></svg>刷新状态</button>
         <p class="image-rail-note">每个展示会话同时只允许一个在途任务；已结束但未轮询的旧任务不会挡住重新提交。</p>
       </aside>
@@ -1717,12 +2594,12 @@ html.js .scroll-cue[hidden] { display: none !important; }
   <!-- ============================================================
        功能二：角色扮演
        ============================================================ -->
-  <section class="feature" id="guide" aria-labelledby="guide-title">
+  <section class="feature" id="guide" aria-labelledby="guide-title" hidden>
+    <a class="simple-back" href="#home">← 全部功能</a>
     <div class="feature-head">
       <div class="feature-intro">
-        <p class="feature-kicker">对话与记忆 / 海洋馆参观</p>
-        <h2 id="guide-title">跟讲解员走一趟，看见记忆是怎么接上的</h2>
-        <p class="feature-desc">左边是真实对话：讲解员「阿海」带游客走一条 51 个展项的路线，母本里已经走了 250 轮，你上次停在深海区，这次接着聊。右边四个标签全是只读的事实，点一下换一个：这轮召回了什么、真正发给模型的完整提示词、库里存了哪些片段、这场对话走到了哪。也可以完全不动模型，直接输一句话查库。</p>
+        <h2 id="guide-title">和阿海聊一句</h2>
+        <p class="feature-desc">和阿海聊一轮；右侧只读展示召回、完整提示词、库内容和对话状态。</p>
       </div>
       <div class="feature-tools">
         <button class="btn btn--small" type="button" id="chatChain" disabled title="这一轮真正发出去的 messages 和召回轨迹，原始 JSON，给排查用"><svg class="icon" aria-hidden="true"><use href="#i-chain" xlink:href="#i-chain"/></svg>本轮原始 JSON</button>
@@ -1758,7 +2635,7 @@ html.js .scroll-cue[hidden] { display: none !important; }
             </div>
           </div>
           <div class="chat-log" id="chatLog" aria-label="与讲解员阿海的对话记录">
-            <p class="chat-empty" id="chatEmpty"><strong>上次的对话已载入</strong>窗口里是最近 6 轮（12 条）。更早的两百多轮在母本里，点右上角「完整参观记录」能翻到；真问起来时，靠检索把它们取回来。模型不可用时，页面会直接说明本轮失败。</p>
+            <p class="chat-empty" id="chatEmpty">说一句话，阿海会接着讲。</p>
           </div>
           <form class="chat-form" id="chatForm" action="/api/showcase/chat" method="post" aria-labelledby="chatInputLabel">
             <label class="field-label" id="chatInputLabel" for="chatInput">发送给阿海</label>
@@ -1769,7 +2646,7 @@ html.js .scroll-cue[hidden] { display: none !important; }
             </div>
             <p class="field-error" id="chatError" role="alert" hidden></p>
             <p class="status-line" id="chatStatus" role="status"></p>
-            <button class="btn btn--primary chat-submit" type="submit" id="chatSend" disabled>发送消息</button>
+            <button class="btn btn--primary chat-submit" type="submit" id="chatSend" disabled>发送</button>
           </form>
         </div>
       </div>
@@ -1895,11 +2772,11 @@ html.js .scroll-cue[hidden] { display: none !important; }
        功能四：漫画流水线
        ============================================================ -->
   <section class="feature" id="comic" aria-labelledby="comic-title">
+    <a class="simple-back" href="#home">← 全部功能</a>
     <div class="feature-head">
       <div class="feature-intro">
-        <p class="feature-kicker">漫画流水线 / 三格回放</p>
-        <h2 id="comic-title">《最后一盏灯》的三步回放</h2>
-        <p class="feature-desc">原创三格漫画的分镜、逐格提示词和素材状态来自公开回放接口。当前只到“素材制作中”，成品图尚未制作与审核，所以页面明确显示待补，不放占位图冒充完成品。</p>
+        <h2 id="comic-title">《最后一盏灯》</h2>
+        <p class="feature-desc">原创三格漫画的分镜与逐格提示词；素材未完成时明确标待补。</p>
       </div>
       <div class="feature-tools">
         <button class="btn btn--small" type="button" id="comicChain" disabled><svg class="icon" aria-hidden="true"><use href="#i-chain" xlink:href="#i-chain"/></svg>查看回放数据</button>
@@ -1929,11 +2806,11 @@ html.js .scroll-cue[hidden] { display: none !important; }
        功能五：模型降级链
        ============================================================ -->
   <section class="feature" id="chain" aria-labelledby="chain-title">
+    <a class="simple-back" href="#home">← 全部功能</a>
     <div class="feature-head">
       <div class="feature-intro">
-        <p class="feature-kicker">模型降级链 / 只读调度面板</p>
-        <h2 id="chain-title">模型失败时，谁接下一棒</h2>
-        <p class="feature-desc">这里显示当前可用链头、候选顺序、冷却状态和失败后的下一候选，以及展示 API 自己的令牌缓存统计。只公开 provider、model 与调度状态，不暴露 Base URL、API Key 或内部错误详情。</p>
+        <h2 id="chain-title">模型降级</h2>
+        <p class="feature-desc">模型失败后的候选顺序、冷却和缓存状态；只公开调度信息。</p>
       </div>
       <div class="feature-tools">
         <button class="btn btn--small" type="button" id="chainRefresh"><svg class="icon" aria-hidden="true"><use href="#i-refresh" xlink:href="#i-refresh"/></svg>刷新状态</button>
@@ -1954,25 +2831,25 @@ html.js .scroll-cue[hidden] { display: none !important; }
        功能六：文档问答（RAG 全流程）
        ============================================================ -->
   <section class="feature" id="rag" aria-labelledby="rag-title">
+    <a class="simple-back" href="#home">← 全部功能</a>
     <div class="feature-head">
       <div class="feature-intro">
-        <p class="feature-kicker">文档问答 / 检索增强全流程</p>
-        <h2 id="rag-title">上传一份文档，看它怎么变成向量、又怎么被找回来</h2>
-        <p class="feature-desc">四步全部真跑：规则清洗先删掉页眉页码，大模型按语义切块（提示词原样展开给你看），本地小模型把每块压成 512 维向量，最后用你的问题去检索并带引用作答。左边三步是建库，中间数据全摊开；检索这一步跟着提问走，就在右边问题区上方，问完立刻能看到命中了哪几块、发给模型的 prompt 长什么样。支持 txt / md / PDF / Word（PDF 与 Word 优先读文本层，零 token 零幻觉；没有文字层的扫描页会自动渲染成图、交视觉模型抄成 Markdown，最多 10 页）。<span class="rag-limit">⚠ 单次仅处理前 1 万字——超出部分按段落截断、后面不进库和检索，请拆成多份</span>；临时库 30 分钟无人访问自动销毁，同时最多 3 个。</p>
+        <h2 id="rag-title">上传文档，直接提问</h2>
+        <p class="feature-desc">清洗、切分、向量化、检索；单次 1 万字。</p>
       </div>
       <div class="feature-tools">
-        <button class="btn btn--small" type="button" id="ragSample">载入示例文档</button>
-        <button class="btn btn--small" type="button" id="ragReset" hidden>销毁这个库</button>
+        <button class="btn btn--small" type="button" id="ragSample">示例文档</button>
+        <button class="btn btn--small" type="button" id="ragReset" hidden>销毁</button>
       </div>
     </div>
 
     <div class="rag-grid">
       <div class="rag-main">
         <div class="rag-drop" id="ragDrop">
-          <strong>把 txt / md / PDF / Word 拖到这里</strong>
-          <span id="ragDropHint">或者选文件、粘贴正文。PDF / Word 先读文本层；扫描页自动走视觉识别，每页约 3~9 秒。<span class="rag-limit">⚠ 仅前 1 万字入库，超出按段落截断</span></span>
+          <strong>把文档拖到这里</strong>
+          <span id="ragDropHint">PDF / Word / txt / md · 1 万字 · 扫描页自动识别</span>
           <div class="rag-drop-actions">
-            <button class="btn btn--primary btn--small" type="button" id="ragPick">选择文件</button>
+            <button class="btn btn--primary btn--small" type="button" id="ragPick">上传文档</button>
             <button class="btn btn--small" type="button" id="ragPaste">粘贴正文</button>
             <input id="ragFile" type="file" accept=".txt,.md,.markdown,.pdf,.docx,text/plain,text/markdown,application/pdf" hidden>
           </div>
@@ -1992,31 +2869,31 @@ html.js .scroll-cue[hidden] { display: none !important; }
 
       <aside class="rag-chat" aria-labelledby="ragChatTitle">
         <div class="rag-chat-head">
-          <b id="ragChatTitle">问这份文档</b>
+          <b id="ragChatTitle">提问</b>
           <span id="ragKb">尚未建库</span>
         </div>
         <!-- 04 检索：它只在提问时才发生，属于「问」不属于「建库」。
              以前挂在左边四步流水线的末尾，得滑到底才看得见（2026-11-15）。 -->
         <div class="rag-retrieve" id="ragRetrieve"></div>
         <div class="rag-log" id="ragLog">
-          <p class="rag-empty" id="ragEmpty">先把文档跑进临时向量库，再在下面提问。回答只依据检索到的片段，并标注引用编号。</p>
+          <p class="rag-empty" id="ragEmpty">先建库，再提问；回答会标注引用。</p>
         </div>
         <form class="rag-chat-form" id="ragForm">
-          <textarea id="ragQuestion" rows="2" placeholder="比如：为什么生图要串行执行？" disabled></textarea>
+          <textarea id="ragQuestion" rows="2" placeholder="输入问题" disabled></textarea>
           <button class="btn btn--primary btn--small" type="submit" id="ragAsk" disabled>提问</button>
         </form>
-        <div class="rag-status" id="ragStatus">向量模型 bge-small-zh-v1.5 · 512 维 · CPU ｜ 检索：扩大召回 → 本地 cross-encoder 精排 → MMR 去重</div>
+        <div class="rag-status" id="ragStatus">bge-small-zh-v1.5 · 512 维 · CPU</div>
       </aside>
     </div>
   </section>
 </main>
 
-<footer class="site-footer">
+<footer class="site-footer" hidden>
   <div class="footer-inner">
     <div class="footer-main">
       <div>
         <p class="footer-brand" data-product-name>大大怪 · 多智能体助手</p>
-        <p class="footer-summary">生图、角色扮演、长期记忆、漫画流水线与模型降级链。页面里的每个结果都来自真实接口，失败也会如实显示。</p>
+        <p class="footer-summary">四个功能，结果都来自真实接口。</p>
       </div>
       <div class="footer-links">
         <a id="footerEmail" href="mailto:2509355624@qq.com">2509355624@qq.com</a>
@@ -2024,7 +2901,7 @@ html.js .scroll-cue[hidden] { display: none !important; }
       </div>
     </div>
     <div class="footer-bottom">
-      <span>公开展示页 · 不含内部素材</span>
+      <span>公开展示页</span>
       <span>匿名会话按访客隔离</span>
     </div>
   </div>
@@ -3044,12 +3921,12 @@ html.js .scroll-cue[hidden] { display: none !important; }
       ui.imageEmpty.hidden = false;
       const emptyCopy = ui.imageEmpty.querySelector("p");
       if (emptyCopy) {
-        if (status === "queued") emptyCopy.textContent = "任务已进入 GPU 队列，排队与耗时会在右侧持续更新。出图后还要审核，未过审不会显示。";
-        else if (status === "running") emptyCopy.textContent = "工作流正在生成图片。完成后会先审核，再通过同源接口显示。";
-        else if (status === "reviewing") emptyCopy.textContent = "图片已生成，正在经过公开图片审核。审核通过前不会显示。";
-        else if (status === "blocked") emptyCopy.textContent = "这张图未通过公开图片审核，按规则不显示。可以换一个场景重新生成。";
-        else if (status === "error") emptyCopy.textContent = "本次任务未完成，页面不会用占位图代替结果。可以重新提交或稍后重试。";
-        else emptyCopy.textContent = "选择场景并提交。真实图片生成后会显示在这里，不用占位图或示例图冒充。";
+        if (status === "queued") emptyCopy.textContent = "排队中，完成后会显示结果。";
+        else if (status === "running") emptyCopy.textContent = "正在生成…";
+        else if (status === "reviewing") emptyCopy.textContent = "正在审核…";
+        else if (status === "blocked") emptyCopy.textContent = "未通过审核，换个场景再试。";
+        else if (status === "error") emptyCopy.textContent = "这次没成功，可以重试。";
+        else emptyCopy.textContent = "选一个场景，然后生成。";
       }
     }
 
@@ -3065,7 +3942,7 @@ html.js .scroll-cue[hidden] { display: none !important; }
     const buttonsBusy = state.image.busy;
     const sceneReady = Boolean(state.config && scene && ((scene.custom || scene.ai) ? scene.prompt : scene.id));
     ui.imageSubmit.disabled = buttonsBusy || active || !sceneReady;
-    ui.imageSubmit.textContent = buttonsBusy ? "提交中…" : active ? "任务进行中" : (status === "ready" ? "再生成一张" : (status === "blocked" || status === "error" ? "重新生成" : "提交生图"));
+    ui.imageSubmit.textContent = buttonsBusy ? "提交中…" : active ? "任务进行中" : (status === "ready" ? "再生成一张" : (status === "blocked" || status === "error" ? "重新生成" : "生成图片"));
     ui.imageChain.disabled = !job;
     ui.imageRefresh.hidden = !job || active;
     ui.imageRefresh.disabled = buttonsBusy;
@@ -3279,7 +4156,7 @@ html.js .scroll-cue[hidden] { display: none !important; }
   function updateChatControls() {
     const configured = Boolean(state.config);
     ui.chatSend.disabled = state.chatBusy || !configured;
-    ui.chatSend.textContent = state.chatBusy ? "等待回复…" : "发送消息";
+    ui.chatSend.textContent = state.chatBusy ? "等待回复…" : "发送";
     ui.chatChain.disabled = !state.chatTrace;
     ui.chatForm.setAttribute("aria-busy", state.chatBusy ? "true" : "false");
   }
@@ -4173,21 +5050,23 @@ html.js .scroll-cue[hidden] { display: none !important; }
   "use strict";
 
   // ─── 标签页 ────────────────────────────────────────────
-  const TABS = ["image", "guide", "comic", "chain", "rag"];
+  const TABS = ["home", "image", "comic", "chain", "rag"];
   // hero + 「公开展示边界」条是首页的一部分，只在默认的生图标签下露脸。
   // 之前它们常驻在 main 第一屏（hero 桌面约 700px），切标签只换下面的 feature，
   // 视口还停在 hero / 那条说明上，点完看到的是同一屏 —— 用户以为没切换。
   const homeOnly = document.querySelectorAll("#main > .hero, #main > .scope-note, #main > .scroll-cue");
 
   function showTab(id, sync) {
-    if (!TABS.includes(id)) id = "image";
+    if (!TABS.includes(id)) id = "home";
     TABS.forEach((t) => {
       const el = document.getElementById(t);
       if (!el) return;
       el.hidden = t !== id;
       el.classList.toggle("is-active", t === id);
     });
-    homeOnly.forEach((el) => { el.hidden = id !== "image"; });
+    homeOnly.forEach((el) => { el.hidden = true; });
+    const siteFooter = document.querySelector(".site-footer");
+    if (siteFooter) siteFooter.hidden = id !== "home";
     document.querySelectorAll(".site-nav a, .header-action").forEach((a) => {
       const href = a.getAttribute("href") || "";
       if (href.charAt(0) !== "#") return;
@@ -4217,7 +5096,7 @@ html.js .scroll-cue[hidden] { display: none !important; }
       const id = (a.getAttribute("href") || "").slice(1);
       if (id === "top") {           // 品牌名 = 回首页
         e.preventDefault();
-        showTab("image", true);
+        showTab("home", true);
         return;
       }
       if (!TABS.includes(id)) return;   // #hero-title 这类留给浏览器
@@ -4227,14 +5106,14 @@ html.js .scroll-cue[hidden] { display: none !important; }
     window.addEventListener("hashchange", () => {
       showTab((location.hash || "").replace("#", ""), false);
     });
-    showTab((location.hash || "").replace("#", ""), false);
+    showTab((location.hash || "#home").replace("#", ""), false);
   }
 
   // ─── 文档问答 ──────────────────────────────────────────
   const STEPS = [
-    { key: "clean", no: "01", title: "清洗", idle: "规则去噪 · 去页码 / 页眉 / 重复行" },
-    { key: "split", no: "02", title: "切分", idle: "DeepSeek 官方 · 语义切块" },
-    { key: "ingest", no: "03", title: "向量化", idle: "bge-small-zh-v1.5 · 每块编成 512 维向量 · CPU" },
+    { key: "clean", no: "01", title: "清洗", idle: "去页码 / 页眉 / 重复行" },
+    { key: "split", no: "02", title: "切分", idle: "语义切块" },
+    { key: "ingest", no: "03", title: "向量化", idle: "512 维 · CPU" },
   ];
 
   // 04 检索不跟上面三步排在一起：前三是「建库」，检索是「提问时才发生」。
@@ -4242,7 +5121,7 @@ html.js .scroll-cue[hidden] { display: none !important; }
   // 现在它渲染在右栏「问这份文档」正下方，提问后自动展开。
   const QUERY_STEP = {
     key: "query", no: "04", title: "检索",
-    idle: "提问后在这里展开：扩大召回 → 本地 cross-encoder 精排 → MMR 去重取 Top 4",
+    idle: "召回 → 精排 → Top 4",
   };
 
   const S = { sid: null, kb: null, filename: "", ingested: false, busy: false, chunks: [], steps: {} };
@@ -4590,7 +5469,7 @@ html.js .scroll-cue[hidden] { display: none !important; }
       setStep("query", hits.length ? "done" : "error",
         hits.length ? `Top ${hits.length} · 最高 ${(hits[0].score * 100).toFixed(1)}%` : "没有命中",
         (hits.length
-          ? `<p style="margin:0 0 .5rem;font-size:.78rem;color:var(--muted)">先把向量召回的候选池扩大，再用本地 cross-encoder 逐对精排把对的捞上来，最后 MMR 去重踢掉重复——所以顺序不是纯相似度排序，第 2 名的百分比可能比第 3 名低，那是为了少返回几段重复内容。</p>
+          ? `<p style="margin:0 0 .5rem;font-size:.78rem;color:var(--muted)">召回 → 本地精排 → MMR 去重。</p>
              <div class="rag-hits">${bars}</div>`
           : `<p>这一问没有检索到片段。</p>`) +
         (data.prompt
@@ -4859,7 +5738,7 @@ html.js .scroll-cue[hidden] { display: none !important; }
       if (question) { question.disabled = true; question.value = ""; }
       resetBtn.hidden = true;
       showErr("");
-      if (statusBox) statusBox.textContent = "向量模型 bge-small-zh-v1.5 · 512 维 · CPU ｜ 检索：扩大召回 → 本地 cross-encoder 精排 → MMR 去重";
+      if (statusBox) statusBox.textContent = "bge-small-zh-v1.5 · 512 维 · CPU";
     });
   }
 
