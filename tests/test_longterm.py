@@ -19,7 +19,7 @@ import unittest
 from unittest import mock
 
 import app.agents as agents
-import app.longterm as longterm
+import app.features.chat.longterm as longterm
 import app.recent as recent
 
 

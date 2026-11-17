@@ -665,7 +665,7 @@ def _digest_turns_async(agent_id, group_id, old_turns):
         batch = pending[:]
         pending.clear()
     try:
-        from app import longterm
+        from app.features.chat import longterm
         longterm.digest_messages_async(agent_id, group_id, batch)
         log.info("[window] 群%s：攒够 %d 条滚出消息，批量转交长期记忆",
                  group_id, len(batch))

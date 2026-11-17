@@ -22,7 +22,7 @@ import os
 import time
 
 from app import agents as agent_store
-from app import longterm
+from app.features.chat import longterm
 
 log = logging.getLogger("recent")
 

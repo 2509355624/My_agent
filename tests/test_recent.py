@@ -21,7 +21,7 @@ from unittest import mock
 import app.agent as agent
 import app.agents as agents
 from app.features.image import comfy_status
-import app.longterm as longterm
+import app.features.chat.longterm as longterm
 import app.memory as memory
 import app.qq_bot as qq_bot
 import app.recent as recent

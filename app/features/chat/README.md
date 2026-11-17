@@ -8,5 +8,6 @@
 `vision.py`、`search_agent.py`、`interject.py`、`background.py`、`confirm_gate.py`、`cancel.py`。
 完整映射见 `docs/project-skeleton.md` 第 4 节。
 
-状态：`background.py` 已从 `chat_bg.py` 迁入并接线；对话主循环仍暂留根目录，
+状态：`background.py` 已从 `chat_bg.py` 迁入并接线；`longterm.py`（长期记忆摘要/召回）
+已迁入，`memory.py` / `recent.py` 通过 feature 路径调用。对话主循环仍暂留根目录，
 下一步再按 `routes.py` + `service.py` 拆 `agent.py` / `memory.py`。
