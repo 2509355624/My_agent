@@ -1,4 +1,4 @@
-"""`app/soda_letter` 的手构 page_info 与工作流接线测试。
+"""`app/features/comic/soda_letter` 的手构 page_info 与工作流接线测试。
 
 不 import soda_storyboard（agent 进程的 my_env 没装），只按 schema 断言：
 字段对照 soda-storyboard 0.5.0 `models.Page.from_dict` /
@@ -11,7 +11,8 @@ import os
 import unittest
 from unittest import mock
 
-from app import moss_comic, soda_letter
+from app.features.comic import soda_letter
+from app import moss_comic
 
 SPEC = {
     "title": "测试",

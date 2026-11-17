@@ -42,7 +42,8 @@ import time
 
 from flask import Blueprint, jsonify, request, send_file
 
-from app import image_jobs, lora_slots, moss_comic, soda_letter
+from app.features.comic import soda_letter
+from app import image_jobs, lora_slots, moss_comic
 from app.config import BASE_DIR, COMFYUI_OUTPUT_DIR
 from app.skills import load_workflow
 from app.tools.normal.generate_image import apply_prompt_placeholders
