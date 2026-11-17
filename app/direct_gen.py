@@ -82,7 +82,7 @@ from app import image_jobs, llm, qq_api, trigger
 from app.features.image import log as image_log
 from app.config import IMAGE_DEFAULT_SKILL, QQ_GROUP_KEYWORDS
 from app.features.chat.confirm_gate import _ATTRIBUTION_RE
-from app.skills import list_skills, load_skill
+from app.core.skills import list_skills, load_skill
 
 log = logging.getLogger(__name__)
 

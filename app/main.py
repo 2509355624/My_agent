@@ -49,7 +49,7 @@ from app.core.config.llm import get_llm_settings, update_llm_settings
 from app.core.config import llm as llm_config
 from app.core.config.runtime import runtime_path
 from app.core import provider_store
-from app.skills import list_skills, load_skill
+from app.core.skills import list_skills, load_skill
 from app.core import model_catalog
 from app.features.chat.agent_prompt import build_stable_prompt, sync_session_system
 from app.features.chat.memory import load_history, save_history, estimate_messages
@@ -773,7 +773,7 @@ def get_skills():
     # 别直接取正文第一行：带 YAML frontmatter 的 skill.md 首行是 `---`，
     # 列表里就成一排横线（2026-10-30 部署包实测）。skill_summary 会跳过
     # frontmatter 再找标题，两边口径也统一了（跑图台用的是同一个函数）。
-    from app.skills import skill_summary
+    from app.core.skills import skill_summary
     out = []
     for s in list_skills():
         data = load_skill(s)

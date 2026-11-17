@@ -188,7 +188,7 @@ from app.config import (BASE_DIR, COMFY_MIN_FREE_RAM_GB, COMFY_MIN_FREE_VRAM_GB,
                         COMFY_RESTART_WAIT, COMFY_WAIT_UP, COMFYUI_URL,
                         IMAGE_GEN_TIMEOUT,
                         QQ_AGENT_ID, QWEN_COOLDOWN)
-from app.skills import skill_priority
+from app.core.skills import skill_priority
 
 log = logging.getLogger("image_jobs")
 

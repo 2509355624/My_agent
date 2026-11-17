@@ -61,7 +61,7 @@ from flask import Blueprint, jsonify, request, send_file
 from app.features.image import comfy_src
 from app import friend_auth, image_jobs, qq_api
 from app.config import QQ_AGENT_ID, state_path
-from app.skills import load_workflow
+from app.core.skills import load_workflow
 
 log = logging.getLogger("outfit_api")
 

@@ -54,7 +54,7 @@ import os
 
 from app.features.image import lora_slots
 from app.config import state_path
-from app.skills import load_skill
+from app.core.skills import load_skill
 
 log = logging.getLogger("comic")
 

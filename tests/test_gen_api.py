@@ -23,7 +23,7 @@ from flask import Response
 from app.features.image import gen_params
 from app.features.image import routes as gen_api
 from app import comic, image_jobs, main
-from app.skills import load_skill
+from app.core.skills import load_skill
 
 
 def _wait(pred, timeout=10):

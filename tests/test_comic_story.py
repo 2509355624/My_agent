@@ -205,18 +205,18 @@ class ComicChannelTest(unittest.TestCase):
     def test_channel_is_internal(self):
         """目录名必须以 `_` 开头：`list_skills()` 跳过它 → AI 点不到它。"""
         self.assertTrue(comic_story.COMIC_SKILL.startswith("_"))
-        from app.skills import list_skills
+        from app.core.skills import list_skills
         self.assertNotIn(comic_story.COMIC_SKILL, list_skills())
 
     def test_channel_is_still_loadable(self):
         """不对外 ≠ 加载不了：`load_skill` 走纯文件系统路径，工作流要读得到。"""
-        from app.skills import load_skill
+        from app.core.skills import load_skill
         sd = load_skill(comic_story.COMIC_SKILL)
         self.assertTrue(sd and sd.get("workflow"))
 
     def test_channel_is_a_batch_workflow(self):
         """必须真的是批量节点，否则一次只出一张、整批拼提示词就白拼了。"""
-        from app.skills import load_skill
+        from app.core.skills import load_skill
         wf = load_skill(comic_story.COMIC_SKILL)["workflow"]
         batch = [n for n in wf.values()
                  if n["class_type"] == "BatchPromptImageGenerator"]
@@ -268,7 +268,7 @@ class AnimaChannelTest(unittest.TestCase):
         self.assertEqual(comic_story.default_panels("anima"), 3)
 
     def test_anima_channel_is_internal_and_loadable(self):
-        from app.skills import list_skills, load_skill
+        from app.core.skills import list_skills, load_skill
         skill = comic_story.COMIC_SKILLS["anima"]
         self.assertTrue(skill.startswith("_"))
         self.assertNotIn(skill, list_skills())
@@ -276,7 +276,7 @@ class AnimaChannelTest(unittest.TestCase):
         self.assertTrue(sd and sd.get("workflow"))
 
     def test_anima_workflow_is_anima_recipe(self):
-        from app.skills import load_skill
+        from app.core.skills import load_skill
         wf = load_skill(comic_story.COMIC_SKILLS["anima"])["workflow"]
         self.assertEqual(wf["5"]["inputs"]["unet_name"],
                          "miaomiaoRealskin_anima13.safetensors")

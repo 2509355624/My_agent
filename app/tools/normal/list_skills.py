@@ -1,6 +1,6 @@
 """列出所有可用 Skill"""
 
-from app.skills import list_skills, load_skill, skill_summary
+from app.core.skills import list_skills, load_skill, skill_summary
 
 
 def _list_skills():

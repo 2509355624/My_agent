@@ -400,7 +400,7 @@ class LegacySnapshotTest(_Base):
 
     def test_apply_slots_falls_back_to_template_names(self):
         from app.features.image import lora_slots
-        from app import skills
+        from app.core import skills
         wf = skills.load_workflow(lora_slots.workflow_path("moss-qunyou"))
         before = {r["slot"]: r["name"] for r in lora_slots.read_slots(wf)}
         n = lora_slots.apply_slots(wf, [

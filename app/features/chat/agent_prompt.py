@@ -11,7 +11,7 @@ Agent System Prompt
 import os
 from datetime import datetime
 from app import agents as agent_store
-from app.skills import list_skills, load_skill, skill_summary
+from app.core.skills import list_skills, load_skill, skill_summary
 from app.tools.registry import TOOLS
 
 

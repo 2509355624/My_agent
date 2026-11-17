@@ -26,7 +26,7 @@ import time
 from app.config import (AGENTS_DIR, DEFAULT_AGENT_ID, NAI_ENABLED,
                         NAI_OPEN_ACCESS, PROVIDERS, QQ_INTERJECT_COOLDOWN,
                         QQ_INTERJECT_MIN_GAP, SKILLS_DIR)
-from app.skills import load_skill
+from app.core.skills import load_skill
 
 log = logging.getLogger("agents")
 

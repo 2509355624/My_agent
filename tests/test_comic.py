@@ -21,7 +21,8 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.features.comic import writer as comic_writer
-from app import comic, skills
+from app import comic
+from app.core import skills
 
 
 def _panel_dict(no, **kw):
@@ -1442,7 +1443,7 @@ class PanelNoPrefixTest(unittest.TestCase):
 
     def test_stamp_real_qwen_workflow(self):
         """真实 qwen workflow 的 SaveImage 节点被正确加上格号。"""
-        from app import skills as _skills
+        from app.core import skills as _skills
         sd = _skills.load_skill("qwen_image_v1")
         self.assertTrue(sd)
         wf = comic.load_workflow(

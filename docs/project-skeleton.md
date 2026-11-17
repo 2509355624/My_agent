@@ -187,7 +187,7 @@ def run(job_id: str) -> None:
 | feature | 当前主要模块（起点） | 目标职责 |
 |---|---|---|
 | `core` | `config.py`、`logsetup.py`、`admin_auth.py`、`friend_auth.py` | 配置、路径、日志、安全、错误 |
-| `core` 迁移后 | `core/config/*`、`cancel.py`、`logsetup.py`、`usage.py`、`provider_store.py`、`model_catalog.py` 已接线；`admin_auth.py`、`friend_auth.py` 仍留根 | 配置、取消信号、日志、用量账本、自定义中转站、模型清单；鉴权待归位 |
+| `core` 迁移后 | `core/config/*`、`cancel.py`、`logsetup.py`、`usage.py`、`provider_store.py`、`model_catalog.py`、`skills.py` 已接线；`admin_auth.py`、`friend_auth.py` 仍留根 | 配置、取消信号、日志、用量账本、自定义中转站、模型清单、技能目录加载；鉴权待归位 |
 | `gallery` | `gallery.py`、`gallery_api.py` | 作品画廊、扫描、权限 |
 | `gallery` 迁移后 | `features/gallery/gallery.py`、`routes.py` 已接线 | 画廊扫描与接口已归位；`friend_auth` 仍留根 |
 | `showcase` | `showcase_api.py`、`showcase_prompts.py` | 公开展示页数据与提示词 |

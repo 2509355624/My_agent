@@ -34,7 +34,7 @@ from app.features.qq import stickers
 from app.features.image import comfy_src
 from app.features.image import nai
 from app import agents, image_jobs, qq_api, vision
-from app.skills import load_workflow
+from app.core.skills import load_workflow
 from app.tools.normal import generate_image as gi
 
 SKILLS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -540,7 +540,7 @@ class LLLiteI2IShapeTest(unittest.TestCase):
 
     def test_the_six_are_all_visible_and_have_a_skeleton(self):
         """6 个都在售（`list_skills` 里看得到）——不然模型点不到这个名字。"""
-        from app.skills import list_skills
+        from app.core.skills import list_skills
         visible = set(list_skills())
         self.assertEqual(len(gi._I2I_LLLITE_SKILLS), 6)
         for skill in gi._I2I_LLLITE_SKILLS:

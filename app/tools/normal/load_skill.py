@@ -1,5 +1,5 @@
 """读取 Skill 说明文档的工具"""
-from app.skills import load_skill
+from app.core.skills import load_skill
 
 
 def _load_skill(skill_name):

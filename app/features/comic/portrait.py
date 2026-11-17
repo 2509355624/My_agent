@@ -29,7 +29,7 @@ import time
 from app.features.comic import render_opts as comic_render_opts
 from app import comic, image_jobs
 from app.tools.normal import generate_image
-from app.skills import load_skill
+from app.core.skills import load_skill
 
 log = logging.getLogger("comic")
 

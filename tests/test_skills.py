@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-import app.skills as skills
+import app.core.skills as skills
 import app.tools.normal.list_skills as list_skills_tool
 
 

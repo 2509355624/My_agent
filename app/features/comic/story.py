@@ -121,7 +121,7 @@ def _system_prompt(panels):
     """编剧提示词：优先用 skill 原文（去掉 frontmatter），读不到再退回内置骨架。"""
     body = ""
     try:
-        from app import skills
+        from app.core import skills
         s = skills.load_skill("storyboard-prompt")
         body = ((s or {}).get("skill_md") or "").strip()
         body = _FRONTMATTER_RE.sub("", body).strip()

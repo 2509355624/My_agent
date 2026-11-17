@@ -455,7 +455,7 @@ def _channels():
     有 workflow 就是能文生图（i2i-only 的 skill 没有这个文件）。写作用 skill
     也因此天然被挡掉，不用去解析 frontmatter。
     """
-    from app.skills import SKILLS_DIR, list_skills
+    from app.core.skills import SKILLS_DIR, list_skills
     out = []
     for name in sorted(list_skills()):
         if os.path.isfile(os.path.join(SKILLS_DIR, name, "workflow.json")):

@@ -15,7 +15,7 @@ from app.features.image import nai as nai_mod
 from app.core.cancel import Cancelled, is_cancelled
 from app.config import (COMFYUI_URL, DISABLED_IMAGE_SKILLS,
                         IMAGE_DEFAULT_SKILL, QQ_AGENT_ID)
-from app.skills import load_skill, load_workflow
+from app.core.skills import load_skill, load_workflow
 
 log = logging.getLogger("generate_image")
 
@@ -1450,7 +1450,7 @@ def _installed_channels():
     这里再要求「有 workflow.json」，把 prompt 类 skill（anima-tags / writing）
     排除在外——它们不是渠道。
     """
-    from app.skills import SKILLS_DIR, list_skills
+    from app.core.skills import SKILLS_DIR, list_skills
 
     names = []
     try:

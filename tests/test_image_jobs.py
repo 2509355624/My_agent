@@ -19,7 +19,7 @@ from app import image_jobs
 from app.features.image import log as image_log
 from app.features.image import nai
 from app import qq_api
-from app import skills
+from app.core import skills
 from app.features.image import out as image_out
 from app.core.cancel import Cancelled
 from app.config import QQ_AGENT_ID

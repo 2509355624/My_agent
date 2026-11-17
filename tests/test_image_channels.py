@@ -67,7 +67,7 @@ import os
 import unittest
 from unittest import mock
 
-from app.skills import list_skills, load_skill, skill_priority
+from app.core.skills import list_skills, load_skill, skill_priority
 
 SKILLS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                       "skills")
@@ -2183,7 +2183,7 @@ class CustomChannelTest(unittest.TestCase):
                 self.assertIn(name, allowed)
 
     def test_custom_channels_have_workflows(self):
-        from app.skills import load_skill
+        from app.core.skills import load_skill
         for name in ("silver", "silver-hd", "jank"):
             with self.subTest(name=name):
                 data = load_skill(name)
@@ -2748,7 +2748,7 @@ class JiguangSingleChannelTest(unittest.TestCase):
     NAME = "krea2-jiguang-1x"
 
     def setUp(self):
-        from app.skills import load_workflow
+        from app.core.skills import load_workflow
         path = os.path.join(SKILLS, self.NAME, "workflow.json")
         self.wf = load_workflow(path)
         self.assertIsNotNone(self.wf, "workflow.json 读不出来")

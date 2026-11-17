@@ -28,7 +28,7 @@ import re
 import shutil
 
 from app.config import SKILLS_DIR
-from app.skills import load_workflow
+from app.core.skills import load_workflow
 
 log = logging.getLogger("lora_slots")
 

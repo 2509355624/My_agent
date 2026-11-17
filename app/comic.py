@@ -49,7 +49,7 @@ from app.features.image import comfy_src
 from app import image_jobs
 from app.core.cancel import Cancelled
 from app.config import BASE_DIR, COMFYUI_OUTPUT_DIR, COMFYUI_URL
-from app.skills import load_skill, load_workflow
+from app.core.skills import load_skill, load_workflow
 from app.tools.normal import generate_image
 
 log = logging.getLogger("comic")

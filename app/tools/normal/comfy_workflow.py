@@ -11,7 +11,7 @@ import json
 import os
 import requests
 from app.config import COMFYUI_URL
-from app.skills import load_skill
+from app.core.skills import load_skill
 
 # 可调的目标节点（按 class_type 定位）
 CHECKPT = "CheckpointLoaderSimple"

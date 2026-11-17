@@ -48,7 +48,7 @@ from app.features.image import gen_params
 from app.core.cancel import Cancelled
 from app.config import COMFYUI_URL, NAI_API_KEY, WEB_DIR, state_path
 from app.direct_gen import _allowed_skills
-from app.skills import load_skill, skill_summary
+from app.core.skills import load_skill, skill_summary
 
 log = logging.getLogger("gen_api")
 
