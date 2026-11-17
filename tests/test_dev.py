@@ -160,6 +160,11 @@ class DevSettleTest(unittest.TestCase):
             os.path.join(self.tmp.name, "state", "persona_sessions.json"))
         q.start()
         self.addCleanup(q.stop)
+        # 这一组测的是 v1 的五处开发度；新线默认会建 schema=2 的 v2 档，
+        # 那套没有 `dev` 字段，会让断言全部 KeyError。测试里强制建 v1。
+        r = mock.patch.object(affection, "V2_AUTO_NEW", False)
+        r.start()
+        self.addCleanup(r.stop)
         agents.clear_cache()
         self.addCleanup(agents.clear_cache)
         persona.save_cards([{"name": "测试", "systemPrompt": "你是测试。"}])
