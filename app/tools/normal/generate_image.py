@@ -1218,7 +1218,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # moss 系先洗干净（2026-11-04）：QQ 侧通用写法里的质量词 / 权重语法 /
     # 打码词对 moss 是纯噪音，`score_7` 这种还会挤掉前段本该写「谁在做什么」
     # 的注意力。判据在 `moss_prompt.is_moss`，非 moss 渠道原样返回。
-    from app import moss_prompt
+    from app.features.comic import moss_prompt
     prompt = moss_prompt.clean(skill, prompt)
     prompt = lora_slots.nai5_prefix(skill, preset_slots) + prompt
     # ANIMA 随心配（2026-11-13）：抽卡——底模随机选 2（可重复）、画风 LoRA

@@ -80,7 +80,7 @@ import re
 import threading
 import time
 
-from .config import BASE_DIR
+from app.config import BASE_DIR
 
 log = logging.getLogger("moss_series")
 

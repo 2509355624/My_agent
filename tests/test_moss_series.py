@@ -20,7 +20,7 @@ import shutil
 import tempfile
 import unittest
 
-from app import moss_msgs, moss_series
+from app.features.comic import moss_msgs, moss_series
 
 
 class _Base(unittest.TestCase):

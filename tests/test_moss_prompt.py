@@ -10,7 +10,7 @@
 """
 import unittest
 
-from app import moss_prompt
+from app.features.comic import moss_prompt
 
 
 class IsMossTest(unittest.TestCase):

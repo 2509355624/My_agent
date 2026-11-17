@@ -29,7 +29,7 @@ import os
 import threading
 import time
 
-from . import moss_series as series_mod
+from app.features.comic import moss_series as series_mod
 
 log = logging.getLogger("moss_msgs")
 

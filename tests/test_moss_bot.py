@@ -32,8 +32,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-from app import (moss_api, moss_bot, moss_comic, moss_msgs,
-                 moss_series, qq_api)
+from app import (moss_api, moss_bot, moss_comic, qq_api)
+from app.features.comic import moss_msgs, moss_series
 from app.features.image import out as image_out
 
 
