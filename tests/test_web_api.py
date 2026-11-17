@@ -17,6 +17,7 @@ from unittest import mock
 
 import app.features.chat.agent as agent
 import app.core.cancel as cancel_mod
+from app.core import admin_access
 from app.features.image import comfy_status
 import app.main as main
 
@@ -35,6 +36,7 @@ def _chain_head():
 import app.core.agents as agents
 import app.features.chat.memory as memory
 import app.tools.normal.documents as documents
+from app.features.rag import documents_api
 from app.main import _safe_base_filename
 
 # comfy_status.snapshot 一律吃内存快照，任何路径都不走真网络
@@ -66,6 +68,7 @@ class WebApiTest(unittest.TestCase):
             (agents, "AGENTS_DIR", os.path.join(self.tmp.name, "agents")),
             (main, "DOCUMENTS_DIR", docs_dir),
             (documents, "DOCUMENTS_DIR", docs_dir),
+            (documents_api, "DOCUMENTS_DIR", docs_dir),
         )
         for module, attr, value in targets:
             p = mock.patch.object(module, attr, value)
@@ -724,14 +727,14 @@ class AgentAdminApiTest(unittest.TestCase):
 
     def test_remote_blocked_by_default(self):
         self._write_agent("main", {})
-        with mock.patch.object(main, "ADMIN_ALLOW_REMOTE", False):
+        with mock.patch.object(admin_access, "ADMIN_ALLOW_REMOTE", False):
             resp = self.client.put("/api/agent/main", json={"model": "x"},
                                    environ_base={"REMOTE_ADDR": "192.168.1.9"})
         self.assertEqual(resp.status_code, 403)
 
     def test_remote_allowed_when_opted_in(self):
         self._write_agent("main", {})
-        with mock.patch.object(main, "ADMIN_ALLOW_REMOTE", True):
+        with mock.patch.object(admin_access, "ADMIN_ALLOW_REMOTE", True):
             resp = self.client.put("/api/agent/main", json={"provider": "volc"},
                                    environ_base={"REMOTE_ADDR": "192.168.1.9"})
         self.assertEqual(resp.status_code, 200)
@@ -743,8 +746,8 @@ class AgentAdminApiTest(unittest.TestCase):
         任何来源，而手机要的其实只是「同一个子网能进」。
         """
         self._write_agent("main", {})
-        with mock.patch.object(main, "ADMIN_ALLOW_REMOTE", True), \
-                mock.patch.object(main, "ADMIN_ALLOW_REMOTE_LAN", True):
+        with mock.patch.object(admin_access, "ADMIN_ALLOW_REMOTE", True), \
+                mock.patch.object(admin_access, "ADMIN_ALLOW_REMOTE_LAN", True):
             resp = self.client.put("/api/agent/main", json={"provider": "volc"},
                                    environ_base={"REMOTE_ADDR": "192.168.1.9"})
         self.assertEqual(resp.status_code, 200)
@@ -752,8 +755,8 @@ class AgentAdminApiTest(unittest.TestCase):
     def test_lan_mode_rejects_public_addr(self):
         """`lan` 档挡公网来源：端口转发 / 公网直连进来的请求必须还是 403。"""
         self._write_agent("main", {})
-        with mock.patch.object(main, "ADMIN_ALLOW_REMOTE", True), \
-                mock.patch.object(main, "ADMIN_ALLOW_REMOTE_LAN", True):
+        with mock.patch.object(admin_access, "ADMIN_ALLOW_REMOTE", True), \
+                mock.patch.object(admin_access, "ADMIN_ALLOW_REMOTE_LAN", True):
             resp = self.client.put("/api/agent/main", json={"provider": "volc"},
                                    environ_base={"REMOTE_ADDR": "8.8.8.8"})
         self.assertEqual(resp.status_code, 403)
@@ -761,8 +764,8 @@ class AgentAdminApiTest(unittest.TestCase):
     def test_loopback_always_allowed(self):
         """回环不受档位影响：`lan` 档下本机照样能改。"""
         self._write_agent("main", {})
-        with mock.patch.object(main, "ADMIN_ALLOW_REMOTE", True), \
-                mock.patch.object(main, "ADMIN_ALLOW_REMOTE_LAN", True):
+        with mock.patch.object(admin_access, "ADMIN_ALLOW_REMOTE", True), \
+                mock.patch.object(admin_access, "ADMIN_ALLOW_REMOTE_LAN", True):
             resp = self.client.put("/api/agent/main", json={"provider": "volc"},
                                    environ_base={"REMOTE_ADDR": "127.0.0.1"})
         self.assertEqual(resp.status_code, 200)

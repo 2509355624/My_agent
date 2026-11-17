@@ -1248,39 +1248,11 @@ def _put_override(aid, group_id, field, value):
 
 # ─── 文档 API ────────────────────────────────────────
 
-@app.route("/api/documents")
-def api_list_documents():
-    """列出所有文档"""
-    import os
-    os.makedirs(DOCUMENTS_DIR, exist_ok=True)
-    result = []
-    for root, dirs, files in os.walk(DOCUMENTS_DIR):
-        for f in files:
-            full_path = os.path.join(root, f)
-            rel_path = os.path.relpath(full_path, DOCUMENTS_DIR)
-            size = os.path.getsize(full_path)
-            try:
-                with open(full_path, "r", encoding="utf-8", errors="ignore") as fh:
-                    lines = len(fh.readlines())
-            except:
-                lines = -1
-            result.append({
-                "name": rel_path,
-                "size": size,
-                "lines": lines
-            })
-    return jsonify({"files": result})
+from app.features.rag import documents_api
+from app.features.rag.documents_api import _safe_base_filename
+app.register_blueprint(documents_api.bp)
 
 
-def _safe_base_filename(fname):
-    """净化上传文件名：保留中文等 Unicode 字符，仅去除路径分隔符和危险字符防穿越"""
-    fname = fname.replace("\\", "/").split("/")[-1].strip()
-    # 只允许 中文/字母/数字/下划线/中划线/空格/点，去其他危险字符
-    cleaned = re.sub(r"[^\w\u4e00-\u9fff. \-]", "", fname, flags=re.UNICODE)
-    cleaned = cleaned.strip(". ")
-    if not cleaned:
-        cleaned = "unnamed.txt"
-    return cleaned
 
 
 @app.route("/api/vision/test", methods=["POST"])
@@ -1342,79 +1314,10 @@ def vision_test():
                     "provider": pid, "model": model})
 
 
-@app.route("/api/documents/upload", methods=["POST"])
-def api_upload_document():
-    """上传文档到 documents 目录"""
-    import os
-
-    os.makedirs(DOCUMENTS_DIR, exist_ok=True)
-
-    if "file" not in request.files:
-        return jsonify({"error": "没有文件"}), 400
-
-    f = request.files["file"]
-    if not f.filename:
-        return jsonify({"error": "文件名为空"}), 400
-
-    filename = _safe_base_filename(f.filename)
-    filepath = os.path.join(DOCUMENTS_DIR, filename)
-    f.save(filepath)
-
-    size = os.path.getsize(filepath)
-    try:
-        with open(filepath, "r", encoding="utf-8", errors="ignore") as fh:
-            lines = len(fh.readlines())
-    except:
-        lines = -1
-
-    return jsonify({
-        "ok": True,
-        "name": filename,
-        "size": size,
-        "lines": lines
-    })
 
 
-@app.route("/api/documents/<path:filename>")
-def api_get_document(filename):
-    """读取文档内容（带行号，支持 offset/limit 参数）"""
-    offset = request.args.get("offset", "1")
-    limit = request.args.get("limit", "100")
-    try:
-        offset = int(offset)
-        limit = int(limit)
-    except ValueError:
-        offset = 1
-        limit = 100
-
-    content = read_document(filename, offset=offset, limit=limit)
-    return jsonify({"content": content})
 
 
-@app.route("/api/documents/<path:filename>", methods=["DELETE"])
-def api_delete_document(filename):
-    """删除文档"""
-    import os
-
-    # 安全校验：确保在 documents 目录内
-    safe_name = filename.replace("..", "").lstrip("/").lstrip("\\").strip()
-    if not safe_name:
-        return jsonify({"error": "文件名非法"}), 400
-
-    filepath = os.path.join(DOCUMENTS_DIR, safe_name)
-    try:
-        real_target = os.path.realpath(filepath)
-        real_docs = os.path.realpath(DOCUMENTS_DIR)
-        if not real_target.startswith(real_docs):
-            return jsonify({"error": "路径非法"}), 400
-    except Exception:
-        return jsonify({"error": "路径非法"}), 400
-
-    if not os.path.exists(filepath):
-        return jsonify({"error": "文件不存在"}), 404
-
-    os.remove(filepath)
-    return jsonify({"ok": True})
 
 
 # ─── 启动 ──────────────────────────────────────────

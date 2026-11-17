@@ -30,6 +30,7 @@ from app.features.novel import routes as novel_api
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAGE = os.path.join(ROOT, "web", "novel.html")
 MAIN = os.path.join(ROOT, "app", "main.py")
+PAGES = os.path.join(ROOT, "app", "web", "pages.py")
 INDEX = os.path.join(ROOT, "web", "index.html")
 NOVEL_SRC = os.path.join(ROOT, "app", "features", "novel", "novel.py")
 
@@ -1245,6 +1246,7 @@ class WiringTest(unittest.TestCase):
     def setUp(self):
         self.html = _read(PAGE)
         self.main = _read(MAIN)
+        self.pages = _read(PAGES)
         self.index = _read(INDEX)
         self.src = _read(NOVEL_SRC)
 
@@ -1292,7 +1294,7 @@ class WiringTest(unittest.TestCase):
     def test_main_registers_blueprint_page_and_no_store(self):
         self.assertIn("from app.features.novel import routes as novel_api", self.main)
         self.assertIn("app.register_blueprint(novel_api.bp)", self.main)
-        self.assertIn('@app.route("/novel")', self.main)
+        self.assertIn('@bp.route("/novel")', self.pages)
         self.assertIn("def _no_cache_novel", self.main)
         self.assertIn('request.path == "/novel"', self.main)
         self.assertIn('request.path.startswith("/api/novel/")', self.main)
@@ -1644,7 +1646,7 @@ class NavUiTest(unittest.TestCase):
             self.assertIn(needle, self.html, "缺少 %s" % needle)
 
     def test_admin_page_has_three_entry_points(self):
-        main = _read(os.path.join(ROOT, "app", "main.py"))
+        main = _read(os.path.join(ROOT, "app", "web", "pages.py"))
         self.assertIn('"/novel_admin"', main)
         for name in ("index.html", "admin.html", "persona_admin.html"):
             html = _read(os.path.join(ROOT, "web", name))
