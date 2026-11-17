@@ -11,7 +11,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import gen_steps
+from app.features.image import gen_steps
 from app.skills import load_workflow
 
 

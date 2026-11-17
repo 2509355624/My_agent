@@ -2123,7 +2123,7 @@ def process(job):
         # 插在 UNETLoader 与消费者之间，角色 LoRA（char_loras，build 时已插）
         # 会落在它的下游，互不干扰。
         try:
-            from app import default_loras
+            from app.features.image import default_loras
             wf = default_loras.apply(job.skill, wf)
         except Exception:                             # noqa: BLE001
             log.exception("默认 LoRA 装填失败 %s，这一图按原样提交", job.skill)
