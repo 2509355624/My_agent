@@ -400,7 +400,7 @@ def allow_send(path, agent_id, target, target_id, notify=True, meta=None):
     # 通道，误拦只能作废。图已经画好了，留着不费事。
     # 挂在这里而不是三个发图口各挂一次：那是本函数存在的意义（唯一闸门）。
     try:
-        from app import image_review
+        from app.features.image import review as image_review
         image_review.record(path, target, target_id, agent_id=agent_id,
                             verdict=verdict, meta=meta)
     except Exception as exc:

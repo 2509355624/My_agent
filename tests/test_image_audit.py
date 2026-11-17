@@ -426,7 +426,7 @@ class AllowSendTest(unittest.TestCase):
         """
         with mock.patch.object(agents, "image_audit_enabled") as gate, \
              mock.patch("app.vision.describe") as desc, \
-             mock.patch("app.image_review.record") as rec:
+             mock.patch("app.features.image.review.record") as rec:
             self.assertTrue(image_audit.allow_send(
                 self.path, "qq", "private", "web_2509355624"))
         gate.assert_not_called()

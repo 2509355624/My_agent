@@ -1768,7 +1768,7 @@ def get_image_review(agent_id):
     aid, err = _agent_or_400(agent_id)
     if err:
         return err
-    from app import image_review
+    from app.features.image import review as image_review
     state = (request.args.get("state") or "").strip() or None
     try:
         limit = int(request.args.get("limit") or 50)
@@ -1805,7 +1805,7 @@ def approve_image_review(agent_id, item_id):
     aid, err = _agent_or_400(agent_id)
     if err:
         return err
-    from app import image_review
+    from app.features.image import review as image_review
     ok, msg = image_review.approve(item_id)
     return jsonify({"ok": ok, "agent": aid, "id": item_id, "msg": msg,
                     "pending": image_review.pending_count()}), \
@@ -1822,7 +1822,7 @@ def reject_image_review(agent_id, item_id):
     aid, err = _agent_or_400(agent_id)
     if err:
         return err
-    from app import image_review
+    from app.features.image import review as image_review
     ok, msg = image_review.reject(item_id)
     return jsonify({"ok": ok, "agent": aid, "id": item_id, "msg": msg,
                     "pending": image_review.pending_count()}), \
@@ -1837,7 +1837,7 @@ def serve_review_image(name):
     与 admin.html）——原图 2000px 级、单张几 MB，列表铺 50 条走隧道卡死。
     缩略图生成失败自动退回原图，不影响判图。
     """
-    from app import image_review
+    from app.features.image import review as image_review
     d = image_review.REVIEW_DIR
     safe = os.path.basename(name)
     if not os.path.isfile(os.path.join(d, safe)):
@@ -1868,7 +1868,7 @@ def get_image_review_global():
     query：`state=pending|approved|rejected`（不传 = 全部）、`limit`（默认 200）。
     每条附会话名（qq_names）+ agent，管理员看着图判断是谁、哪个 bot 要的、什么时候。
     """
-    from app import image_review
+    from app.features.image import review as image_review
     state = (request.args.get("state") or "").strip() or None
     try:
         limit = int(request.args.get("limit") or 200)
@@ -1896,7 +1896,7 @@ def approve_image_review_global(item_id):
     if not _admin_allowed():
         return jsonify({"error": "管理接口默认只允许本机访问，"
                                  "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
-    from app import image_review
+    from app.features.image import review as image_review
     ok, msg = image_review.approve(item_id)
     return jsonify({"ok": ok, "id": item_id, "msg": msg,
                     "pending": image_review.pending_count()}), \
@@ -1909,7 +1909,7 @@ def reject_image_review_global(item_id):
     if not _admin_allowed():
         return jsonify({"error": "管理接口默认只允许本机访问，"
                                  "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
-    from app import image_review
+    from app.features.image import review as image_review
     ok, msg = image_review.reject(item_id)
     return jsonify({"ok": ok, "id": item_id, "msg": msg,
                     "pending": image_review.pending_count()}), \

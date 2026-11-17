@@ -23,7 +23,7 @@ import time
 import unittest
 from unittest import mock
 
-from app import image_review
+from app.features.image import review as image_review
 from app.features.image.audit import Verdict
 
 
@@ -376,7 +376,7 @@ class AuditHookTest(unittest.TestCase):
         with mock.patch.object(image_audit, "check",
                                return_value=Verdict(False, reason="x")), \
              mock.patch("app.agents.image_audit_enabled", return_value=True), \
-             mock.patch("app.image_review.record",
+             mock.patch("app.features.image.review.record",
                         side_effect=OSError("disk full")), \
              mock.patch("app.qq_api.send_group") as sg:
             ok = image_audit.allow_send(path, "qq", "group", "233")
@@ -388,7 +388,7 @@ class AuditHookTest(unittest.TestCase):
         with mock.patch.object(image_audit, "check",
                                return_value=Verdict(True)), \
              mock.patch("app.agents.image_audit_enabled", return_value=True), \
-             mock.patch("app.image_review.record") as rec:
+             mock.patch("app.features.image.review.record") as rec:
             self.assertTrue(image_audit.allow_send("x.jpg", "qq", "group", "233"))
         self.assertFalse(rec.called)
 
