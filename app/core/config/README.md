@@ -7,6 +7,7 @@ import，未搬完的配置域暂时由 `__init__.py` 的惰性 `__getattr__` �
 |---|---|
 | `paths.py` | 仓库根、`web/`、`data/`、`documents/`、`state_path()`、测试进程判断 |
 | `env.py` | `.env` 加载、`_env_bool`、`_env_list` |
+| `image.py` | ComfyUI 地址/启动参数、生图渠道、显存/内存水位、NAI 开关 |
 | `llm.py` | provider/模型表、降级链、请求超时、重试、TTL、`get_llm_settings`、`validate_llm_patch`、`update_llm_settings` |
 | `runtime.py` | 非密钥运行期设置 JSON；`AGENT_RUNTIME_SETTINGS` 可覆盖路径；mtime 缓存、原子写 |
 | `__init__.py` | 显式导出已拆域；未搬完的名字惰性回落旧 `app.config` |
