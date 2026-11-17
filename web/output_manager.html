@@ -17,7 +17,7 @@
     --radius: 12px; --radius-sm: 8px;
   }
   html, body { background: var(--bg); color: var(--text);
-    font-family: "SF Mono", "JetBrains Mono", "Consolas", "Microsoft YaHei", monospace;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
     font-size: 14px; min-height: 100%; }
   a { color: var(--text-dim); text-decoration: none; }
   a:hover { color: var(--accent); }
@@ -159,17 +159,30 @@
     #tree { width: 100%; flex: none; max-height: 240px; position: static;
       border-right: none; border-bottom: 1px solid var(--border-soft); }
   }
+
+  /* 2026-11-17：手机上目录树收紧；触屏没有 hover，多选勾必须常显。 */
+  @media (max-width: 760px) {
+    .topbar { padding: 10px 14px; }
+    #tree { max-height: 180px; padding: 8px 6px 20px; }
+    #main { padding: 12px 14px 50px; }
+    #grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+    #toolbar { gap: 6px; }
+    #toolbar .info { flex: 1 1 100%; }
+  }
+  @media (hover: none) {
+    .cell .pick { display: block; }
+  }
+
 </style>
 </head>
 <body>
 
 <div class="topbar">
-  <h1>图片管理台</h1>
-  <span class="pill">ComfyUI output</span>
+  <h1>图片</h1>
   <span class="stat" id="stat">加载中…</span>
   <span class="spacer"></span>
   <button class="btn small" id="btnRefresh">&#x21bb; 刷新</button>
-  <a class="btn small" href="/">返回主页</a>
+  <a class="btn small" href="/">← 回首页</a>
 </div>
 
 <div class="layout">
