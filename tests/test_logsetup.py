@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from app import logsetup
+from app.core import logsetup
 
 
 class SetupTest(unittest.TestCase):

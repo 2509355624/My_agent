@@ -179,7 +179,7 @@ from app import comfy_gate
 from app.features.image import log as image_log
 from app.features.image.delivery import (
     _caption, _caption_note_text, _send_image, caption_note_default)
-from app.cancel import Cancelled, is_cancelled
+from app.core.cancel import Cancelled, is_cancelled
 from app.config import (BASE_DIR, COMFY_MIN_FREE_RAM_GB, COMFY_MIN_FREE_VRAM_GB,
                         COMFY_RELEASE_AFTER_COMIC,
                         COMFY_RELEASE_AFTER_SAME, COMFY_RELEASE_AFTER_SAME_MAP,

@@ -8,7 +8,7 @@ import logging
 import threading
 import time
 import requests
-from app.cancel import is_cancelled
+from app.core.cancel import is_cancelled
 from app.core.config.llm import (API_URL, API_KEY, MODEL, LLM_PROVIDER,
                                  PERSONA_PROVIDER, PERSONA_MODEL,
                                  PROVIDERS, OLLAMA_BASE_URL,

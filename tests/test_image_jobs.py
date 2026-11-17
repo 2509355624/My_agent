@@ -21,7 +21,7 @@ from app import nai
 from app import qq_api
 from app import skills
 from app.features.image import out as image_out
-from app.cancel import Cancelled
+from app.core.cancel import Cancelled
 from app.config import QQ_AGENT_ID
 from app.tools.normal import generate_image
 

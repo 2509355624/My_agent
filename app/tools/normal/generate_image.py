@@ -11,7 +11,7 @@ from flask import request
 from app import comfy_src, image_jobs
 from app import char_guard
 from app import nai as nai_mod
-from app.cancel import Cancelled, is_cancelled
+from app.core.cancel import Cancelled, is_cancelled
 from app.config import (COMFYUI_URL, DISABLED_IMAGE_SKILLS,
                         IMAGE_DEFAULT_SKILL, QQ_AGENT_ID)
 from app.skills import load_skill, load_workflow

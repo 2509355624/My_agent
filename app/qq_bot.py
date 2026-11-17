@@ -43,10 +43,10 @@ except ImportError:                    # 非 Windows 平台退化为不做检查
 
 from app.features.qq import status as qq_status
 from app.features.persona import galgame
+from app.core import logsetup
 from app import (confirm_gate, direct_gen, image_jobs,
                  lora_bot, play_bot, solo_bot,
                  interject,
-                 logsetup,
                  longterm, moss_bot, notify, persona, qq_api, recent,
                  stickers, trigger, usage)
 from app.features.card import bot as card_bot

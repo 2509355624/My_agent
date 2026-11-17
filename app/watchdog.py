@@ -700,6 +700,6 @@ def run():
 
 
 if __name__ == "__main__":
-    from app.logsetup import setup
+    from app.core.logsetup import setup
     setup("watchdog")
     run()

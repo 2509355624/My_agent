@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 import re
-from app.cancel import is_cancelled
+from app.core.cancel import is_cancelled
 from app.llm import (call_llm_stream, candidates, current_stream_meta,
                      current_usage, get_effective_config)
 from app import agents as agent_store

@@ -13,7 +13,8 @@
 状态：`config/` 包已建立，`paths.py`、`env.py`、`llm.py`、`persona.py`、
 `context.py`、`search.py`、`agent.py`、`image.py`、`vision.py`、`rag.py`、
 `web.py`、`card.py`、`qq.py`、`watchdog.py`、`runtime.py` 已从旧
-`app/config.py` 拆出；`runtime.py` 提供管理页可热更新的非密钥设置，
+`app/config.py` 拆出；`cancel.py`（跨域取消信号）、`logsetup.py`（各入口日志初始化）
+也归 core。`runtime.py` 提供管理页可热更新的非密钥设置，
 `llm.py` 提供统一 LLM 降级链/超时/重试/预算的默认值、校验与自定义中转站合并，
 `persona.py` 管角色扮演默认模型和玩家白名单，`context.py` 管轮次、token 预算
 和物理窗口封顶，`search.py` 管联网搜索，`agent.py` 管默认 agent ID，

@@ -44,7 +44,7 @@ from app import comic, image_jobs, lora_slots
 from app.features.image import out as image_out
 from app.features.image import gen_steps
 from app.features.image import gen_params
-from app.cancel import Cancelled
+from app.core.cancel import Cancelled
 from app.config import COMFYUI_URL, NAI_API_KEY, WEB_DIR, state_path
 from app.direct_gen import _allowed_skills
 from app.skills import load_skill, skill_summary
