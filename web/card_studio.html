@@ -16,7 +16,7 @@
     --warn: #fbbf24; --info: #4fc3f7; --radius: 12px; --radius-sm: 8px;
   }
   html, body { background: var(--bg); color: var(--text);
-    font-family: "SF Mono", "JetBrains Mono", "Consolas", "Microsoft YaHei", monospace;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
     font-size: 14px; min-height: 100%; }
   .wrap { max-width: 1180px; margin: 0 auto; padding: 20px; }
   .topbar { display: flex; align-items: center; gap: 12px; padding: 12px 0 20px; }
@@ -89,15 +89,25 @@
   .coverops { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
   .coverstate { font-size: 12px; color: var(--text-dim); }
   .coverstate.err { color: var(--error); }
+
+  /* 2026-11-17：手机封面别占满整屏；表单宽度跟随屏幕。 */
+  @media (max-width: 860px) {
+    .wrap { padding: 14px; }
+    .coverbox { max-width: 220px; margin: 0 auto; }
+    .coverops { max-width: 220px; margin: 10px auto 0; }
+    .field input { width: 100% !important; }
+    input, textarea, select { font-size: 16px; }
+    .layout { gap: 12px; }
+  }
+
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1>角色卡工作台</h1>
-    <span class="hint">一句话 → 星陨AI 的六个模块</span>
+    <h1>造卡</h1>
     <span class="spacer"></span>
-    <a class="back" href="/">返回主页</a>
+    <a class="back" href="/">← 回首页</a>
   </div>
 
   <div class="card">
@@ -108,7 +118,7 @@
       <button class="btn" id="btnAgain" disabled>换一版</button>
       <span id="msg"></span>
     </div>
-    <div class="hint" style="margin-top:8px">缺失的设定模型会自己补，补了什么会写在该卡最下面的「补了什么」里——不满意直接换一版。</div>
+    <div class="hint" style="margin-top:8px">缺的设定会自动补；不满意就换一版。</div>
   </div>
 
   <div id="result" style="display:none">
