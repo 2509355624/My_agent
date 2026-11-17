@@ -281,6 +281,8 @@ from app.features.persona.manual_input import (
     _MANUAL_KEYS, _manual_block, _manual_display, _manual_norm,
     _manual_segments,
 )
+
+from app.features.persona.json_utils import _close_json, _parse_json_loose
 from app.features.persona.story import (
     STORY_MAX_CHARS, _clip_items, _ledger_section,
     _shares_phrase, story_line,
@@ -2943,98 +2945,6 @@ def _judge_intent(card, said, state="", history=None, note=""):
     note = str(d.get("note") or "").strip()[:30]
     return intent, note, _director_fields(d)
 
-
-
-def _close_json(s):
-    """把被截断的 JSON 补成合法结构。**只补语法，不改值。**
-
-    2026-11-05 事故：打分 JSON 加上 `spot` / `dev` / `hook` 之后变长，
-    小模型（flash 档）经常在 `literal` 那一行被硬截断，末尾还粘一句
-    「Sorry, I can't respond...」。原来的 `rfind("}")` 会命中 `segments`
-    里那个内层右括号，`json.loads` 必然失败 → 整轮按 0 分走 →
-    玩家看到的是「高潮值只掉不涨、开发度不动」。
-
-    这里逐字符扫一遍，只做四件事：
-      · 记住还没闭合的 `{` / `[`，在末尾按顺序补上；
-      · 字符串中途断掉就把引号补上；
-      · 断在 `"key":` 后面时补 `null`；
-      · 去掉尾部多余的逗号。
-
-    救回来的字段值原样保留——补出来的只有括号和引号，不会凭空造分。
-    """
-    out, stack = [], []
-    in_str = esc = False
-    for ch in s:
-        if in_str:
-            if esc:
-                out.append(ch)
-                esc = False
-            elif ch == "\\":
-                out.append(ch)
-                esc = True
-            elif ch == '"':
-                out.append(ch)
-                in_str = False
-            elif ord(ch) < 0x20:
-                # JSON 字符串里不许有裸的控制字符。模型被截断时经常在这里
-                # 带一个真实换行进来，整段就废了——转义掉，值本身不动。
-                out.append("\\n" if ch == "\n" else
-                           ("\\r" if ch == "\r" else
-                            ("\\t" if ch == "\t" else " ")))
-            else:
-                out.append(ch)
-            continue
-        if ch == '"':
-            in_str = True
-            out.append(ch)
-        elif ch in "{[":
-            stack.append("}" if ch == "{" else "]")
-            out.append(ch)
-        elif ch in "}]":
-            # 和栈顶对不上 = 多出来的右括号（多半是截断后粘上的正文），
-            # 到这里就截住，别把它塞进去。
-            if not stack or stack[-1] != ch:
-                break
-            stack.pop()
-            out.append(ch)
-        else:
-            out.append(ch)
-    body = "".join(out).rstrip()
-    if in_str:
-        body += '"'
-    if body.endswith(":"):
-        body += " null"
-    for closer in reversed(stack):
-        body += closer
-    # `,}` / `,]` 是截断后最常见的非法结构，补完括号再清一次。
-    body = re.sub(r",\s*([}\]])", r"\1", body)
-    return body
-
-
-def _parse_json_loose(raw):
-    """从回复里抠 JSON。
-
-    先按最紧的边界原样解析；失败再**补一次语法**（见 `_close_json`）——
-    截断的回复里前面那些数值（`act` / `excite` / `dev`）都是好的，扔了可惜。
-    **不做语义修补**：补不出来的字段就是没有，由调用方按缺省走。
-    """
-    s = str(raw or "").strip()
-    if not s:
-        return None
-    a = s.find("{")
-    if a < 0:
-        return None
-    b = s.rfind("}")
-    if b > a:
-        try:
-            return json.loads(s[a:b + 1])
-        except ValueError:
-            pass
-    # 截断救援：从第一个 `{` 一路扫到文末，补括号后再试。
-    try:
-        return json.loads(_close_json(s[a:]))
-    except ValueError:
-        return None
 
 
 # ── 攻略模式的第一段（2026-11-03）────────────────────
