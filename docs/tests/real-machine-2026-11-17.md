@@ -26,6 +26,13 @@ JSONL 后写覆盖先写，导致全局列表少一条。已在
 `app/features/image/review.py` 改为“已用编号集合 + 锁”去重，
 保持对外编号格式不变。提交 `5483786`。
 
+## 后续补充验证
+
+- 拉取 `9310970` 后，`test_qq.py` 在 Linux 上最初因缺少 PyYAML 无法导入；
+  补进 `requirements.txt` 后又暴露单实例锁只有 Windows 分支。
+- 已补 `fcntl.flock` 的 POSIX 分支，`test_qq.py` 在 Linux 上 199/199 通过。
+- 同步后 Windows 上 `test_qq.py` 同样 199/199 通过。
+
 ## 尚未做
 
 - 没有在虚拟机里启动常驻 Flask/QQ/ComfyUI 进程；启动仍由站主手动执行。
