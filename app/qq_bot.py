@@ -46,11 +46,12 @@ from app.features.qq import notify
 from app.features.persona import galgame
 from app.core import logsetup
 from app.features.chat import longterm
+from app.features.chat import recent
 from app.features.qq import stickers
 from app import (confirm_gate, direct_gen, image_jobs,
                  lora_bot, play_bot, solo_bot,
                  interject,
-                 moss_bot, persona, qq_api, recent,
+                 moss_bot, persona, qq_api,
                  trigger, usage)
 from app.features.card import bot as card_bot
 from app.features.image import log as image_log

@@ -20,7 +20,7 @@ from unittest import mock
 
 import app.agents as agents
 import app.features.chat.longterm as longterm
-import app.recent as recent
+import app.features.chat.recent as recent
 
 
 class _TmpAgentsMixin:
