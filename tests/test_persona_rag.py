@@ -74,6 +74,7 @@ class RagBase(unittest.TestCase):
         rank._WARMED = False
         rank._WORKER = None
         rank._pending_path = lambda: self.pending_path
+        rank._RECENT_CACHE.clear()
         self.addCleanup(self._restore)
 
     def _restore(self):
@@ -152,6 +153,33 @@ class DistillTest(RagBase):
         self.assertIn("【第2天 · 中午】", entries[0]["content"])
         self.assertEqual(entries[1]["metadata"]["kind"], "fact")
         self.assertTrue(entries[1]["content"].startswith("伊蕾娜："))
+
+    def test_parse_attaches_batch_id_to_batch_fact_and_anchor(self):
+        """批次摘要、原子事实、锚点必须共享同一个 batch_id。
+
+        没有这个字段时，三层只能靠 (turn_start, turn_end) 猜父子关系；
+        同一窗口重试/回滚就会混批。
+        """
+        raw = ('{"skip": false, "summary": "第一次见面是在旧书市。",'
+               ' "anchors": [{"key": "first_meet",'
+               ' "content": "第一次见面是在旧书市。"}],'
+               ' "entries": [{"about": "shared",'
+               ' "content": "双方：约好下次还去旧书市"}]}')
+        entries = rank.parse_memory_json(
+            raw, 21, 25, day=2, phase="中午", epoch=7,
+            batch_id="batch-21-25-7")
+        self.assertEqual(entries[0]["id"], "batch-21-25-7")
+        self.assertEqual(
+            [e["metadata"]["kind"] for e in entries],
+            ["batch", "anchor", "fact"])
+        for entry in entries:
+            self.assertEqual(entry["metadata"]["batch_id"],
+                             "batch-21-25-7")
+
+    def test_parse_without_batch_id_uses_deterministic_fallback(self):
+        raw = '{"skip": false, "entries": [{"about": "user", "content": "用户：怕冷"}]}'
+        entries = rank.parse_memory_json(raw, 3, 7, epoch=2)
+        self.assertEqual(entries[0]["metadata"]["batch_id"], "batch-3-7-2")
 
     def test_remember_flushes_batch_when_day_changes(self):
         with mock.patch.object(rank, "_ensure_worker"):
@@ -298,6 +326,45 @@ class RetrieveTest(RagBase):
         self.assertIn("【第2天】", block)
 
 
+class RecentDocsTest(RagBase):
+    def test_groups_children_by_batch_id_not_only_window(self):
+        """同一 batch_id 的批次/事实/锚点必须同组，哪怕 turn 窗口不同。"""
+        bid = "batch-3-4-9"
+        self.client.entries = [
+            {"id": "batch-3-4-9", "content": "【第2天】旧书市。",
+             "metadata": {"kind": "batch", "batch_id": bid,
+                          "turn_start": 3, "turn_end": 4,
+                          "source": rank._SOURCE}},
+            {"id": "3-4-0", "content": "用户：买了旧书。",
+             "metadata": {"kind": "fact", "batch_id": bid,
+                          "turn_start": 3, "turn_end": 5,
+                          "source": rank._SOURCE}},
+            {"id": "anchor-3-4-first", "content": "第一次见面。",
+             "metadata": {"kind": "anchor", "batch_id": bid,
+                          "turn_start": 4, "turn_end": 5,
+                          "source": rank._SOURCE}},
+        ]
+        got = rank._recent_docs("web_10001__rem", batches=1)
+        self.assertEqual([d["id"] for d in got],
+                         ["batch-3-4-9", "3-4-0", "anchor-3-4-first"])
+
+    def test_old_entries_fall_back_to_turn_window(self):
+        """旧数据没有 batch_id 时，仍按 (turn_start, turn_end) 归组。"""
+        self.client.entries = [
+            {"id": "batch-1-2", "content": "旧批次。",
+             "metadata": {"kind": "batch", "turn_start": 1, "turn_end": 2,
+                          "source": rank._SOURCE}},
+            {"id": "1-2-0", "content": "旧事实。",
+             "metadata": {"kind": "fact", "turn_start": 1, "turn_end": 2,
+                          "source": rank._SOURCE}},
+            {"id": "batch-3-4", "content": "更新批次。",
+             "metadata": {"kind": "batch", "turn_start": 3, "turn_end": 4,
+                          "source": rank._SOURCE}},
+        ]
+        got = rank._recent_docs("web_10001__rem", batches=1)
+        self.assertEqual([d["id"] for d in got], ["batch-3-4"])
+
+
 class ForgetTest(RagBase):
     def test_forget_last_pops_pending(self):
         with mock.patch.object(rank, "_ensure_worker"):
@@ -329,6 +396,30 @@ class ForgetTest(RagBase):
         rec = rank.pending_for("web_10001__rem")
         self.assertEqual([t["turn"] for t in rec["items"]], [1])
         self.assertEqual(rec["epoch"], 1)
+
+    def test_forget_removes_anchor_children_by_batch_id(self):
+        """回退一批时，锚点也要跟着 batch_id 一起删，不能留孤儿。"""
+        bid = "batch-1-2-9"
+        self.client.entries = [
+            {"id": "batch-1-2-9", "content": "批次。",
+             "metadata": {"kind": "batch", "batch_id": bid,
+                          "turn_start": 1, "turn_end": 2,
+                          "source": rank._SOURCE}},
+            {"id": "1-2-0", "content": "事实。",
+             "metadata": {"kind": "fact", "batch_id": bid,
+                          "turn_start": 1, "turn_end": 2,
+                          "source": rank._SOURCE}},
+            {"id": "anchor-1-2-first", "content": "锚点。",
+             "metadata": {"kind": "anchor", "batch_id": bid,
+                          "turn_start": 1, "turn_end": 2,
+                          "source": rank._SOURCE}},
+        ]
+        rank._process("forget", "web_10001__rem",
+                      {"start": 1, "end": 2, "batch_ids": [bid]})
+        ids = [eid for _coll, eid in self.client.deleted_entries]
+        self.assertIn("batch-1-2-9", ids)
+        self.assertIn("1-2-0", ids)
+        self.assertIn("anchor-1-2-first", ids)
 
     def test_rollback_cancels_in_flight_distill(self):
         line = "web_10001__rem"

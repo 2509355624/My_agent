@@ -607,16 +607,29 @@ def _recent_docs_uncached(line, batches=3, limit=12):
     for e in entries:
         m = e.get("metadata") or {}
         try:
-            key = (int(m.get("turn_start") or 0), int(m.get("turn_end") or 0))
+            start = int(m.get("turn_start") or 0)
+            end = int(m.get("turn_end") or 0)
         except (TypeError, ValueError):
             continue
-        groups.setdefault(key, []).append(e)
+        # 新数据按 batch_id 分组；旧数据没有这个字段，退回原来的
+        # (turn_start, turn_end) 窗口。事实/锚点因此能和批次摘要同组。
+        bid = str(m.get("batch_id") or "").strip()
+        key = ("batch", bid) if bid else ("window", start, end)
+        row = groups.get(key)
+        if row is None:
+            groups[key] = {"order": (start, end, bid), "items": [e]}
+        else:
+            old = row["order"]
+            row["order"] = (min(old[0], start), max(old[1], end),
+                            old[2] or bid)
+            row["items"].append(e)
     # 取**最近**几批（2026-11-08 改）：原来是 `[:batches]` 取最早的，
     # 问「昨天」时拿到的可能是前天以前的内容。现在取末尾几批，组内按时间正序。
-    keys = sorted(groups.keys())[-max(1, int(batches or 1)):]
+    rows = sorted(groups.values(), key=lambda row: row["order"])[
+        -max(1, int(batches or 1)):]
     out = []
-    for key in keys:
-        out.extend(groups[key])
+    for row in rows:
+        out.extend(row["items"])
     return out[:limit]
 
 
@@ -1029,6 +1042,28 @@ def _process(kind, line, payload):
             # 否则回退之后演员还能把被撤掉的那句话召回出来。
             for t in range(start, end + 1):
                 ids += ["raw-%d-u" % t, "raw-%d-a" % t]
+            # 新数据把 batch_id 写进了事实/锚点；按 batch_id（旧数据退回
+            # turn 窗口）把锚点等孩子一起找出来，避免回退留下孤儿锚点。
+            try:
+                listed = client.list_entries(coll, timeout=PERSONA_RAG_TIMEOUT)
+            except Exception:                            # noqa: BLE001
+                log.warning("回退前读记忆列表失败 %s", coll, exc_info=True)
+                listed = {}
+            if listed.get("ok"):
+                wanted = {str(x) for x in ids if x}
+                for e in listed.get("entries") or []:
+                    meta = e.get("metadata") or {}
+                    bid = str(meta.get("batch_id") or "")
+                    try:
+                        ts = int(meta.get("turn_start") or 0)
+                        te = int(meta.get("turn_end") or 0)
+                    except (TypeError, ValueError):
+                        ts = te = 0
+                    if (bid and bid in wanted) or (ts == start and te == end):
+                        ids.append(str(e.get("id") or ""))
+        # 同一 id 可能同时来自 fallback 列表和 list_entries，去重后再删。
+        seen = set()
+        ids = [eid for eid in ids if eid and not (eid in seen or seen.add(eid))]
         try:
             for entry_id in ids:
                 r = client.delete_entry(coll, entry_id)
@@ -1135,6 +1170,10 @@ def parse_memory_json(raw, start, end, day=0, phase="", card_name="角色",
         return []
     if not isinstance(data, dict) or data.get("skip"):
         return []
+    # 批次摘要和它的孩子共享同一个 batch_id（2026-11-18）：
+    # 以前只把 batch_id 用在摘要自己的 id 上，事实/锚点靠 turn 窗口猜父子；
+    # 同一窗口重试或回滚时会混批，回退也点不到锚点。
+    bid = str(batch_id or ("batch-%d-%d-%d" % (start, end, int(epoch or 0))))
     out = []
     summary = " ".join(str(data.get("summary") or "").split())
     if summary:
@@ -1145,11 +1184,11 @@ def parse_memory_json(raw, start, end, day=0, phase="", card_name="角色",
                   if int(day or 0) else "")
         content = prefix + summary[:320]
         out.append({
-            "id": str(batch_id or ("batch-%d-%d-%d"
-                                  % (start, end, int(epoch or 0)))),
+            "id": bid,
             "content": content,
             "metadata": {
                 "kind": "batch",
+                "batch_id": bid,
                 "about": "shared",
                 "day": int(day or 0),
                 "phase": str(phase or "")[:12],
@@ -1175,6 +1214,7 @@ def parse_memory_json(raw, start, end, day=0, phase="", card_name="角色",
                 "content": ac[:200],
                 "metadata": {
                     "kind": "anchor",
+                    "batch_id": bid,
                     "key": str(a.get("key") or "")[:24],
                     "about": "shared",
                     "day": int(day or 0),
@@ -1205,6 +1245,7 @@ def parse_memory_json(raw, start, end, day=0, phase="", card_name="角色",
             "content": content,
             "metadata": {
                 "kind": "fact",
+                "batch_id": bid,
                 "about": about,
                 "day": int(day or 0),
                 "turn_start": start,
