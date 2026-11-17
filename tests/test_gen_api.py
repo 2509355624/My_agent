@@ -23,7 +23,8 @@ from flask import Response
 from app.features.image import gen_params
 from app.features.image import routes as gen_api
 from app.features.comic import comic
-from app import (image_jobs, main)
+from app.features.image import jobs as image_jobs
+from app import (main)
 from app.core.skills import load_skill
 
 

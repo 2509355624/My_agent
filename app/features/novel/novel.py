@@ -67,7 +67,7 @@ import uuid
 from app.features.persona import rag as persona_rag
 from app.features.persona import writing_style
 from app.integrations import llm
-from app import (persona)
+from app.features.persona import service as persona
 from app.config import (BASE_DIR, PERSONA_MODEL, PERSONA_PROVIDER,
                         state_path)
 

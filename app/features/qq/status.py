@@ -93,7 +93,7 @@ def snapshot(bot=None):
 
     # ── 生图队列 ───────────────────────────────────
     try:
-        from app import image_jobs
+        from app.features.image import jobs as image_jobs
         jobs = image_jobs.snapshot()
     except Exception as exc:
         log.warning("读生图队列失败：%s", exc)

@@ -1273,7 +1273,7 @@ def _blank(line_key="", value=None, schema=1):
     card = {}
     if line_key:
         try:
-            from app import persona
+            from app.features.persona import service as persona
             card = persona.active_card(line_key) or {}
         except Exception:                                  # noqa: BLE001
             card = {}
@@ -1317,7 +1317,7 @@ def _entry(line_key):
     以前只在 `record_of` 里就地补内存，每次读都重算——用户改一次
     `affection_tiers.json` 的 gate，同一条线的层级就跟着漂。
     """
-    from app import persona
+    from app.features.persona import service as persona
     ent = persona._entry(line_key)                        # noqa: SLF001
     if not isinstance(ent, dict):
         return None
@@ -1333,7 +1333,7 @@ def _entry(line_key):
 
 
 def _save_entry(line_key, ent):
-    from app import persona
+    from app.features.persona import service as persona
     state = persona._load_state()                         # noqa: SLF001
     state[line_key] = ent
     persona._save_state(state)                            # noqa: SLF001
@@ -1342,7 +1342,7 @@ def _save_entry(line_key, ent):
 def _card_of(line_key):
     """这条线现在演的角色卡（取不到就空字典）。"""
     try:
-        from app import persona
+        from app.features.persona import service as persona
         card = persona.active_card(line_key)
         return card if isinstance(card, dict) else {}
     except Exception:                                      # noqa: BLE001
@@ -3603,7 +3603,7 @@ def detail_nodes(line_key):
     rec = record_of(ent)
     if not rec:
         return None
-    from app import persona
+    from app.features.persona import service as persona
     cfg = load_config()
     card = persona.active_card(line_key) or {}
     name = card.get("name") or "她"

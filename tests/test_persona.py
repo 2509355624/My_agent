@@ -26,7 +26,7 @@ from unittest import mock
 
 import app.core.agents as agents
 import app.affection as affection
-import app.persona as persona
+from app.features.persona import service as persona
 from app.features.persona import rag as persona_rag
 
 
@@ -946,11 +946,11 @@ class DrawTest(unittest.TestCase):
         job = mock.Mock()
         job.wait.return_value = {"outputs": {}}
         patches = [
-            mock.patch("app.image_jobs.comfy_alive",
+            mock.patch("app.features.image.jobs.comfy_alive",
                        return_value=kw.get("alive", True)),
-            mock.patch("app.image_jobs.output_images",
+            mock.patch("app.features.image.jobs.output_images",
                        return_value=kw.get("names", ["a.png"])),
-            mock.patch("app.image_jobs.enqueue",
+            mock.patch("app.features.image.jobs.enqueue",
                        return_value=(job, kw.get("reason"))),
             mock.patch("app.tools.normal.generate_image.build_t2i_workflow",
                        return_value=kw.get("wf", {"x": 1})),
@@ -965,7 +965,7 @@ class DrawTest(unittest.TestCase):
         name = persona.draw("sitting, smile", {"appearancePrompt": "1girl"},
                             "group_1")
         self.assertEqual(name, "a.png")
-        import app.image_jobs as ij
+        from app.features.image import jobs as ij
         args, kw = ij.enqueue.call_args
         self.assertEqual(args[:2], ("group", "1"))       # 会话线拆出来的投递目标
         self.assertEqual(kw["skill"], persona.FAST_SKILL)
@@ -983,7 +983,7 @@ class DrawTest(unittest.TestCase):
                             "web_2509355624__izumi_sagiri",
                             skill="anima-line", landscape=True)
         self.assertEqual(name, "a.png")
-        import app.image_jobs as ij
+        from app.features.image import jobs as ij
         from app.features.image import comfy_out
         args, kw = ij.enqueue.call_args
         self.assertEqual(args[:2], (None, "2509355624"))   # 网页侧 + 本人在途额度
@@ -1012,7 +1012,7 @@ class DrawTest(unittest.TestCase):
         提交前自己等（image_jobs._worker 的 wait_comfy_up）。
         """
         job = self._patch(alive=False)
-        import app.image_jobs as ij
+        from app.features.image import jobs as ij
         name = persona.draw("x", {"appearancePrompt": "1girl"}, "private_1")
         self.assertEqual(name, "a.png")            # 排队 → 等回来 → 照常用图
         kw = ij.enqueue.call_args[1]
@@ -1022,7 +1022,7 @@ class DrawTest(unittest.TestCase):
     def test_comfy_up_marks_the_job_as_up(self):
         """在线时 comfy_down 必须是 False——别把所有单都标成等机子。"""
         self._patch()
-        import app.image_jobs as ij
+        from app.features.image import jobs as ij
         persona.draw("x", {"appearancePrompt": "1girl"}, "private_1")
         self.assertFalse(ij.enqueue.call_args[1]["comfy_down"])
 
@@ -1052,7 +1052,7 @@ class DrawTest(unittest.TestCase):
 
     def test_empty_scene_does_not_enqueue(self):
         self._patch()
-        import app.image_jobs as ij
+        from app.features.image import jobs as ij
         self.assertEqual(persona.draw("   ", {"appearancePrompt": "1girl"},
                                       "private_1"), "")
         ij.enqueue.assert_not_called()
@@ -1102,7 +1102,7 @@ class DrawTest(unittest.TestCase):
 
     def test_no_workflow_is_silent(self):
         self._patch(wf=None)
-        import app.image_jobs as ij
+        from app.features.image import jobs as ij
         self.assertEqual(persona.draw("x", {"appearancePrompt": "1girl"},
                                       "private_1"), "")
         ij.enqueue.assert_not_called()
@@ -1113,7 +1113,7 @@ class DrawTest(unittest.TestCase):
         name = persona.draw("sitting, smile", {"appearancePrompt": "1girl"},
                             "group_1", skill="anima-line", landscape=True)
         self.assertEqual(name, "a.png")
-        import app.image_jobs as ij
+        from app.features.image import jobs as ij
         import app.tools.normal.generate_image as gi
         _, kw = ij.enqueue.call_args
         self.assertEqual(kw["skill"], "anima-line")
@@ -1134,7 +1134,7 @@ class DrawTest(unittest.TestCase):
                                            "group_1")
         self.assertEqual(name, "a.png")
         self.assertEqual(note, "")
-        import app.image_jobs as ij
+        from app.features.image import jobs as ij
         _, kw = ij.enqueue.call_args
         self.assertEqual(kw["skill"], persona.SHOT_SKILL)
         self.assertFalse(kw["landscape"])
@@ -2706,7 +2706,7 @@ class DrawReplyToTest(unittest.TestCase):
     """`draw` 必须把 reply_to 显式交给 enqueue（2026-11-02 引用修复）。"""
 
     def test_reply_to_is_passed_through(self):
-        import app.image_jobs as ij
+        from app.features.image import jobs as ij
         from unittest import mock
         job = mock.MagicMock()
         job.wait.return_value = {"ok": True}
@@ -3928,32 +3928,32 @@ class RatingTagTest(unittest.TestCase):
     """
 
     def test_safe_upgraded_when_nude(self):
-        from app import persona
+        from app.features.persona import service as persona
         out, note = persona._fix_rating("safe, 1girl, completely nude, lying on bed")
         self.assertTrue(out.startswith("sensitive"))
         self.assertEqual(note, "safe → sensitive")
 
     def test_safe_upgraded_when_explicit(self):
-        from app import persona
+        from app.features.persona import service as persona
         out, _ = persona._fix_rating("safe, 1girl, penetration, from behind")
         self.assertTrue(out.startswith("nsfw"))
 
     def test_daily_scene_untouched(self):
         """穿衣日常不能被动——乱升级会让普通图往情色构图跑。"""
-        from app import persona
+        from app.features.persona import service as persona
         src = "safe, 1girl, wearing a white shirt, smiling"
         out, note = persona._fix_rating(src)
         self.assertEqual(out, src)
         self.assertEqual(note, "")
 
     def test_missing_rating_gets_one(self):
-        from app import persona
+        from app.features.persona import service as persona
         out, _ = persona._fix_rating("1girl, completely nude")
         self.assertTrue(out.startswith("sensitive"))
 
     def test_higher_rating_not_downgraded(self):
         """演员写了 nsfw / explicit 就别往回压。"""
-        from app import persona
+        from app.features.persona import service as persona
         for src in ("nsfw, 1girl, completely nude", "explicit, 1girl, penetration"):
             out, note = persona._fix_rating(src)
             self.assertEqual(out, src, "不许降级：%s" % src)
@@ -3961,7 +3961,7 @@ class RatingTagTest(unittest.TestCase):
 
     def test_only_rating_word_changes(self):
         """只改评级词，其它 tag 一个都不动。"""
-        from app import persona
+        from app.features.persona import service as persona
         src = "safe, 1girl, solo, pov, completely nude, blonde hair"
         out, _ = persona._fix_rating(src)
         self.assertEqual(out.replace("sensitive", "safe"), src)
@@ -3969,13 +3969,13 @@ class RatingTagTest(unittest.TestCase):
     def test_build_prompt_applies_fix(self):
         """`build_prompt` 是出图前的最后一道，必须真的调用它。"""
         import inspect
-        from app import persona
+        from app.features.persona import service as persona
         src = inspect.getsource(persona.build_prompt)
         self.assertIn("_fix_rating", src)
 
     def test_contract_teaches_rating(self):
         """契约要教演员按场景写评级，否则每张图都带着 safe。"""
-        from app import persona
+        from app.features.persona import service as persona
         c = persona._CONTRACT
         self.assertIn("评级 tag 按画面写", c)
         self.assertIn("sensitive", c)
@@ -3987,14 +3987,14 @@ class RatingTagTest(unittest.TestCase):
         2026-11-13 用户拍板：**不能写「不要打码」**——白象效应，
         提了反而更容易画出来。正确做法是这些字眼根本不出现。
         """
-        from app import persona
+        from app.features.persona import service as persona
         c = persona._CONTRACT
         for w in ("打码", "马赛克", "censor", "mosaic", "pixelat"):
             self.assertNotIn(w, c, "契约里出现了 %s" % w)
 
     def test_prompt_builder_never_injects_censor_words(self):
         """拼出来的提示词里也不许出现——演员写什么就画什么。"""
-        from app import persona
+        from app.features.persona import service as persona
         card = {"appearancePrompt": "1girl, black hair, blue eyes"}
         out = persona.build_prompt(
             card, "close-up, completely nude, lying on bed", pov=True)
@@ -4030,7 +4030,7 @@ class ModelChooseTest(unittest.TestCase):
             self.assertIsNone(config.persona_model_of(bad), bad)
 
     def test_override_switches_and_falls_back(self):
-        from app import persona
+        from app.features.persona import service as persona
         try:
             persona.set_model_override("deepseek-v4-pro")
             self.assertEqual(persona.current_model()["id"], "deepseek-v4-pro")
@@ -4046,7 +4046,7 @@ class ModelChooseTest(unittest.TestCase):
     def test_llm_call_uses_override(self):
         """`_llm_call` 拼链头时要用覆盖值，不能还用全局常量。"""
         import inspect
-        from app import persona
+        from app.features.persona import service as persona
         src = inspect.getsource(persona._llm_call)
         self.assertIn("current_model()", src)
         self.assertNotIn('kw.setdefault("model", PERSONA_MODEL)', src)

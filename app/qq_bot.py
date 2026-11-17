@@ -55,7 +55,8 @@ from app.features.qq import play_bot, solo_bot, trigger
 from app.features.image import direct_gen
 from app.features.comic import moss_bot
 from app.features.qq import api as qq_api
-from app import (image_jobs, persona)
+from app.features.image import jobs as image_jobs
+from app.features.persona import service as persona
 from app.features.card import bot as card_bot
 from app.features.image import log as image_log
 from app.features.image import out as image_out

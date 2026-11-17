@@ -23,7 +23,8 @@ from unittest import mock
 from app.features.image import comfy_out
 from app.features.image import routes as gen_api
 from app.features.comic import comic
-from app import (image_jobs, main)
+from app.features.image import jobs as image_jobs
+from app import (main)
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
 

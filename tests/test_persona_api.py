@@ -1,4 +1,4 @@
-"""`app/persona_api.py` 的接线测试（2026-11-03）。
+"""`app/features/persona/routes.py` 的接线测试（2026-11-03）。
 
 只测「请求进、JSON 出」这一层：引擎本身在 `tests/test_persona.py` 里，
 这里不重复测。跑 Flask test_client，不启动服务、不调真模型。
@@ -15,7 +15,7 @@ from app.core import agents
 from app.core import agents as agent_store
 from app.integrations import llm
 from app.features.persona import routes as persona_api
-from app import (persona)
+from app.features.persona import service as persona
 
 QQ = "2509355624"
 
@@ -386,9 +386,9 @@ class ShotTest(PersonaApiBase):
         name = self.get("/api/persona/cards")["cards"][0]["name"]
         self.post("/api/persona/switch", name=name)
         with tempfile.TemporaryDirectory() as td:
-            with mock.patch("app.persona.shot_scene",
+            with mock.patch("app.features.persona.service.shot_scene",
                             return_value="standing, smile"), \
-                 mock.patch("app.persona.draw_shot",
+                 mock.patch("app.features.persona.service.draw_shot",
                             return_value=("a.png", "")), \
                  self._inline_thread(), \
                  mock.patch("app.features.persona.routes._pic_map_path",
@@ -415,9 +415,9 @@ class ShotTest(PersonaApiBase):
         self.post("/api/persona/switch", name=name)
         rel = os.path.join("web", "生图页", "anima-line") + "/a.png"
         with tempfile.TemporaryDirectory() as td:
-            with mock.patch("app.persona.shot_scene",
+            with mock.patch("app.features.persona.service.shot_scene",
                             return_value="standing, smile"), \
-                 mock.patch("app.persona.draw_shot",
+                 mock.patch("app.features.persona.service.draw_shot",
                             return_value=(rel, "")), \
                  self._inline_thread(), \
                  mock.patch("app.features.persona.routes._pic_map_path",
@@ -433,8 +433,8 @@ class ShotTest(PersonaApiBase):
         """没有画面行 → 400 直接拒绝（用户拍板不做 LLM 兜底翻译）。"""
         name = self.get("/api/persona/cards")["cards"][0]["name"]
         self.post("/api/persona/switch", name=name)
-        with mock.patch("app.persona.shot_scene", return_value=""), \
-             mock.patch("app.persona.draw_shot") as ds:
+        with mock.patch("app.features.persona.service.shot_scene", return_value=""), \
+             mock.patch("app.features.persona.service.draw_shot") as ds:
             r = self.c.post("/api/persona/shot",
                             json={"qq": QQ, "msgIndex": 2})
         self.assertEqual(r.status_code, 400)
@@ -447,9 +447,9 @@ class ShotTest(PersonaApiBase):
         name = self.get("/api/persona/cards")["cards"][0]["name"]
         self.post("/api/persona/switch", name=name)
         with tempfile.TemporaryDirectory() as td:
-            with mock.patch("app.persona.shot_scene",
+            with mock.patch("app.features.persona.service.shot_scene",
                             return_value="standing, smile"), \
-                 mock.patch("app.persona.draw_shot",
+                 mock.patch("app.features.persona.service.draw_shot",
                             return_value=("", "排队满")), \
                  self._inline_thread(), \
                  mock.patch("app.features.persona.routes._pic_map_path",

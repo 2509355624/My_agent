@@ -16,7 +16,7 @@ from unittest import mock
 import app.features.chat.agent as agent
 from app.features.image import comfy_status
 import app.config as config
-from app import image_jobs
+from app.features.image import jobs as image_jobs
 
 _comfy_patch = None
 

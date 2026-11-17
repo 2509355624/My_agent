@@ -2445,7 +2445,7 @@ class Anima2sChannelTest(unittest.TestCase):
         from app.features.image import char_loras
         from app.core import agents
         from app.core import agents as agent_store
-        from app import (persona)
+        from app.features.persona import service as persona
         from app.features.image.direct_gen import _allowed_skills
         self.assertTrue(agents.allows_skill("qq", self.NAME))
         self.assertIn(self.NAME, _allowed_skills())
@@ -2718,7 +2718,7 @@ class MossTwoChannelTest(unittest.TestCase):
                 self.assertEqual(direct_gen._parse_channel(text)[0], want)
 
     def test_timeouts_and_whitelist(self):
-        from app import image_jobs
+        from app.features.image import jobs as image_jobs
         self.assertEqual(image_jobs.SKILL_TIMEOUTS.get("moss-qunyou"), 420)
         self.assertEqual(image_jobs.SKILL_TIMEOUTS.get("moss-light"), 420)
         for gone in ("moss-wide", "moss-light1", "moss-light2"):
@@ -2815,7 +2815,7 @@ class JiguangSingleChannelTest(unittest.TestCase):
 
     def test_landscape_swaps_to_1536x1024(self):
         """横屏走 `landscape_workflow()` 自动对调，成品跟着横过来。"""
-        from app.image_jobs import landscape_workflow
+        from app.features.image.jobs import landscape_workflow
         wide = landscape_workflow(self.wf)
         latent_id = _all(wide, "EmptyLatentImage")[0]
         latent = wide[latent_id]["inputs"]
@@ -2839,7 +2839,7 @@ class JiguangSingleChannelTest(unittest.TestCase):
         完整版 `krea2-jiguang` 是 300 秒（它要到 3328×4864）。这条要是也进
         `SKILL_TIMEOUTS`，说明有人把它当成完整版在调，先回来看这条测试。
         """
-        from app import image_jobs
+        from app.features.image import jobs as image_jobs
         self.assertNotIn(self.NAME, image_jobs.SKILL_TIMEOUTS)
 
 

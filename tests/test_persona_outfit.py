@@ -19,7 +19,7 @@ import unittest
 from unittest import mock
 
 import app.affection as affection
-import app.persona as persona
+from app.features.persona import service as persona
 
 RAW = (
     "她把外套搭到椅背上。\n\n"

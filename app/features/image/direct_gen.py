@@ -81,7 +81,7 @@ from app.features.image import random_tags
 from app.features.qq import trigger
 from app.integrations import llm
 from app.features.qq import api as qq_api
-from app import (image_jobs)
+from app.features.image import jobs as image_jobs
 from app.features.image import log as image_log
 from app.config import IMAGE_DEFAULT_SKILL, QQ_GROUP_KEYWORDS
 from app.features.chat.confirm_gate import _ATTRIBUTION_RE

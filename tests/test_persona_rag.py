@@ -14,7 +14,7 @@ from unittest import mock
 
 import app.core.agents as agents
 import app.integrations.llm as llm
-import app.persona as persona
+from app.features.persona import service as persona
 from app.features.persona import rag as rank
 
 

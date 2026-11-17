@@ -236,7 +236,7 @@ def render(target, target_id, fixed, dynamics, style="silver", landscape=False):
     本函数跑在后台线程，`qq_api` 的上下文是 threading.local，在这儿现读恒为
     None（见 `image_jobs.Job.landscape` 那段）。默认 False = 竖版，跟从前一致。
     """
-    from app import image_jobs
+    from app.features.image import jobs as image_jobs
     from app.tools.normal import generate_image as gi
 
     skill = COMIC_SKILLS.get(style or "silver", COMIC_SKILL)

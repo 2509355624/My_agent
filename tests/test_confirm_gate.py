@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 
 from app.features.chat import confirm_gate
-from app import image_jobs
+from app.features.image import jobs as image_jobs
 
 
 @contextlib.contextmanager
@@ -147,8 +147,8 @@ class ConsumeTest(unittest.TestCase):
     def test_confirm_enqueues_original_params(self):
         self._pending_comfy()
         job = mock.Mock()
-        with mock.patch("app.image_jobs.comfy_alive", return_value=True), \
-             mock.patch("app.image_jobs.enqueue",
+        with mock.patch("app.features.image.jobs.comfy_alive", return_value=True), \
+             mock.patch("app.features.image.jobs.enqueue",
                         return_value=(job, None)) as en, \
              mock.patch("app.tools.normal.generate_image._charge_quota",
                         return_value=""), \
@@ -173,8 +173,8 @@ class ConsumeTest(unittest.TestCase):
         self._pending_comfy()
         confirm_gate._PENDING[("group", "123")]["landscape"] = True
         job = mock.Mock()
-        with mock.patch("app.image_jobs.comfy_alive", return_value=True), \
-             mock.patch("app.image_jobs.enqueue",
+        with mock.patch("app.features.image.jobs.comfy_alive", return_value=True), \
+             mock.patch("app.features.image.jobs.enqueue",
                         return_value=(job, None)) as en, \
              mock.patch("app.tools.normal.generate_image._charge_quota",
                         return_value=""), \
@@ -234,8 +234,8 @@ class ConsumeTest(unittest.TestCase):
         confirm_gate._PENDING[("group", "123")]["reply_to"] = "153"
         confirm_gate._PENDING[("group", "123")]["at_user"] = 42
         job = mock.Mock()
-        with mock.patch("app.image_jobs.comfy_alive", return_value=True), \
-             mock.patch("app.image_jobs.enqueue",
+        with mock.patch("app.features.image.jobs.comfy_alive", return_value=True), \
+             mock.patch("app.features.image.jobs.enqueue",
                         return_value=(job, None)) as en, \
              mock.patch("app.tools.normal.generate_image._charge_quota",
                         return_value=""), \
@@ -251,8 +251,8 @@ class ConsumeTest(unittest.TestCase):
         撞上的窗口，从前这里回一句「刚那张画不了」，正是要修的毛病。"""
         self._pending_comfy()
         job = mock.Mock()
-        with mock.patch("app.image_jobs.comfy_alive", return_value=False), \
-             mock.patch("app.image_jobs.enqueue",
+        with mock.patch("app.features.image.jobs.comfy_alive", return_value=False), \
+             mock.patch("app.features.image.jobs.enqueue",
                         return_value=(job, None)) as en, \
              mock.patch("app.tools.normal.generate_image._charge_quota",
                         return_value=""), \
@@ -282,7 +282,7 @@ class ConsumeTest(unittest.TestCase):
         job = mock.Mock()
         with mock.patch("app.core.agents.nai_allowed",
                         return_value=(True, "")), \
-             mock.patch("app.image_jobs.enqueue",
+             mock.patch("app.features.image.jobs.enqueue",
                         return_value=(job, None)) as en, \
              mock.patch("app.tools.normal.generate_image._charge_quota",
                         return_value=""), \
@@ -351,8 +351,8 @@ class AttributionPrefixTest(unittest.TestCase):
             "seed": None, "intent": "k", "workflow": {"w": 1}, "note": "",
         }
         job = mock.Mock()
-        with mock.patch("app.image_jobs.comfy_alive", return_value=True), \
-             mock.patch("app.image_jobs.enqueue",
+        with mock.patch("app.features.image.jobs.comfy_alive", return_value=True), \
+             mock.patch("app.features.image.jobs.enqueue",
                         return_value=(job, None)) as en, \
              mock.patch("app.tools.normal.generate_image._charge_quota",
                         return_value=""), \
@@ -407,7 +407,7 @@ class DisabledByDefaultTest(unittest.TestCase):
             "seed": None, "intent": "k", "workflow": {"w": 1}, "note": "",
         }
         with mock.patch.object(confirm_gate, "enabled", return_value=False), \
-             mock.patch("app.image_jobs.enqueue") as en:
+             mock.patch("app.features.image.jobs.enqueue") as en:
             reply = confirm_gate.consume_if_confirmed("group", "123", "好")
         self.assertIsNone(reply)
         en.assert_not_called()

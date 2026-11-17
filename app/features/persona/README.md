@@ -13,6 +13,6 @@
 `pregnancy.py`）、`items.py`（原 `items.py`）、`achievements.py`（原
 `achievements.py`）、`writing_style.py`（原 `writing_style.py`）、`writing_skills.py`
 （原 `app/writing_skills.py`，亲密写法规范切片）、`galgame.py`（原
-`galgame.py`）、`routes.py`（原 `app/persona_api.py`，网页角色扮演 Blueprint）
-已迁入并接线；`persona.py` 仍是 441 KB God 文件，冻结增长，按
-“人设/记忆/计费/查看台”拆，不整文件搬。
+`galgame.py`）、`routes.py`（原 `app/persona_api.py`，网页角色扮演 Blueprint）、
+`service.py`（原 `app/persona.py`，角色池/扮演态/出图编排）已迁入并接线；
+`service.py` 仍是 441 KB 大文件，冻结增长，后续按“人设/记忆/计费/查看台”拆。

@@ -18,7 +18,7 @@ import unittest
 from unittest import mock
 
 import app.core.agents as agents
-import app.persona as persona
+from app.features.persona import service as persona
 
 
 def _card(name="测试角色", **kw):

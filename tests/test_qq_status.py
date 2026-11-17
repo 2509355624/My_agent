@@ -13,7 +13,7 @@ import time
 import unittest
 from unittest import mock
 
-from app import image_jobs
+from app.features.image import jobs as image_jobs
 from app.features.qq import status as qq_status
 
 

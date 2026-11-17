@@ -8184,7 +8184,7 @@ def draw(scene, card, session_key, reply_to="", state="", skill=None,
     ComfyUI 正在重启时**照常入队**（2026-11-09）——worker 提交前会等它回来，
     不再把重启窗口顶回成一次失败。
     """
-    from app import image_jobs
+    from app.features.image import jobs as image_jobs
     from app.tools.normal import generate_image as gi
 
     _DRAW_ERR.reason = ""       # 同一个线程可能被复用，先清掉上一轮的原因

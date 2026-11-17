@@ -34,7 +34,7 @@ from app.features.persona import billing as persona_billing
 from app.features.persona import rag as persona_rag
 from app.gateways import guest
 from app.gateways import friend_auth
-from app import (persona)
+from app.features.persona import service as persona
 from app.features.chat import background as chat_bg
 from app.config import BASE_DIR
 

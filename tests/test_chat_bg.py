@@ -19,7 +19,7 @@ from app.gateways import guest
 from app.core import agents
 from app.core import agents as agent_store
 from app.features.persona import routes as persona_api
-from app import (persona)
+from app.features.persona import service as persona
 from app.features.admin import routes as persona_admin_api
 from app.features.chat import background as chat_bg
 

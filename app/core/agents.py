@@ -324,7 +324,7 @@ def image_quota_line(agent_id, target, target_id):
             state = ("今天已用 %d/%d 张，**还能画 %d 张**，现在可以接单"
                      "（额度**接单就扣**，不是出图才扣）。"
                      % (used, limit, limit - used))
-            from app import image_jobs
+            from app.features.image import jobs as image_jobs
             inflight = image_jobs.inflight_count(target, target_id)
             if inflight:
                 state += ("其中 %d 张还在排队/生成中，**图还没发出去**——"

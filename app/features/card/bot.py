@@ -31,7 +31,7 @@ import time
 
 from app.features.image import direct_gen
 from app.features.qq import api as qq_api
-from app import (image_jobs)
+from app.features.image import jobs as image_jobs
 from app.features.card import service as card_maker
 from app.config import QQ_AGENT_ID, state_path
 

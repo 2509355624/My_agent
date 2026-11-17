@@ -32,7 +32,8 @@ from unittest import mock
 
 from app.features.image import random_tags
 from app.features.image import direct_gen
-from app import (image_jobs, qq_bot)
+from app.features.image import jobs as image_jobs
+from app import (qq_bot)
 from app.features.image.direct_gen import MENU_TEXT
 from app.tools.normal import generate_comic as gc
 from app.tools.normal import generate_image as gi

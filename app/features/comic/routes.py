@@ -62,7 +62,7 @@ from flask import (Blueprint, Response, g, jsonify, request, send_file,
 from app.features.comic import silver_comic
 from app.features.comic import comic
 from app.features.comic import agent as comic_agent
-from app import (image_jobs)
+from app.features.image import jobs as image_jobs
 from app.features.comic import quota as comic_quota
 from app.features.comic import delivery as comic_delivery
 from app.features.comic import portrait as comic_portrait

@@ -35,7 +35,7 @@ class SplitRelTest(unittest.TestCase):
 
 class BodyTest(unittest.TestCase):
     def _job(self, target, target_id, skill, **kw):
-        from app.image_jobs import Job
+        from app.features.image.jobs import Job
         return Job(target, target_id, {}, skill=skill, **kw)
 
     def test_group_goes_under_its_own_number(self):

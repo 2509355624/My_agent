@@ -9,7 +9,7 @@ import json
 import random
 from flask import request
 from app.features.image import comfy_src
-from app import image_jobs
+from app.features.image import jobs as image_jobs
 from app.features.image import char_guard
 from app.features.image import nai as nai_mod
 from app.core.cancel import Cancelled, is_cancelled

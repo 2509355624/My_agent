@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 
 from app.features.image import comfy_status
-from app import image_jobs
+from app.features.image import jobs as image_jobs
 
 
 def _resp(payload, status=200):

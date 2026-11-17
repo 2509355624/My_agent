@@ -286,7 +286,7 @@ class ScorePromptTest(unittest.TestCase):
     """编剧提示词里必须有的成人向字段（钉住契约，防止哪天被顺手删掉）。"""
 
     def test_prompt_has_adult_block(self):
-        from app import persona
+        from app.features.persona import service as persona
         p = persona._SCORE_PROMPT_V2
         self.assertIn("\"adult\"", p)
         for key in ("arousal", "excite", "corrupt", "submit", "dev", "sense",
@@ -294,21 +294,21 @@ class ScorePromptTest(unittest.TestCase):
             self.assertIn(key, p, "提示词缺字段 %s" % key)
 
     def test_prompt_has_the_five_parts(self):
-        from app import persona
+        from app.features.persona import service as persona
         p = persona._SCORE_PROMPT_V2
         for part in ad.PARTS:
             self.assertIn(part, p, "五处缺 %s" % part)
 
     def test_prompt_states_the_gates(self):
         """闸门必须写在提示词里，否则编剧会一直给正向好感也加堕落。"""
-        from app import persona
+        from app.features.persona import service as persona
         p = persona._SCORE_PROMPT_V2
         self.assertIn("只在好感为负时", p)
         self.assertIn("单纯插入不推这里", p)
         self.assertIn("最多判到 want", p)
 
     def test_prompt_lists_shame_event_kinds(self):
-        from app import persona
+        from app.features.persona import service as persona
         p = persona._SCORE_PROMPT_V2
         for ev in ("kiss", "intimate_private", "outdoor", "exposed", "caught"):
             self.assertIn(ev, p, "羞耻事件类别缺 %s" % ev)
@@ -316,7 +316,7 @@ class ScorePromptTest(unittest.TestCase):
     def test_judge_v2_passes_adult_through(self):
         """_judge_v2 要把 adult 原样交出去，不在这一层净化。"""
         import inspect
-        from app import persona
+        from app.features.persona import service as persona
         src = inspect.getsource(persona._judge_v2)
         self.assertIn('score["adult"] = d["adult"]', src)
 
@@ -326,7 +326,7 @@ class RunTurnWiringTest(unittest.TestCase):
 
     def test_run_turn_calls_adult_apply(self):
         import inspect
-        from app import persona
+        from app.features.persona import service as persona
         src = inspect.getsource(persona.run_turn)
         self.assertIn("adult_state.load", src)
         self.assertIn("adult_state.apply", src)
@@ -335,7 +335,7 @@ class RunTurnWiringTest(unittest.TestCase):
 
     def test_state_saved_after_settle(self):
         import inspect
-        from app import persona
+        from app.features.persona import service as persona
         src = inspect.getsource(persona.run_turn)
         self.assertIn("_save_state(_astate)", src)
 
@@ -388,7 +388,7 @@ class StateLocationTest(unittest.TestCase):
 
     def test_run_turn_uses_save_helper(self):
         import inspect
-        from app import persona
+        from app.features.persona import service as persona
         src = inspect.getsource(persona.run_turn)
         self.assertIn("adult_state.save", src)
         self.assertNotIn('_rec["adult"] = _ast', src)
@@ -758,20 +758,20 @@ class PovContractTest(unittest.TestCase):
     """
 
     def test_both_contracts_carry_pov_camera(self):
-        from app import persona
+        from app.features.persona import service as persona
         for c in (persona._CONTRACT, persona._CONTRACT_NO_INTIMATE):
             self.assertIn("POV 视角", c)
             self.assertIn("first-person pov, eye level", c)
 
     def test_contract_splits_subject_from_scene(self):
-        from app import persona
+        from app.features.persona import service as persona
         c = persona._CONTRACT
         self.assertIn("这一行只写「这一刻」", c)
         self.assertIn("系统另拼一份固定块", c)
         self.assertIn("长相不用你写", c)
 
     def test_contract_has_no_hard_bans_or_negative_anchor(self):
-        from app import persona
+        from app.features.persona import service as persona
         c = persona._CONTRACT
         for old in ("POV 有三种状态", "两条硬禁令", "no other hands in frame",
                     "hand around wrist", "拉扯动词", "反向钉住"):
@@ -779,18 +779,18 @@ class PovContractTest(unittest.TestCase):
 
     def test_draw_does_not_repair_tags(self):
         import inspect
-        from app import persona
+        from app.features.persona import service as persona
         self.assertNotIn("repair_line", inspect.getsource(persona.draw))
 
     def test_camera_is_fixed_and_adds_no_second_party(self):
-        from app import persona
+        from app.features.persona import service as persona
         cam = persona._POV_CAMERA
         self.assertIn("first-person pov", cam)
         for tag in ("1other", "pov hands", "solo", "1boy", "no "):
             self.assertNotIn(tag, cam, tag)
 
     def test_build_prompt_pov_opt_in_only(self):
-        from app import persona
+        from app.features.persona import service as persona
         card = {"appearancePrompt": "an adult woman with green hair"}
         plain = persona.build_prompt(card, "medium shot, smiling")
         self.assertEqual(plain,
@@ -800,7 +800,7 @@ class PovContractTest(unittest.TestCase):
         self.assertEqual(pov.count("first-person pov"), 1)
 
     def test_subject_declared_once_in_pov_prompt(self):
-        from app import persona
+        from app.features.persona import service as persona
         p = persona.build_prompt(
             {"appearancePrompt": "an adult woman with green hair"},
             "medium shot, leaning toward the camera", pov=True)
@@ -870,12 +870,12 @@ class ItemSystemTest(unittest.TestCase):
         self.assertFalse(self.it.is_plot("lubricant"))
 
     def test_prompt_has_item_keys_placeholder(self):
-        from app import persona
+        from app.features.persona import service as persona
         self.assertIn("%(item_keys)s", persona._SCORE_PROMPT_V2)
 
     def test_run_turn_injects_items(self):
         import inspect
-        from app import persona
+        from app.features.persona import service as persona
         src = inspect.getsource(persona.run_turn)
         self.assertIn("_items.list_block", src)
         self.assertIn("_items.use_block", src)
@@ -897,7 +897,7 @@ class ItemSystemTest(unittest.TestCase):
         import io
         import os
         path = os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "app", "persona_api.py")
+            os.path.abspath(__file__))), "app", "features", "persona", "routes.py")
         with io.open(path, encoding="utf-8") as fh:
             src = fh.read()
         self.assertIn('/api/persona/items', src)
@@ -976,7 +976,7 @@ class ItemLifecycleTest(unittest.TestCase):
 
     def test_run_turn_ticks_and_injects(self):
         import inspect
-        from app import persona
+        from app.features.persona import service as persona
         src = inspect.getsource(persona.run_turn)
         self.assertIn("_items.tick", src)
         self.assertIn("_items.start", src)
@@ -985,7 +985,7 @@ class ItemLifecycleTest(unittest.TestCase):
 
     def test_fade_marker_is_popped_once(self):
         import inspect
-        from app import persona
+        from app.features.persona import service as persona
         src = inspect.getsource(persona.pop_item_fade)
         self.assertIn('pop("item_fade"', src)
         self.assertIn("_save_state", src)
@@ -994,7 +994,7 @@ class ItemLifecycleTest(unittest.TestCase):
         import io
         import os
         path = os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "app", "persona_api.py")
+            os.path.abspath(__file__))), "app", "features", "persona", "routes.py")
         with io.open(path, encoding="utf-8") as fh:
             src = fh.read()
         self.assertIn('out["act"]', src)
@@ -1058,37 +1058,37 @@ class ItemsUniversalTest(unittest.TestCase):
     """道具在 v1 / v2 / 自由模式三条路上都要能用（2026-11-08 补齐）。"""
 
     def test_item_keys_helper_exists(self):
-        from app import persona
+        from app.features.persona import service as persona
         txt = persona._item_keys_text()
         self.assertIn("lubricant=润滑液", txt)
 
     def test_v1_prompt_has_items_block(self):
         """v1 / 自由模式走 `_INTENT_PROMPT`，那里也要有 items 字段。"""
-        from app import persona
+        from app.features.persona import service as persona
         p = persona._INTENT_PROMPT
         self.assertIn('"items"', p)
         self.assertIn("%(item_keys)s", p)
 
     def test_v1_prompt_has_items_criteria(self):
-        from app import persona
+        from app.features.persona import service as persona
         p = persona._INTENT_PROMPT
         self.assertIn("真的用上了", p)
         self.assertIn("keepsake", p)
 
     def test_director_fields_passes_items(self):
-        from app import persona
+        from app.features.persona import service as persona
         out = persona._director_fields({"items": {"use": ["wine"]}})
         self.assertEqual(out.get("items"), {"use": ["wine"]})
 
     def test_director_fields_items_none_when_absent(self):
-        from app import persona
+        from app.features.persona import service as persona
         out = persona._director_fields({})
         self.assertIsNone(out.get("items"))
 
     def test_run_turn_reads_items_from_extras(self):
         """自由模式下 score 是 None，道具只能从 extras 拿。"""
         import inspect
-        from app import persona
+        from app.features.persona import service as persona
         src = inspect.getsource(persona.run_turn)
         self.assertIn("_sc = extras if isinstance(extras, dict)", src)
 
@@ -1108,41 +1108,41 @@ class SaveSlotTest(unittest.TestCase):
 
     def test_slot_zero_keeps_old_key(self):
         """slot 0 的 key 必须和加这个功能之前一模一样。"""
-        from app import persona
+        from app.features.persona import service as persona
         self.assertEqual(persona._card_key_slot("web_1", "rem", 0),
                          "web_1__rem")
 
     def test_slot_one_and_two_suffix(self):
-        from app import persona
+        from app.features.persona import service as persona
         self.assertEqual(persona._card_key_slot("web_1", "rem", 1),
                          "web_1__rem_s1")
         self.assertEqual(persona._card_key_slot("web_1", "rem", 2),
                          "web_1__rem_s2")
 
     def test_slot_clamped(self):
-        from app import persona
+        from app.features.persona import service as persona
         self.assertEqual(persona._card_key_slot("web_1", "rem", 9),
                          "web_1__rem_s2", "超过上限要压回最后一个槽")
 
     def test_card_key_is_idempotent_with_slot(self):
-        from app import persona
+        from app.features.persona import service as persona
         k = persona._card_key_slot("web_1", "rem", 1)
         self.assertEqual(persona._card_key_slot(k, "rem", 1), k,
                          "不能叠成 __rem_s1__rem_s1")
 
     def test_card_slot_of_roundtrip(self):
-        from app import persona
+        from app.features.persona import service as persona
         for n in range(persona.SLOT_MAX):
             k = persona._card_key_slot("web_1", "rem", n)
             self.assertEqual(persona.card_slot_of(k, "rem"), n)
 
     def test_slot_max_is_three(self):
-        from app import persona
+        from app.features.persona import service as persona
         self.assertEqual(persona.SLOT_MAX, 3)
 
     def test_slot_key_is_safe(self):
         """`_SAFE_KEY` 只允许 [A-Za-z0-9_-]，后缀不能带 # 或 ~。"""
-        from app import persona
+        from app.features.persona import service as persona
         for n in range(persona.SLOT_MAX):
             k = persona._card_key_slot("web_2509355624", "izumi_sagiri", n)
             self.assertIsNotNone(persona._SAFE_KEY.match(k),
@@ -1150,7 +1150,7 @@ class SaveSlotTest(unittest.TestCase):
             self.assertLessEqual(len(k), 63)
 
     def test_resolve_line_reads_slot(self):
-        from app import persona
+        from app.features.persona import service as persona
         import inspect
         src = inspect.getsource(persona.resolve_line)
         self.assertIn('ent.get("slot")', src)
@@ -1160,7 +1160,7 @@ class SaveSlotTest(unittest.TestCase):
         import io
         import os
         path = os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "app", "persona_api.py")
+            os.path.abspath(__file__))), "app", "features", "persona", "routes.py")
         with io.open(path, encoding="utf-8") as fh:
             src = fh.read()
         self.assertIn("/api/persona/slots", src)
@@ -1171,7 +1171,7 @@ class SaveSlotTest(unittest.TestCase):
         import io
         import os
         path = os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "app", "persona_api.py")
+            os.path.abspath(__file__))), "app", "features", "persona", "routes.py")
         with io.open(path, encoding="utf-8") as fh:
             src = fh.read()
         self.assertIn("确认删除", src)
@@ -1205,7 +1205,7 @@ class SlotWipeStrictTest(unittest.TestCase):
         import io
         import os
         path = os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "app", "persona_api.py")
+            os.path.abspath(__file__))), "app", "features", "persona", "routes.py")
         with io.open(path, encoding="utf-8") as fh:
             return fh.read()
 

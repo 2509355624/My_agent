@@ -31,7 +31,8 @@ from app.features.comic import render_opts as comic_render_opts
 from app.features.comic import routes as comic_api
 from app.features.comic import comic
 from app.features.comic import agent as comic_agent
-from app import (image_jobs, main)
+from app.features.image import jobs as image_jobs
+from app import (main)
 
 GOOD_SCRIPT = "# 标题：测试\n\n## 01\n画面: 1girl, solo, pov\n气泡: 一\n标签1: 她站在门口\n"
 

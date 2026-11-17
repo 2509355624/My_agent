@@ -25,7 +25,8 @@ from app.features.chat import agent as agent_mod
 from app.core import agents
 from app.core import agents as agent_store
 from app.features.qq import api as qq_api
-from app import (image_jobs, qq_bot)
+from app.features.image import jobs as image_jobs
+from app import (qq_bot)
 from app.tools.normal import generate_image as gi
 
 MARK = image_jobs.RECEIPT_SENT_MARK

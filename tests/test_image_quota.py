@@ -26,7 +26,7 @@ from unittest import mock
 
 import app.core.agents as agents
 import app.config as config
-import app.image_jobs as image_jobs
+from app.features.image import jobs as image_jobs
 from app.features.image import quota as image_quota
 import app.main as main
 from app.features.qq import api as qq_api

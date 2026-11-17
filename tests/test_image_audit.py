@@ -717,7 +717,7 @@ class SendHookTest(unittest.TestCase):
     """挂钩点：image_jobs._send_image 被拦下时**不能真发**，也不抛异常。"""
 
     def _send(self, allow):
-        from app import image_jobs
+        from app.features.image import jobs as image_jobs
         with mock.patch("app.features.image.out.prepare_for_send",
                         return_value="D:/fake/out.jpg"), \
              mock.patch.object(image_jobs, "QQ_AGENT_ID", "qq"), \

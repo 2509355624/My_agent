@@ -752,7 +752,7 @@ def _card_for(sc):
     if not cid:
         return None
     try:
-        from app import persona
+        from app.features.persona import service as persona
         return persona.get_card(cid)
     except Exception:
         log.exception("取角色卡失败 %s", cid)
@@ -924,7 +924,7 @@ def draw_cg(cg, session_key, script_id=""):
     不扣每日额度。区别只有一个——这里用 `GAL_SKILL`（anima 渠道，出图慢但好看），
     所以只挂在关键章节上。
     """
-    from app import image_jobs
+    from app.features.image import jobs as image_jobs
     from app.tools.normal import generate_image as gi
 
     sc = None
@@ -942,7 +942,7 @@ def draw_cg(cg, session_key, script_id=""):
     prompt = scene
     if card:
         try:
-            from app import persona
+            from app.features.persona import service as persona
             prompt = persona.build_prompt(card, scene)
         except Exception:
             log.exception("拼 CG 提示词失败")

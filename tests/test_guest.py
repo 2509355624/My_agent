@@ -21,7 +21,7 @@ import flask
 
 from app.gateways import guest
 from app.features.persona import routes as persona_api
-from app import (persona)
+from app.features.persona import service as persona
 
 
 class GuestBase(unittest.TestCase):

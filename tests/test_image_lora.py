@@ -8,7 +8,7 @@ import unittest
 from unittest import mock
 
 from app.features.qq import api as qq_api
-from app import image_jobs
+from app.features.image import jobs as image_jobs
 from app.config import QQ_AGENT_ID
 from app.tools.normal import generate_image
 from app.features.chat.agent_prompt import _build_tool_list

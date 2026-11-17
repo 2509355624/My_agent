@@ -15,7 +15,7 @@ from unittest import mock
 
 from app.core import agents
 from app.core import agents as agent_store
-from app import (persona)
+from app.features.persona import service as persona
 
 
 BUILTIN = "izumi_sagiri"

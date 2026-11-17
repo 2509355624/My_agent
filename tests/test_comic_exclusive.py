@@ -28,7 +28,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.features.comic import routes as comic_api
 from app.features.image import comfy_gate
 from app.features.comic import comic
-from app import (image_jobs, main)
+from app.features.image import jobs as image_jobs
+from app import (main)
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

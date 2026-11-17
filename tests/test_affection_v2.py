@@ -20,7 +20,7 @@ from unittest import mock
 
 import app.affection as A
 import app.core.agents as agents
-import app.persona as P
+from app.features.persona import service as P
 
 
 def _rec(**kw):

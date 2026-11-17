@@ -12,7 +12,7 @@
 import unittest
 from unittest import mock
 
-from app import persona
+from app.features.persona import service as persona
 
 
 class PlaceBlockTest(unittest.TestCase):

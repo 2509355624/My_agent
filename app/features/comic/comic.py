@@ -46,7 +46,7 @@ from app.features.comic import prompt_suffix as comic_prompt_suffix
 from app.features.comic import render_opts as comic_render_opts
 from app.features.image import comfy_out
 from app.features.image import comfy_src
-from app import image_jobs
+from app.features.image import jobs as image_jobs
 from app.core.cancel import Cancelled
 from app.config import BASE_DIR, COMFYUI_OUTPUT_DIR, COMFYUI_URL
 from app.core.skills import load_skill, load_workflow

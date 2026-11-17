@@ -140,7 +140,7 @@ def intercept(kind, *, skill, prompt, seed=None, intent=None, workflow=None,
     不再拦（agent 路径保持 False）。
     """
     from app.features.qq import api as qq_api
-    from app import (image_jobs)
+    from app.features.image import jobs as image_jobs
     if skip_confirm:
         return None
     # 总开关（settings.json 热生效，默认关）：关 = 整道闸不存在，直接放行。
@@ -207,7 +207,7 @@ def consume_if_confirmed(target, target_id, text):
         log.info("确认闸：pending 作废（对方说的是 %r，不是确认）",
                  (text or "")[:40])
         return None
-    from app import image_jobs
+    from app.features.image import jobs as image_jobs
     from app.core.agents import image_gen_allowed
     from app.tools.normal import generate_image as gi
     ok, why = image_gen_allowed(gi.QQ_AGENT_ID, target, target_id)

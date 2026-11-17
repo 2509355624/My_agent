@@ -229,7 +229,7 @@ def upload(raw, suffix=".png", wait=True):
     报「源图传不进」——同一台机器两种口径。
     """
     if wait:
-        from app import image_jobs
+        from app.features.image import jobs as image_jobs
 
         limit = image_jobs.COMFY_WAIT_UP
         if not image_jobs.wait_comfy_up(limit=limit, gap=_UP_GAP):

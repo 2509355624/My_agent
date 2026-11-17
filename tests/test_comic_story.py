@@ -123,7 +123,7 @@ class RenderTest(unittest.TestCase):
         return fn
 
     def test_render_submits_one_batch_job(self):
-        from app import image_jobs
+        from app.features.image import jobs as image_jobs
         from app.tools.normal import generate_image as gi
         seen = []
         with mock.patch.object(gi, "build_t2i_workflow", return_value={"x": 1}) as bw, \
@@ -152,7 +152,7 @@ class RenderTest(unittest.TestCase):
         `_comic_batch` 的尺寸节点是 `BatchPromptImageGenerator`，早就在
         `image_jobs._SIZE_NODE_TYPES` 里，对调开关本来就能生效。
         """
-        from app import image_jobs
+        from app.features.image import jobs as image_jobs
         from app.tools.normal import generate_image as gi
         seen = []
         with mock.patch.object(gi, "build_t2i_workflow", return_value={"x": 1}), \
@@ -164,7 +164,7 @@ class RenderTest(unittest.TestCase):
 
     def test_render_returns_zero_when_rejected(self):
         """整批被拒（队列满 / ComfyUI 没在线）——一张都没画，返回 0。"""
-        from app import image_jobs
+        from app.features.image import jobs as image_jobs
         from app.tools.normal import generate_image as gi
         with mock.patch.object(gi, "build_t2i_workflow", return_value={"x": 1}), \
              mock.patch.object(image_jobs, "enqueue",
@@ -181,7 +181,7 @@ class RenderTest(unittest.TestCase):
 
     def test_render_survives_job_error(self):
         """任务失败（超时 / ComfyUI 掉线）不能把后台线程炸出去。"""
-        from app import image_jobs
+        from app.features.image import jobs as image_jobs
         from app.tools.normal import generate_image as gi
 
         class BoomJob:
@@ -313,7 +313,7 @@ class AnimaChannelTest(unittest.TestCase):
         self.assertEqual(len(ups), 1)
 
     def test_render_uses_anima_skill(self):
-        from app import image_jobs
+        from app.features.image import jobs as image_jobs
         from app.tools.normal import generate_image as gi
 
         class FakeJob:
@@ -353,7 +353,7 @@ class LandscapeSnapshotTest(unittest.TestCase):
     """
 
     def test_generate_comic_snapshots_the_landscape_word(self):
-        from app import image_jobs
+        from app.features.image import jobs as image_jobs
         from app.tools.normal import generate_comic as gc
 
         with mock.patch.object(image_jobs, "turn_is_landscape",
@@ -373,7 +373,7 @@ class LandscapeSnapshotTest(unittest.TestCase):
     def test_explicit_false_is_not_re_read(self):
         """调用方已经拍过板（含 False）就别再读原话——确认闸重入队时原话已经
         不是那一轮了（同 `image_jobs.enqueue` 的 `landscape` 语义）。"""
-        from app import image_jobs
+        from app.features.image import jobs as image_jobs
         from app.tools.normal import generate_comic as gc
 
         with mock.patch.object(image_jobs, "turn_is_landscape",

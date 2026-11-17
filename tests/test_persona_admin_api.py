@@ -13,7 +13,7 @@ import flask
 from app.gateways import guest
 from app.core import agents
 from app.core import agents as agent_store
-from app import (persona)
+from app.features.persona import service as persona
 from app.features.admin import routes as persona_admin_api
 
 

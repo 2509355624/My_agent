@@ -416,7 +416,7 @@ def _queued_note_for_user(result):
     # 回执「后台直发」那条（generate_image._qq_receipt，2026-10-04）：人话那半句
     # 就是已经发进会话的那句，取出来照样算「已提交」——掐断判据必须认它，否则
     # 一轮一张的硬闸整条失效。兜底补话照旧走（qq_bot 会丢掉这次补话：它已经发过）。
-    from app import image_jobs
+    from app.features.image import jobs as image_jobs
     direct = image_jobs.receipt_line(text)
     if direct:
         return direct
@@ -482,7 +482,7 @@ def _session_has_image_activity(session_key):
     if not target or not target_id:
         return False
     try:
-        from app import image_jobs
+        from app.features.image import jobs as image_jobs
         return image_jobs.recent_activity(target, target_id) > 0
     except Exception:
         # 查不了就当作「没有」：宁可漏放一次，也不能因为这里出错把整轮回复吞掉。
