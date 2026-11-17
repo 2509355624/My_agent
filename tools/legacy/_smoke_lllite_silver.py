@@ -11,9 +11,11 @@ import time
 import traceback
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(os.path.dirname(ROOT))
 sys.path.insert(0, ROOT)
 
-REF = os.path.join(ROOT, "_ref02_参考图.png")
+REF = os.path.join(REPO_ROOT, "artifacts", "root_cleanup_20261117",
+                   "_ref02_参考图.png")
 PROMPT = ("1girl, solo, standing, hands on hips, looking at viewer, "
           "green hair, taoist hat, green robe, candlelight, dark room, "
           "full body")

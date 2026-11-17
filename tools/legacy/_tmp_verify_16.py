@@ -3,10 +3,15 @@
 跑的是一话 5 格（跟用户那次的 C20261012-03 同规格），只打印结果、落一份
 _tmp_verify_16.md 供人工比对。跑完即可删。
 """
+import os
 import sys
 import time
 
 sys.path.insert(0, ".")
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ARTIFACTS_DIR = os.path.join(REPO_ROOT, "artifacts", "root_cleanup_20261117")
+os.makedirs(ARTIFACTS_DIR, exist_ok=True)
 from app import comic_agent as A  # noqa: E402
 
 brief = open("comics/C20261012-03/brief.txt", encoding="utf-8").read().strip()
@@ -26,7 +31,8 @@ except Exception as e:  # noqa: BLE001
     raise SystemExit(1)
 
 print("[%6.1fs] 交稿，%d 字" % (time.time() - t0, len(text)), flush=True)
-open("_tmp_verify_16.md", "w", encoding="utf-8").write(text)
+open(os.path.join(ARTIFACTS_DIR, "_tmp_verify_16.md"), "w",
+     encoding="utf-8").write(text)
 
 _, panels = A.comic.parse_script_text(text)
 print("\n" + "=" * 60, flush=True)

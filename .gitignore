@@ -61,6 +61,9 @@ state/
 # 运行日志（logs/qq_bot.log、logs/agent.log，含模型调用与降级记录）
 logs/
 
+# 本地截图 / 对比图 / 一次性日志归档（不进 public 仓库）
+artifacts/
+
 # 排查问题时的本地残留：诊断脚本、diff 转储、临时抓的 stdout/stderr。
 # 都带 `_` 前缀或固定名，跑完就该删；万一忘了也不该被顺手提交进来。
 _local*

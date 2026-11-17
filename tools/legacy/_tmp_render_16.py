@@ -21,7 +21,9 @@ logging.basicConfig(level=logging.INFO, format="%(message)s",
 
 from app import comic  # noqa: E402
 
-SRC = "_tmp_verify_16.md"
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SRC = os.path.join(REPO_ROOT, "artifacts", "root_cleanup_20261117",
+                   "_tmp_verify_16.md")
 DST = os.path.join("comics", "C20261012-04")
 PANELS = ("03", "04", "05")
 
