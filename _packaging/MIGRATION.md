@@ -13,7 +13,7 @@
 | `agents/qq/` | 机器人人设（prompt.md / agent.json / settings.json）+ 表情包库 stickers/ |
 | `skills/` | 技能包（表情包、写作等） |
 | `documents/` + `vector_store/` | 知识库文档 + 向量索引（RAG 用） |
-| `napcat_ref/onebot11.json` | NapCat 网络配置模板（3000/3001 端口 + token 已配好） |
+| `config/onebot_*.json` | SnowLuma 网络配置模板（3000/3001 端口 + token 已配好） |
 | `requirements.txt` | Python 依赖清单 |
 
 **没有带**：台式机的聊天历史（sessions/ recent/ memory/），笔记本是干净的全新会话。
@@ -50,12 +50,12 @@ D:\AI\confyui_env\Scripts\python -c "from modelscope import snapshot_download; s
   照样报「启动失败」。**手动装完最稳。**
 - `RAG_EMBED_DEVICE=cpu` 是**故意**的（把显存留给 ComfyUI）。CPU 加载约 15 秒，正常。
 
-## 第 2 步：装 NapCat 并放网络配置
+## 第 2 步：装 SnowLuma 并放网络配置
 
-1. 安装 NapCat（https://napcat.napneke.icu 下载对应版本，或 Shell/Launcher 一键版），装好后找到它的 `napcat/config/` 目录。
-2. 把包里的 `napcat_ref/onebot11.json` **复制为** `napcat/config/onebot11.json`（无账号后缀的模板，新号首登自动继承）。
+1. 安装 SnowLuma（从 SnowLuma 发布页下载），装好后找到它的 `SnowLuma/config/` 目录。
+2. 把包里的 `config/onebot_*.json` 放到 SnowLuma 的 `config/`（无账号后缀的模板，新号首登自动继承）。
    - 里面有 HTTP 3000 端口（机器人收消息用）和 WS 3001，token 已与 `.env` 配好对，不用改。
-3. 启动 NapCat，用**笔记本专用的那个 QQ 小号**扫码登录（别用台式机机器人正在用的号，同一账号不能两处同时登录）。
+3. 双击 `启动SnowLuma.bat`，浏览器打开 `http://127.0.0.1:5099`，用**笔记本专用 QQ 小号**扫码登录（同一账号不能两处同时登录）。
 4. 登录成功标志：`netstat -ano | findstr "3000 3001"` 能看到 LISTENING。
 
 ## 第 3 步：检查 .env（换人设的关键都在这）
@@ -82,16 +82,16 @@ D:\AI\confyui_env\Scripts\python -c "from modelscope import snapshot_download; s
 
 ## 第 5 步：启动
 
-方式 A（推荐）：`一键启动QQ机器人.bat` 会依次拉起 NapCat 和机器人适配层。
+方式 A（推荐）：`一键启动QQ机器人.bat` 会依次拉起 SnowLuma 和机器人适配层。
 **仓库内的路径已改成 `%~dp0` 自定位**（脚本自己所在的目录），所以整个目录解压到哪儿都不用改。
 只剩两条**仓库外**的路径要按笔记本实际情况改：
 
 ```
-D:\AI\NapCat\启动NapCat.bat            → 笔记本 NapCat 的启动 bat
+启动SnowLuma.bat            → 笔记本 SnowLuma 的启动 bat
 D:\AI\confyui_env\Scripts\python.exe   → 笔记本的 venv python（第 2 步建的那个）
 ```
 
-方式 B（手动）：先启动 NapCat 并登录，再双击解压目录里的 `启动QQ机器人.bat`。
+方式 B（手动）：先启动 SnowLuma 并登录，再双击解压目录里的 `启动QQ机器人.bat`。
 
 **⚠️ bat 的编码与行尾不能动**：`一键启动全部.bat`、`一键启动QQ机器人.bat`、`启动QQ机器人.bat`、`启动看门狗.bat` 是 **GBK + CRLF**；`一键启动.bat`、`扫码登录.bat`、`检查登录.bat` 是 **ASCII + LF**。记事本"另存为"会把 LF 变成 CRLF，要改就直接编辑原文件、别另存。
 

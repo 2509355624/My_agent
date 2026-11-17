@@ -31,7 +31,7 @@ _SEND_INTERVAL = 0.3
 
 # ─── 发送日志：把「发给了谁」打进适配层终端 ─────────────
 
-# NapCat 自己的日志有发送行但没有正文，适配层这边只有接收没有发送，
+# SnowLuma 自己的日志有发送行但没有正文，适配层这边只有接收没有发送，
 # 排查「它到底回给了谁」得两边对——干脆在发送的必经之路（本文件）补一行，
 # 带上群名/昵称和内容预览。名字懒加载一次缓存住，拿不到就显示号码，
 # 绝不因为取名字失败而拦发送。
@@ -236,7 +236,7 @@ def current_turn_text():
 
 # ─── 底层调用 ────────────────────────────────────────
 
-# NapCat 就在本机 127.0.0.1，请求必须绕开系统代理：本机装了 Clash 这类工具
+# SnowLuma 就在本机 127.0.0.1，请求必须绕开系统代理：本机装了 Clash 这类工具
 # 时会把代理写进 Windows 注册表，而 requests 在环境变量为空时会 fallback
 # 去读注册表，结果连 127.0.0.1 的请求也被送去代理、换回一个 502。
 # trust_env=False 让这个 session 完全不理会环境变量与注册表里的代理设置。
@@ -269,7 +269,7 @@ def _call(action, payload=None, timeout=20):
         raise RuntimeError("OneBot 返回不是 JSON：" + resp.text[:200])
 
     if not isinstance(data, dict):
-        # POST 已经完成：请求送达且 NapCat 已处理——发送类 action 走到这一步，
+        # POST 已经完成：请求送达且 SnowLuma 已处理——发送类 action 走到这一步，
         # 消息多半已经发出去了。实测偶发响应不是预期对象（json() 解析成字符串），
         # 之前在这里 data.get 崩掉、被上层当「发送失败」上报，模型便以为图没发
         # 出去，下文接着编「发不出来」——比丢一次返回值严重得多。按成功处理，
@@ -284,7 +284,7 @@ def _call(action, payload=None, timeout=20):
 
 
 # 协议端失败时抛的是 `OneBot 调用失败 <action>: <返回体 dict>`，**真实原因在
-# 返回体的 `wording` 里**（NapCat 的字段名），别的实现叫 `message` / `msg`。
+# 返回体的 `wording` 里**（SnowLuma 的字段名），别的实现叫 `message` / `msg`。
 # 调用方拿到异常时通常只剩一个冒号——2026-10-31 用户看到的就是
 # `图画好了，但没发出去（OneBot 调用失败 send_private_msg: ）`，因为调用方
 # 按 30 字截断，而这句话的前缀正好 35 字。这里把原因挖出来，别再让人猜。
@@ -334,7 +334,7 @@ def file_url(target, target_id, file_id, busid="", timeout=20):
     没有 `url`。`_parse_segments` 在 WS 消息循环上不能发 HTTP，所以先记成
     `fileid://` 伪地址，由 worker 线程（`qq_bot._prepare_images`）调到这里。
 
-    NapCat 的取文件链接是 `get_group_file_url` / `get_private_file_url`；
+    SnowLuma 的取文件链接是 `get_group_file_url` / `get_private_file_url`；
     标准 OneBot 只有 `get_file`。三个都试：谁先给出 http(s) / file:// 地址
     就用谁。**不接受 base64**——`get_file` 可能把文件内容直接塞进 `file`，
     那串不是 URL，交给 `fetch_image` 只会炸。
@@ -385,13 +385,13 @@ def get_forward_msg(forward_id, timeout=10):
     """按 id 取一张「转发的聊天记录」卡片的全部节点。
 
     多数情况下 forward 段自带 content 数组，用不上这个接口；这里是兜底，
-    以及万一 NapCat 某个版本不下发 content 时的退路。
+    以及万一 SnowLuma 某个版本不下发 content 时的退路。
     """
     return _call("get_forward_msg", {"id": forward_id}, timeout=timeout)
 
 
 # 取名字用的两个接口超时给得很短：它们是纯锦上添花（把 group_123 显示成
-# 群名），NapCat 没开时应该立刻放弃，而不是让整个管理页等二十秒。
+# 群名），SnowLuma 没开时应该立刻放弃，而不是让整个管理页等二十秒。
 _NAME_TIMEOUT = 3
 
 
@@ -649,7 +649,7 @@ def reply_segment(message_id):
 # 只认老措辞的代价很大：图这条被判成「真故障」，于是 `_call_private` 既不重试
 # 也不探测，直接报失败——可图**明明已经画好了**（Anima_00276_.png，3.89MB），
 # 胡桃桃收到的是「图没画出来（OneBot 调用失败 send_private_msg: ）」。
-# 0x11c5_100 就是 NapCat 发私聊那条 OIDB 命令，170019003 是它的身份校验失败码，
+# 0x11c5_100 就是 SnowLuma 发私聊那条 OIDB 命令，170019003 是它的身份校验失败码，
 # 与 result=16 同源：没有可用的私聊通道（不是好友、也没有活跃临时会话）。
 FRIEND_REQUIRED_HINTS = (
     "请先添加对方为好友",
@@ -775,7 +775,7 @@ def _call_private(user_id, message, timeout=30):
 
     QQ **不允许**给非好友直接发私聊（result=16「请先添加对方为好友」），但如果
     对方是从某个群发起的**临时会话**，带上那个群的 `group_id` 就能发出去——
-    NapCat 支持这个参数（OneBot 11 的 `send_private_msg.group_id`）。
+    SnowLuma 支持这个参数（OneBot 11 的 `send_private_msg.group_id`）。
 
     **只在这一种错误上换路子**：别的失败照抛，免得把真故障掩盖成「对方不是好友」。
 

@@ -195,7 +195,7 @@ class SessionApiTest(SessionsTestBase):
         self.assertEqual(names["private_222"], "阿明（222）")
 
     def test_get_falls_back_when_protocol_side_down(self):
-        """NapCat 没开时列表照给，只是名字退回号——不能整个接口失败。"""
+        """SnowLuma 没开时列表照给，只是名字退回号——不能整个接口失败。"""
         self.write_session("qq", key="group_111")
 
         def boom(*a, **k):

@@ -1,6 +1,6 @@
 """qq_api._call 对非对象响应的容错 + records_by_numbers 兜底。
 
-背景（2026-09-26 凌晨 233 群实录）：send_sticker 已把图发出去，NapCat 返回的
+背景（2026-09-26 凌晨 233 群实录）：send_sticker 已把图发出去，SnowLuma 返回的
 响应体 json() 解析成了字符串，_call 里 data.get 崩掉、上层报「发送失败」——
 模型于是以为图没发出去，下文接着编。修复：POST 完成后的非对象响应按成功处理。
 """

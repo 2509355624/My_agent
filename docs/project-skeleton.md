@@ -31,7 +31,7 @@ my_agent_restructure/
 根目录不再放：`_probe_*.py`、`_tmp_*.py`、`*.log`、`*_before_*.html`、一次性对比图。
 这些分别进 `tools/legacy/`、`artifacts/`、`web/_backup/`（确认无引用后再搬）。
 
-`clean_zombies.py`、`export_presets.py`、`import_presets.py`、`napcat_qr.py`、
+`clean_zombies.py`、`export_presets.py`、`import_presets.py`、
 `restart_servers.py` 这些运维脚本，后续进 `tools/ops/`；根目录保留 3 个进程入口即可。
 
 `app/` 根目录当前只剩 4 个文件：`__init__.py`、`config.py`（配置门面）、`main.py`

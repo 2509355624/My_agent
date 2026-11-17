@@ -205,7 +205,7 @@ QQ_INTERJECT_GROUPS=
 | `QQ_ENABLE` | 总开关。网页端也读它（决定要不要注册「发 QQ 消息」工具） | 必须 `true` |
 | `QQ_WS_URL` / `QQ_HTTP_URL` | 协议端两个端口 | 协议端没改就照抄 |
 | `QQ_TOKEN` | OneBot 令牌 | 和协议端**逐字一致** |
-| `QQ_WEBUI_PORT` | 协议端 WebUI 端口，只用来「探活判断它登没登录」 | SnowLuma 是 `5099`，NapCat 是 `6099` |
+| `QQ_WEBUI_PORT` | 协议端 WebUI 端口，只用来「探活判断它登没登录」 | SnowLuma 是 `5099` |
 | `QQ_AGENT_ID` | 用哪个 agent 的人设和工具，对应 `agents/qq/` 目录名 | `qq`，和第 5 节目录名一致 |
 | `QQ_BOT_NAME` | **机器人在群里的 QQ 昵称** | 必须和 QQ 昵称一致，否则它会认不出自己说过的话、开始复读 |
 | `QQ_PRIVATE_ENABLE` | 私聊要不要回 | 一般 `true` |

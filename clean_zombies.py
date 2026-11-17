@@ -57,7 +57,6 @@ NO_PORT_SERVICES = {
     "-m app.workers.watchdog": "watchdog（看门狗）",
     "-m app.qq_bot": "qq_bot（QQ 适配层）",
     "friend_tunnel.py": "friend_tunnel（群友隧道）",
-    "napcat": "NapCat（协议端）",
     "snowluma": "SnowLuma（协议端）",
 }
 

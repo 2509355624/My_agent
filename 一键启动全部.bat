@@ -9,7 +9,6 @@ if not defined PY set "PY=python"
 title LAUNCH-ALL
 
 set "WEB_BAT=%~dp0一键启动.bat"
-set "NAPCAT_BAT=D:\AI\NapCat\启动NapCat.bat"
 set "SNOWLUMA_BAT=%~dp0启动SnowLuma.bat"
 set "BOT_BAT=%~dp0启动QQ机器人.bat"
 set "FRIEND_BAT=%~dp0启动群友页.bat"
@@ -19,40 +18,10 @@ set "ADMIN_TUNNEL_BAT=%~dp0启动管理页隧道.bat"
 rem ComfyUI 是**可选**的：缺了只影响生图，聊天照常，所以下面只 WARN 不 exit。
 set "COMFY_BAT=%~dp0启动ComfyUI.bat"
 
-rem ---------------------------------------------------------------------------
-rem  协议端二选一（NapCat / SnowLuma）。两者 OneBot 端口完全一样（3000 HTTP /
-rem  3001 WS），只有 WebUI 口不同（6099 / 5099），所以切换只影响：启动哪个 bat、
-rem  探活哪个口、以及怎么出扫码窗口。
-rem  [!!] 改这里之后，.env 里的 QQ_WEBUI_PORT 要跟着改 —— 看门狗靠它区分
-rem       「进程没起来」和「起来了但没登录」，探错口就永远判成「进程死了」。
-rem  传参：任意位置写 snowluma 都能切（force snowluma / force auto snowluma）；
-rem      环境变量 QQ_PROTOCOL=snowluma、.env 的 QQ_WEBUI_PORT=5099 亦可。
-rem ---------------------------------------------------------------------------
-set "PROTOCOL=napcat"
-rem 三个入口任意一个说 snowluma 就算：命令行参数（任意位置）、QQ_PROTOCOL
-rem 环境变量、.env 里的 QQ_WEBUI_PORT。
-rem [!!] 只认 %~3 是错的：手打「force snowluma」时 snowluma 落在 %~2，
-rem      2026-09-30 就因为这一条白跑了半天 NapCat。
-for %%a in (%~1 %~2 %~3) do if /i "%%~a"=="snowluma" set "PROTOCOL=snowluma"
-if /i "%QQ_PROTOCOL%"=="snowluma" set "PROTOCOL=snowluma"
-set "_ENV_PORT="
-rem [!!] 读 .env **必须**用 findstr，不能用 for /f + usebackq：本项目的 .env 是
-rem      **纯 LF**（0 个 CRLF），cmd 的 for /f 会把整篇当一行，%%a 永远匹配不上
-rem      —— 09-30 实测 for/f 得到空、findstr 得到 5099。别改回 for /f。
-if exist "%~dp0.env" (
-    for /f "tokens=1,* delims==" %%a in ('findstr /i /b "QQ_WEBUI_PORT=" "%~dp0.env"') do set "_ENV_PORT=%%~b"
-)
-if "%_ENV_PORT%"=="5099" set "PROTOCOL=snowluma"
-
-if /i "%PROTOCOL%"=="snowluma" (
-    set "PROTO_BAT=%SNOWLUMA_BAT%"
-    set "PROTO_PORT=5099"
-    set "PROTO_NAME=SnowLuma"
-) else (
-    set "PROTO_BAT=%NAPCAT_BAT%"
-    set "PROTO_PORT=6099"
-    set "PROTO_NAME=NapCat"
-)
+rem 协议端固定 SnowLuma：OneBot 3000 HTTP / 3001 WS，WebUI 5099。
+set "PROTO_BAT=%SNOWLUMA_BAT%"
+set "PROTO_PORT=5099"
+set "PROTO_NAME=SnowLuma"
 
 set "FORCE_RESTART="
 if /i "%~1"=="force" set "FORCE_RESTART=1"
@@ -135,11 +104,9 @@ if defined FORCE_RESTART (
             taskkill /PID %%a /F >nul 2>&1
         )
     )
-    rem 关掉上一次的 NapCat 窗口（进程杀完窗口会停在提示符，不清就一直堆）
-    taskkill /FI "WINDOWTITLE eq NapCat - QQ 协议端" /T /F >nul 2>&1
+    rem 关掉上一次的 SnowLuma 窗口和 QQ 进程，保证重新注入
     taskkill /FI "WINDOWTITLE eq SNOWLUMA" /T /F >nul 2>&1
     taskkill /IM QQ.exe /F >nul 2>&1
-    taskkill /IM NapCatWinBootMain.exe /F >nul 2>&1
 ) else if defined PROTO_RUNNING (
     echo       %PROTO_NAME% 已在运行，跳过 - 重启它需要重新扫码
 ) else (
@@ -149,11 +116,9 @@ if defined FORCE_RESTART (
             taskkill /PID %%a /F >nul 2>&1
         )
     )
-    rem 关掉上一次的 NapCat 窗口（进程杀完窗口会停在提示符，不清就一直堆）
-    taskkill /FI "WINDOWTITLE eq NapCat - QQ 协议端" /T /F >nul 2>&1
+    rem 关掉上一次的 SnowLuma 窗口和 QQ 进程，保证重新注入
     taskkill /FI "WINDOWTITLE eq SNOWLUMA" /T /F >nul 2>&1
     taskkill /IM QQ.exe /F >nul 2>&1
-    taskkill /IM NapCatWinBootMain.exe /F >nul 2>&1
 )
 ping -n 5 127.0.0.1 >nul
 echo       完成
@@ -222,13 +187,8 @@ if defined FORCE_RESTART (
 )
 start "QQBOT-ADAPTER" cmd /k "%BOT_BAT%"
 ping -n 3 127.0.0.1 >nul
-if /i "%PROTOCOL%"=="snowluma" (
-    rem SnowLuma 不落盘 qrcode.png，码在 WebUI(5099) 里画 —— 开个页面代替扫码窗口
-    rem 首次要用控制台的一次性临时密码登录，之后浏览器会记住
-    start "" "http://127.0.0.1:5099"
-) else (
-    start "扫码窗口" cmd /k "%PY%" "%~dp0napcat_qr.py" --tries 12 --wait 120
-)
+rem SnowLuma 的二维码在 WebUI(5099) 里画，直接打开页面
+start "" "http://127.0.0.1:5099"
 echo       QQBOT-ADAPTER    QQ 适配层
 echo.
 
@@ -267,14 +227,9 @@ if not errorlevel 1 (
 )
 echo.
 echo   需要扫码登录时:
-if /i "%PROTOCOL%"=="snowluma" (
 echo   浏览器打开  http://127.0.0.1:5099
 echo   密码 SnowLuma@2026（启动SnowLuma.bat 里写死的，只听 127.0.0.1）
 echo   OneBot 端口与令牌已预置在 config\onebot.json，进去只要扫码
-) else (
-echo   浏览器打开  http://127.0.0.1:6099/webui
-echo   用手机 QQ 扫码，建议用小号
-)
 echo   登录成功后适配层会自动连上，无需重启任何东西
 echo ==================================================
 echo.

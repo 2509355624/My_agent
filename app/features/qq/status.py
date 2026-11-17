@@ -14,7 +14,7 @@ qq_bot.py 是**独立进程**，跟 Flask（app/main.py）不共享内存。Sess
 ## 要点
 - 原子写（临时文件 + os.replace）：读的一方永远看不到半截 JSON。
 - 只写不读；读在 Flask 侧（read()）。
-- NapCat 探活在这里做一次就够，别让 Flask 再去戳 3000 口。
+- 协议端探活在这里做一次就够，别让 Flask 再去戳 3000 口。
 - 时长一律用 monotonic 算（SessionRunner.state_since 也是 monotonic），
   千万别拿 time.time() 去减——两个时钟基准不同，减出来是垃圾。
 """
@@ -39,7 +39,7 @@ WRITE_INTERVAL = 1.0
 # 读的一方认为「超过这么久没更新 = bot 死了」。
 STALE_SECONDS = 10.0
 
-# 探活 NapCat 的超时：状态后台每 2 秒要拿到结果，不能让它卡住。
+# 探活协议端的超时：状态后台每 2 秒要拿到结果，不能让它卡住。
 _ALIVE_TIMEOUT = 3
 
 # 阶段 -> 中文。后台直接显示，不用前端再翻一次。
@@ -55,7 +55,7 @@ _ORDER = {"waiting_slot": 0, "running": 1, "debouncing": 2, "idle": 3}
 
 
 def _alive():
-    """探 NapCat 协议端。返回 (online, detail)。"""
+    """探协议端。返回 (online, detail)。"""
     try:
         from app.features.qq import api as qq_api
         uid, nick = qq_api.check_alive(timeout=_ALIVE_TIMEOUT)
@@ -99,7 +99,7 @@ def snapshot(bot=None):
         log.warning("读生图队列失败：%s", exc)
         jobs = {"running": None, "queued": [], "depth": 0}
 
-    # ── NapCat ────────────────────────────────────
+    # ── 协议端 ────────────────────────────────────
     online, detail = _alive()
 
     # ── 最后一次收发（墙钟）────────────────────────
@@ -110,7 +110,7 @@ def snapshot(bot=None):
         idle_for = None
 
     # ── 群名/私聊昵称（顺手把刷新驱动一下）────────
-    # refresh_lists 内部限速 10 分钟一次，状态后台每 2 秒调它不会刷爆 NapCat。
+    # refresh_lists 内部限速 10 分钟一次，状态后台每 2 秒调它不会刷爆协议端。
     try:
         from app.features.qq import names as qq_names
         qq_names.refresh_lists()
@@ -133,7 +133,7 @@ def snapshot(bot=None):
         "bot_alive": True,
         "sessions": sessions,
         "jobs": jobs,
-        "napcat": {"online": online, "detail": detail},
+        "protocol": {"online": online, "detail": detail},
         "last_activity_ago": idle_for,
     }
 
@@ -184,7 +184,7 @@ def _write_loop(bot, path, interval):
         try:
             # 顺便把名字缓存刷一下——refresh_lists 内部限速 10 分钟一次，
             # 起动时 last_refresh=0 必刷，之后每次写盘顺带检查但不真拉。
-            # 这样起动后第一秒就能看到名字，也不会把 NapCat 打爆。
+            # 这样起动后第一秒就能看到名字，也不会把协议端打爆。
             try:
                 from app.features.qq import names as qq_names
                 qq_names.refresh_lists()

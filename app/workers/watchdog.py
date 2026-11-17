@@ -1,33 +1,33 @@
-"""NapCat + ComfyUI 心跳看门狗（独立进程）。
+"""SnowLuma + ComfyUI 心跳看门狗（独立进程）。
 
-目的：NapCat 偶尔直接崩 / 卡死，崩了之后没人知道、扫码通知也不会发（死进程不写
-qrcode.png）。这个进程独立于 qq_bot / NapCat，定时探 NapCat 是否还活着，死了就拉起
-「一键启动全部 force」把三个窗口（Agent Web / NapCat / QQBOT-ADAPTER）全重启。
+目的：SnowLuma 偶尔直接崩 / 卡死，崩了之后没人知道、扫码通知也不会发（死进程不写
+qrcode.png）。这个进程独立于 qq_bot / SnowLuma，定时探 SnowLuma 是否还活着，死了就拉起
+「一键启动全部 force」把三个窗口（Agent Web / SnowLuma / QQBOT-ADAPTER）全重启。
 
 **另外还盯 ComfyUI（2026-09-30 加，见「ComfyUI 分支」一节）**：它原先**没有任何守护**
-——NapCat 有自愈（杀了 QQ.exe 约 40 秒自己拉起来）、qq_bot 有本看门狗，只有 ComfyUI
+——协议端自身可能有自愈、qq_bot 有本看门狗，只有 ComfyUI
 崩了就彻底断，只能人工去《启动手册.txt》里抄那行命令起它。
 
 为什么独立：如果看门狗是 qq_bot 内部的一个线程，适配层自己卡死时就没人能救它了。
 
-探测对象：NapCat OneBot HTTP（:3000）。复用 app.features.qq.api.check_alive（自带
+探测对象：SnowLuma OneBot HTTP（:3000）。复用 app.features.qq.api.check_alive（自带
 trust_env=False，不受本机 Clash 注册表代理影响）。
 
 判定（探活三态，见 `_probe`）：
-  - "dead"：连不上（:6099 WebUI 口也没监听 = 进程没了 / 卡死）。连续 MAX_FAILS 次
+  - "dead"：连不上（:5099 WebUI 口也没监听 = 进程没了 / 卡死）。连续 MAX_FAILS 次
     → 触发重启。
-  - "offline"：:6099 在听但 :3000 不通 = 进程活着、**登录态失效**。持续 OFFLINE_GRACE
+  - "offline"：:5099 在听但 :3000 不通 = 进程活着、**登录态失效**。持续 OFFLINE_GRACE
     秒（≈二维码有效期）→ 触发重启，换一张新码推给用户。
 
   ⚠ 「活着但没登录」以前是**不动**的。**09-29 两次误判**：原文写着「实测推翻了这个假设：
-  重启走 `-q <号>` 快速登录，20:30 那次 NapCat 自己就登回去了」—— **用户两次纠正：恢复
+  旧协议端曾走 `-q <号>` 快速登录，20:30 那次自己就登回去了」—— **用户两次纠正：恢复
   都是他手动扫码的结果，不是自动登录。所以别假设快速登录有效。**
   现在两种掉线都重启，理由**不是**「重启能自愈」，而是：**只有重启才能把一张新二维码推到
   用户手上**（用户 09-29 要求「掉线就重启，别只丢个二维码让我自己扫 —— 我扫完还没反应」）。
   OFFLINE_GRACE 留够时间给「人正在扫」，免得白重启一次、还要人多扫一次码。
 
 重启：subprocess 拉起「一键启动全部.bat force auto」（**隐藏窗口**，不阻塞 watchdog）。
-  - force = 忽略「6099 还在监听就跳过 NapCat」的保护，强制杀掉再起，处理「进程活着
+  - force = 忽略「5099 还在监听就跳过 SnowLuma」的保护，强制杀掉再起，处理「进程活着
     但卡死」的情形。
   - auto  = 启动器跑完直接退出，不留窗口、不等回车。看门狗每重启一次就多一个窗口的话
     桌面上很快就堆满了（09-29 用户抱怨）。
@@ -40,7 +40,7 @@ trust_env=False，不受本机 Clash 注册表代理影响）。
 **重启后只发一条通知，而且只在「要扫码」时发**（09-29 用户拍板）：重启一发起就立刻
 盯结果，等出结论再发，不再先发「正在自动重启」。三种结论：
   - 已登录（:3000 探通）      → **不通知**（用户原话：「重启可以自动登上来就不用通知」）
-  - NapCat 起来但没登录 + 二维码是本次新写的 → 推「已重启，需要扫码」+ 二维码图
+  - 协议端起来但没登录 + 二维码是本次新写的 → 推「已重启，需要扫码」+ 二维码图
   - 超时都没等到               → 推「重启后未恢复」并计入失败次数
 
 **静默判据（假在线，见 `_check_silence`）**：三态探针探不出「接口全好但收不到消息」，
@@ -67,21 +67,21 @@ MAX_RESTART_FAILS 次仍停在扫码界面 → 暂停自动重启并退避 BACKO
 默认开启，但仍受 `comfy_seen` 闩保护：看门狗启动后从未见过 ComfyUI 在线时，
 不会因为用户主动关闭 ComfyUI 而自行拉起。只有在线后连续约 120 秒失联才重启。
 
-跟 NapCat 那套**平行**、互不干扰：两边各有自己的失败计数和退避，一个挂了不影响另一个。
+跟 SnowLuma 那套**平行**、互不干扰：两边各有自己的失败计数和退避，一个挂了不影响另一个。
 探的是 ComfyUI 的 `/system_stats`（:8188），连续 4 次失败后，按 8188 找到 PID，
 用 `taskkill /F /T` 结束进程树，再执行固定 Python 启动命令。
 
-四条跟 NapCat 不一样的地方：
+四条跟 SnowLuma 不一样的地方：
 
 1. **只在「它本来在跑」时才管**（用户 09-30 拍板）：ComfyUI 按需启动，用户常常
    压根没开。所以先探到一次「在线」才认账（`comfy_seen` 闩），之后**从在线变成
    不通**才动手；从没在线过就不动。否则「故意不开省显存」会被强行拉起来。
 
 2. **静默重启，不通知**（用户 09-30 拍板）：ComfyUI 是本地服务，重启不需要人做任何事
-   ——不像 NapCat 要扫码。所以起来就自己好了，按「恢复不通知」同一个原则处理。只有
+   ——不像 SnowLuma 要扫码。所以起来就自己好了，按「恢复不通知」同一个原则处理。只有
    **连续 MAX_RESTART_FAILS 次都拉不起来**时才推一条「需人工处理」。
 
-3. **没有「登录态」这种中间态**：NapCat 要分 online/offline/dead 三态（因为「进程活着
+3. **没有「登录态」这种中间态**：SnowLuma 要分 online/offline/dead 三态（因为「进程活着
    但没登录」需要扫码）。ComfyUI 只有「8188 通」和「不通」两态，判定简单。
 
 4. **进程级恢复**：连续 4 次失败后按 8188 找到监听 PID，使用 `taskkill /F /T`
@@ -99,7 +99,7 @@ import subprocess
 import sys
 import time
 
-# 看门狗是 Windows 专用（NapCat / QQ 都是 Windows 程序），文件锁也只在 Windows 有。
+# 看门狗是 Windows 专用（SnowLuma / QQ 都是 Windows 程序），文件锁也只在 Windows 有。
 try:
     import msvcrt
 except ImportError:  # 非 Windows 上退化成无锁（本项目不会走到这）
@@ -123,7 +123,7 @@ PROBE_TIMEOUT = 10.0       # 单次探测超时（秒）
 MAX_FAILS = 3              # 连续失败几次判定为死（≈90 秒）
 
 # 「活着但没登录」持续这么久 → 判定「二维码过期了还没人扫」，重启换一张新码。
-# 取 ≈ 二维码有效期（NapCat 约 180 秒）：等短了会把「NapCat 正在快速登录」或
+# 取 ≈ 二维码有效期（协议端约 180 秒）：等短了会把「协议端正在恢复登录」或
 # 「人正在扫码」误判成没人管，白重启一次、还要人多扫一次码；等长了用户就一直
 # 拿着过期码。
 OFFLINE_GRACE = 180.0
@@ -132,7 +132,7 @@ RECOVER_INTERVAL = 3.0     # 重启后复查间隔（秒）—— 要小，扫�
 RECOVER_WAIT = 180.0       # 重启后最多等多久；超时算「恢复失败」
 PROBE_TIMEOUT_FAST = 3.0   # 重启窗口内的探测超时，短一点免得拖慢判定
 
-NAPCAT_WEBUI_PORT = WEBUI_PORT   # 协议端 WebUI：它起来了就说明进程活着（登录前也监听）
+PROTOCOL_WEBUI_PORT = WEBUI_PORT   # 协议端 WebUI：它起来了就说明进程活着（登录前也监听）
 QR_GRACE = 20.0            # WebUI 起来后再等这么久还没登录 → 判定要扫码
 
 MAX_RESTART_FAILS = 3      # 连续几次重启都救不活 → 放弃自动重启
@@ -156,12 +156,10 @@ STATUS_STALE = 120.0
 _ALL_BAT = os.path.join(BASE_DIR, "一键启动全部.bat")
 _LOCK_PATH = os.path.join(BASE_DIR, "state", "watchdog.lock")
 
-# ── 协议端（2026-09-30 起可换 NapCat / SnowLuma）──────
-# `一键启动全部.bat` 认第 3 个参数（snowluma）；不传就是 NapCat。
-# 看门狗重启时必须把它透传下去，否则会把协议端拉错 —— 详见 `_trigger_restart`。
-#   判断依据是 WebUI 端口：6099 = NapCat，其他（5099）= SnowLuma。
-# 用端口反推而不是再加一个 env：只会有一个真相源，不会两边配不一致。
-_PROTOCOL_ARG = "" if WEBUI_PORT == 6099 else "snowluma"
+# ── 协议端固定 SnowLuma ─────────────────────────────
+# 看门狗重启时把 snowluma 透传给一键启动，避免拉错协议端。
+# WebUI 端口默认 5099，只用于区分「进程没起来」和「起来了但没登录」。
+_PROTOCOL_ARG = "snowluma"
 
 # ── ComfyUI 分支参数 ──────────────────────────────────
 # ComfyUI 单独采用约 120 秒失联阈值：30 秒探一次，连续 4 次失败才重启。
@@ -194,7 +192,7 @@ def _comfy_session():
 def _probe_comfyui(timeout=None):
     """探一次 ComfyUI。返回 (alive, detail)。
 
-    **只有两态**（不像 NapCat 有三态）：ComfyUI 没有「进程活着但没登录」这种需要
+    **只有两态**（不像 SnowLuma 有三态）：ComfyUI 没有「进程活着但没登录」这种需要
     人介入的中间态，8188 答得上就算活着。
 
     ⚠️ 判据是「HTTP 200 + 是预期的 JSON」，不是「TCP 连得上」：8188 在 ComfyUI
@@ -359,7 +357,7 @@ def _comfy_restart(state, now, detail):
             state["comfy_restart_fails"] = 0
         return True
 
-    # 静默重启：不推「正在重启」，起来了也不推（跟 NapCat「恢复不通知」同一原则）。
+    # 静默重启：不推「正在重启」，起来了也不推（跟 SnowLuma「恢复不通知」同一原则）。
     # 只有一个例外——连续几次都没起来，才告诉用户要人工看一眼。
     state["comfy_restart_fails"] += 1
     if state["comfy_restart_fails"] >= MAX_RESTART_FAILS:
@@ -404,22 +402,22 @@ def _acquire_lock():
 
 
 def _probe(timeout=None):
-    """探一次 NapCat。返回 (state, detail)，state 三态：
+    """探一次 SnowLuma。返回 (state, detail)，state 三态：
 
       - "online"  连得上且已登录
       - "offline" 进程活着但没登录（登录态失效，等着扫码 / 快速登录）
       - "dead"    连不上，且 WebUI 口也没监听（进程没了或卡死）
 
-    为什么不能只看 :3000 通不通：**3000 只在登录成功后才监听**（登录前只有 6099），
+    为什么不能只看 :3000 通不通：**3000 只在登录成功后才监听**（登录前只有 5099），
     所以「3000 连不上」既可能是进程死了、也可能只是没登录 —— 前者重启能救，后者
-    重启是另一回事（换新码 / 快速登录）。用 6099（登录前就监听）把两者分开。
+    重启是另一回事（换新码 / 快速登录）。用 5099（登录前就监听）把两者分开。
     """
     try:
         uid, nick = check_alive(
             timeout=PROBE_TIMEOUT if timeout is None else timeout)
     except Exception as e:
         detail = "%s: %s" % (type(e).__name__, e)
-        if _port_open(NAPCAT_WEBUI_PORT):
+        if _port_open(PROTOCOL_WEBUI_PORT):
             return "offline", detail
         return "dead", detail
     if not uid:
@@ -444,7 +442,7 @@ def _port_open(port, timeout=1.0):
 def _qr_written_since(since):
     """二维码文件是不是本次重启之后新写的（= 真的在等人扫这一轮的码）。
 
-    留 5 秒余量：文件系统时间戳精度 + NapCat 写文件的时刻可能略早于我们记的
+    留 5 秒余量：文件系统时间戳精度 + SnowLuma 写文件的时刻可能略早于我们记的
     重启时刻（force 分支里先杀进程再拉起，中间的 ping 延迟不小）。
     """
     try:
@@ -481,7 +479,7 @@ def _trigger_restart():
     """拉起「一键启动全部 force auto」，隐藏窗口、不阻塞。返回是否成功发起。
 
     ⚠️ 第三个参数（协议端）必须跟着 `_PROTOCOL` 走：`一键启动全部.bat` 默认起
-    NapCat，如果这里不传，那么在跑 SnowLuma 的时候看门狗一重启就会把 NapCat
+    SnowLuma，如果这里不传，那么在跑 SnowLuma 的时候看门狗一重启就会把 SnowLuma
     拉起来 —— 两个协议端抢 3000/3001 端口，比不重启更糟。
     """
     if not os.path.exists(_ALL_BAT):
@@ -507,8 +505,8 @@ def _trigger_restart():
 def _await_outcome(since):
     """重启后判定结果：'online'（已登录）/ 'qr'（要扫码）/ 'unknown'（没救活）。
 
-    'qr' 要三个条件同时成立：NapCat 进程活着但没登录（_probe 给 "offline"，等价于
-    6099 在听而 :3000 不通）+ 这个状态持续够 QR_GRACE + 二维码文件是本次重启后新写的。
+    'qr' 要三个条件同时成立：SnowLuma 进程活着但没登录（_probe 给 "offline"，等价于
+    5099 在听而 :3000 不通）+ 这个状态持续够 QR_GRACE + 二维码文件是本次重启后新写的。
     缺一不可 —— 只看端口会把「刚起来、快速登录还没走完」误判成要扫码；只看文件会把
     上一轮的旧码误判成本次的。
     """
@@ -589,27 +587,27 @@ def _cycle(state, now=None):
         state["backoff_until"] = 0.0        # 真的好了，把退避一并清掉
         if state["fails"] or state["restart_fails"]:
             # 恢复本身**不通知**（09-29 用户要求）：能自己登回来就不打扰他。
-            log.info("NapCat 恢复在线：%s", detail)
+            log.info("SnowLuma 恢复在线：%s", detail)
             state["fails"] = 0
             state["restart_fails"] = 0
         else:
-            log.debug("NapCat 在线：%s", detail)
+            log.debug("SnowLuma 在线：%s", detail)
         return _check_silence(state, now)
 
     if st == "dead":
         state["offline_since"] = None
         state["fails"] += 1
-        log.warning("NapCat 探活失败 (%d/%d)：%s",
+        log.warning("SnowLuma 探活失败 (%d/%d)：%s",
                     state["fails"], MAX_FAILS, detail)
         if state["fails"] < MAX_FAILS:
             return True
-        return _restart(state, now, "NapCat 心跳丢失")
+        return _restart(state, now, "SnowLuma 心跳丢失")
 
     # "offline"：进程活着，登录态没了 —— 先给扫码/快速登录留够时间
     state["fails"] = 0
     if state["offline_since"] is None:
         state["offline_since"] = now
-        log.warning("NapCat 活着但未登录，先等 %.0f 秒看会不会自己扫码/快速登录",
+        log.warning("SnowLuma 活着但未登录，先等 %.0f 秒看会不会自己扫码/快速登录",
                     OFFLINE_GRACE)
         return True
     if now - state["offline_since"] < OFFLINE_GRACE:
@@ -642,7 +640,7 @@ def _restart(state, now, reason):
 
     if outcome == "online":
         # 自动登录 = 会话本来就是好的 → 按用户要求**不通知**。
-        log.info("重启后 NapCat 已恢复（自动登录，按用户要求不通知）")
+        log.info("重启后 SnowLuma 已恢复（自动登录，按用户要求不通知）")
         state["restart_fails"] = 0
     elif outcome == "qr":
         # 「已重启」和「要扫码」合并成一条 —— 不再先发一条说在重启。
@@ -664,24 +662,24 @@ def _restart(state, now, reason):
             state["restart_fails"] = 0
     else:
         state["restart_fails"] += 1
-        log.error("重启后 NapCat 仍未恢复（%d/%d）",
+        log.error("重启后 SnowLuma 仍未恢复（%d/%d）",
                   state["restart_fails"], MAX_RESTART_FAILS)
         if state["restart_fails"] >= MAX_RESTART_FAILS:
             log.error("连续 %d 次重启均失败，停止自动重启，退避 %.0f 秒",
                       MAX_RESTART_FAILS, BACKOFF)
             push_text("QQ 机器人需人工处理",
-                      "看门狗多次自动重启失败，NapCat 仍无法恢复，请检查。")
+                      "看门狗多次自动重启失败，SnowLuma 仍无法恢复，请检查。")
             state["backoff_until"] = now + BACKOFF
             state["restart_fails"] = 0
         else:
             push_text("QQ 机器人重启后未恢复",
-                      "看门狗已自动重启，但 NapCat 仍未上线，稍后会再试。")
+                      "看门狗已自动重启，但 SnowLuma 仍未上线，稍后会再试。")
     return True
 
 
 def run():
     _acquire_lock()
-    log.info("看门狗启动：探 NapCat :3000，间隔 %.0fs；连不上 %d 次、或未登录 %.0fs 即重启。"
+    log.info("看门狗启动：探 SnowLuma :3000，间隔 %.0fs；连不上 %d 次、或未登录 %.0fs 即重启。"
              "同时探 ComfyUI :8188，连不上 %d 次即静默拉起「启动ComfyUI.bat」",
              PROBE_INTERVAL, MAX_FAILS, OFFLINE_GRACE, MAX_FAILS)
     state = {"fails": 0, "restart_fails": 0, "offline_since": None,
@@ -691,7 +689,7 @@ def run():
     while True:
         time.sleep(PROBE_INTERVAL)
         _cycle(state)
-        # ComfyUI 独立分支：它抛异常（比如 requests 炸了）不能让 NapCat 的守护停摆
+        # ComfyUI 独立分支：它抛异常（比如 requests 炸了）不能让 SnowLuma 的守护停摆
         # ——那是「一个服务的问题拖垮整个看门狗」，正好是加这条要防的事。
         try:
             _comfy_cycle(state)

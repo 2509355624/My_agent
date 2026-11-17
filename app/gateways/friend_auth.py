@@ -54,7 +54,7 @@ _lock = threading.Lock()
 _state = None               # 延迟加载，见 _data()
 _secret_cache = None
 
-# 好友列表缓存：NapCat 每次都拉一遍太慢，60 秒内复用。
+# 好友列表缓存：SnowLuma 每次都拉一遍太慢，60 秒内复用。
 # **缓存为空不代表「没有好友」**——拉取失败也是空，所以另外记 `ok` 位，
 # 只有 ok 才允许用它做「不是好友」的判定（fail-closed）。
 _friends = {"ts": 0.0, "ids": set(), "ok": False}
@@ -135,7 +135,7 @@ def secret():
 # ─── 好友白名单 ──────────────────────────────────────────
 
 def _friend_ids(force=False):
-    """→ (set, ok)。ok=False 表示这次没拿到（NapCat 不在线等），调用方必须拒绝。"""
+    """→ (set, ok)。ok=False 表示这次没拿到（SnowLuma 不在线等），调用方必须拒绝。"""
     now = time.time()
     with _friends_lock:
         if not force and _friends["ok"] and now - _friends["ts"] < 60:

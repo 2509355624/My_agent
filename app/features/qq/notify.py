@@ -1,10 +1,10 @@
-"""掉线通知：NapCat 走到扫码界面时，把二维码推到手机微信。
+"""掉线通知：SnowLuma 走到扫码界面时，把二维码推到手机微信。
 
 为什么需要它：机器人掉线后**自己发不出任何消息** —— 掉线的号就是要发消息的
 号。所以必须借助一个不在 QQ 里的通道。这里用 PushPlus（微信推送），手机扫码
 绑定一次拿 token 即可。
 
-**触发点只有一个：`cache/qrcode.png` 被重写。** 这个文件只在 NapCat 需要人工
+**触发点只有一个：`cache/qrcode.png` 被重写。** 这个文件只在 SnowLuma 需要人工
 扫码时才生成（快速登录成功不会写它），所以它的修改时间就是「必须扫码了」的
 准确时刻 —— 不需要另外判断掉线类型，也不需要等一段时间去抖。
 
@@ -30,10 +30,10 @@ _PUSHPLUS_URL = "https://www.pushplus.plus/send"
 # 而每次 tick 只是 getmtime，3 秒粒度足够快又不费电。
 _POLL_SECONDS = 3
 
-# 同一批二维码只推一次的去抖窗口。NapCat 换码时可能连着写好几次文件，没有这个
+# 同一批二维码只推一次的去抖窗口。SnowLuma 换码时可能连着写好几次文件，没有这个
 # 闸就会被反复轰炸 —— 而人扫码需要时间，轰炸只会让手机响个不停。
 #
-# **必须短于二维码有效期**（NapCat 约 180 秒换一张）。原来这里是 300 秒，比有效期
+# **必须短于二维码有效期**（SnowLuma 约 180 秒换一张）。原来这里是 300 秒，比有效期
 # 还长，于是「旧码推送 → 码过期换新码」这条新码恰好落在旧冷却窗口里被吃掉，
 # 用户手里永远是一张过期的码（2026-09-29 用户报「扫了没反应」的直接原因之一）。
 _DEBOUNCE_SECONDS = 90
@@ -67,7 +67,7 @@ _silence_alerted = False
 
 
 def note_activity():
-    """qq_bot 每收到/发出一条消息就调一下（自己发的消息 NapCat 也会上报，
+    """qq_bot 每收到/发出一条消息就调一下（自己发的消息 SnowLuma 也会上报，
     所以只挂在收消息的入口就同时覆盖了收和发）。恢复活动会重置静默告警，
     下一次静默满时长可以再报。"""
     global _last_activity, _silence_alerted
@@ -207,9 +207,9 @@ def _mtime(path):
 
 
 def _login_uin():
-    """从 NapCat 的 webui.json 读出这个实例要登的号（autoLoginAccount）。
+    """从 SnowLuma 的 webui.json 读出这个实例要登的号（autoLoginAccount）。
 
-    二维码文件在 ...\\app\\napcat\\cache\\qrcode.png，往回两级就是 napcat 目录，
+    二维码文件在协议端自己的缓存目录（本项目已改用 SnowLuma，不再落盘），
     webui.json 就在它下面的 config\\ 里 —— 不用再单独配一个路径。读不到就返回
     空串，推送里少个号而已，不能因为拿不到号就不推。
     """
@@ -339,7 +339,7 @@ def push_silence(hours):
         "title": "%s 疑似冻结" % _bot_label(),
         "content": "<p>%s <b>%s</b> 已连续 %.0f 小时没有任何收发，但协议探活正常。</p>"
                    "<p>可能是消息同步停摆（冻而不掉），也可能是群里真的没人说话。</p>"
-                   "<p>去群里喊它一声试试；真没反应就重启 NapCat（大概率要扫码，"
+                   "<p>去群里喊它一声试试；真没反应就重启 SnowLuma（大概率要扫码，"
                    "二维码会自动推过来）。</p>"
                    % (time.strftime("%m-%d %H:%M:%S"), _bot_label(), hours),
         "template": "html",

@@ -211,12 +211,12 @@ h1 { font-size: 20px; }
     </div>
 
     <div class="card">
-      <h2>NapCat 协议端</h2>
+      <h2>SnowLuma 协议端</h2>
       <div class="stat">
-        <span class="dot unk" id="napDot"></span>
-        <span class="val unk" id="napVal">—</span>
+        <span class="dot unk" id="protocolDot"></span>
+        <span class="val unk" id="protocolVal">—</span>
       </div>
-      <div class="meta" id="napMeta">—</div>
+      <div class="meta" id="protocolMeta">—</div>
     </div>
 
     <div class="card">
@@ -380,16 +380,16 @@ async function refresh() {
       "状态心跳 " + fmtAgo(bot.age) + " 前");
   }
 
-  // NapCat
-  var nap = d.napcat || {};
-  if (nap.online === true) {
-    setStat("napDot", "napVal", "napMeta", "ok", "在线",
-      "最后收发 " + fmtAgo(d.last_activity_ago) + " 前" + (nap.detail ? " · " + nap.detail : ""));
-  } else if (nap.online === false) {
-    setStat("napDot", "napVal", "napMeta", "bad", "离线",
-      (nap.detail || "探活失败") + " · 最后收发 " + fmtAgo(d.last_activity_ago) + " 前");
+  // SnowLuma
+  var proto = d.protocol || {};
+  if (proto.online === true) {
+    setStat("protocolDot", "protocolVal", "protocolMeta", "ok", "在线",
+      "最后收发 " + fmtAgo(d.last_activity_ago) + " 前" + (proto.detail ? " · " + proto.detail : ""));
+  } else if (proto.online === false) {
+    setStat("protocolDot", "protocolVal", "protocolMeta", "bad", "离线",
+      (proto.detail || "探活失败") + " · 最后收发 " + fmtAgo(d.last_activity_ago) + " 前");
   } else {
-    setStat("napDot", "napVal", "napMeta", "unk", "未知", "bot 无心跳，探不到");
+    setStat("protocolDot", "protocolVal", "protocolMeta", "unk", "未知", "bot 无心跳，探不到");
   }
 
   // ComfyUI

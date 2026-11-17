@@ -1,6 +1,6 @@
 """掉线通知（app/notify.py）测试。
 
-全程 mock：不真发 PushPlus、不真碰 NapCat。二维码用临时文件模拟 ——「NapCat
+全程 mock：不真发 PushPlus、不真碰 SnowLuma。二维码用临时文件模拟 ——「SnowLuma
 刷新了二维码」在测试里就是「把文件的 mtime 往后挪」。
 
 mtime 一律显式钉死（不用 time.time()），因为 Windows 上连续两次写文件的
@@ -160,7 +160,7 @@ class WatcherTest(unittest.TestCase):
         self.assertEqual(self.sent, [])
 
     def test_cooldown_suppresses_repeat(self):
-        """NapCat 会重写同一个二维码文件，不该把人轰炸一遍。"""
+        """SnowLuma 会重写同一个二维码文件，不该把人轰炸一遍。"""
         w = self._watcher(cooldown=300)
         base = w.last_mtime
         self.qr.touch(b"png-2", at=base + 10)
@@ -173,7 +173,7 @@ class WatcherTest(unittest.TestCase):
         self.assertEqual(len(self.sent), 2)
 
     def test_debounce_shorter_than_qrcode_lifetime(self):
-        """去抖必须短于二维码有效期（NapCat 约 180s 换一张）。
+        """去抖必须短于二维码有效期（SnowLuma 约 180s 换一张）。
 
         原来这里是 300s：旧码推完之后码就过期了，换的新码正好落在旧冷却窗口里
         被吃掉，用户手里永远是一张过期码（2026-09-29「扫了没反应」）。
@@ -186,7 +186,7 @@ class WatcherTest(unittest.TestCase):
         base = w.last_mtime
         self.qr.touch(b"png-2", at=base + 5)
         self.assertTrue(w.tick(now=1000))
-        self.qr.touch(b"png-3", at=base + 185)     # 旧码过期，NapCat 换新
+        self.qr.touch(b"png-3", at=base + 185)     # 旧码过期，SnowLuma 换新
         self.assertTrue(w.tick(now=1185))
         self.assertEqual(len(self.sent), 2)
 

@@ -85,7 +85,7 @@ def thumb_for(name):
 # 正在处理中的 id（2026-10-18）。
 #
 # `approve` 的流程是「读 → 判 pending → 真的发图 → 才写 approved」，而发图要
-# 走一遍 NapCat（实测 0.5~2 秒）。这中间状态还是 pending，管理员等得不耐烦
+# 走一遍 SnowLuma（实测 0.5~2 秒）。这中间状态还是 pending，管理员等得不耐烦
 # 再点一次，第二个请求照样通过 pending 检查 → **同一张图发两遍**。
 # 前端把按钮 disable 只能挡住同一个页面；这里再兜一层，进程内同一个 id
 # 同时只允许一个处理中（Flask 默认 threaded，同进程多线程够用）。

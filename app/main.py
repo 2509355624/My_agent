@@ -937,7 +937,7 @@ def get_status():
         # bot 进程本身：stale = 心跳停了（卡死/没起）
         "bot": {"stale": stale,
                 "age": (round(time.time() - ts, 1) if ts else None)},
-        "napcat": snap.get("napcat") or {"online": None, "detail": ""},
+        "protocol": snap.get("protocol") or {"online": None, "detail": ""},
         "last_activity_ago": snap.get("last_activity_ago"),
         "sessions": snap.get("sessions") or [],
         "jobs": snap.get("jobs")
@@ -961,7 +961,7 @@ def get_status():
 def _decorate_session_names(items):
     """把群名 / 昵称补进每条会话线的 name，返回「名字是否全拿到了」。
 
-    名字要问 QQ 协议端，属于锦上添花：NapCat 没开、这台机器压根没接 QQ、
+    名字要问 QQ 协议端，属于锦上添花：协议端没开、这台机器压根没接 QQ、
     或者只是没进过某个群的好友——拿不到就退回只显示号，列表照样给全。
     所以这里把异常吞掉并如实回报 ok=False，而不是让整个接口失败。
     """

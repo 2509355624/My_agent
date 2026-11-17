@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """发送日志：每条实际发出的 QQ 消息都要在适配层终端打一行「发给了谁」。
 
-用户诉求：NapCat 窗口看得到收发，适配层窗口只有接收没有发送，
+用户诉求：SnowLuma 窗口看得到收发，适配层窗口只有接收没有发送，
 排查「AI 到底回给了谁」得两边对。修法=在 qq_api 的发送必经之路上
 打日志，带群名/昵称和内容预览；拿不到名字退回号码，不拦发送。
 """
@@ -48,7 +48,7 @@ class GroupSendLogTest(_Base):
         self.assertIn("大家好呀", line)
 
     def test_group_send_without_name_shows_id(self):
-        # 名单拿不到（NapCat 没回）也要照发照打日志，显示号码兜底
+        # 名单拿不到（SnowLuma 没回）也要照发照打日志，显示号码兜底
         self.groups([])
         with self.assertLogs("qq_api", level="INFO") as cm:
             qq_api.send_group(111, "在吗")

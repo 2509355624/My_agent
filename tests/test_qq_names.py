@@ -1,6 +1,6 @@
 """名字解析缓存测试（app/features/qq/names.py）。
 
-跟状态后台测试一样：NapCat 全 mock、不打 3000 口、不读真实 state/ 文件。
+跟状态后台测试一样：SnowLuma 全 mock、不打 3000 口、不读真实 state/ 文件。
 模块级缓存字典在每个测试里手动重置，避免被上一次跑残留污染。
 """
 
@@ -98,11 +98,11 @@ class QqNamesTest(unittest.TestCase):
         self.assertTrue(ok)
 
     def test_refresh_lists_survives_api_failure(self):
-        """NapCat 不在线时静默失败，缓存保留原样。"""
+        """SnowLuma 不在线时静默失败，缓存保留原样。"""
         qq_names._group = {"1": "旧群名"}
         qq_names._last_refresh = 0.0
         with mock.patch("app.features.qq.api.get_group_list",
-                        side_effect=RuntimeError("napcat down")):
+                        side_effect=RuntimeError("snowluma down")):
             ok = qq_names.refresh_lists(force=True)
         self.assertFalse(ok)
         self.assertEqual(qq_names.name_for("group", "1"), "旧群名")

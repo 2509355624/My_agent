@@ -8,9 +8,9 @@ if /i "%~1"=="auto" set "AUTO_RUN=1"
 
 
 rem ===========================================================================
-rem  SnowLuma 协议端启动器（NapCat 的替代品，2026-09-30 起可切换）
+rem  SnowLuma 协议端启动器（旧协议端 的替代品，2026-09-30 起可切换）
 rem
-rem  [!!] 跟 NapCat 最大的区别：SnowLuma **不会自己拉起 QQ**。
+rem  [!!] 跟 旧协议端 最大的区别：SnowLuma **不会自己拉起 QQ**。
 rem       它只做「发现 QQ.exe -> 注入 hook」，打包里一个 spawn 都没有。
 rem       所以这里必须先保证 QQ.exe 在跑，否则 SnowLuma 起来了也是空的，
 rem       WebUI 里永远显示「未检测到 QQ 进程」。

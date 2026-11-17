@@ -14,7 +14,7 @@ websocket-client>=1.6
 # 图片处理：读群里的图 / 表情包打标 / 生图发出去前转 JPEG 或校验原图
 Pillow>=10.0
 
-# QQ 适配层：YAML 角色卡配置 / WebSocket 连接 NapCat
+# QQ 适配层：YAML 角色卡配置 / WebSocket 连接 SnowLuma
 PyYAML>=6.0
 websockets>=10.0
 

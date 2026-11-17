@@ -22,7 +22,7 @@ echo ==================================================
 echo.
 
 rem ── venv python ──
-rem [!!] 这里**不能**照抄 一键启动全部.bat 的顺序。那个 PY 是给机器人/napcat_qr
+rem [!!] 这里**不能**照抄 一键启动全部.bat 的顺序。那个 PY 是给机器人/协议端启动脚本
 rem      用的，首选 D:\AI\my_env（agent 的 venv，没有 torch）。ComfyUI 必须用
 rem      自己那套带 torch 的环境，所以 my_env 根本不参与挑选。
 set "PY="

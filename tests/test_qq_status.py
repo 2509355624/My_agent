@@ -3,7 +3,7 @@
 原则同 test_image_jobs：零网络、零显卡、零真实线程。
 - image_jobs 的 worker 一律挡掉（_ensure_worker 成空操作），绝不让它真去
   提交 ComfyUI——enqueue 会拉起真实 worker，测试里碰它就是真机生图。
-- NapCat 探活（qq_status._alive）mock，不打 3000 口。
+- SnowLuma 探活（qq_status._alive）mock，不打 3000 口。
 - 状态文件写临时目录，不碰真实的 state/。
 """
 
@@ -151,9 +151,9 @@ class QqStatusTest(unittest.TestCase):
         # 时长用 monotonic 相减，必须是正数（拿 time.time() 减会得垃圾）
         self.assertGreaterEqual(s["sessions"][0]["for"], 4)
 
-    def test_napcat_and_last_activity_present(self):
+    def test_protocol_and_last_activity_present(self):
         s = qq_status.snapshot(self._bot({}))
-        self.assertTrue(s["napcat"]["online"])
+        self.assertTrue(s["protocol"]["online"])
         self.assertIn("last_activity_ago", s)
 
 

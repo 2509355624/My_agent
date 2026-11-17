@@ -1987,7 +1987,7 @@ async function loadSessions() {
     $('chanceAll').value = d.interject_chance != null ? d.interject_chance : '';
     $('gapAll').value = d.interject_min_gap != null ? d.interject_min_gap : '';
     // 名字要问 QQ 协议端，拿不到只是显示得糙一点，不影响删除
-    sessStatus(d.names_ok ? '' : 'NapCat 没连上，群里只显示群号（不影响删除）',
+    sessStatus(d.names_ok ? '' : 'SnowLuma 没连上，群里只显示群号（不影响删除）',
                d.names_ok ? '' : 'err');
   } catch (e) {
     sessStatus(e.message, 'err');
@@ -2563,7 +2563,7 @@ async function reviewDecide(id, act, card, btn, other) {
   if (REVIEW_DECIDING.has(id) || !btn || btn.disabled) return;
   REVIEW_DECIDING.add(id);
 
-  // 先把反馈做出来：过审要真发一遍图（NapCat 往返 0.5~2 秒），干等着就会再点。
+  // 先把反馈做出来：过审要真发一遍图（SnowLuma 往返 0.5~2 秒），干等着就会再点。
   const label = btn.textContent;
   btn.disabled = true;
   other.disabled = true;

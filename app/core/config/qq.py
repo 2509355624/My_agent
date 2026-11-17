@@ -8,25 +8,24 @@ import os
 
 from app.core.config.env import _env_bool, _env_list
 
-# ─── QQ 接入（NapCat / OneBot 11）─────────────────────
+# ─── QQ 接入（SnowLuma / OneBot 11）─────────────────────
 # 适配层是独立进程（app/qq_bot.py），本段配置只在它里面用到；网页端进程
 # 仅用到 QQ_ENABLE（决定是否注册 send_qq_message 工具）。
 
 QQ_ENABLE = _env_bool("QQ_ENABLE", False)
 
-# NapCat 协议端地址：WS 收事件，HTTP 发消息（WebUI 里要分别启用这两个）
+# SnowLuma 协议端地址：WS 收事件，HTTP 发消息（WebUI 里要分别启用这两个）
 QQ_WS_URL = os.getenv("QQ_WS_URL", "ws://127.0.0.1:3001")
 QQ_HTTP_URL = os.getenv("QQ_HTTP_URL", "http://127.0.0.1:3000").rstrip("/")
-# OneBot 访问令牌（NapCat 网络配置里设的那个）。空表示不鉴权，仅限本机使用
+# OneBot 访问令牌（SnowLuma 网络配置里设的那个）。空表示不鉴权，仅限本机使用
 QQ_TOKEN = os.getenv("QQ_TOKEN", "")
 
-# 协议端的 **WebUI 端口**。NapCat = 6099，SnowLuma = 5099。
+# 协议端的 **WebUI 端口**。SnowLuma = 5099。
 #
 # 这个口只给看门狗用：:3000 只在登录成功后才监听，光看它分不出「进程没起来」和
 # 「起来了但登录态失效」。WebUI 口**登录前就监听**，正好把两者分开。
-# 2026-09-30 起协议端可换（SnowLuma 与 NapCat 的 OneBot 端口 3000/3001 完全一致，
-# 只有 WebUI 口不同），所以这里改成可配。默认保持 6099，不影响现有部署。
-WEBUI_PORT = int(os.getenv("QQ_WEBUI_PORT", "6099"))
+# OneBot 端口固定 3000 / 3001；WebUI 端口默认 5099。这里保留 env 覆盖，便于本机调试。
+WEBUI_PORT = int(os.getenv("QQ_WEBUI_PORT", "5099"))
 
 # 用哪个 agent 的人设与工具白名单
 QQ_AGENT_ID = os.getenv("QQ_AGENT_ID", "qq")
@@ -161,11 +160,10 @@ QQ_MEMORY_DIGEST_TIMEOUT = int(os.getenv("QQ_MEMORY_DIGEST_TIMEOUT", "60"))
 # 机器人掉线需要扫码时，把二维码推到手机。它自己发不出消息 —— 掉线的号就是
 # 发消息的号 —— 所以必须走一个不在 QQ 里的通道。用 PushPlus：手机扫码登录
 # https://www.pushplus.plus/ 拿 token 填这里，留空则整个功能关闭。
-# 触发点见 app/notify.py：盯 NapCat 的 qrcode.png，一变就推。
+# 触发点见 app/notify.py：盯 SnowLuma 的 qrcode.png，一变就推。
 NOTIFY_PUSHPLUS_TOKEN = os.getenv("PUSHPLUS_TOKEN", "").strip()
-# NapCat 需要人工扫码时会重写这个文件，它的修改时间就是掉线时刻。
-NOTIFY_QRCODE_PATH = os.getenv(
-    "NAPCAT_QRCODE_PATH", r"D:\AI\NapCat\napcat\cache\qrcode.png").strip()
+# SnowLuma 需要人工扫码时会重写这个文件，它的修改时间就是掉线时刻。
+NOTIFY_QRCODE_PATH = os.getenv("QQ_QRCODE_PATH", "").strip()
 
 # 静默告警：连续这么多小时零收发且探活正常 → 推一条「疑似冻结」。
 # 抓的是「冻而不掉」（2026-09-27 事故：协议层活着、消息同步停摆，二维码

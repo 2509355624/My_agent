@@ -36,5 +36,5 @@ JSONL 后写覆盖先写，导致全局列表少一条。已在
 ## 尚未做
 
 - 没有在虚拟机里启动常驻 Flask/QQ/ComfyUI 进程；启动仍由站主手动执行。
-- 没有做公网隧道、NapCat 扫码、ComfyUI 真实出图验收。
+- 没有做公网隧道、SnowLuma 扫码、ComfyUI 真实出图验收。
 - 没有写 Linux 一键启动/更新脚本；下一步按实际进程拓扑补 `scripts/linux/`。

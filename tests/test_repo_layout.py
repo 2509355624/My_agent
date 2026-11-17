@@ -17,7 +17,6 @@ ALLOWED_ROOT_PY = {
     "clean_zombies.py",  # 运维：清残留进程
     "export_presets.py", # 运维：导出预设
     "import_presets.py", # 运维：导入预设
-    "napcat_qr.py",      # 运维：QQ 协议端登录
     "restart_servers.py",# 运维：手动重启
 }
 

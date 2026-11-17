@@ -43,7 +43,7 @@
    （和 `app\`、`agents\` 同级，不要多套一层文件夹）。
 
 3. 重启机器人适配层：关掉 `QQBOT-ADAPTER` 窗口，双击 `启动QQ机器人.bat`。
-   **不用重启 NapCat，也不用重启 ComfyUI。**
+   **不用重启 SnowLuma，也不用重启 ComfyUI。**
 
 ---
 

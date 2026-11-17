@@ -64,7 +64,7 @@ def admin_page():
     return send_from_directory(WEB_DIR, "admin.html")
 @bp.route("/status")
 def status_page():
-    """状态后台：队列 / 轮次 / ComfyUI / NapCat 的实时看板。"""
+    """状态后台：队列 / 轮次 / ComfyUI / SnowLuma 的实时看板。"""
     return send_from_directory(WEB_DIR, "status.html")
 @bp.route("/comic")
 def comic_page():

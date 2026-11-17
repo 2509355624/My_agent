@@ -4,7 +4,7 @@
 登录态失效满宽限期才重启、重启后要扫码只推一条合并通知、一直没人扫码会退避、
 重启连续失败放弃并退避、退避期内不动作、静默判据（假在线）、启动互斥（文件锁）、
     ComfyUI 分支（独立计数 / 进程树强杀 / 固定命令重启 / 失败才求助）。
-不涉及真实 NapCat / ComfyUI / subprocess。
+不涉及真实 SnowLuma / ComfyUI / subprocess。
 """
 
 from unittest import TestCase, mock
@@ -14,7 +14,7 @@ from app.workers import watchdog as wd
 
 
 class ProbeStateTest(TestCase):
-    """_probe 的三态：用 6099 WebUI 口区分「进程死了」和「活着但没登录」。"""
+    """_probe 的三态：用 5099 WebUI 口区分「进程死了」和「活着但没登录」。"""
 
     def setUp(self):
         p = mock.patch.object(wd, "check_alive")
@@ -34,7 +34,7 @@ class ProbeStateTest(TestCase):
         self.assertEqual(wd._probe()[0], "offline")
 
     def test_connect_error_with_webui_up_is_offline(self):
-        """:3000 只在登录成功后才监听 —— 连不上但 6099 在听 = 没登录，进程还活着。"""
+        """:3000 只在登录成功后才监听 —— 连不上但 5099 在听 = 没登录，进程还活着。"""
         self.alive.side_effect = OSError("refused")
         self.webui.return_value = True
         self.assertEqual(wd._probe()[0], "offline")
@@ -45,21 +45,21 @@ class ProbeStateTest(TestCase):
         self.assertEqual(wd._probe()[0], "dead")
 
     def test_webui_port_is_configurable(self):
-        """协议端可换：NapCat WebUI=6099，SnowLuma WebUI=5099。
+        """SnowLuma WebUI=5099；_probe 必须跟着配置走。
 
         `_probe` 判「进程活着吗」就是拿这个口探的，所以它必须跟着协议端走，
-        不能写死 6099 —— 否则换成 SnowLuma 后每次探活都会当成「进程死了」。
+        不能写死 5099 —— 否则换成 SnowLuma 后每次探活都会当成「进程死了」。
         """
         from app import config as cfg
-        self.addCleanup(setattr, wd, "NAPCAT_WEBUI_PORT", wd.NAPCAT_WEBUI_PORT)
-        wd.NAPCAT_WEBUI_PORT = 5099
+        self.addCleanup(setattr, wd, "PROTOCOL_WEBUI_PORT", wd.PROTOCOL_WEBUI_PORT)
+        wd.PROTOCOL_WEBUI_PORT = 5099
         self.alive.side_effect = OSError("refused")
         self.webui.return_value = True
         wd._probe()
         self.assertEqual(self.webui.call_args[0][0], 5099)
-        # 默认值必须还是 NapCat 的 6099（现有部署不受影响）
+        # 默认值必须还是 SnowLuma 的 5099（现有部署不受影响）
         self.assertEqual(cfg.WEBUI_PORT, int(
-            __import__("os").getenv("QQ_WEBUI_PORT", "6099")))
+            __import__("os").getenv("QQ_WEBUI_PORT", "5099")))
 
 
 class WatchdogCycleTest(TestCase):
@@ -121,7 +121,7 @@ class WatchdogCycleTest(TestCase):
         self.assertNotIn("QQ 机器人正在自动重启", titles)
 
     def test_offline_within_grace_does_not_restart(self):
-        """刚发现没登录时先别动 —— 人可能正在扫，NapCat 也可能正在快速登录。"""
+        """刚发现没登录时先别动 —— 人可能正在扫，SnowLuma 也可能正在快速登录。"""
         wd._probe.return_value = ("offline", "no login")
         s = self.new_state()
         wd._cycle(s, now=0.0)
@@ -197,7 +197,7 @@ class WatchdogCycleTest(TestCase):
         self.assertGreater(s["backoff_until"], 0.0)
         wd.push_text.assert_any_call(
             "QQ 机器人需人工处理",
-            "看门狗多次自动重启失败，NapCat 仍无法恢复，请检查。")
+            "看门狗多次自动重启失败，SnowLuma 仍无法恢复，请检查。")
 
     def test_repeated_qr_outcomes_back_off(self):
         """一直没人扫码：重启 N 次后暂停自动重启，别再整夜反复杀进程。"""
@@ -424,9 +424,9 @@ class SilentSecondsTest(TestCase):
 class RestartProtocolTest(TestCase):
     """看门狗重启必须把「协议端」透传下去。
 
-    一键启动全部.bat 的第 3 个参数决定起 NapCat 还是 SnowLuma，不传就是 NapCat。
+    一键启动全部.bat 的第 3 个参数决定起 SnowLuma 还是 SnowLuma，不传就是 SnowLuma。
     如果 `_trigger_restart` 忘了透传，那么在跑 SnowLuma 时一旦看门狗触发重启，
-    就会把 NapCat 也拉起来 —— 两个协议端抢 3000/3001，比不重启更糟。
+    就会把 SnowLuma 也拉起来 —— 两个协议端抢 3000/3001，比不重启更糟。
     """
 
     def setUp(self):
@@ -439,13 +439,13 @@ class RestartProtocolTest(TestCase):
         wd._trigger_restart()
         return wd.subprocess.Popen.call_args[0][0]
 
-    def test_napcat_passes_no_protocol_arg(self):
-        """默认（6099）不传协议端参数 —— 保持原来「不传就是 NapCat」的行为。"""
-        wd._PROTOCOL_ARG = ""
+    def test_snowluma_protocol_arg_is_always_passed(self):
+        """协议端固定 SnowLuma，重启时始终把 snowluma 透传给一键启动。"""
+        wd._PROTOCOL_ARG = "snowluma"
         args = self._args()
         self.assertEqual(args[:4], ["cmd", "/c", wd._ALL_BAT, "force"])
         self.assertEqual(args[4], "auto")
-        self.assertEqual(len(args), 5)
+        self.assertEqual(args[-1], "snowluma")
 
     def test_snowluma_is_passed_through(self):
         """跑 SnowLuma 时重启必须带 snowluma，否则会拉错协议端。"""
@@ -453,10 +453,9 @@ class RestartProtocolTest(TestCase):
         args = self._args()
         self.assertEqual(args[-1], "snowluma")
 
-    def test_protocol_follows_webui_port(self):
-        """协议端由 WebUI 端口反推：只有一个真相源，不会两边配不一致。"""
-        self.assertEqual("" if wd.WEBUI_PORT == 6099 else "snowluma",
-                         wd._PROTOCOL_ARG)
+    def test_protocol_arg_is_always_snowluma(self):
+        """协议端固定 SnowLuma，不再按端口反推。"""
+        self.assertEqual("snowluma", wd._PROTOCOL_ARG)
 
 
 class AwaitOutcomeTest(TestCase):
@@ -498,9 +497,9 @@ class AwaitOutcomeTest(TestCase):
 
 
 class ComfyuiWatchTest(TestCase):
-    """ComfyUI 分支：跟 NapCat 平行、独立计数，**静默重启**。
+    """ComfyUI 分支：跟 SnowLuma 平行、独立计数，**静默重启**。
 
-    为什么单独一套：ComfyUI 原先没有任何守护（NapCat 有自愈、qq_bot 有看门狗），
+    为什么单独一套：ComfyUI 原先没有任何守护（SnowLuma 有自愈、qq_bot 有看门狗），
     崩了只能人工去《启动手册.txt》抄命令起它。2026-09-30 加进来。
     """
 
@@ -591,7 +590,7 @@ class ComfyuiWatchTest(TestCase):
     def test_restart_is_silent(self):
         """**核心性质**：拉起来的那一刻不推任何通知（用户 09-30 拍板）。
 
-        ComfyUI 不需要人做任何事，跟 NapCat「恢复不通知」同一原则。
+        ComfyUI 不需要人做任何事，跟 SnowLuma「恢复不通知」同一原则。
         """
         wd._probe_comfyui.return_value = (False, "refused")
         state = self.new_state()
@@ -636,8 +635,8 @@ class ComfyuiWatchTest(TestCase):
             wd._comfy_cycle(state)
         self.assertGreater(state["comfy_backoff_until"], 0.0)
 
-    def test_independent_from_napcat_counters(self):
-        """两边的计数器必须分开——ComfyUI 挂了不能把 NapCat 的失败计数也推上去。"""
+    def test_independent_from_protocol_counters(self):
+        """两边的计数器必须分开——ComfyUI 挂了不能把 SnowLuma 的失败计数也推上去。"""
         wd._probe_comfyui.return_value = (False, "refused")
         nap = {"fails": 0, "restart_fails": 0, "offline_since": None,
                "backoff_until": 0.0, "silence_until": 0.0, "silence_gap": 0.0}

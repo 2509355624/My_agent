@@ -16,7 +16,7 @@
 
 ```
 入口层    网页  Flask :5174（8 个页面）
-          QQ    SnowLuma / NapCat  --OneBot 3000/3001-->  qq_bot（独立进程）
+          QQ    SnowLuma  --OneBot 3000/3001-->  qq_bot（独立进程）
           看门狗 watchdog.py（独立进程，盯协议端与 ComfyUI）
                             ↓
 Agent 层   多 agent：main / qq / draw / writing …
@@ -100,7 +100,7 @@ Agent 层   多 agent：main / qq / draw / writing …
 | LLM 接入 | 自研 `app/llm.py`，云侧统一 OpenAI 兼容接口，Ollama 走原生 `/api/chat` |
 | 向量库 | ChromaDB + sentence-transformers(BGE-M3) + MMR |
 | 生图 | ComfyUI HTTP API + 自定义节点 |
-| QQ | OneBot 11，协议端可用 SnowLuma 或 NapCat |
+| QQ | OneBot 11，协议端使用 SnowLuma |
 | 持久化 | 会话 JSONL，**原子写**（临时文件 + fsync + `os.replace`） |
 
 ---
@@ -112,7 +112,7 @@ Agent 层   多 agent：main / qq / draw / writing …
 - Python 3.10 以上
 - （可选）[Ollama](https://ollama.com)：想用本地模型时安装
 - （可选）ComfyUI：想用生图时安装
-- （可选）SnowLuma 或 NapCat：想接 QQ 时装
+- （可选）SnowLuma：想接 QQ 时装
 
 ### 2. 安装依赖
 
@@ -156,7 +156,7 @@ ENABLE_IMAGE_GEN=true
 
 ### 6. 接 QQ（可选）
 
-默认按 **SnowLuma** 配置，OneBot 端口与 NapCat 完全一致：
+默认按 **SnowLuma** 配置，OneBot 端口 3000 / 3001：
 
 ```bash
 QQ_ENABLE=true
@@ -176,8 +176,7 @@ python -m app.workers.watchdog  # 看门狗，独立进程（可选但建议）
 浏览器打开 `http://127.0.0.1:5099` 扫码登录。协议端只做「发现 `QQ.exe` → 注入」，
 **不会自己拉起 QQ**，所以要先手动开 QQ。
 
-> **换回 NapCat**：`QQ_WEBUI_PORT=6099`，重启协议端即可（OneBot 端口不用改）。
-> 两个协议端的差异见下方「协议端说明」。
+> 新项目只使用 **SnowLuma**；启动脚本、看门狗、状态页都已按 5099 固定。
 
 ---
 
@@ -296,7 +295,7 @@ agent_my_test/
 | `QQ_WS_URL` | `ws://127.0.0.1:3001` | 收事件 |
 | `QQ_HTTP_URL` | `http://127.0.0.1:3000` | 发消息 |
 | `QQ_TOKEN` | — | OneBot accessToken，需与协议端一致 |
-| `QQ_WEBUI_PORT` | `6099` | 协议端 WebUI：NapCat `6099` / SnowLuma `5099`（本项目当前用 `5099`） |
+| `QQ_WEBUI_PORT` | `5099` | SnowLuma WebUI 端口 |
 | `QQ_AGENT_ID` | `qq` | QQ 侧默认 agent |
 | `QQ_DEBOUNCE_SECONDS` | `1.5` | 消息合并窗口 |
 | `QQ_MAX_CONCURRENCY` | `2` | 跨会话并行上限 |
@@ -308,22 +307,18 @@ agent_my_test/
 
 ---
 
-## 协议端说明（SnowLuma / NapCat）
+## 协议端说明（SnowLuma）
 
-默认使用 **SnowLuma**，NapCat 仍可直接换回。两者的 OneBot 端口一致（HTTP 3000 / WS 3001），
-差异只有 WebUI 端口和启动方式：
+新项目只使用 **SnowLuma**。OneBot 端口为 HTTP 3000 / WS 3001，WebUI 为 5099：
 
-| | SnowLuma | NapCat |
-|---|---|---|
-| OneBot HTTP / WS | 3000 / 3001 | 3000 / 3001 |
-| WebUI | **5099** | **6099** |
-| 注入方式 | hook `QQ.exe` | hook `QQ.exe` |
-| 谁拉起 QQ | **不拉，需先手动开 QQ** | launcher 自己拉（`-q` 快速登录） |
-| 登录方式 | 仅扫码 | 扫码 / 快速登录 |
-| 掉线推二维码到手机 | **不支持**（二维码只在 WebUI 网页里画，不落盘） | 支持 |
-
-切换方式：改 `QQ_WEBUI_PORT` 后重启协议端。看门狗会按这个端口反推该拉起哪个协议端，
-不会拉错。
+| 项 | SnowLuma |
+|---|---|
+| OneBot HTTP / WS | 3000 / 3001 |
+| WebUI | **5099** |
+| 注入方式 | hook `QQ.exe` |
+| 谁拉起 QQ | **不拉，需先手动开 QQ** |
+| 登录方式 | 仅扫码（WebUI 网页里出码） |
+| 掉线通知 | 不支持二维码落盘推送，直接看 WebUI |
 
 ---
 

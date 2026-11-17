@@ -4,7 +4,7 @@
 
 `app/qq_api.py` → `app/features/qq/api.py`
 
-QQ 的 NapCat/OneBot HTTP 调用、会话上下文、发送与日志都在 `qq` 域；模块对象
+QQ 的 SnowLuma/OneBot HTTP 调用、会话上下文、发送与日志都在 `qq` 域；模块对象
 通过 `from app.features.qq import api as qq_api` 保持别名不变。
 
 ## 调用方

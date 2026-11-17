@@ -23,7 +23,7 @@ ComfyUI 会往 PNG 的 tEXt 块里塞一份工作流 JSON（`prompt` 键，实�
 - **转不出来就回落**：任何一步失败都退化成 ComfyUI 的原图 URL。宁可
   带着元数据发出去，也不能让图卡在这一步发不出来。
 - **产物放系统 temp**：一次性文件不往项目目录里堆。每次写入顺手清掉过期
-  的旧产物——NapCat 读文件是异步的，删早了会发不出去。
+  的旧产物——SnowLuma 读文件是异步的，删早了会发不出去。
 - **带 alpha 的先铺白底**：PNG 有透明通道时直接 convert("RGB") 会把透明
   区压成黑色，看着像坏图。这条只对 JPEG 那条路成立——png 是无损保留 alpha 的。
 """
@@ -50,7 +50,7 @@ JPEG_QUALITY = 92
 FORMATS = ("jpg", "png")
 DEFAULT_FORMAT = "jpg"
 
-# 产物的保留时长（秒）。NapCat 拉取 file:// 是异步的，留足余量再删。
+# 产物的保留时长（秒）。SnowLuma 拉取 file:// 是异步的，留足余量再删。
 #
 # 2026-10-01 从 3600 提到 86400：用户回头引用「几小时前那张」是常事，而引用
 # 机器人自己发的图时，协议端回传的就是这个 file:// 路径（见 vision.
@@ -116,7 +116,7 @@ def missing_file_error(exc):
 
     2026-10-31 23:03 实测：ComfyUI 出图 2 秒后，`%TEMP%\\wb_qq_img` 里那份
     副本就没了（同目录其它文件还在，按时间清理解释不通，多半是杀毒/管家类
-    工具扫走了大 PNG），NapCat 读它时报 ENOENT，整张图发不出去。
+    工具扫走了大 PNG），SnowLuma 读它时报 ENOENT，整张图发不出去。
 
     判据**认措辞不认异常类型**：这个错是被 `qq_api` 包成 RuntimeError 抛上来
     的，没有可用的 errno / FileNotFoundError 可抓。
@@ -231,7 +231,7 @@ def prepare_for_send(filename, fmt=DEFAULT_FORMAT):
 def save_bytes(data, ext=DEFAULT_FORMAT, stem="img"):
     """把一段字节（如 NAI 返回的 PNG）写到 temp，返回本地路径。
 
-    与 prepare_for_send 同目录、同过期清理——NapCat 拉取 file:// 是异步的，
+    与 prepare_for_send 同目录、同过期清理——SnowLuma 拉取 file:// 是异步的，
     删早了会发不出去。返回的路径可直接交给 qq_api.send_image。
     """
     d = _out_dir()

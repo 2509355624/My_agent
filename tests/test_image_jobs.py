@@ -1165,7 +1165,7 @@ class SendImageTest(unittest.TestCase):
         """副本被外部清掉时，从原图重取一份重发——**不让用户白等一张**。
 
         2026-10-31 23:03 真机事故：图 23:03:04 落盘，23:03:06 副本就没了，
-        NapCat 报 ENOENT，用户收到「图画好了，但没发出去（）。」。图本身
+        SnowLuma 报 ENOENT，用户收到「图画好了，但没发出去（）。」。图本身
         一直好好的在 ComfyUI output 里，重取一次就能发出去。
         """
         from app.features.image import out as image_out

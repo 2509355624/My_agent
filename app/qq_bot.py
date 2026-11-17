@@ -1,5 +1,5 @@
 """
-QQ 接入适配层（NapCat / OneBot 11）
+QQ 接入适配层（SnowLuma / OneBot 11）
 
 独立进程运行：
 
@@ -11,8 +11,8 @@ QQ 接入适配层（NapCat / OneBot 11）
 
 链路：
 
-    QQ → NapCat(:3001 WS 推事件) → 本模块 → run_agent_stream
-                                          → NapCat(:3000 HTTP) → QQ
+    QQ → SnowLuma(:3001 WS 推事件) → 本模块 → run_agent_stream
+                                          → SnowLuma(:3000 HTTP) → QQ
 
 几条设计取舍：
 
@@ -91,7 +91,7 @@ except ImportError:          # 旧版 websockets 的兼容路径
 
 log = logging.getLogger("qq_bot")
 
-# 首次连接失败后的重试间隔（秒），指数退避到上限。NapCat 启动后需要先扫码
+# 首次连接失败后的重试间隔（秒），指数退避到上限。SnowLuma 启动后需要先扫码
 # 登录，3001 要等登录成功才监听，所以适配层刚起来时连不上属于常态。
 _RECONNECT_MIN = 5
 _RECONNECT_MAX = 60
@@ -1928,7 +1928,7 @@ class QQBot:
             return
         if not isinstance(ev, dict):
             return
-        # NapCat 被踢时会推 bot_offline notice，正文里就是掉线原因（tag=tipsTitle、
+        # SnowLuma 被踢时会推 bot_offline notice，正文里就是掉线原因（tag=tipsTitle、
         # message=tipsDesc）。从前这里一律按「非 message 就丢」处理，等于对掉线
         # 零感知；现在至少把原因留下来，交给掉线通知（app/notify.py）带出去。
         if (ev.get("post_type") == "notice"
@@ -1955,7 +1955,7 @@ class QQBot:
                          ev.get("group_id"))
         else:
             return
-        # 静默告警的心跳：收到的消息（含 NapCat 上报的自己发言 = 发送）都算
+        # 静默告警的心跳：收到的消息（含 SnowLuma 上报的自己发言 = 发送）都算
         # 活动。恢复活动会重置「疑似冻结」告警，见 app/notify.py。
         notify.note_activity()
         if not target_id or target_id == "0":
@@ -2209,10 +2209,10 @@ class QQBot:
         self.sem = asyncio.Semaphore(QQ_MAX_CONCURRENCY)
         log.info("QQ 接入启动：agent=%s，事件源=%s", QQ_AGENT_ID, QQ_WS_URL)
         await self._probe()
-        # 掉线通知：盯 NapCat 的 qrcode.png，机器人要人工扫码时把二维码推到手机。
+        # 掉线通知：盯 SnowLuma 的 qrcode.png，机器人要人工扫码时把二维码推到手机。
         # 放在 _probe 之后 —— 它启动时会先探一次活，判断「是不是已经卡在待扫码」。
         notify.start_watcher()
-        # 状态后台的心跳源：把本进程的内存状态（谁在排队 / 生图队列 / NapCat）
+        # 状态后台的心跳源：把本进程的内存状态（谁在排队 / 生图队列 / SnowLuma）
         # 落成 JSON，Flask 那个进程读它。文件停更 = 本进程卡死，后台会标红。
         qq_status.start(self)
 
@@ -2223,7 +2223,7 @@ class QQBot:
         # 两层重连各管一件事，缺一不可：
         #   - 内层 async for 管「连上之后断开」，它自带指数退避重连；
         #   - 外层 while 管「第一次就没连上」—— 这种失败会让 connect 直接
-        #     抛异常冒泡出去，内置重连根本轮不到，进程会当场退出。NapCat
+        #     抛异常冒泡出去，内置重连根本轮不到，进程会当场退出。SnowLuma
         #     还没扫码登录时正是这种情况。
         delay = _RECONNECT_MIN
         while True:
@@ -2254,7 +2254,7 @@ _SINGLETON_HANDLE = None
 def _acquire_single_instance():
     """抢占单实例锁；已有实例在跑时返回 False。
 
-    两个适配层同时连着 NapCat 的 WS 时，同一条 QQ 消息会被两个进程各处理
+    两个适配层同时连着 SnowLuma 的 WS 时，同一条 QQ 消息会被两个进程各处理
     一遍 —— 同一个会话里回两遍，而且两份上下文会互相覆盖。Windows 的文件
     锁随进程结束（包括被强杀）由内核自动释放，所以不用担心残留锁文件。
 

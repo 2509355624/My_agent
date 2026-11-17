@@ -1,6 +1,6 @@
 """QQ 事件解析：CQ 码、消息段、文件段图片、引用与转发。
 
-只做「把 NapCat 推来的事件翻译成文本/图片/引用」，不发 HTTP、不碰会话。
+只做「把 SnowLuma 推来的事件翻译成文本/图片/引用」，不发 HTTP、不碰会话。
 `_resolve_file_ref` 例外：它把 `fileid://` 换成真实链接，必须在 worker
 线程里调用（见 `_resolve_quote` 的调用方）。
 """
@@ -40,7 +40,7 @@ _FILE_REF_RE = re.compile(r"^fileid://(group|private)/([^/]+)/([^/]+)/(.+)$")
 
 
 def _file_name(sdata):
-    """文件段里的文件名。NapCat 把它放在 `file`，别的实现叫 `name`。"""
+    """文件段里的文件名。SnowLuma 把它放在 `file`，别的实现叫 `name`。"""
     return str(sdata.get("file") or sdata.get("name")
                or sdata.get("file_name") or "").strip()
 
@@ -105,7 +105,7 @@ def _parse_segments(ev):
     """从事件里取出文本、@ 标记、以及图片地址列表。
 
     OneBot 有两种上报格式：message 数组（结构化）和 raw_message 字符串
-    （CQ 码）。NapCat 配的是哪种都要能认，所以两条路都走。
+    （CQ 码）。SnowLuma 配的是哪种都要能认，所以两条路都走。
 
     图片在这里**只取地址，不下载**：下载是 IO，得放到 worker 线程里做
     （见 SessionRunner._prepare_images），事件循环上不能有阻塞操作。
@@ -133,7 +133,7 @@ def _parse_segments(ev):
                     # 只给了本地文件名（file）时拿不到图，退回占位说明
                     parts.append("[图片]")
             elif stype == "mface":
-                # 商城表情包：NapCat 一般带 url，能当普通图收（表情库/识图都认）
+                # 商城表情包：SnowLuma 一般带 url，能当普通图收（表情库/识图都认）
                 url = str(sdata.get("url") or "")
                 if url:
                     images.append(url)

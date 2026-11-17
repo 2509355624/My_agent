@@ -14,11 +14,11 @@ echo ==================================================
 echo   QQ 机器人适配层  ^(独立进程^)
 echo ==================================================
 echo.
-echo   前置: NapCat 已在运行并完成登录
-echo         启动命令 D:\AI\NapCat\启动NapCat.bat
+echo   前置: SnowLuma 已启动并完成 QQ 登录
+echo         WebUI: http://127.0.0.1:5099
 echo.
 echo   本窗口持续输出日志，请勿关闭。
-echo   NapCat 重启后本进程会自动重连，无需手动重启。
+echo   SnowLuma 重启后本进程会自动重连，无需手动重启。
 echo.
 
 if not exist "%PY%" (

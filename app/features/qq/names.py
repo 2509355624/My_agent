@@ -1,7 +1,7 @@
 """群名 / 私聊人名解析缓存。
 
 给状态后台把 `群 1041446471` 显示成 `群 我的群`，`私聊 546587874` 显示成
-`私聊 某人`。本来每次显示都调 NapCat 一遍是浪费，而且 `get_group_info`
+`私聊 某人`。本来每次显示都调 SnowLuma 一遍是浪费，而且 `get_group_info`
 按群号单查更贵 —— 改用两个一次性接口：
 
 - `get_group_list` ：机器人**所有**已加入的群，附带群名。一次拿全。
@@ -9,13 +9,13 @@
 
 私聊昵称额外走一条捷径：**消息事件里 sender.card/nickname 是免费的**，
 非好友也能拿到，所以在 `QQBot._dispatch` 里直接 `note_private` 进缓存
-—— 不依赖 NapCat。
+—— 不依赖 SnowLuma。
 
 ## 设计要点
 - **缓存持久化**到 `state/qq_names.json`，重启不丢（跟 `qq_status` 一样）。
 - **自动限速**：后台每 2 秒调一次 `name_for`，但 `refresh_lists` 内部判断距上次
-  刷新是否过 10 分钟，没过直接返回，NapCat 不会被刷爆。
-- **失败保守**：NapCat 不在线时 `refresh_lists` 静默失败，原缓存保留 —— 状态
+  刷新是否过 10 分钟，没过直接返回，SnowLuma 不会被刷爆。
+- **失败保守**：SnowLuma 不在线时 `refresh_lists` 静默失败，原缓存保留 —— 状态
   后台继续用 ID 显示，不该因为「取不到名字」整个卡住。
 """
 
@@ -72,7 +72,7 @@ def _persist():
 
 
 def note_private(user_id, name):
-    """从消息事件记一个私聊名字。非好友也行——不需要 NapCat 介入。
+    """从消息事件记一个私聊名字。非好友也行——不需要 SnowLuma 介入。
 
     QQBot._dispatch 处理 private 消息时调一下。这条路径是**主入口**，
     get_friend_list 只是兜底（只覆盖好友）。
@@ -88,7 +88,7 @@ def note_private(user_id, name):
 
 
 def refresh_lists(force=False):
-    """从 NapCat 拉一次全量列表。限速：默认 10 分钟一次，force=True 不限。
+    """从 SnowLuma 拉一次全量列表。限速：默认 10 分钟一次，force=True 不限。
 
     失败保持原缓存不动；返回值告诉调用方这次是否真拉了。
     """

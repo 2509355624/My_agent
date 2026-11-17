@@ -13,6 +13,6 @@
 `stickers.py`（原 `stickers.py`，群表情收藏/检索）、`trigger.py`（触发词解析）、
 `play_bot.py`（`/play` 互动页）、`solo_bot.py`（单人页卡片）、`friend_site.py`
 （群友站隧道地址/入口）、`friend_api.py`（群友生图 Blueprint）、`api.py`（原
-`qq_api.py`，NapCat OneBot HTTP 调用/会话上下文）已迁入并接线；`qq_bot.py` 仍是
+`qq_api.py`，SnowLuma OneBot HTTP 调用/会话上下文）已迁入并接线；`qq_bot.py` 仍是
 根目录的事件循环入口。QQ 机器人不是 Flask 进程，不注册 blueprint；事件循环放
 `service.py`。

@@ -8,7 +8,7 @@
 3. 事件 → 要不要回：判错就是机器人乱插话，或者被叫到却不理。
 
 再加会话线隔离（每个人 / 每个群各一条历史，不能串）和「工具发过就别重复回发」。
-真机（连 NapCat 收真实群消息）另做验证，这里只管逻辑。
+真机（连 SnowLuma 收真实群消息）另做验证，这里只管逻辑。
 """
 
 import asyncio
@@ -1717,7 +1717,7 @@ class ConnectRobustnessTest(unittest.TestCase):
                 #   1. 状态线程每秒覆写**生产**的 state/qq_status.json，
                 #      和正在跑的 qq_bot 抢同一个文件（Windows 报 WinError 5），
                 #      后台页面显示的是测试造的假数据；
-                #   2. 通知线程真去盯 NapCat 的 qrcode.png，可能给用户手机
+                #   2. 通知线程真去盯 SnowLuma 的 qrcode.png，可能给用户手机
                 #      推一条假的「机器人掉线」。
                 try:
                     await asyncio.wait_for(bot.run(), timeout=0.15)
@@ -1732,7 +1732,7 @@ class ConnectRobustnessTest(unittest.TestCase):
 # ─── 单实例保护 ─────────────────────────────────────
 
 class SingleInstanceTest(unittest.TestCase):
-    """两个适配层同时连着 NapCat 时，同一条 QQ 消息会被回两遍，必须拦住。"""
+    """两个适配层同时连着 SnowLuma 时，同一条 QQ 消息会被回两遍，必须拦住。"""
 
     def setUp(self):
         self._saved = qq_bot._SINGLETON_HANDLE
