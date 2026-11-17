@@ -48,7 +48,8 @@ from app.core import logsetup
 from app.features.chat import longterm
 from app.features.chat import interject, recent
 from app.features.qq import stickers
-from app import (confirm_gate, direct_gen, image_jobs,
+from app.features.chat import confirm_gate
+from app import (direct_gen, image_jobs,
                  lora_bot, play_bot, solo_bot,
                  moss_bot, persona, qq_api,
                  trigger, usage)

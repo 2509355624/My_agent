@@ -405,7 +405,7 @@ def consume_if_confirmed(target, target_id, text, sender_uin=None):
             # 不是他说的「好」，当没看见——pending 留着，等他本人回
             return False
         _PENDING.pop(key, None)
-    from app import confirm_gate
+    from app.features.chat import confirm_gate
     if not confirm_gate.is_confirm(text):
         log.info("moss 截断确认作废（对方说的是 %r）", (text or "")[:30])
         return False

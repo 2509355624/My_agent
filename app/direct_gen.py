@@ -81,7 +81,7 @@ from app.features.image import random_tags
 from app import image_jobs, llm, qq_api, trigger
 from app.features.image import log as image_log
 from app.config import IMAGE_DEFAULT_SKILL, QQ_GROUP_KEYWORDS
-from app.confirm_gate import _ATTRIBUTION_RE
+from app.features.chat.confirm_gate import _ATTRIBUTION_RE
 from app.skills import list_skills, load_skill
 
 log = logging.getLogger(__name__)

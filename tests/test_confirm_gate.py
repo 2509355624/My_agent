@@ -10,7 +10,8 @@ import contextlib
 import unittest
 from unittest import mock
 
-from app import confirm_gate, image_jobs
+from app.features.chat import confirm_gate
+from app import image_jobs
 
 
 @contextlib.contextmanager

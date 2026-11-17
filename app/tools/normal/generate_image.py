@@ -1083,7 +1083,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
                      target, target_id)
             return _DUPLICATE_NOTE
         # 二次确认闸（2026-10-04）：QQ 轮拦下发确认卡，对方回「好」才真入队。
-        from app import confirm_gate
+        from app.features.chat import confirm_gate
         gate = confirm_gate.intercept("nai", skill=skill, prompt=prompt,
                                       intent=intent, nai_i2i=nai_i2i,
                                       skip_confirm=_skip_confirm)
@@ -1321,7 +1321,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 二次确认闸（2026-10-04）：QQ 轮拦下发确认卡（渠道/种子/提示词全文），
     # 对方回「好」由 confirm_gate 原样入队；网页端放行。放在所有守卫之后、
     # 入队之前——存下的就是最终参数，确认后不需要重算任何东西。
-    from app import confirm_gate
+    from app.features.chat import confirm_gate
     gate = confirm_gate.intercept("comfy", skill=skill, prompt=prompt, seed=seed,
                                   intent=intent, workflow=workflow,
                                   note=source_note,

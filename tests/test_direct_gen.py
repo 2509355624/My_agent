@@ -2569,7 +2569,8 @@ class VerbatimWeightedPromptTest(unittest.TestCase):
 
 class SkipConfirmTest(unittest.TestCase):
     def test_intercept_skips_when_told(self):
-        from app import confirm_gate, qq_api
+        from app.features.chat import confirm_gate
+        from app import qq_api
         with mock.patch.object(qq_api, "current_context",
                                return_value=("group", "123")), \
              mock.patch.object(qq_api, "current_turn_text",
