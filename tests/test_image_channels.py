@@ -694,7 +694,7 @@ class VisibilityTest(unittest.TestCase):
         **必须手改 skill.md 的标题**（漏了这条就会有两个/零个自称默认）。
         动漫那一族的标题只许说「该族默认画风」，不许说「默认生图渠道」。
         """
-        from app.agent_prompt import _build_skill_list
+        from app.features.chat.agent_prompt import _build_skill_list
         lines = _build_skill_list("qq").splitlines()
         defaults = [l for l in lines if "默认生图渠道" in l]
         self.assertEqual(len(defaults), 1, "有多个渠道自称默认：%r" % defaults)
@@ -2077,7 +2077,7 @@ class BriefToolParamTest(unittest.TestCase):
     """
 
     def _line(self, brief):
-        from app import agent_prompt as ap
+        from app.features.chat import agent_prompt as ap
         from unittest import mock
         with mock.patch.dict("os.environ", {"PROMPT_BRIEF":
                                             "1" if brief else "0"}):
@@ -2097,7 +2097,7 @@ class BriefToolParamTest(unittest.TestCase):
         self.assertIn("qwen-real", line, "brief 下丢了 qwen-real 的 id")
 
     def test_qq_system_head_mentions_qwen_real(self):
-        from app.agent_prompt import build_stable_prompt
+        from app.features.chat.agent_prompt import build_stable_prompt
         head = build_stable_prompt("qq")
         self.assertIn("qwen真人", head)
         self.assertIn("qwen-real", head)
@@ -2116,7 +2116,7 @@ class BriefToolParamTest(unittest.TestCase):
         # 反向约束：别把 brief 修成「等于没 brief」。2026-10-04 晚白名单
         # 砍成 4 个纯生图工具后，名单外的工具（web_search 等）整行不出现
         # ——比「压短」更彻底。
-        from app import agent_prompt as ap
+        from app.features.chat import agent_prompt as ap
         from unittest import mock
         with mock.patch.dict("os.environ", {"PROMPT_BRIEF": "1"}):
             tools = ap._build_tool_list("qq", brief=True)

@@ -3043,7 +3043,7 @@ class QqWhitelistTest(unittest.TestCase):
             self.assertFalse(agents.allows_skill("qq", name), name)
 
     def test_qq_skill_list_only_advertises_the_offered_channels(self):
-        from app.agent_prompt import _build_skill_list
+        from app.features.chat.agent_prompt import _build_skill_list
         block = _build_skill_list("qq")
         for name in self.VISIBLE:
             self.assertIn("**" + name + "**", block, name)

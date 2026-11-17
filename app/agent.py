@@ -816,7 +816,7 @@ def _status_message(history, extra_context=None):
     内容每轮都要重新注入一遍，十几轮下来历史里堆着十几份重复的背景，既占
     预算、又让摘要越压越浑。
     """
-    from app.agent_prompt import build_status_bar
+    from app.features.chat.agent_prompt import build_status_bar
 
     last_tool = "none"
     for msg in reversed(history):

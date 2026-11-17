@@ -11,7 +11,7 @@ from app import qq_api
 from app import image_jobs
 from app.config import QQ_AGENT_ID
 from app.tools.normal import generate_image
-from app.agent_prompt import _build_tool_list
+from app.features.chat.agent_prompt import _build_tool_list
 
 
 def _chain_workflow():

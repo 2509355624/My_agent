@@ -114,7 +114,7 @@ class StatusBarWiringTest(unittest.TestCase):
     """接线测试：build_status_bar 必须真的拼进 NAI 行、且不泄露 ComfyUI 状态。"""
 
     def test_status_bar_has_nai_but_no_comfyui(self):
-        from app import agent_prompt
+        from app.features.chat import agent_prompt
         with mock.patch.object(image_jobs, "nai_depth", return_value=(0, 0)):
             bar = agent_prompt.build_status_bar()
         self.assertIn("<status_bar>", bar)

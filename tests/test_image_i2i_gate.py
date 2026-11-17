@@ -230,7 +230,7 @@ class PromptSurfaceTest(unittest.TestCase):
         return text.replace("**", "")
 
     def _hints(self):
-        from app.agent_prompt import _TOOL_HINTS
+        from app.features.chat.agent_prompt import _TOOL_HINTS
         return self._flat("\n".join(text for needs, text in _TOOL_HINTS
                                     if "generate_image" in needs))
 

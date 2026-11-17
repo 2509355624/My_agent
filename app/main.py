@@ -51,7 +51,7 @@ from app.core.config.runtime import runtime_path
 from app import provider_store
 from app.skills import list_skills, load_skill
 from app import model_catalog
-from app.agent_prompt import build_stable_prompt, sync_session_system
+from app.features.chat.agent_prompt import build_stable_prompt, sync_session_system
 from app.features.chat.memory import load_history, save_history, estimate_messages
 from app.agent import run_agent_stream, parse_tool_calls, _strip_tool_blocks
 from app.tools import execute_tool
@@ -677,7 +677,7 @@ def vision():
     if not question:
         question = "帮我看看这张图片，描述它，并给出可以优化/改进的地方。"
 
-    from app.agent_prompt import build_stable_prompt
+    from app.features.chat.agent_prompt import build_stable_prompt
     messages = [
         {"role": "system", "content": build_stable_prompt(agent_id)},
         {"role": "user", "content": [

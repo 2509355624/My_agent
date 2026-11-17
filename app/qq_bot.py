@@ -58,7 +58,7 @@ from app.features.card import bot as card_bot
 from app.features.image import log as image_log
 from app.features.image import out as image_out
 from app.agent import run_agent_stream, tail_tokens
-from app.agent_prompt import build_stable_prompt
+from app.features.chat.agent_prompt import build_stable_prompt
 from app.config import (
     BASE_DIR, QQ_AGENT_ID, QQ_BOT_NAME, QQ_BLACKLIST_USERS,
     QQ_CONTEXT_MAX_CHARS, QQ_CONTEXT_MESSAGES,

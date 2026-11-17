@@ -19,7 +19,7 @@ from unittest import mock
 
 import app.agents as agents
 import app.features.chat.memory as memory
-import app.agent_prompt as prompt_mod
+import app.features.chat.agent_prompt as prompt_mod
 
 
 def _bump(path):
@@ -278,7 +278,7 @@ class BriefModeTest(unittest.TestCase):
 
     def _sp(self, brief):
         from unittest import mock
-        import app.agent_prompt as ap
+        import app.features.chat.agent_prompt as ap
         ap._stable_cache.clear()
         ap._stable_fp.clear()
         with mock.patch.dict(os.environ,
@@ -329,7 +329,7 @@ class BriefModeTest(unittest.TestCase):
         预算依据：用户给的 1 万字（≈5000 token）里，qq 系统头 6782 → 9043，
         仍低于 ollama 的 11468 物理预算，所以两头都没破。
         """
-        from app.agent_prompt import _build_tool_hints
+        from app.features.chat.agent_prompt import _build_tool_hints
         hints = _build_tool_hints("qq")
         self.assertIn("提示：", self._sp(True))
         self.assertIn(hints[:40], self._sp(True),
@@ -342,7 +342,7 @@ class BriefModeTest(unittest.TestCase):
         两种超法不一样），所以光靠 test_brief_shrinks_system_head_hard
         抓不到「skill 目录没压」这种回归。
         """
-        from app.agent_prompt import _build_skill_list
+        from app.features.chat.agent_prompt import _build_skill_list
         full = _build_skill_list("qq", brief=False)
         brief = _build_skill_list("qq", brief=True)
         self.assertIn("（", full, "完整模式应该有类型标注")
@@ -366,7 +366,7 @@ class BriefModeTest(unittest.TestCase):
         """没设 PROMPT_BRIEF 时必须走完整模式——云端模型上下文充裕，
         不该被小模型的限制拖累。"""
         from unittest import mock
-        import app.agent_prompt as ap
+        import app.features.chat.agent_prompt as ap
         ap._stable_cache.clear()
         ap._stable_fp.clear()
         env = {k: v for k, v in os.environ.items() if k != "PROMPT_BRIEF"}
