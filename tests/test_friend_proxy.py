@@ -19,7 +19,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import friend_app                       # noqa: E402
-from app import friend_auth             # noqa: E402
+from app.gateways import friend_auth  # noqa: E402
 
 
 class _FakeResp(object):

@@ -106,7 +106,7 @@ def friend_qq():
     站主路径不查 owner、不查配额 —— 但 5174 只监听本机/内网，群友碰不到。
     """
     try:
-        from app import friend_auth
+        from app.gateways import friend_auth
         good = friend_auth.secret()
     except Exception:
         return ""

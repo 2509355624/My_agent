@@ -493,7 +493,7 @@ def receipt_note_default():
 def _receipt_links(target, target_id):
     """回执末尾那三行入口；隧道没开 / 开关关掉 → ""（一个字都不加）。"""
     from app.features.qq import friend_site
-    from app import friend_auth
+    from app.gateways import friend_auth
     from app.config import QQ_RECEIPT_LINKS, QQ_RECEIPT_LINK_TTL_HOURS
     if not QQ_RECEIPT_LINKS:
         return ""

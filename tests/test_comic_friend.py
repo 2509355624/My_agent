@@ -28,7 +28,8 @@ from app.features.comic import delivery as comic_delivery
 from app.features.comic import thumb as comic_thumb
 from app.features.comic import routes as comic_api
 from app.features.comic import render_opts as comic_render_opts
-from app import (comic, friend_auth, main)
+from app.gateways import friend_auth
+from app import (comic, main)
 
 SECRET = "unit-test-friend-secret"
 QQ = "123456"

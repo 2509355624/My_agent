@@ -19,7 +19,7 @@ from unittest import mock
 
 from PIL import Image
 
-from app import friend_auth
+from app.gateways import friend_auth
 from app.features.gallery import gallery
 from app.features.gallery import routes as gallery_api
 

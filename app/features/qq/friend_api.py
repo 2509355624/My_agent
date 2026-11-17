@@ -48,7 +48,8 @@ import requests
 from flask import Blueprint, jsonify, request, send_file
 
 from app.features.image import lora_presets, lora_slots
-from app import friend_auth, image_jobs
+from app.gateways import friend_auth
+from app import (image_jobs)
 from app.config import COMFYUI_OUTPUT_DIR, COMFYUI_URL, state_path
 from app.core.skills import load_skill
 

@@ -1445,7 +1445,8 @@ def _outfit_text():
     不用登录、不用记账号。6 小时过期（隧道域名会变，旧的发过去也打不开）。
     """
     from app.features.qq import friend_site
-    from app import friend_auth, qq_api
+    from app.gateways import friend_auth
+    from app import (qq_api)
     url = friend_site.url()
     if not url:
         return ("换装页现在打不开——隧道没开，让群主双击"
@@ -1517,7 +1518,8 @@ def _runbench_text():
     账号，分享给别人也能用，结果仍回原会话。6 小时过期。
     """
     from app.features.qq import friend_site
-    from app import friend_auth, qq_api
+    from app.gateways import friend_auth
+    from app import (qq_api)
     url = friend_site.url()
     if not url:
         return ("跑图台现在打不开——隧道没开，让群主双击"

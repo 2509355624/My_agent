@@ -266,7 +266,8 @@ class FriendApiTest(_Base):
 
     def setUp(self):
         super().setUp()
-        from app import main, friend_auth
+        from app.gateways import friend_auth
+        from app import (main)
         self.c = main.app.test_client()
         self.h = {"X-Friend-Token": friend_auth.secret()}
         self.loras = [{"slot": 1, "on": True, "strength": 0.8,

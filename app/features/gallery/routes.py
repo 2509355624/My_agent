@@ -30,7 +30,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from flask import Blueprint, jsonify, request, send_file
 
-from app import friend_auth
+from app.gateways import friend_auth
 from app.features.gallery import gallery
 from app.config import GALLERY_OWNER_QQ
 

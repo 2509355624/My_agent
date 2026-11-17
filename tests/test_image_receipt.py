@@ -168,7 +168,7 @@ class ReceiptLinksTest(_SubmitHarness):
 
     def setUp(self):
         super().setUp()
-        p = mock.patch("app.friend_auth.secret", return_value="t" * 64)
+        p = mock.patch("app.gateways.friend_auth.secret", return_value="t" * 64)
         p.start()
         self.addCleanup(p.stop)
 
@@ -187,7 +187,7 @@ class ReceiptLinksTest(_SubmitHarness):
         self.assertTrue(lines[-3].startswith("跑图台 %s/runbench?k=" % self.URL))
 
     def test_runbench_token_leads_back_to_this_session(self):
-        from app import friend_auth
+        from app.gateways import friend_auth
         text = self._submit_with(("group", "482079537"))
         line = [x for x in text.splitlines() if x.startswith("跑图台 ")][0]
         k = line.split("k=", 1)[1]
@@ -195,7 +195,7 @@ class ReceiptLinksTest(_SubmitHarness):
                          ("group", "482079537"))
 
     def test_private_and_group_get_their_own_token(self):
-        from app import friend_auth
+        from app.gateways import friend_auth
         text = self._submit_with(("private", "2509355624"))
         k = [x for x in text.splitlines()
              if x.startswith("跑图台 ")][0].split("k=", 1)[1]

@@ -24,7 +24,8 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.features.image import outfit_api
-from app import friend_auth, main
+from app.gateways import friend_auth
+from app import (main)
 
 
 def _png_bytes():

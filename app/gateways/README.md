@@ -11,5 +11,6 @@
 - 不 import feature 内部文件；需要业务结果时走 HTTP 反代或对方 `service.py`。
 
 状态：`guest.py`（原 `app/guest.py`，访客会话/名额）、`guest_view.py`（原
-`app/guest_view.py`，游客页渲染）已迁入并接线；`admin_app.py`、`friend_app.py`、
-`friend_auth.py`、`admin_auth.py` 仍暂留根目录，后续搬入。
+`app/guest_view.py`，游客页渲染）、`friend_auth.py`（原 `app/friend_auth.py`，
+5175 群友登录/会话）已迁入并接线；`admin_app.py`、`friend_app.py` 仍暂留根目录，
+后续搬入。

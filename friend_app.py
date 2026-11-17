@@ -36,8 +36,8 @@ import requests
 from flask import (Flask, Response, g, jsonify, make_response, redirect, request,
                    send_from_directory, stream_with_context)
 
-from app import friend_auth
-from app import guest_view
+from app.gateways import friend_auth
+from app.gateways import guest_view
 from app.config import WEB_DIR, WORKSHOP_HTML
 from app.core.logsetup import setup as log_setup
 

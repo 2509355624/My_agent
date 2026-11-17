@@ -163,28 +163,28 @@ class RunbenchTokenTest(unittest.TestCase):
     """friend_auth 跑图台令牌：签名域独立、roundtrip、过期。"""
 
     def test_roundtrip(self):
-        from app import friend_auth
+        from app.gateways import friend_auth
         k = friend_auth.make_runbench_token("private", "123456789")
         self.assertTrue(k)
         parsed = friend_auth.parse_runbench_token(k)
         self.assertEqual(parsed, ("private", "123456789"))
 
     def test_group_token(self):
-        from app import friend_auth
+        from app.gateways import friend_auth
         k = friend_auth.make_runbench_token("group", "987654321")
         parsed = friend_auth.parse_runbench_token(k)
         self.assertEqual(parsed, ("group", "987654321"))
 
     def test_domain_isolation_from_outfit(self):
         # 跑图台令牌不能被换装 parse 认（签名域不同），反之亦然
-        from app import friend_auth
+        from app.gateways import friend_auth
         rk = friend_auth.make_runbench_token("private", "123456789")
         ok = friend_auth.make_outfit_token("private", "123456789")
         self.assertIsNone(friend_auth.parse_outfit_token(rk))
         self.assertIsNone(friend_auth.parse_runbench_token(ok))
 
     def test_invalid_target_rejected(self):
-        from app import friend_auth
+        from app.gateways import friend_auth
         self.assertEqual(friend_auth.make_runbench_token("bot", "123"), "")
 
 

@@ -62,7 +62,7 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 def _secret():
     """复用登录那套密钥。import 放在函数里，避免循环依赖。"""
-    from app import friend_auth
+    from app.gateways import friend_auth
     return friend_auth.secret()
 
 

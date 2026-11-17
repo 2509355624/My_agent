@@ -187,7 +187,7 @@ def run(job_id: str) -> None:
 | feature | 当前主要模块（起点） | 目标职责 |
 |---|---|---|
 | `core` | `config.py`、`logsetup.py`、`admin_auth.py`、`friend_auth.py` | 配置、路径、日志、安全、错误 |
-| `core` 迁移后 | `core/config/*`、`cancel.py`、`logsetup.py`、`usage.py`、`provider_store.py`、`model_catalog.py`、`skills.py`、`admin_auth.py` 已接线；`friend_auth.py` 仍留根（归 5175 网关） | 配置、取消信号、日志、用量账本、自定义中转站、模型清单、技能目录加载、管理鉴权；群友鉴权待随网关搬入 |
+| `core` 迁移后 | `core/config/*`、`cancel.py`、`logsetup.py`、`usage.py`、`provider_store.py`、`model_catalog.py`、`skills.py`、`admin_auth.py` 已接线；`friend_auth.py` 仍留根（归 5175 网关） | 配置、取消信号、日志、用量账本、自定义中转站、模型清单、技能目录加载、管理鉴权；群友鉴权已随网关搬入 |
 | `gallery` | `gallery.py`、`gallery_api.py` | 作品画廊、扫描、权限 |
 | `gallery` 迁移后 | `features/gallery/gallery.py`、`routes.py` 已接线 | 画廊扫描与接口已归位；`friend_auth` 仍留根 |
 | `showcase` | `showcase_api.py`、`showcase_prompts.py` | 公开展示页数据与提示词 |
@@ -213,7 +213,7 @@ def run(job_id: str) -> None:
 | `admin` | `admin_site.py`、`usage.py`、`job_ledger.py`、`provider_store.py`、`model_catalog.py`、`agents.py`、`skills.py` | 用量、账本、预设、配置、后台 |
 | `admin` 迁移后 | `features/admin/site.py`、`routes.py` 已接线；`admin_auth.py` 仍在 core | 后台入口与 `/api/characters` |
 | `gateways` | `admin_app.py`、`friend_app.py` | 反代、登录、限流、CF 头 |
-| `gateways` 迁移后 | `gateways/guest.py`、`guest_view.py` 已接线；`admin_app.py`、`friend_app.py`、`friend_auth.py`、`admin_auth.py` 仍留根 | 访客会话/游客页已归位，网关主入口与鉴权待搬 |
+| `gateways` 迁移后 | `gateways/guest.py`、`guest_view.py` 已接线；`admin_app.py`、`friend_app.py`、`friend_auth.py`、`admin_auth.py` 仍留根 | 访客会话/游客页/群友鉴权已归位，网关主入口待搬 |
 | `integrations` | `comfy_*`、`llm.py`、`vision.py`、`nai.py`、`qq_api.py` | 外部系统适配 |
 | `integrations` 迁移后 | `integrations/vision.py` 已接线（原 `app/vision.py`）；`comfy_*`、`llm.py`、`nai.py`、`qq_api.py` 仍待迁 | 识图/图片描述适配已归位，其余外部适配待拆 |
 | `persistence` | `agents.py`、`memory.py`、`longterm.py`、`job_ledger.py`、`recent.py`、`image_log.py` | JSON/SQL 存储 |
