@@ -55,7 +55,7 @@ app/
 │   │   ├── web.py            # 端口 / 页面 / 画廊 / 管理远端
 │   │   ├── qq.py             # QQ_* / 通知
 │   │   ├── persona.py        # 角色扮演模型白名单
-│   │   └── runtime.py        # 上下文 / 记忆 / 看门狗
+│   │   └── runtime.py        # 运行期可热更新设置（JSON，非密钥）
 │   ├── logging.py            # 原 logsetup.py
 │   ├── security.py           # 令牌、HMAC、来源闸、限流
 │   ├── errors.py             # 统一错误类型与响应
@@ -298,7 +298,10 @@ tests/
 - 先搬 `paths.py`（绝对路径、`state_path`）和 `env.py`（`.env`、`_env_bool`）。
 - `app/config.py` 从新模块 import，旧名字继续可用；不一次改 106 个调用方。
 - 测试锁 `BASE_DIR`、`ROOT_DIR`、`WEB_DIR`、`DATA_DIR`、`state_path()`。
-- 后续按 `llm` → `image` → `rag` → `web` → `qq/runtime` → `persona` 顺序搬。
+- 已完成 `paths` / `env` / `llm` / `runtime`：`llm.py` 管降级链、超时、重试、
+  TTL、预算；`runtime.py` 存 `data/runtime_settings.json`，管理页通过
+  `/api/llm/settings` 读写，下一次请求即生效。
+- 后续按 `image` → `rag` → `web` → `qq` → `persona` 顺序搬。
 
 ### 第三步：`bootstrap.py` + 入口
 
