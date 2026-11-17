@@ -23,7 +23,8 @@ from unittest import mock
 
 import flask
 
-from app import novel, persona_rag
+from app import novel
+from app.features.persona import rag as persona_rag
 from app.features.novel import routes as novel_api
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1343,7 +1344,7 @@ class WiringTest(unittest.TestCase):
                        "import affection", "import galgame", "pregnancy"):
             self.assertNotIn(banned, self.src,
                              "小说引擎接回 1v1 状态条了：%s" % banned)
-        for needle in ("from app import llm, persona, persona_rag, writing_style",
+        for needle in ("from app.features.persona import rag as persona_rag",
                        "persona.cache_rows", "persona_rag.build_block",
                        "persona_rag.remember", "writing_style.LENGTH_ANCHOR"):
             self.assertIn(needle, self.src, "没复用扮演内核：%s" % needle)

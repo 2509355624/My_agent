@@ -27,7 +27,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.features.comic import render_opts as comic_render_opts as ro
+from app.features.comic import render_opts as ro
 from app import lora_slots as L
 from app.skills import load_workflow
 

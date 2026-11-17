@@ -27,7 +27,7 @@ from unittest import mock
 import app.agents as agents
 import app.affection as affection
 import app.persona as persona
-import app.persona_rag as persona_rag
+from app.features.persona import rag as persona_rag
 
 
 def _card(name="测试角色", **kw):

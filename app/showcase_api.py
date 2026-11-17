@@ -29,7 +29,8 @@ from app.config import (
     WEB_DIR,
     state_path,
 )
-from app import comfy_out, friend_auth, image_jobs, llm, persona_rag
+from app.features.persona import rag as persona_rag
+from app import comfy_out, friend_auth, image_jobs, llm
 from app.features.image import audit as image_audit
 from app import showcase_prompts
 from app.tools.normal.generate_image import build_t2i_workflow

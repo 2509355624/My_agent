@@ -3104,7 +3104,7 @@ def run():
     # 重启后第一轮检索必然返回空，模型手里一条记忆都没有，只能从 12 条窗口
     # 里编（实测把「门板被撞见那次」编成了「第一次」）。异步，不阻塞启动。
     try:
-        from app import persona_rag
+        from app.features.persona import rag as persona_rag
         persona_rag.warm()
     except Exception:                                # noqa: BLE001
         logging.getLogger("main").exception("RAG 预热失败")

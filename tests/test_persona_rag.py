@@ -15,7 +15,7 @@ from unittest import mock
 import app.agents as agents
 import app.llm as llm
 import app.persona as persona
-import app.persona_rag as rank
+from app.features.persona import rag as rank
 
 
 class FakeClient:

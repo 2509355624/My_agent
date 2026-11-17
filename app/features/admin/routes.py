@@ -31,8 +31,8 @@ import os
 from flask import Blueprint, Response, jsonify, request
 
 from app.features.persona import billing as persona_billing
-from app import (friend_auth, guest, persona,
-                 persona_rag)
+from app.features.persona import rag as persona_rag
+from app import (friend_auth, guest, persona)
 from app.features.chat import background as chat_bg
 from app.config import BASE_DIR
 

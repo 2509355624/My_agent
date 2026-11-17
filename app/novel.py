@@ -64,7 +64,8 @@ import threading
 import time
 import uuid
 
-from app import llm, persona, persona_rag, writing_style
+from app.features.persona import rag as persona_rag
+from app import llm, persona, writing_style
 from app.config import (BASE_DIR, PERSONA_MODEL, PERSONA_PROVIDER,
                         state_path)
 
