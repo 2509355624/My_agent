@@ -60,8 +60,16 @@ class GalleryHeaderTest(unittest.TestCase):
         tools = tools[:tools.index("function btn(")]
         self.assertIn('more.appendChild(btn("↻ 全部重扫"', tools)
         self.assertIn('more.appendChild(btn("⌫ 清理失效"', tools)
+        self.assertIn('more.appendChild(btn("🗑 清空扫描结果"', tools)
         self.assertNotIn('t.appendChild(btn("↻ 全部重扫"', tools)
         self.assertNotIn('t.appendChild(btn("⌫ 清理失效"', tools)
+
+    def test_scan_dialog_blocks_drive_root(self):
+        """整块盘不能扫：否则 D:\\AI、D:\\Users 会全变成作品集。"""
+        html = _html()
+        self.assertIn("function isDriveRoot(p)", html)
+        self.assertIn('b.textContent = blocked ? "请进到文件夹" : "扫描这里"', html)
+        self.assertIn("不能扫描整块盘，请进到具体文件夹", html)
 
     def test_original_ids_are_kept(self):
         html = _html()

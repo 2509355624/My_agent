@@ -134,6 +134,23 @@ def _root_name(root):
     return name or str(root or "")
 
 
+def _is_filesystem_root(path):
+    """整块盘 / 文件系统根不能当扫描目录。
+
+    2026-11-17：站主扫 `D:\\` 之后，`D:\\AI`、`D:\\Users`、`D:\\APP` 全被
+    登记成作品集，分类条冒出一排不认识的文件夹名。扫盘根没有业务意义，
+    而且会把几万张和图库无关的图拖进索引，所以在入口直接拦掉。
+    """
+    try:
+        p = os.path.abspath(str(path or ""))
+    except (TypeError, ValueError):
+        return False
+    drive, tail = os.path.splitdrive(p)
+    if drive and tail in ("\\", "/"):
+        return True
+    return p == os.path.abspath(os.sep)
+
+
 def _ord_key(title):
     """标题 → 可排序字符串：数字段补零，`2` 才能排在 `10` 前面。
 
@@ -359,6 +376,9 @@ def scan(roots=None):
     for item in roots:
         grp, root = item[0], item[1]
         root_title = item[2] if len(item) > 2 else grp
+        if _is_filesystem_root(root):
+            log.warning("画廊：拒绝扫描整块盘 %s", root)
+            continue
         if not os.path.isdir(root):
             log.warning("画廊根目录不存在：%s", root)
             continue
@@ -469,6 +489,8 @@ def scan_path(path):
     零点几秒。
     """
     p = os.path.abspath(str(path or "").strip())
+    if _is_filesystem_root(p):
+        return {"error": "不能扫描整块盘，请进到具体文件夹再扫"}
     if not os.path.isdir(p):
         return {"error": "目录不存在：%s" % p}
     root = p
@@ -1049,6 +1071,31 @@ def drop_orphans():
         con.execute("UPDATE works SET n=(SELECT COUNT(*) FROM items"
                     " WHERE work_id=works.id) WHERE src='owner'")
     return len(gone)
+
+
+def clear_scan():
+    """清空站主扫描索引，群友上传和磁盘原图都保留。
+
+    站主扫错目录（例如整块盘）之后需要一键重来。这里只删 `src='owner'`
+    的 works/items 和这些图的点赞收藏，**不动**磁盘文件、缩略图缓存和
+    群友上传的作品集：原图归磁盘管，缓存按路径哈希，重扫同一路径还能复用。
+    → {"works": 清掉的作品集数, "items": 清掉的图片数}
+    """
+    with connect() as con:
+        works = con.execute(
+            "SELECT COUNT(*) c FROM works WHERE src='owner'").fetchone()["c"]
+        items = con.execute(
+            "SELECT COUNT(*) c FROM items WHERE work_id IN"
+            " (SELECT id FROM works WHERE src='owner')").fetchone()["c"]
+        con.execute(
+            "DELETE FROM marks WHERE item_id IN"
+            " (SELECT id FROM items WHERE work_id IN"
+            "  (SELECT id FROM works WHERE src='owner'))")
+        con.execute(
+            "DELETE FROM items WHERE work_id IN"
+            " (SELECT id FROM works WHERE src='owner')")
+        con.execute("DELETE FROM works WHERE src='owner'")
+    return {"works": int(works or 0), "items": int(items or 0)}
 
 
 # ─── 展示名 ──────────────────────────────────────────────

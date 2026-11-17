@@ -646,6 +646,19 @@ def api_clean():
     return jsonify({"ok": True, "removed": gallery.drop_orphans()})
 
 
+@bp.route("/clear", methods=["POST"])
+def api_clear():
+    """清空站主扫描索引。群友上传和磁盘原图不动。"""
+    bad = _guard()
+    if bad:
+        return bad
+    qq = _qq()
+    if not _is_owner(qq):
+        return jsonify({"ok": False, "error": "只有站主能改"}), 403
+    out = gallery.clear_scan()
+    return jsonify({"ok": True, "works": out["works"], "items": out["items"]})
+
+
 @bp.route("/work/<int:wid>", methods=["DELETE"])
 def api_delete_work(wid):
     bad = _guard()

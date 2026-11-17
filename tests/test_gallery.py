@@ -251,6 +251,13 @@ class ScanPathTest(_Base):
         self.assertIn("error", out)
         self.assertNotIn("works", out)
 
+    def test_scanning_filesystem_root_is_rejected(self):
+        """整块盘不能扫：那会把 D:\\AI、D:\\Users 全登记成作品集。"""
+        fs_root = os.path.abspath(os.sep)
+        out = gallery.scan_path(fs_root)
+        self.assertIn("error", out)
+        self.assertNotIn("works", out)
+
     def test_browse_lists_subdirs_with_counts(self):
         self.mk("a", "x.png")
         self.mk("a", "y.png")
@@ -1300,6 +1307,69 @@ class WarmCacheTest(_Base):
         gallery.thumb(a, "t")                      # a 已经有缓存
         missing = gallery.missing_cache([a, b, os.path.join(self.root, "nope.png")])
         self.assertEqual(missing, [b])
+
+
+class ClearScanTest(_Base):
+    """一键清空只清站主扫描索引，群友上传和磁盘原图都不动。"""
+
+    def test_clear_scan_keeps_user_uploads_and_disk_files(self):
+        owner_file = self.mk("1", "a.png")
+        gallery.scan([("图库", self.root, "图库")])
+        with gallery.connect() as con:
+            owner_item = con.execute(
+                "SELECT id FROM items ORDER BY id LIMIT 1").fetchone()["id"]
+
+        user_wid = gallery.create_work("20002", "群友")
+        gallery.append_upload("20002", user_wid, "x.png",
+                              io.BytesIO(_png()).getvalue())
+        with gallery.connect() as con:
+            con.execute("INSERT INTO marks(qq,item_id,kind,ts)"
+                        " VALUES(?,?,?,?)",
+                        ("30003", owner_item, "like", time.time()))
+
+        out = gallery.clear_scan()
+
+        self.assertEqual(out["works"], 1)
+        self.assertEqual(out["items"], 1)
+        left = self.works()
+        self.assertEqual([w["src"] for w in left], ["user"])
+        self.assertEqual(left[0]["id"], user_wid)
+        with gallery.connect() as con:
+            self.assertEqual(
+                con.execute("SELECT COUNT(*) c FROM items WHERE work_id=?",
+                            (user_wid,)).fetchone()["c"], 1)
+            self.assertEqual(
+                con.execute("SELECT COUNT(*) c FROM marks").fetchone()["c"], 0)
+        self.assertTrue(os.path.isfile(owner_file), "清索引不能删磁盘原图")
+
+
+class ClearScanApiTest(_Base):
+    def setUp(self):
+        super().setUp()
+        from flask import Flask
+        self.app = Flask(__name__)
+        self.app.register_blueprint(gallery_api.bp)
+        self.c = self.app.test_client()
+        self.h = {"X-Friend-Token": "tok"}
+        for target, attr, val in ((friend_auth, "secret", lambda: "tok"),
+                                  (gallery_api, "GALLERY_OWNER_QQ", "10001")):
+            p = mock.patch.object(target, attr, val)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_only_owner_can_clear(self):
+        r = self.c.post("/api/gal/clear", json={"qq": "20002"},
+                        headers=self.h)
+        self.assertEqual(r.status_code, 403)
+        self.mk("1", "a.png")
+        gallery.scan([("图库", self.root, "图库")])
+        r = self.c.post("/api/gal/clear", json={"qq": "10001"},
+                        headers=self.h)
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["works"], 1)
+        self.assertEqual(self.works(), [])
 
 
 class DeleteItemTest(_Base):

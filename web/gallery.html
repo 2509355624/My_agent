@@ -386,7 +386,7 @@
 <div id="scanbox">
   <div class="sheet">
     <h3>扫描文件夹</h3>
-    <p>点进目录选中它，或者直接粘完整路径。选中的目录连同子目录一起扫，
+    <p>点进具体文件夹，或者直接粘完整路径。只能扫文件夹，不能扫整块盘；
       每个「直接放着图」的目录算一个作品集。</p>
     <div class="nowline" id="scnow"></div>
     <div class="row" style="margin-bottom:10px">
@@ -714,6 +714,7 @@
       more.id = "toolMore";
       more.appendChild(btn("↻ 全部重扫", "", scanAll));
       more.appendChild(btn("⌫ 清理失效", "", clean));
+      more.appendChild(btn("🗑 清空扫描结果", "", clearScan));
       t.appendChild(more);
     }
   }
@@ -785,6 +786,17 @@
   // ── 选文件夹 ──────────────────────────────────────────
   var SC = { path: "", parent: "" };
 
+  function isDriveRoot(p) {
+    return /^[A-Za-z]:[\\/]?$/.test(p || "") || (p || "") === "/";
+  }
+
+  function markScanButton() {
+    var b = $("scgo");
+    var blocked = isDriveRoot(SC.path);
+    b.disabled = !SC.path || blocked;
+    b.textContent = blocked ? "请进到文件夹" : "扫描这里";
+  }
+
   function openScan() {
     $("scanbox").classList.add("on");
     var last = "";
@@ -799,6 +811,7 @@
       SC.parent = d.parent || "";
       $("scpath").value = SC.path;
       try { localStorage.setItem("gal_scan_path", SC.path); } catch (e) {}
+      markScanButton();
 
       var now = $("scnow");
       now.innerHTML = "";
@@ -849,6 +862,7 @@
 
   function goScan() {
     if (!SC.path) { toast("先点进一个文件夹"); return; }
+    if (isDriveRoot(SC.path)) { toast("不能扫描整块盘，请进到具体文件夹"); return; }
     var b = $("scgo");
     b.disabled = true;
     b.textContent = "扫描中…";
@@ -861,7 +875,7 @@
         closeScan();
         setTab("owner");
       }).catch(function (e) { toast(e.message); })
-      .then(function () { b.disabled = false; b.textContent = "扫描这里"; });
+      .then(function () { markScanButton(); });
   }
 
   $("sccancel").onclick = closeScan;
@@ -878,6 +892,25 @@
       toast("清掉 " + (d.removed || 0) + " 条失效记录");
       load(true);
     }).catch(function (e) { toast(e.message); });
+  }
+
+  // 清空站主扫描索引。群友上传的作品和磁盘原图都不动，只把扫错的目录
+  // 从库里拿掉，方便重新扫正确的文件夹。
+  function clearScan() {
+    if (S.busy) return;
+    if (!window.confirm("清空站长的扫描结果？群友上传的作品和磁盘原图不会动。")) {
+      return;
+    }
+    S.busy = true;
+    toast("正在清空扫描结果…");
+    api("clear", { method: "POST", headers: { "Content-Type": "application/json" },
+                   body: "{}" }).then(function (d) {
+      S.grp = "";
+      toast("已清空 " + (d.works || 0) + " 个作品集、"
+            + (d.items || 0) + " 张图的索引");
+      S.busy = false;
+      load(true);
+    }).catch(function (e) { toast(e.message); S.busy = false; });
   }
 
   // ── 作品集详情 ────────────────────────────────────────
