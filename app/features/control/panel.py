@@ -9,6 +9,7 @@ import os
 import secrets
 import threading
 import time
+import webbrowser
 from pathlib import Path
 
 from flask import Flask, Response, jsonify, request
@@ -113,6 +114,15 @@ def _autostart(manager: ServiceManager):
         time.sleep(1.2)
 
 
+def _open_browser():
+    if os.getenv("CONTROL_NO_BROWSER", "0").lower() in ("1", "true", "yes"):
+        return
+    try:
+        webbrowser.open("http://127.0.0.1:%d" % CONTROL_PORT)
+    except Exception:                                    # noqa: BLE001
+        log.warning("open browser failed", exc_info=True)
+
+
 def main():
     log_dir = ROOT / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -128,6 +138,9 @@ def main():
     app = create_app(manager)
     if os.getenv("CONTROL_AUTOSTART", "1").lower() not in ("0", "false", "no", ""):
         threading.Thread(target=_autostart, args=(manager,), daemon=True).start()
+    browser_timer = threading.Timer(1.5, _open_browser)
+    browser_timer.daemon = True
+    browser_timer.start()
     log.info("control panel on http://127.0.0.1:%d", CONTROL_PORT)
     app.run(host="127.0.0.1", port=CONTROL_PORT, threaded=True, use_reloader=False)
 

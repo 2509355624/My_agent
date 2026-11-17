@@ -119,14 +119,14 @@ class SpecsTest(unittest.TestCase):
         self.assertFalse(specs["watchdog"].autostart)
         self.assertFalse(specs["comfyui"].autostart)
 
-    def test_launcher_does_not_depend_on_system32_in_path(self):
+    def test_launcher_is_minimal_and_does_not_use_path_commands(self):
         bat = (Path(__file__).resolve().parents[1] / "启动控制台.bat").read_text(
             encoding="utf-8")
-        self.assertIn("%SYS32%\\netstat.exe", bat)
-        self.assertIn("%SYS32%\\findstr.exe", bat)
-        self.assertIn("PING.EXE", bat)
-        self.assertNotIn("timeout /t", bat.lower())
-        self.assertNotIn("netstat -ano 2>nul | findstr", bat)
+        self.assertIn('start "" "%PYW%" -m app.features.control.panel', bat)
+        self.assertNotIn("netstat", bat.lower())
+        self.assertNotIn("findstr", bat.lower())
+        self.assertNotIn("timeout", bat.lower())
+        self.assertNotIn("goto wait", bat.lower())
 
     def test_status_colors_are_three_state(self):
         self.assertEqual("green", status_color("running"))
