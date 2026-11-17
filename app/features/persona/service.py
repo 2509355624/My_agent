@@ -283,6 +283,7 @@ from app.features.persona.manual_input import (
 )
 
 from app.features.persona.json_utils import _close_json, _parse_json_loose
+from app.features.persona import comic_brief as comic_brief_text
 from app.features.persona.prompt_facts import (
     FACT_MAX, FACT_TEXT_MAX, _FACTS_GUIDE, _facts_block, _outfit_block,
     _parse_facts, _place_block,
@@ -553,105 +554,14 @@ def draw_shot(card, session_key, msg_index=None, reply_to="", on_submit=None,
 
 
 def comic_brief(card, session_key, extra="", msg_index=None):
-    """把「用户点名要画的 + 她此刻 + 状态 + 人物」拼成 moss 漫画的 brief。
-
-    `session_key` 传 base 或线键都行——内部 `resolve_line` 统一换算
-    （QQ 私聊分线后，brief 里读的历史必须来自**当前角色线**）。
-
-    2026-11-03 第二次改（用户实测反馈「都不按剧情来的」）：
-
-    第一版把**最近三轮**对话塞进「刚才发生的事」，结果编剧看到三个不同场景，
-    自然画成「过程」——这正是用户抱怨的「六格写完一个过程，磨磨唧唧」。
-
-    现在的结构按**重要性**排，而且只取**最后一轮**：
-
-      1. `用户点名要画的` —— 最后一条用户消息**全文**。这才是「他要看什么」，
-         不该依赖引用（引用经常是空的，还会把「（没有可读内容）」这种噪声
-         塞进最高优先段）。
-      2. `她此刻` —— 最后一条她的回复正文，画面和她这一刻的动作对齐。
-      3. `状态` —— 在哪 / 穿什么 / 接触。
-      4. `人物` —— 女主外观 + 固定男主。
-
-    `extra`（引用内容）只在真有字的时候加，且排在用户原话之后。
-
-    `msg_index`（2026-11-03 加，2026-11-04 改口径）：**指定画哪一条回复**。
-    - `None` → 取最后一轮（QQ 端「出图」走这条，行为不变）
-    - `N` → 取**归档里第 N 行**（必须是 assistant），用它自己那轮的正文、状态、
-      以及它前面那条用户消息。归档只增不删，所以这个号不会随窗口裁剪漂移。
-
-    网页端每条回复下面都有「出图」按钮，画错位置就全乱了，所以必须能定位。
-    好消息是每条回复在历史里**本来就带着 `画面：` / `状态：` 行**（见
-    `split_turn`），不用另存一份。
-    """
+    """把「用户点名要画的 + 她此刻 + 状态 + 人物」拼成 moss 漫画的 brief。"""
     session_key = resolve_line(session_key)
     name = char_name(card, "女主角", key=session_key)
     look = _fixed_block(card)
-
     last_user, last_ai, scene, state = _shot_parts(session_key, msg_index)
+    return comic_brief_text.build(
+        name, look, last_user, last_ai, scene, state, extra, MALE_PROTAGONIST)
 
-    lines = ["这是一部成人向漫画的一页。", ""]
-    lines.append("## 画什么")
-    lines.append("**这是一页，不是一个故事。** 只画下面那一个瞬间，"
-                 "用多个格子从不同角度拍它，不要推进时间、不要讲起承转合。")
-
-    # 画面行排第一（2026-11-04）：这是**她这一轮自己写的画面描述**，景别、姿态、
-    # 衣着、接触点都已经定稿，本来就是给生图用的。
-    #
-    # 之前这里只传正文，`split_turn()[0]` 把 scene 丢了，编剧拿着中文散文
-    # 「拽住开衫的衣角盖在膝上」去猜英文构图，猜成了「脊背拱在椅沿」——
-    # 实测一张「坐在小凳上」的画成了反折在椅子上、头抵地。
-    if scene:
-        lines.append("")
-        lines.append("## 这一页的画面（**已定稿，照它画**）")
-        lines.append(scene[:400])
-        lines.append("")
-        lines.append("这一段是**已经写好的画面**，不是素材。景别、姿态、衣着、"
-                     "身体朝向、接触点在哪儿，全部以它为准。")
-        lines.append("")
-        lines.append("可以做的：换角度、换机位、把同一个姿势拆成不同景别拍（全身→"
-                     "近景→手或脸的特写）。")
-        lines.append("**不可以做的**：改姿势。她写「坐着」就画坐着，不许改成躺着、"
-                     "跪着、反折在椅子上；她写「膝盖并拢」就画膝盖并拢。"
-                     "用户原话里如果有和这段冲突的动作描述，**以这一段为准**——"
-                     "原话是他要做什么，这一段才是做完之后她实际的样子。")
-
-    if last_user:
-        lines.append("")
-        lines.append("## 用户这一轮做了什么")
-        lines.append(last_user[:600])
-        lines.append("")
-        lines.append("这一节说明**发生了什么、接触在哪里**，用来定格子的内容；"
-                     "但**姿势与衣着不从这里推断**——上面那段画面已经定好了，"
-                     "这里只补充「谁在做什么」。")
-
-    if extra.strip():
-        lines.append("")
-        lines.append("## 用户另外引用的内容（同样要照画）")
-        lines.append(extra.strip()[:400])
-
-    if last_ai:
-        lines.append("")
-        lines.append("## 她此刻正在做什么（正文）")
-        lines.append(last_ai[:600])
-        lines.append("")
-        lines.append("正文里**引号中的话**可以直接当台词用，但**不许改写她的台词、"
-                     "也不许替她编旁白**——旁白写什么见下面 `caption` 的规则。")
-
-    if state:
-        lines.append("")
-        lines.append("## 上一轮结束时的快照（**只作参考**）")
-        lines.append(state)
-        lines.append("")
-        lines.append("⚠️ 这条快照可能落后于上面的画面。"
-                     "它和「这一页的画面」冲突时，**以画面为准**。")
-
-    lines.append("")
-    lines.append("## 人物")
-    lines.append("- 女主角：%s。外观固定：%s" % (name, look or "按角色卡"))
-    lines.append("- 男主角：%s。他是读者本人，不要给他起名字、不要画脸特写。"
-                 % MALE_PROTAGONIST)
-
-    return "\n".join(lines)
 
 # 画面 / 服饰行正则见 text_utils。
 
