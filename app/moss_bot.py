@@ -105,9 +105,10 @@ import re
 import threading
 import time
 
-from app import (image_out, moss_api, moss_comic, moss_msgs,
+from app import (moss_api, moss_comic, moss_msgs,
                  moss_series as series_mod, qq_api, trigger)
 from app.config import QQ_AGENT_ID
+from app.features.image import out as image_out
 
 log = logging.getLogger("moss_bot")
 

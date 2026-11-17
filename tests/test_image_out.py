@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""app/image_out.py：对外发图前的两种副本（jpg / png）与回落。
+"""app/features/image/out.py：对外发图前的两种副本（jpg / png）与回落。
 
 两条底线都得钉住：jpg 那条转成功必须是目标格式、且不带 PNG 里的 tEXt 工作流
 元数据；转失败必须回落成 ComfyUI 原图 URL（图还得发得出去，不能卡在这一步）。
@@ -20,7 +20,7 @@ from unittest import mock
 
 from PIL import Image, PngImagePlugin
 
-from app import image_out
+from app.features.image import out as image_out
 
 
 def _png_bytes(with_meta=True, mode="RGB", size=(32, 32), color=None):

@@ -2022,11 +2022,12 @@ def _process_nai(job):
     if job.target is None:
         # NAI 仅限 QQ 群，正常走不到这里（generate_image 已挡 web）；保险起见
         # 仍把图落盘，网页侧可下载。job.entry 直接放文件路径。
-        from app import image_out
+        from app.features.image import out as image_out
         job.entry = {"images": [image_out.save_bytes(png, "png", "nai")]}
         return
     try:
-        from app import image_audit, image_out
+        from app import image_audit
+        from app.features.image import out as image_out
         path = image_out.save_bytes(png, "png", "nai")
         # 审核闸门。拦下时**不设 job.error**：图确实出出来了，只是没过审，
         # 而且 image_audit 已经回过一句提示了，再报错是重复。
@@ -3278,7 +3279,8 @@ def _send_image(target, target_id, filename, tag="", skill="", seed=None,
     ⚠️ 审核审的是 `prepare_for_send` 的产物（本地文件），也就是**真正要发出去
     的那份字节**，不是 ComfyUI 的原图。见 app/image_audit.py 的模块注释。
     """
-    from app import image_audit, image_out, qq_api
+    from app import image_audit, qq_api
+    from app.features.image import out as image_out
     from app.agents import image_send_format
     fmt = image_send_format(QQ_AGENT_ID, target, target_id)
     path = image_out.prepare_for_send(filename, fmt)

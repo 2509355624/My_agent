@@ -715,7 +715,7 @@ class SendHookTest(unittest.TestCase):
 
     def _send(self, allow):
         from app import image_jobs
-        with mock.patch("app.image_out.prepare_for_send",
+        with mock.patch("app.features.image.out.prepare_for_send",
                         return_value="D:/fake/out.jpg"), \
              mock.patch.object(image_jobs, "QQ_AGENT_ID", "qq"), \
              mock.patch("app.agents.image_send_format", return_value="jpg"), \

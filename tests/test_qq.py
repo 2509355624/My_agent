@@ -22,7 +22,7 @@ from unittest import mock
 
 import app.agents as agents
 import app.comfy_status as comfy_status
-import app.image_out as image_out
+from app.features.image import out as image_out
 import app.notify as notify
 import app.qq_api as qq_api
 import app.qq_bot as qq_bot

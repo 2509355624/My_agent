@@ -196,7 +196,7 @@ class LocalFileUrlTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
-        patcher = mock.patch("app.image_out._out_dir",
+        patcher = mock.patch("app.features.image.out._out_dir",
                              return_value=self.dir.name)
         patcher.start()
         self.addCleanup(patcher.stop)

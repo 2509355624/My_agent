@@ -465,7 +465,7 @@ def _local_image_path(url):
         return None
     from urllib.parse import unquote, urlparse
 
-    from app.image_out import _out_dir
+    from app.features.image.out import _out_dir
 
     path = unquote(urlparse(s).path or "")
     if re.match(r"^/[A-Za-z]:", path):   # Windows 的 file:///C:/x 解析出来是 /C:/x

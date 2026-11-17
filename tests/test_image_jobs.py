@@ -20,7 +20,7 @@ from app.features.image import log as image_log
 from app import nai
 from app import qq_api
 from app import skills
-from app import image_out
+from app.features.image import out as image_out
 from app.cancel import Cancelled
 from app.config import QQ_AGENT_ID
 from app.tools.normal import generate_image
@@ -1018,7 +1018,7 @@ class SendImageTest(unittest.TestCase):
         self.addCleanup(agents.clear_cache)
 
     def _capture(self, fmts, sent):
-        from app import image_out
+        from app.features.image import out as image_out
         return mock.patch.object(
             image_out, "prepare_for_send",
             lambda f, fmt="jpg": (fmts.append(fmt), "C:/tmp/y." + fmt)[1]), \
@@ -1047,7 +1047,7 @@ class SendImageTest(unittest.TestCase):
 
     def test_falls_back_to_comfy_url(self):
         """转换拉不到图时回落原图 URL，图照样发得出去。"""
-        from app import image_out
+        from app.features.image import out as image_out
 
         sent = []
         with mock.patch.object(image_out._session, "get",
@@ -1065,7 +1065,7 @@ class SendImageTest(unittest.TestCase):
         单独测；这一族的用例只关心**第一行**那条信息串（编号 · 分辨率 ·
         渠道 · seed），所以这里统一把附言关掉，免得断言里塞满整段文案。
         """
-        from app import image_out
+        from app.features.image import out as image_out
         sent = []
         return mock.patch.object(image_out, "prepare_for_send",
                                  lambda f, fmt="jpg": "C:/tmp/y.jpg"), \
@@ -1095,7 +1095,7 @@ class SendImageTest(unittest.TestCase):
 
     def test_caption_carries_size_and_skill(self):
         """编号后面跟分辨率、渠道——编号仍在前且原样（引用靠它被抠回来）。"""
-        from app import image_out
+        from app.features.image import out as image_out
         p1, p2, sent = self._capture_captions()
         with p1, p2, \
              mock.patch.object(image_out, "local_size", return_value="1024×1536"):
@@ -1106,7 +1106,7 @@ class SendImageTest(unittest.TestCase):
 
     def test_caption_survives_missing_size(self):
         """量不出分辨率（图读不出来 / 回落到 ComfyUI URL）时只少这一项，别多出空档。"""
-        from app import image_out
+        from app.features.image import out as image_out
         p1, p2, sent = self._capture_captions()
         with p1, p2, \
              mock.patch.object(image_out, "local_size", return_value=""):
@@ -1132,7 +1132,7 @@ class SendImageTest(unittest.TestCase):
         图片在同一条消息里，群友引用它时整行回到模型眼前，种子于是自己就回来了
         ——不依赖模型记不记得。
         """
-        from app import image_out
+        from app.features.image import out as image_out
         p1, p2, sent = self._capture_captions()
         with p1, p2, \
              mock.patch.object(image_out, "local_size", return_value="1024×1536"):
@@ -1146,7 +1146,7 @@ class SendImageTest(unittest.TestCase):
 
     def test_caption_writes_seed_zero(self):
         """0 是一个合法种子，不是「没传」——用 `if seed:` 判就把这张的种子弄丢了。"""
-        from app import image_out
+        from app.features.image import out as image_out
         p1, p2, sent = self._capture_captions()
         with p1, p2, \
              mock.patch.object(image_out, "local_size", return_value=""):
@@ -1168,7 +1168,7 @@ class SendImageTest(unittest.TestCase):
         NapCat 报 ENOENT，用户收到「图画好了，但没发出去（）。」。图本身
         一直好好的在 ComfyUI output 里，重取一次就能发出去。
         """
-        from app import image_out
+        from app.features.image import out as image_out
         paths = iter(["C:/tmp/first.jpg", "C:/tmp/second.jpg"])
         calls = []
 
@@ -1188,7 +1188,7 @@ class SendImageTest(unittest.TestCase):
 
     def test_other_send_errors_still_raise(self):
         """只有「文件没了」才重取。别的失败重取一遍也是白搭，照旧往上报。"""
-        from app import image_out
+        from app.features.image import out as image_out
         with mock.patch.object(image_out, "prepare_for_send",
                                lambda f, fmt="jpg": "C:/tmp/y.jpg"), \
              mock.patch.object(qq_api, "send_image",
@@ -1232,7 +1232,7 @@ class MissingFileTest(unittest.TestCase):
     """`image_out.missing_file_error` 只认「读不到文件」，不能把别的错也认进来。"""
 
     def test_recognizes_enoent(self):
-        from app import image_out
+        from app.features.image import out as image_out
         for text in ("ENOENT: no such file or directory, stat 'x.png'",
                      "No such file or directory",
                      "cannot find the file specified"):
@@ -1240,7 +1240,7 @@ class MissingFileTest(unittest.TestCase):
                 self.assertTrue(image_out.missing_file_error(RuntimeError(text)))
 
     def test_ignores_other_failures(self):
-        from app import image_out
+        from app.features.image import out as image_out
         for text in ("取图 404", "OneBot 调用失败 send_private_msg: "
                      "{'retcode': 1200}", "connection refused", ""):
             with self.subTest(text=text):

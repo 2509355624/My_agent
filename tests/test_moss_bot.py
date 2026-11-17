@@ -32,8 +32,9 @@ import tempfile
 import unittest
 from unittest import mock
 
-from app import (image_out, moss_api, moss_bot, moss_comic, moss_msgs,
+from app import (moss_api, moss_bot, moss_comic, moss_msgs,
                  moss_series, qq_api)
+from app.features.image import out as image_out
 
 
 class ParseTest(unittest.TestCase):
@@ -633,7 +634,7 @@ class ReceiptTest(unittest.TestCase):
 
     def test_missing_copy_is_refetched(self):
         """副本被外部清掉时重取一份再发，不许报「图画好了但发不出去」。"""
-        from app import image_out
+        from app.features.image import out as image_out
         paths = iter(["C:/tmp/a.png", "C:/tmp/b.png"])
         calls = []
 

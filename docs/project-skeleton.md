@@ -190,7 +190,7 @@ def run(job_id: str) -> None:
 | `chat` | `agent.py`、`agent_prompt.py`、`memory.py`、`longterm.py`、`llm.py`、`vision.py`、`search_agent.py`、`interject.py`、`chat_bg.py`、`confirm_gate.py`、`cancel.py` | 对话循环、提示词、记忆、模型路由 |
 | `chat` 迁移后 | `features/chat/background.py` 已接线；其余仍待迁 | 背景图先归位 |
 | `image` | `image_jobs.py`、`image_audit.py`、`image_log.py`、`image_migrate.py`、`image_out.py`、`image_quota.py`、`image_review.py`、`direct_gen.py`、`gen_api.py`、`gen_params.py`、`gen_steps.py`、`comfy_*.py`、`lora_*.py`、`anima_random.py`、`nai.py`、`outfit_api.py` | 生图、渠道、队列、审核、LoRA |
-| `image` 迁移后 | `features/image/log.py` 已接线；`image_jobs.py` 暂留根目录 | 编号账本；队列待拆 |
+| `image` 迁移后 | `features/image/log.py`、`out.py` 已接线；`image_jobs.py` 暂留根目录 | 编号账本、发图副本；队列待拆 |
 | `comic` | `comic*.py`、`moss_*.py`、`silver_comic.py` | 漫画、编剧、渲染、额度、作品 |
 | `persona` | `persona*.py`、`affection*.py`、`galgame.py`、`pregnancy.py`、`achievements.py`、`items.py` | 角色扮演、计费、记忆、查看台 |
 | `rag` | `rag/`、`rag_lab.py`、`rerank.py` | 文档问答、切片、检索、重排 |

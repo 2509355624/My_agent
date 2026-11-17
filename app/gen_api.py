@@ -39,7 +39,8 @@ import requests
 from flask import (Blueprint, Response, jsonify, request, send_file,
                    send_from_directory)
 
-from app import comic, comfy_out, image_jobs, image_out, lora_slots
+from app import comic, comfy_out, image_jobs, lora_slots
+from app.features.image import out as image_out
 from app import gen_params, gen_steps
 from app.cancel import Cancelled
 from app.config import COMFYUI_URL, NAI_API_KEY, WEB_DIR, state_path
