@@ -258,7 +258,7 @@ from app.features.persona import head_builder
 from app.features.persona import llm_bridge
 from app.features.persona import mood as _mood_store
 from app.features.persona import gameday
-from app.features.persona.wipe import erase as _erase
+from app.features.persona.wipe import clear, erase as _erase, wipe
 from app.features.persona.judge_fields import (
     NOTE_MAX_CHARS, _director_fields, _item_keys_text, _judge_ledger,
     _norm_finish,
@@ -666,35 +666,6 @@ def _migrate_persona_files(old_key, new_key):
                          os.path.basename(src), os.path.basename(dst))
             except OSError:
                 log.exception("分线迁移失败 %s", src)
-
-
-def clear(session_key):
-    """把这条线的记忆清干净，**保留当前角色**（网页端「清空记忆」按钮走这里）。
-
-    2026-11-05 起 QQ 侧**不再暴露成命令**（用户实测「清空」无确认直接删档，
-    不可接受）。QQ 的命令入口统一走 `wipe_request` 的两步确认；这个函数
-    只留给明确点了按钮的网页端。
-    """
-    name = _erase(session_key)
-    if name is None:
-        return "现在没有在演谁，没什么可清的。发「#角色名」挑一个吧。"
-    return "记忆清空了，就当今天第一次见面。还是%s，想换人就发「#角色名」。\n" % name
-
-
-def wipe(session_key):
-    """「清空存档」执行体：真删。
-
-    2026-11-04 用户拍板：老版本这里叫「重新开始」，但只清数值、聊天记忆留着，
-    玩家删完发现她还记得上周聊的，觉得「没惩罚」。所以改成真删，并且
-    改名「清空存档」+ 二次确认（见 `wipe_request`）。
-    """
-    name = _erase(session_key)
-    if name is None:
-        return None           # 没在演谁：当普通消息
-    return ("🚨 存档已删除。\n"
-            "你们的聊天记录、好感、关系进度、成就、连续天数全部清掉了，"
-            "一切回到这张卡的最初。\n"
-            "她还在这儿 —— 想继续就跟她说话，想换人发「#角色名」。")
 
 
 # ── 「清空存档」的两步确认（2026-11-04，2026-11-05 加引用闸门）─────
