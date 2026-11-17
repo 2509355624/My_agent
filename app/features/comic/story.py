@@ -26,7 +26,7 @@ import random
 import re
 import threading
 
-from app import llm
+from app.integrations import llm
 
 log = logging.getLogger("comic.story")
 

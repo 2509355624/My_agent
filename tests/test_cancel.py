@@ -18,7 +18,7 @@ import app.features.chat.agent as agent
 import app.core.cancel as cancel
 from app.features.image import comfy_status
 import app.config as config
-import app.llm as llm
+import app.integrations.llm as llm
 
 # comfy_status.snapshot 一律吃内存快照，任何路径都不走真网络
 # （状态栏已不再探测 ComfyUI，见 app/comfy_status 的模块注释）

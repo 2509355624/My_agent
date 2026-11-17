@@ -32,7 +32,8 @@ from app.config import (
 from app.features.persona import rag as persona_rag
 from app.features.image import comfy_out
 from app.gateways import friend_auth
-from app import (image_jobs, llm)
+from app.integrations import llm
+from app import (image_jobs)
 from app.features.image import audit as image_audit
 from app.features.showcase import prompts as showcase_prompts
 from app.tools.normal.generate_image import build_t2i_workflow

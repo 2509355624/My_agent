@@ -23,7 +23,7 @@ import app.main as main
 
 def _chain_all():
     """当前生效的全局降级链（.env 优先），[(pid, model), ...]。"""
-    from app.llm import parse_chain
+    from app.integrations.llm import parse_chain
     return parse_chain(main.LLM_FALLBACK_CHAIN)
 
 

@@ -1337,7 +1337,7 @@ def distill(turns, custom=None, card_name="角色", epoch=0, batch_id=""):
     prompt = _MEMORY_PROMPT.format(start=start, end=end,
                                    dialogue=_format_dialogue(turns, card_name),
                                    name=card_name or "角色")
-    from app import llm
+    from app.integrations import llm
     # 2026-11-09：后台线程要重建**同一条**扮演降级链。空列表也要挂上
     # （`[]` ≠ None）——没挂就会退回全局链，中转站闭站时提炼照样烧官方的钱。
     if custom is not None:

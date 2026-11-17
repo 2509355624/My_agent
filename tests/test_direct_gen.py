@@ -41,7 +41,7 @@ RECEIPT = image_jobs.RECEIPT_SENT_MARK + "回执"
 # 前置搜索（`_translate` 里的 search_agent）默认关掉。
 #
 # 为什么必须显式关：这些用例测的是**转译本身**，而搜索会给每次转译多打一次
-# LLM。更麻烦的是 search_agent 用的是同一个 `app.llm` 模块对象——用例里
+# LLM。更麻烦的是 search_agent 用的是同一个 `app.integrations.llm` 模块对象——用例里
 # `mock.patch.object(direct_gen.llm, "call_llm")` 会**连带把搜索那一路也
 # mock 掉**，返回 MagicMock 而不是字符串，parse_tool_calls 拿到它行为未定义。
 # 与其让每个用例各自处理，不如模块级统一关掉；要测搜索这一层的看
@@ -1261,7 +1261,7 @@ class RevisionPipelineTest(unittest.TestCase):
                         return_value=seen) as m_describe, \
              mock.patch.object(direct_gen.image_log, "lookup",
                                return_value=lookup_row), \
-             mock.patch("app.llm.call_llm",
+             mock.patch("app.integrations.llm.call_llm",
                         side_effect=describe_side_effect,
                         return_value=llm_reply or seen) as m_text, \
              mock.patch.object(gi, "_generate_image",
@@ -2091,7 +2091,7 @@ class QuotedComicTest(unittest.TestCase):
              mock.patch("app.integrations.vision.describe", return_value=seen), \
              mock.patch.object(direct_gen.image_log, "lookup",
                                return_value=None), \
-             mock.patch("app.llm.call_llm", return_value=seen), \
+             mock.patch("app.integrations.llm.call_llm", return_value=seen), \
              mock.patch.object(gi, "_generate_image",
                                return_value=RECEIPT) as m_gen, \
              mock.patch.object(gc, "_generate_comic",

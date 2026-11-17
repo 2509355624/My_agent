@@ -44,7 +44,7 @@ class WritePromptsTest(unittest.TestCase):
     """提示词员没交齐作业就报错重跑——不猜不补（用户拍板的哲学）。"""
 
     def _llm(self, text):
-        return mock.patch("app.llm.call_llm", return_value=text)
+        return mock.patch("app.integrations.llm.call_llm", return_value=text)
 
     def test_returns_n_lines(self):
         text = "\n".join("1girl, scene %d" % i for i in range(4))

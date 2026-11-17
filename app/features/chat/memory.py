@@ -25,7 +25,7 @@ import threading
 import time
 from app.core.agents import session_file as _agent_session_file
 from app.config import CONTEXT_BUDGET, CONTEXT_MAX_TURNS, physical_budget
-from app.llm import current_usage
+from app.integrations.llm import current_usage
 
 # 走 logging 而不是 print：print 落 stdout，被重定向/管道接管后是块缓冲，
 # 压缩、滚窗口这些诊断会「看起来丢了」。见 app/logsetup.py 模块说明。
@@ -237,7 +237,7 @@ def _summarize_old_turns(old_msgs, provider=None, model=None):
     agent 配的模型、压缩却打另一家的额度——实测症状是 agent 早已切到
     deepseek，一压缩就报火山的额度错误。
     """
-    from app.llm import call_llm
+    from app.integrations.llm import call_llm
 
     # 拼装摘要请求：只把旧内容交给模型，不混入新历史
     payload = [{

@@ -17,4 +17,5 @@ volc/     火山/豆包适配
 - 网络调用可注入超时/重试；测试用 fake，不连真实服务。
 
 状态：`vision.py`（原 `app/vision.py`，图片下载/嗅探/多模态描述/审核候选）已迁入
-并接线；`comfy_*`、`llm.py`、`nai.py`、`qq_api.py` 后续按调用方拆入。
+并接线；`llm/`（原 `app/llm.py`，provider 选择/降级链/流式/用量记账）已迁入
+`llm/__init__.py` 并接线；`comfy_*`、`nai.py`、`qq_api.py` 后续按调用方拆入。

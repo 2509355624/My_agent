@@ -68,7 +68,7 @@ import os
 import re
 import time
 
-from app import llm
+from app.integrations import llm
 from app.config import IMAGE_DEFAULT_SKILL, state_path
 
 log = logging.getLogger("card")

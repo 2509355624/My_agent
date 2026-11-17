@@ -14,7 +14,7 @@ import unittest
 from unittest import mock
 
 import app.config as config
-import app.llm as llm
+import app.integrations.llm as llm
 
 
 def _sse(*texts):

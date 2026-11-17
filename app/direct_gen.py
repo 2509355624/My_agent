@@ -79,7 +79,8 @@ import time
 
 from app.features.image import random_tags
 from app.features.qq import trigger
-from app import image_jobs, llm, qq_api
+from app.integrations import llm
+from app import (image_jobs, qq_api)
 from app.features.image import log as image_log
 from app.config import IMAGE_DEFAULT_SKILL, QQ_GROUP_KEYWORDS
 from app.features.chat.confirm_gate import _ATTRIBUTION_RE
@@ -2958,7 +2959,7 @@ def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):
         recent=recent,
         lang=_prompt_lang(channel or anchor_skill),
         text=text)
-    from app.llm import call_llm
+    from app.integrations.llm import call_llm
     from app.integrations.vision import describe
 
     def _ask_image(question):

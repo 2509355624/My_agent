@@ -66,8 +66,8 @@ from app.features.persona import items as _items
 from app.features.persona import writing_style
 from app.features.persona import writing_skills
 from app.features.qq import trigger
-from app import (affection,
-                   llm)
+from app.integrations import llm
+from app import (affection)
 from app.config import (BASE_DIR, PERSONA_MODEL, PERSONA_MODEL_DEFAULT,
                         PERSONA_MODELS, PERSONA_PROVIDER,
                         persona_model_of,

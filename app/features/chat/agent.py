@@ -8,7 +8,7 @@ import json
 import logging
 import re
 from app.core.cancel import is_cancelled
-from app.llm import (call_llm_stream, candidates, current_stream_meta,
+from app.integrations.llm import (call_llm_stream, candidates, current_stream_meta,
                      current_usage, get_effective_config)
 from app.core import agents
 from app.core import agents as agent_store

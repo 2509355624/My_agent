@@ -30,7 +30,7 @@ import time
 
 from app.config import BASE_DIR, PERSONA_MODEL, PERSONA_PROVIDER
 from app.config import PERSONA_RAG_MODEL
-from app import llm
+from app.integrations import llm
 
 log = logging.getLogger("lora_lib")
 

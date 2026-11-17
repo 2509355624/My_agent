@@ -27,7 +27,8 @@ from app.features.persona import billing as persona_billing
 from app.features.persona import writing_style
 from app.core import usage
 from app.gateways import friend_auth
-from app import (config, llm, persona)
+from app.integrations import llm
+from app import (config, persona)
 from app.features.chat import background as chat_bg
 
 log = logging.getLogger("persona_api")

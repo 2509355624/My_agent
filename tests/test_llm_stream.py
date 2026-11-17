@@ -18,7 +18,7 @@ import threading
 import unittest
 from unittest import mock
 
-import app.llm as llm
+import app.integrations.llm as llm
 from app.core import usage as usage_stats
 
 

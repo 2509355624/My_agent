@@ -17,7 +17,8 @@ localStorage，每轮聊天随请求带给后端，llm.set_custom_override 临�
 import unittest
 from unittest import mock
 
-from app import config, llm
+from app.integrations import llm
+from app import (config)
 
 _CFG = {"base_url": "https://my.relay/v1", "model": "my-model",
         "api_key": "sk-test-1234"}

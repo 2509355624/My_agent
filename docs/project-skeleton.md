@@ -215,7 +215,7 @@ def run(job_id: str) -> None:
 | `gateways` | `admin_app.py`、`friend_app.py` | 反代、登录、限流、CF 头 |
 | `gateways` 迁移后 | `gateways/guest.py`、`guest_view.py` 已接线；`admin_app.py`、`friend_app.py`、`friend_auth.py`、`admin_auth.py` 仍留根 | 访客会话/游客页/群友鉴权已归位，网关主入口待搬 |
 | `integrations` | `comfy_*`、`llm.py`、`vision.py`、`nai.py`、`qq_api.py` | 外部系统适配 |
-| `integrations` 迁移后 | `integrations/vision.py` 已接线（原 `app/vision.py`）；`comfy_*`、`llm.py`、`nai.py`、`qq_api.py` 仍待迁 | 识图/图片描述适配已归位，其余外部适配待拆 |
+| `integrations` 迁移后 | `integrations/vision.py`、`integrations/llm/` 已接线（原 `app/vision.py`、`app/llm.py`）；`comfy_*`、`nai.py`、`qq_api.py` 仍待迁 | 识图/图片描述、模型 provider/降级链/流式已归位，其余外部适配待拆 |
 | `persistence` | `agents.py`、`memory.py`、`longterm.py`、`job_ledger.py`、`recent.py`、`image_log.py` | JSON/SQL 存储 |
 | `workers` | `image_jobs.py`、`comic_delivery.py`、`watchdog.py` | 后台任务、看门狗 |
 | `workers` 迁移后 | `workers/watchdog.py` 已接线；`image_jobs.py`、`comic_delivery.py` 待迁 | 常驻守护已归位，启动命令改为 `python -m app.workers.watchdog` |

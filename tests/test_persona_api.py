@@ -13,7 +13,8 @@ import flask
 
 from app.core import agents
 from app.core import agents as agent_store
-from app import (llm, persona, persona_api)
+from app.integrations import llm
+from app import (persona, persona_api)
 
 QQ = "2509355624"
 

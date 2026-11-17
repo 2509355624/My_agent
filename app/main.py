@@ -665,7 +665,7 @@ def vision():
     走 deepseek 官方 deepseek-flash（官方文档验证支持图像理解），content 用块数组
     内联 data URL 图片。只分析讨论，绝不由 AI 自动重绘——重绘与否由用户决定。
     """
-    from app.llm import call_llm
+    from app.integrations.llm import call_llm
 
     data = request.get_json() or {}
     image = (data.get("image") or "").strip()
@@ -922,7 +922,7 @@ def _agent_detail(aid):
     """
     cfg = agent_store.agent_config(aid)
     raw = agent_store.agent_raw_config(aid)
-    from app.llm import parse_chain
+    from app.integrations.llm import parse_chain
     settings = get_llm_settings()
     chain = parse_chain(settings["fallback_chain"])
     default_model = PROVIDERS.get(settings["provider"], {}).get("model", MODEL)

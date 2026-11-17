@@ -4,7 +4,8 @@ import os
 import tempfile
 import unittest
 
-from app import llm as app_llm
+from app.integrations import llm
+from app.integrations import llm as app_llm
 from app.core.config import llm, runtime
 
 

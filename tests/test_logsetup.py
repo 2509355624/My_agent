@@ -97,14 +97,14 @@ class ModelCallLogTest(unittest.TestCase):
     """模型调用 / 降级 / 识图三条路都要留下可 grep 的行。"""
 
     def test_effective_model_is_logged_with_attempt(self):
-        from app import llm
+        from app.integrations import llm
         with self.assertLogs("llm", level="INFO") as cm:
             llm._log_effective({"provider": "volc", "model": "m1"},
                                stream=True, attempt=(1, 2))
         self.assertIn("[llm] volc / m1 stream [1/2]", cm.output[0])
 
     def test_blacklist_is_logged(self):
-        from app import llm
+        from app.integrations import llm
         saved = dict(llm._DEAD)
         self.addCleanup(lambda: (llm._DEAD.clear(), llm._DEAD.update(saved)))
         with self.assertLogs("llm", level="INFO") as cm:

@@ -2286,7 +2286,7 @@ class TemperatureTest(unittest.TestCase):
 
     def test_call_llm_accepts_temperature(self):
         import inspect
-        from app import llm
+        from app.integrations import llm
         sig = inspect.signature(llm.call_llm)
         self.assertIn("temperature", sig.parameters)
 

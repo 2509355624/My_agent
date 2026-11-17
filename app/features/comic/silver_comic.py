@@ -13,7 +13,8 @@ import logging
 import os
 import re
 
-from app import comic, llm
+from app.integrations import llm
+from app import (comic)
 
 log = logging.getLogger("comic.silver")
 

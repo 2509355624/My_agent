@@ -354,7 +354,7 @@ class SummaryModelPassthroughTest(unittest.TestCase):
             seen["provider"], seen["model"] = provider, model
             return "摘要"
 
-        with mock.patch("app.llm.call_llm", fake_call_llm):
+        with mock.patch("app.integrations.llm.call_llm", fake_call_llm):
             memory._summarize_old_turns([_msg("user", "旧")],
                                         provider="deepseek",
                                         model="deepseek-flash")

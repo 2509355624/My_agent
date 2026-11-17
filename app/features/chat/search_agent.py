@@ -58,7 +58,7 @@ cat=4 候选、「胡桃」18 个、「银狼」3 个，而朴素取第一个必
 import logging
 import re
 
-from app import llm
+from app.integrations import llm
 from app.features.chat.agent import parse_tool_calls, _strip_tool_blocks
 from app.tools.normal.search_tags import search_tags
 from app.tools.normal.web_search import tool as _web_search_tool

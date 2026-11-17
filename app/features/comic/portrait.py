@@ -71,7 +71,7 @@ def write_prompts(brief, heroine, n, provider=None, model=None, progress=None):
     条数不齐 = 没交齐作业：报 PortraitError 让上层提示重跑，**不猜不补**
     （用户 2026-10-12 拍板的哲学：代码只做检测，判断权留给 AI）。
     """
-    from app import llm
+    from app.integrations import llm
 
     n = max(1, min(MAX_SHOTS, int(n)))
     heroine = (heroine or "").strip() or "1girl"
