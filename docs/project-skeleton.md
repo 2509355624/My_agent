@@ -201,7 +201,7 @@ def run(job_id: str) -> None:
 | `chat` | `agent.py`、`agent_prompt.py`、`memory.py`、`longterm.py`、`llm.py`、`vision.py`、`search_agent.py`、`interject.py`、`chat_bg.py`、`confirm_gate.py`、`cancel.py` | 对话循环、提示词、记忆、模型路由 |
 | `chat` 迁移后 | `features/chat/background.py`、`longterm.py`、`recent.py`、`interject.py`、`confirm_gate.py`、`memory.py`、`agent_prompt.py`、`search_agent.py` 已接线；`agent.py`、`llm.py` 等仍待迁 | 背景图、长期记忆、近期窗口、主动插话、确认门、会话读写、系统提示词、联网搜索先归位；对话主循环/模型层待拆 |
 | `image` | `image_jobs.py`、`image_audit.py`、`image_log.py`、`image_migrate.py`、`image_out.py`、`image_quota.py`、`image_review.py`、`direct_gen.py`、`gen_api.py`、`gen_params.py`、`gen_steps.py`、`comfy_*.py`、`lora_*.py`、`anima_random.py`、`nai.py`、`outfit_api.py` | 生图、渠道、队列、审核、LoRA |
-| `image` 迁移后 | `features/image/` 的 `log/out/quota/audit/review/migrate/delivery/gen_steps/default_loras/comfy_status/comfy_launch/comfy_progress/comfy_out/job_ledger/random_tags/gen_params/char_guard/routes/outfit_api/output_api/comfy_gate/comfy_src/lora_lib/lora_presets/lora_slots/lora_bot/char_loras/anima_random/nai/direct_gen` 已接线；`image_jobs.py` 暂留根目录 | 编号账本、发图副本、额度、审核、复核、旧图迁移、caption 投递、步数/默认 LoRA、ComfyUI 状态/启动/进度/门禁/源目录、output 分流、任务台账、标签随机、参数规整、角色内容守卫、手动跑图接口、双图换装接口、输出文件接口、直接生图编排、LoRA 索引/预设/槽位/指令、角色 LoRA、ANIMA 随心配、NAI 渠道；队列仍待拆 |
+| `image` 迁移后 | `features/image/` 的 `log/out/quota/audit/review/migrate/delivery/gen_steps/default_loras/comfy_status/comfy_launch/comfy_progress/comfy_out/job_ledger/random_tags/gen_params/char_guard/routes/outfit_api/output_api/comfy_gate/comfy_src/lora_lib/lora_presets/lora_slots/lora_bot/char_loras/anima_random/nai/direct_gen/jobs/admin_routes` 已接线 | 编号账本、发图副本、额度、审核、复核、旧图迁移与二审接口、caption 投递、步数/默认 LoRA、ComfyUI 状态/启动/进度/门禁/源目录、output 分流、任务台账、标签随机、参数规整、角色内容守卫、手动跑图接口、双图换装接口、输出文件接口、直接生图编排、LoRA 索引/预设/槽位/指令、角色 LoRA、ANIMA 随心配、NAI 渠道、后台队列；`direct_gen` / `jobs` 内部仍待按用例再拆 |
 | `comic` | `comic*.py`、`moss_*.py`、`silver_comic.py` | 漫画、编剧、渲染、额度、作品 |
 | `comic` 迁移后 | `features/comic/` 的 `quota/thumb/prompt_suffix/delivery/portrait/story/render_opts/writer/moss_msgs/moss_prompt/moss_series/moss_api/moss_comic/moss_bot/silver_comic/soda_letter/routes` 已接线；漫画主流程暂留根目录 | 漫画额度、缩略图、提示词后缀、交付、头像、故事、渲染参数、编剧、Moss 消息/提示词/连载/接口/核心/机器人、漫画核心/Agent、Silver 编剧、Soda 排字、工作台接口；分镜/渲染再细分 |
 | `persona` | `persona*.py`、`affection*.py`、`galgame.py`、`pregnancy.py`、`achievements.py`、`items.py` | 角色扮演、计费、记忆、查看台 |
@@ -215,7 +215,7 @@ def run(job_id: str) -> None:
 | `qq` | `qq_api.py`、`qq_bot.py`、`qq_bill.py`、`qq_names.py`、`qq_status.py`、`friend_api.py`、`friend_site.py`、`guest*.py` | QQ 事件、账单、群友页内核 |
 | `qq` 迁移后 | `features/qq/bill.py`、`names.py`、`status.py`、`notify.py`、`stickers.py`、`trigger.py`、`play_bot.py`、`solo_bot.py`、`friend_site.py`、`friend_api.py`、`api.py` 已接线；`qq_bot.py` 暂留根目录 | QQ 账单、名字缓存、状态快照、掉线/扫码通知、表情收藏、触发词、互动页、群友站入口、群友生图接口、OneBot HTTP 调用/会话上下文；事件循环待拆 |
 | `admin` | `admin_site.py`、`usage.py`、`job_ledger.py`、`provider_store.py`、`model_catalog.py`、`agents.py`、`skills.py` | 用量、账本、预设、配置、后台 |
-| `admin` 迁移后 | `features/admin/site.py`、`routes.py` 已接线；`admin_auth.py` 仍在 core | 后台入口与 `/api/characters` |
+| `admin` 迁移后 | `features/admin/site.py`、`routes.py`、`agent_profile.py`、`image_settings.py`、`interject.py`、`common.py` 已接线；`admin_auth.py` 仍在 core | 后台入口、管理页数据、agent 详情/附言、生图与识图设置、会话插话/视觉模型设置；访问范围判断在 `core/admin_access.py` |
 | `gateways` | `admin_app.py`、`friend_app.py` | 反代、登录、限流、CF 头 |
 | `gateways` 迁移后 | `gateways/guest.py`、`guest_view.py` 已接线；`admin_app.py`、`friend_app.py`、`friend_auth.py`、`admin_auth.py` 仍留根 | 访客会话/游客页/群友鉴权已归位，网关主入口待搬 |
 | `integrations` | `comfy_*`、`llm.py`、`vision.py`、`nai.py`、`qq_api.py` | 外部系统适配 |
@@ -361,3 +361,23 @@ tests/
 - `compileall app` 通过。
 - `test_repo_layout` 通过。
 - 新目录有 README，接手的人能看懂“这个包负责什么、不负责什么”。
+
+---
+
+## 11. 本轮收敛结果（2026-11-17）
+
+`app/main.py` 已从 3,134 行降到约 1,075 行，仍保留 292 条路由不变：
+
+- 生图二审 / 旧图迁移 → `features/image/admin_routes.py`
+- 管理面 agent 详情 / 附言 → `features/admin/agent_profile.py`
+- 管理面生图 / 识图 / 私聊配额 → `features/admin/image_settings.py`
+- 管理面会话提示词 / 插话 / 视觉模型 → `features/admin/interject.py`
+- 静态页面入口 → `web/pages.py`
+- 角色卡池读写 → `features/persona/cards_api.py`
+- 文档库接口 → `features/rag/documents_api.py`
+- 访问范围判断 → `core/admin_access.py`；agent id 校验 → `core/agent_http.py`
+
+`app/` 根目录仍只有 4 个文件：`__init__.py`、`config.py`、`main.py`、`qq_bot.py`。
+仍未拆完的大文件：`features/persona/service.py`、`features/persona/affection.py`、
+`features/image/direct_gen.py`、`features/image/jobs.py`、`features/comic/agent.py`、
+`app/qq_bot.py`。这些文件当前冻结新增职责，后续按“读/写/后台/HTTP”继续分。
