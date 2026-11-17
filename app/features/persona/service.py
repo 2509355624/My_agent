@@ -188,7 +188,6 @@ TEMPERATURE = 1.05
 # 1000 字这一档性价比最好：记忆翻倍，token 只涨 5%。
 # 对照：今天生图链路（含编剧）实测单次约 3000~5000 token，
 # 所以「扮演一轮 ≈ 生图一次」这个用户定的目标是达成的。
-NOTE_MAX_CHARS = 1000
 NOTE_EVERY_TURNS = 5
 
 # 提示词里报给模型的字数，比硬上限留一成余量。
@@ -259,6 +258,10 @@ from app.features.persona import head_builder
 from app.features.persona import llm_bridge
 from app.features.persona import mood as _mood_store
 from app.features.persona import gameday
+from app.features.persona.judge_fields import (
+    NOTE_MAX_CHARS, _director_fields, _item_keys_text, _judge_ledger,
+    _norm_finish,
+)
 from app.features.persona.llm_bridge import REPLY_MAX_TOKENS
 from app.features.persona.head_builder import (
     _env_note, _guard_block, _note_block, _state_block,
@@ -1683,45 +1686,6 @@ INTENTS = {
 # 于是把摆好的东西当没发生。这里正面说清「就在这一幕眼前」，不动契约正文。
 
 
-def _director_fields(d):
-    """从第一段的 JSON 里取**事实**字段（2026-11-09 收窄）。
-
-    这里只剩事实：这一轮已经摆出来的东西（facts）、他这句是不是对着她说
-    （addressed）、他有没有藏着话（secret）、有没有内射（finish）、道具进出
-    （items）。
-
-    分段（说·做·想）、潜台词、她察觉到的、这一拍的态度、主动的勾子全部
-    不再由编剧产出——那五样都是「这一拍该怎么写」的判断，编剧只该记数值
-    和已经发生的事，写法交给写作层。
-    """
-    if not isinstance(d, dict):
-        return {"facts": [], "addressed": True, "secret": False,
-                "finish": "unknown", "items": None}
-    addressed = d.get("addressed", True)
-    if isinstance(addressed, str):
-        addressed = addressed.strip().lower() not in ("false", "0", "no", "否", "不")
-    else:
-        addressed = bool(addressed)
-    secret = d.get("secret")
-    if isinstance(secret, str):
-        secret = secret.strip().lower() in ("true", "1", "yes", "是")
-    return {
-        "facts": _parse_facts(d.get("facts")),
-        "addressed": addressed,
-        # 他说没说出口，是事实；内容不抄给演员（他看得见的是行为，不是心声）。
-        "secret": bool(secret),
-        # 怀孕（2026-11-05）：编剧判这一轮有没有内射。代码只在跨天时用。
-        "finish": _norm_finish(d.get("finish")),
-        # 道具（2026-11-08）：v1 / 自由模式也走这条路，透传出去。
-        "items": d.get("items") if isinstance(d.get("items"), dict) else None,
-    }
-
-
-def _norm_finish(value):
-    v = str(value or "").strip().lower()
-    return v if v in ("inside", "outside", "none", "unknown") else "unknown"
-
-
 # ── 射精选择（2026-11-05，用户拍板）────────────────────────
 #
 # 用户原话：「玩家他不需要自己去写，他只需要负责推动剧情就行了。女主来到
@@ -1909,30 +1873,6 @@ def _judge_recent(hist):
             continue
         lines.append("%s：%s" % (role, body[:300]))
     return "\n".join(lines) or "（还没有）"
-
-
-def _judge_ledger(note):
-    """给第一段看的长期账本。空账本就写「还没有」，别塞一个空标题。"""
-    text = str(note or "").strip()
-    return text[:NOTE_MAX_CHARS] if text else "（还没有）"
-
-
-
-def _item_keys_text():
-    """道具清单的 key 列表，给编剧挑 use 用。**只给 key，不给 prompt**。
-
-    写在提示词里的是「有哪些可选」，具体怎么写由 `app/items.py` 在
-    用到那一条时注入——这样十几样道具都进清单也只占一行。
-    """
-    try:
-        from app.features.persona import items as _items
-        rows = []
-        for key, it in (_items.all_items() or {}).items():
-            if isinstance(it, dict):
-                rows.append("%s=%s" % (key, it.get("name") or key))
-        return "、".join(rows) if rows else "（无）"
-    except Exception:                                     # noqa: BLE001
-        return "（无）"
 
 
 def _judge_intent(card, said, state="", history=None, note=""):
