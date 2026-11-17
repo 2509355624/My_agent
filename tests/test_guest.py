@@ -19,7 +19,8 @@ from unittest import mock
 
 import flask
 
-from app import guest, persona, persona_api
+from app.gateways import guest
+from app import persona, persona_api
 
 
 class GuestBase(unittest.TestCase):

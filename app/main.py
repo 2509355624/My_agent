@@ -3095,7 +3095,7 @@ def run():
     # **只报不删**——用户要自己手动清（原话：「我有时间也会自己去手动清洗」）。
     # 这里把超过 24 小时的目录点名出来，方便他按目录删。
     try:
-        from app import guest
+        from app.gateways import guest
         guest.log_status()
     except Exception:                              # noqa: BLE001
         logging.getLogger("main").exception("游客目录检查失败")

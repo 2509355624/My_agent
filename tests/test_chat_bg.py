@@ -15,7 +15,8 @@ import flask
 from PIL import Image
 from werkzeug.datastructures import FileStorage
 
-from app import agents, guest, persona, persona_api
+from app.gateways import guest
+from app import agents, persona, persona_api
 from app.features.admin import routes as persona_admin_api
 from app.features.chat import background as chat_bg
 

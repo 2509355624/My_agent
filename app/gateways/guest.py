@@ -42,7 +42,7 @@ import re
 import time
 import uuid as uuid_mod
 
-from .config import BASE_DIR
+from app.config import BASE_DIR
 
 log = logging.getLogger("guest")
 
@@ -62,7 +62,7 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 def _secret():
     """复用登录那套密钥。import 放在函数里，避免循环依赖。"""
-    from . import friend_auth
+    from app import friend_auth
     return friend_auth.secret()
 
 

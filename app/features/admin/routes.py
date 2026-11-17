@@ -32,7 +32,8 @@ from flask import Blueprint, Response, jsonify, request
 
 from app.features.persona import billing as persona_billing
 from app.features.persona import rag as persona_rag
-from app import (friend_auth, guest, persona)
+from app.gateways import guest
+from app import (friend_auth, persona)
 from app.features.chat import background as chat_bg
 from app.config import BASE_DIR
 
@@ -444,7 +445,7 @@ def admin_delete_card_background(cid):
 
 @bp.route("/api/persona_admin/admins")
 def api_admins():
-    from app import guest_view
+    from app.gateways import guest_view
     return jsonify({"ok": True, "ids": guest_view.list_admins()})
 
 
@@ -453,7 +454,7 @@ def api_add_admin():
     ok, why = _may_manage()
     if not ok:
         return _manage_denied(why)
-    from app import guest_view
+    from app.gateways import guest_view
     data = request.get_json(silent=True) or {}
     qq = str(data.get("qq") or "").strip()
     ids, err = guest_view.add_admin(qq)
@@ -467,7 +468,7 @@ def api_del_admin(qq):
     ok, why = _may_manage()
     if not ok:
         return _manage_denied(why)
-    from app import guest_view
+    from app.gateways import guest_view
     return jsonify({"ok": True, "ids": guest_view.remove_admin(qq)})
 
 

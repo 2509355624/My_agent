@@ -10,4 +10,6 @@
 - 新增接口必须登记限流桶；缺条目会让 `rate_ok()` 抛 `KeyError`。
 - 不 import feature 内部文件；需要业务结果时走 HTTP 反代或对方 `service.py`。
 
-状态：空包，未接线。现有 `admin_app.py`、`friend_app.py` 暂留根目录，后续搬入。
+状态：`guest.py`（原 `app/guest.py`，访客会话/名额）、`guest_view.py`（原
+`app/guest_view.py`，游客页渲染）已迁入并接线；`admin_app.py`、`friend_app.py`、
+`friend_auth.py`、`admin_auth.py` 仍暂留根目录，后续搬入。

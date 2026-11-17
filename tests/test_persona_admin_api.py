@@ -10,7 +10,8 @@ from unittest import mock
 
 import flask
 
-from app import agents, guest, persona
+from app.gateways import guest
+from app import agents, persona
 from app.features.admin import routes as persona_admin_api
 
 

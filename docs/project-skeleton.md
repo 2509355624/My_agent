@@ -213,6 +213,7 @@ def run(job_id: str) -> None:
 | `admin` | `admin_site.py`、`usage.py`、`job_ledger.py`、`provider_store.py`、`model_catalog.py`、`agents.py`、`skills.py` | 用量、账本、预设、配置、后台 |
 | `admin` 迁移后 | `features/admin/site.py`、`routes.py` 已接线；`admin_auth.py` 仍在 core | 后台入口与 `/api/characters` |
 | `gateways` | `admin_app.py`、`friend_app.py` | 反代、登录、限流、CF 头 |
+| `gateways` 迁移后 | `gateways/guest.py`、`guest_view.py` 已接线；`admin_app.py`、`friend_app.py`、`friend_auth.py`、`admin_auth.py` 仍留根 | 访客会话/游客页已归位，网关主入口与鉴权待搬 |
 | `integrations` | `comfy_*`、`llm.py`、`vision.py`、`nai.py`、`qq_api.py` | 外部系统适配 |
 | `integrations` 迁移后 | `integrations/vision.py` 已接线（原 `app/vision.py`）；`comfy_*`、`llm.py`、`nai.py`、`qq_api.py` 仍待迁 | 识图/图片描述适配已归位，其余外部适配待拆 |
 | `persistence` | `agents.py`、`memory.py`、`longterm.py`、`job_ledger.py`、`recent.py`、`image_log.py` | JSON/SQL 存储 |

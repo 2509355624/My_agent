@@ -316,7 +316,7 @@ def _qq():
 
 def _guest_id():
     """取游客 id；没有就当场签一个。返回 (裸 uuid, 需要下发的 cookie 值)。"""
-    from app import guest
+    from app.gateways import guest
     raw = request.cookies.get(GUEST_COOKIE) or ""
     uid = guest.check_id(raw)
     if uid:
@@ -771,7 +771,7 @@ def _guest_sweep():
     """
     import os
     import time
-    from app import guest as G
+    from app.gateways import guest as G
     now = time.time()
     state = persona._load_state()                         # noqa: SLF001
     stale = []
@@ -813,7 +813,7 @@ def _guest_session(uid, token):
     只多 `remaining` / `limit` 两个字段——30 轮上限保留（用户拍板），
     到顶后前端锁输入框引导登录。固定学妹、默认自由模式。
     """
-    from app import guest
+    from app.gateways import guest
     ckey = _guest_line(uid)
     if ckey is None:
         return jsonify({"ok": False, "error": "没有可用角色"}), 500
@@ -1328,7 +1328,7 @@ def _guest_chat(text, uid, token, manual=None, writing=None):
     直接走 `persona.run_turn` 主引擎，和登录用户同一套打分/注入/归档；
     差别只剩三样：**一律自由模式**、固定学妹、30 轮上限（不能出图/删档）。
     """
-    from app import guest
+    from app.gateways import guest
 
     _guest_sweep()                          # 顺手清过期线，量级很小
     ckey = _guest_line(uid)
@@ -1397,7 +1397,7 @@ def skip_day_api():
     try:
         role, who, token = _who()
         if role == "guest":
-            from app import guest
+            from app.gateways import guest
 
             _guest_sweep()
             ckey = _guest_line(who)
@@ -1493,7 +1493,7 @@ def set_phase_api():
                             "error": "时段只能是早晨/中午/下午/晚上"}), 400
         role, who, token = _who()
         if role == "guest":
-            from app import guest
+            from app.gateways import guest
 
             _guest_sweep()
             ckey = _guest_line(who)
@@ -1569,7 +1569,7 @@ def rollback_api():
     """
     role, who, token = _who()
     if role == "guest":
-        from app import guest
+        from app.gateways import guest
 
         _guest_sweep()
         ckey = _guest_line(who)

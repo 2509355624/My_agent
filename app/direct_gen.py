@@ -3244,7 +3244,7 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         # 还要用 `qq_api.current_session_key()`，函数内 import 会把它变成局部名，
         # 在那之前访问就是 UnboundLocalError（2026-11-08 实测，私聊发指令直接炸）。
         # 用别名，不碰外面的同名符号。
-        from app import guest_view as _gv
+        from app.gateways import guest_view as _gv
         from app import qq_api as _qqapi
         try:
             sender = str(_qqapi.current_sender_uin() or "")
