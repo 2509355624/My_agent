@@ -13,7 +13,9 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import comic, comic_api, comic_portrait, main
+from app.features.comic import routes as comic_api
+from app.features.comic import portrait as comic_portrait
+from app import comic, main
 
 
 def _touch(path, data=b"x"):

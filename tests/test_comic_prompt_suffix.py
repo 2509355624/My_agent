@@ -20,7 +20,8 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.features.comic import prompt_suffix as comic_prompt_suffix
-from app import comic, comic_api, main
+from app.features.comic import routes as comic_api
+from app import comic, main
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -277,7 +278,7 @@ class PageTest(unittest.TestCase):
                              "%s 定义了不止一次" % name)
 
     def test_backend_docstring_lists_the_routes(self):
-        with open(os.path.join(_ROOT, "app", "comic_api.py"),
+        with open(os.path.join(_ROOT, "app", "features", "comic", "routes.py"),
                   encoding="utf-8") as f:
             src = f.read()
         self.assertIn("/api/comic/prompt_suffix", src)

@@ -26,8 +26,9 @@ from flask import Flask
 from app.features.comic import quota as comic_quota
 from app.features.comic import delivery as comic_delivery
 from app.features.comic import thumb as comic_thumb
-from app import (comic, comic_api,
-                 comic_render_opts, friend_auth, main)
+from app.features.comic import routes as comic_api
+from app.features.comic import render_opts as comic_render_opts
+from app import (comic, friend_auth, main)
 
 SECRET = "unit-test-friend-secret"
 QQ = "123456"
@@ -841,7 +842,7 @@ class TestFriendPageFromMaster(unittest.TestCase):
 
     def test_后端只有整批加气泡才发zip(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        with open(os.path.join(root, "app", "comic_api.py"), encoding="utf-8") as f:
+        with open(os.path.join(root, "app", "features", "comic", "routes.py"), encoding="utf-8") as f:
             api = f.read()
         with open(os.path.join(root, "app", "features", "comic",
                                "delivery.py"), encoding="utf-8") as f:

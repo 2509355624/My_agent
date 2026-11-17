@@ -26,7 +26,7 @@ from app.features.qq import bill as qq_bill
 # 写成 `from app import vision` 会在调用处炸 AttributeError:
 # 'function' object has no attribute 'default_prompt'。
 from app import vision as vision_mod
-from app import comic_api
+from app.features.comic import routes as comic_api
 from app.features.comic import moss_api
 from app import gen_api
 from app import friend_api

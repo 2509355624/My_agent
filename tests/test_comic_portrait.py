@@ -8,8 +8,8 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import comic_portrait
-from app.comic_portrait import PortraitError
+from app.features.comic import portrait as comic_portrait
+from app.features.comic.portrait import PortraitError
 
 
 # ─── 提示词解析 ───────────────────────────────────────
