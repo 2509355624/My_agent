@@ -12,7 +12,7 @@ import unittest
 
 from flask import Flask
 
-from app import output_api
+from app.features.image import output_api
 
 
 class NaturalKeyTest(unittest.TestCase):

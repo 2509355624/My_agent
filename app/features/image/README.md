@@ -21,6 +21,7 @@
 `anima_random.py`（ANIMA 随心配）、`nai.py`（NAI 渠道）、
 `random_tags.py`（标签随机）、`gen_params.py`（参数规整）、`char_guard.py`
 （角色提示词内容守卫）、`routes.py`（原 `gen_api.py`，手动跑图台 Blueprint）、
-`outfit_api.py`（双图换装/换姿势 Blueprint）已迁入并接线；
+`outfit_api.py`（双图换装/换姿势 Blueprint）、`output_api.py`（原 `app/output_api.py`，
+输出文件/缩略图接口）已迁入并接线；
 `image_jobs.py` 仍留在根目录，测试直接 patch 它的队列/ComfyUI 内部函数，硬拆前
 要先定测试兼容策略。
