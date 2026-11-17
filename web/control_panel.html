@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>服务控制台</title>
+<style>
+:root{
+  --bg:#0f1011;
+  --panel:#17181a;
+  --tile:#1d1e21;
+  --line:rgba(255,255,255,.09);
+  --text:#ededed;
+  --muted:#8b8d93;
+  --accent:#f3b35f;
+  --green:#4cc38a;
+  --yellow:#e0b341;
+  --red:#e5484d;
+}
+*{box-sizing:border-box}
+html,body{min-height:100%}
+body{
+  margin:0;padding:24px;background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+  display:grid;place-items:center;
+}
+.shell{
+  width:min(92vw,760px);aspect-ratio:1/1;background:var(--panel);
+  border:1px solid var(--line);border-radius:18px;padding:20px;
+  display:grid;grid-template-rows:auto 1fr auto;gap:16px;
+  box-shadow:0 16px 48px rgba(0,0,0,.28);
+}
+header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+h1{margin:0;font-size:22px;line-height:1.2;font-weight:600;letter-spacing:-.01em}
+.summary{margin:6px 0 0;color:var(--muted);font-size:12px;line-height:1.4}
+.head-actions{display:flex;gap:8px;flex:0 0 auto}
+button{
+  border:1px solid var(--line);background:var(--tile);color:var(--text);
+  border-radius:8px;padding:8px 12px;font:inherit;font-size:12px;
+  cursor:pointer;transition:background .16s,border-color .16s,color .16s;
+}
+button:hover{border-color:rgba(255,255,255,.2);background:#242529}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button:disabled{opacity:.5;cursor:default}
+button.primary{background:var(--accent);border-color:var(--accent);color:#15100a;font-weight:600}
+button.ghost{background:transparent;color:var(--muted)}
+button.ghost:hover{color:var(--text)}
+.grid{
+  display:grid;grid-template-columns: repeat(3,minmax(0,1fr));
+  grid-template-rows:repeat(3,minmax(0,1fr));gap:10px;min-height:0;
+}
+.tile{
+  min-height:0;padding:12px;border:1px solid var(--line);border-radius:12px;
+  background:var(--tile);display:flex;flex-direction:column;justify-content:space-between;gap:8px;
+}
+.tile.status-green{border-color:rgba(76,195,138,.28)}
+.tile.status-yellow{border-color:rgba(224,179,65,.3)}
+.tile.status-red{border-color:rgba(229,72,77,.25)}
+.tile-top{display:flex;align-items:center;gap:8px;min-width:0}
+.dot{width:8px;height:8px;border-radius:50%;flex:0 0 8px;background:var(--muted)}
+.status-green .dot{background:var(--green)}
+.status-yellow .dot{background:var(--yellow)}
+.status-red .dot{background:var(--red)}
+.tile-name{font-size:14px;font-weight:600;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile-port{margin-left:auto;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;flex:0 0 auto}
+.tile-state{font-size:18px;line-height:1.1;font-weight:600;letter-spacing:-.01em}
+.status-green .tile-state{color:var(--green)}
+.status-yellow .tile-state{color:var(--yellow)}
+.status-red .tile-state{color:var(--red)}
+.tile-detail{
+  color:var(--muted);font-size:11px;line-height:1.45;min-height:2.9em;
+  overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+}
+.tile-actions{display:flex;gap:6px}
+.tile-actions button{flex:1;padding:7px 8px;border-radius:7px}
+footer{display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:11px;line-height:1.4}
+@media(max-width:720px){
+  body{padding:12px;display:block}
+  .shell{width:100%;aspect-ratio:auto;min-height:calc(100vh - 24px);padding:16px;border-radius:14px}
+  h1{font-size:20px}
+  .grid{grid-template-columns:1fr;grid-template-rows:none;overflow:auto;padding-right:2px}
+  .tile{min-height:104px}
+  .tile-detail{-webkit-line-clamp:3}
+  footer{flex-direction:column;gap:4px}
+}
+@media(max-width:420px){
+  .head-actions{flex-direction:column}
+  .head-actions button{width:100%}
+}
+</style>
+</head>
+<body>
+<main class="shell">
+  <header>
+    <div>
+      <h1>服务控制台</h1>
+      <p id="summary" class="summary">连接中</p>
+    </div>
+    <div class="head-actions">
+      <button id="restart-all" type="button">全部重启</button>
+    </div>
+  </header>
+
+  <section id="grid" class="grid" aria-live="polite"></section>
+
+  <footer>
+    <span id="updated">--</span>
+    <span>绿=运行 · 黄=重启/等待 · 红=停止</span>
+  </footer>
+</main>
+
+<script>
+const TOKEN = "__CONTROL_TOKEN__";
+const grid = document.getElementById('grid');
+const summary = document.getElementById('summary');
+const updated = document.getElementById('updated');
+const restartAll = document.getElementById('restart-all');
+let inFlight = false;
+
+function esc(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+function uptimeText(seconds) {
+  const s = Number(seconds) || 0;
+  if (s <= 0) return '刚刚';
+  if (s < 60) return s + ' 秒';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + ' 分钟';
+  const h = Math.floor(m / 60);
+  return h + ' 小时 ' + (m % 60) + ' 分';
+}
+
+function tile(service) {
+  const status = esc(service.color);
+  const busy = service.status === 'starting' || service.status === 'restarting' || service.status === 'stopping';
+  const stopped = service.status === 'stopped' || service.status === 'error';
+  let primary = stopped ? '启动' : '重启';
+  if (service.status === 'starting') primary = '启动中';
+  if (service.status === 'restarting') primary = '重启中';
+  if (service.status === 'stopping') primary = '停止中';
+  const port = service.port ? esc(service.port) : '进程';
+  const detail = service.pid ? ('PID ' + esc(service.pid) + ' · ' + uptimeText(service.uptime)) : esc(service.detail);
+  const secondary = stopped || busy ? '' :
+    '<button type="button" class="ghost" data-action="stop" data-id="' + esc(service.id) + '">停止</button>';
+  return '<article class="tile status-' + status + '">' +
+    '<div class="tile-top"><span class="dot"></span><span class="tile-name">' + esc(service.name) + '</span><span class="tile-port">' + port + '</span></div>' +
+    '<div class="tile-state">' + esc(service.label) + '</div>' +
+    '<div class="tile-detail">' + detail + '</div>' +
+    '<div class="tile-actions">' +
+      '<button type="button" class="primary" data-action="' + (stopped ? 'start' : 'restart') + '" data-id="' + esc(service.id) + '"' + (busy ? ' disabled' : '') + '>' + primary + '</button>' +
+      secondary +
+    '</div>' +
+  '</article>';
+}
+
+function render(data) {
+  const list = data.services || [];
+  grid.innerHTML = list.map(tile).join('');
+  const s = data.summary || {};
+  summary.textContent = '运行 ' + (s.green || 0) + ' · 等待 ' + (s.yellow || 0) + ' · 停止 ' + (s.red || 0) + ' / 共 ' + (s.total || list.length);
+  const d = new Date();
+  updated.textContent = '更新 ' + d.toLocaleTimeString('zh-CN', {hour12: false});
+}
+
+async function getStatus() {
+  if (inFlight) return;
+  inFlight = true;
+  try {
+    const r = await fetch('/api/status', {headers: {'X-Control-Token': TOKEN}});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    render(await r.json());
+  } catch (e) {
+    summary.textContent = '控制台未连接：' + e.message;
+  } finally {
+    inFlight = false;
+  }
+}
+
+async function act(id, action) {
+  const r = await fetch('/api/services/' + encodeURIComponent(id) + '/' + action, {
+    method: 'POST', headers: {'X-Control-Token': TOKEN}
+  });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  await getStatus();
+}
+
+grid.addEventListener('click', function (event) {
+  const button = event.target.closest('button[data-action]');
+  if (!button) return;
+  button.disabled = true;
+  act(button.dataset.id, button.dataset.action).catch(function (e) {
+    button.disabled = false;
+    summary.textContent = '操作失败：' + e.message;
+  });
+});
+
+restartAll.addEventListener('click', async function () {
+  restartAll.disabled = true;
+  try {
+    const r = await fetch('/api/all/restart', {
+      method: 'POST', headers: {'X-Control-Token': TOKEN}
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    await getStatus();
+  } catch (e) {
+    summary.textContent = '操作失败：' + e.message;
+  } finally {
+    setTimeout(function () { restartAll.disabled = false; }, 1200);
+  }
+});
+
+getStatus();
+setInterval(getStatus, 1500);
+</script>
+</body>
+</html>

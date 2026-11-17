@@ -6,6 +6,9 @@ requests>=2.28
 python-dotenv>=1.0
 duckduckgo-search>=5.0,<9
 
+# 服务控制台（app/features/control）：按 PID/进程树管服务，不靠窗口标题。
+psutil>=5.9
+
 # ComfyUI 采样进度监听（app/comfy_progress.py）：拉 /ws 收 progress 消息，
 # 用来发现「每步几秒」的降级——内存吃干后 50 步能从 1.5 s/it 掉到 48 s/it。
 # 没装也能跑，只是这段保护自动失效（那个模块整体 try/except 掉了）。
