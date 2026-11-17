@@ -24,8 +24,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from flask import Flask
 
 from app.features.comic import quota as comic_quota
+from app.features.comic import delivery as comic_delivery
 from app.features.comic import thumb as comic_thumb
-from app import (comic, comic_api, comic_delivery,
+from app import (comic, comic_api,
                  comic_render_opts, friend_auth, main)
 
 SECRET = "unit-test-friend-secret"
@@ -842,7 +843,8 @@ class TestFriendPageFromMaster(unittest.TestCase):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         with open(os.path.join(root, "app", "comic_api.py"), encoding="utf-8") as f:
             api = f.read()
-        with open(os.path.join(root, "app", "comic_delivery.py"), encoding="utf-8") as f:
+        with open(os.path.join(root, "app", "features", "comic",
+                               "delivery.py"), encoding="utf-8") as f:
             dv = f.read()
         self.assertIn('finish="notify"', api)
         self.assertIn('finish="send" if no == "all" else None', api)
