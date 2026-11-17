@@ -41,8 +41,9 @@ app/core/config/
 | `web.py` | `AGENT_PORT`、`ADMIN_ALLOW_REMOTE*`、`_parse_gallery_roots`、`GALLERY_*`、`WORKSHOP_HTML` |
 | `card.py` | `BUILTIN_CARD_IDS` |
 | `qq.py` | `QQ_*`、`NOTIFY_*`、`WEBUI_PORT` |
+| `watchdog.py` | `WATCHDOG_SILENCE_*`、`WATCHDOG_COMFY_ENABLED` |
 | `persona.py` | 角色扮演模型白名单与 `persona_model_ids` / `persona_model_of` |
-| `runtime.py` | `MAX_TURNS`、`CONTEXT_BUDGET`、`CONTEXT_MAX_TURNS`、`MEMORY_*`、`WEB_SEARCH_MAX_CHARS`、`WATCHDOG_*` |
+| `runtime.py` | `MAX_TURNS`、`CONTEXT_BUDGET`、`CONTEXT_MAX_TURNS`、`MEMORY_*`、`WEB_SEARCH_MAX_CHARS` |
 
 `DEFAULT_AGENT_ID` 归 `runtime.py` 或 `paths.py`，按调用方复核。
 

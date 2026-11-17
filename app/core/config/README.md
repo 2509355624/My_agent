@@ -13,6 +13,7 @@ import，未搬完的配置域暂时由 `__init__.py` 的惰性 `__getattr__` �
 | `web.py` | 主站端口、管理接口访问范围、画廊根目录、提示词工坊入口 |
 | `card.py` | 内置角色卡保护名单 |
 | `qq.py` | QQ 接入地址/令牌、协议端 WebUI 端口、触发规则、名单、并发/超时、回复切分、主动接话、长期记忆、掉线通知 |
+| `watchdog.py` | 静默判据、静默重启节奏、ComfyUI 看门狗分支总闸 |
 | `llm.py` | provider/模型表、降级链、请求超时、重试、TTL、`get_llm_settings`、`validate_llm_patch`、`update_llm_settings` |
 | `runtime.py` | 非密钥运行期设置 JSON；`AGENT_RUNTIME_SETTINGS` 可覆盖路径；mtime 缓存、原子写 |
 | `__init__.py` | 显式导出已拆域；未搬完的名字惰性回落旧 `app.config` |
@@ -23,6 +24,7 @@ import，未搬完的配置域暂时由 `__init__.py` 的惰性 `__getattr__` �
 - `runtime.py` 只存非密钥、可热更新的设置；密钥仍留在 `.env`。
 - `.env` 只放启动前必须知道的密钥/端口/进程拓扑；密钥文件不提交 Git。
 - `qq.py` 只读 `QQ_TOKEN` / `PUSHPLUS_TOKEN` 的环境变量，不写入任何令牌值。
+- `watchdog.py` 只服务 `app/watchdog.py`，不混入 QQ 接入配置。
 - 新增配置先判断属于哪个域，不要继续往旧 `app/config.py` 堆。
 - 管理页通过 `GET/PUT /api/llm/settings` 读写 LLM 运行期设置，落盘后下一次
   请求即生效，不需要重启进程。
