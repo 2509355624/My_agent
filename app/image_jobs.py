@@ -172,7 +172,8 @@ import time
 
 import requests
 
-from app import comfy_gate, comfy_launch, comfy_out, comfy_progress
+from app.features.image import comfy_launch
+from app import comfy_gate, comfy_out, comfy_progress
 from app.features.image import log as image_log
 from app.features.image.delivery import (
     _caption, _caption_note_text, _send_image, caption_note_default)

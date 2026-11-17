@@ -105,7 +105,8 @@ try:
 except ImportError:  # 非 Windows 上退化成无锁（本项目不会走到这）
     msvcrt = None
 
-from app import comfy_launch, notify
+from app.features.image import comfy_launch
+from app import notify
 from app.config import (BASE_DIR, COMFYUI_PYTHON, COMFYUI_ROOT,
                         NOTIFY_QRCODE_PATH, WEBUI_PORT,
                         WATCHDOG_COMFY_ENABLED,

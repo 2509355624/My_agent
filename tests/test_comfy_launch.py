@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from app import comfy_launch
+from app.features.image import comfy_launch
 
 
 class LaunchArgsTest(unittest.TestCase):
