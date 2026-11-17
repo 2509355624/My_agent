@@ -267,6 +267,10 @@ from app.features.persona.contract import (
 
 from app.features.persona import state_store
 from app.features.persona import history_store
+from app.features.persona.lines import (
+    SLOT_MAX, _card_key_slot, _persona_key, _slot_suffix,
+    card_key, card_slot_of,
+)
 from app.features.persona.story import (
     STORY_MAX_CHARS, _clip_items, _ledger_section,
     _shares_phrase, story_line,
@@ -1033,23 +1037,6 @@ def _migrate_persona_files(old_key, new_key):
                 log.exception("分线迁移失败 %s", src)
 
 
-def _persona_key(session_key, sender_uin=""):
-    """扮演态的状态键。**群里按人隔离，私聊不隔离。**
-
-    2026-11-02：群聊放开之前，状态是整条会话线一份（`group_<群号>`）——群里
-    A 把好感刷到 50、B 进来看到的就是恋人关系，历史也混在一起，模型分不清
-    谁在说话。所以群里改成 `group_<群号>_<QQ号>`，每人一条独立的线和档案；
-    私聊本来就是一对一，`private_<QQ号>` 已经是隔离的，不用再加一层。
-
-    拿不到对方 QQ 号时退回原键（宁可大家共用一条，也好过整轮不演）。
-    """
-    key = str(session_key or "")
-    uid = str(sender_uin or "").strip()
-    if not uid or not key.startswith("group_"):
-        return key
-    return key + "_" + uid
-
-
 def _erase(session_key):
     """把这条线的存档整份抹掉，**保留角色卡本身**。
 
@@ -1311,71 +1298,6 @@ def active_card(session_key):
     if not cid:
         return None
     return get_card(cid)
-
-
-def card_key(session_key, card_id=""):
-    """「这个人 × 这个角色」的会话键（2026-11-03 用户要求）。
-
-    用户原话：「选择其他的角色就是另一个会话了，就是相同 QQ 账号的其他
-    角色的会话」。
-
-    所以一条线的身份是 `(会话线, 角色)`，不是只有会话线。
-
-        web_2509355624            + izumi_sagiri → web_2509355624__izumi_sagiri
-        web_2509355624            + rem          → web_2509355624__rem
-        private_2509355624        + asuna        → private_2509355624__asuna
-
-    分隔符用 `__`（双下划线）：`_SAFE_KEY` 允许它，而且不会和现有的
-    `group_<群号>_<QQ>` 撞（那是一个下划线）。
-
-    `card_id` 为空时返回原键——没选角色就没有「按角色分」这回事。
-    """
-    return _card_key_slot(session_key, card_id, 0)
-
-
-# 每张卡最多几个存档（2026-11-08 用户拍板：3 个）。
-# slot 0 是**老存档**，key 不带后缀——加这一列之前的所有线都在 slot 0，
-# 不能因为新功能让老档读不到。
-SLOT_MAX = 3
-
-
-def _slot_suffix(slot):
-    """slot 0 → 空串（老 key 原样）；1/2 → `_s1` / `_s2`。
-
-    分隔符只能从 `_SAFE_KEY`（`[A-Za-z0-9_-]`）里挑，`#` `~` 会被判非法，
-    所以用下划线。`_s<数字>` 也不会和卡 id 撞（卡 id 里没有 `_s` 开头段）。
-    """
-    try:
-        n = int(slot or 0)
-    except (TypeError, ValueError):
-        n = 0
-    n = max(0, min(SLOT_MAX - 1, n))
-    return "" if n == 0 else "_s%d" % n
-
-
-def _card_key_slot(session_key, card_id, slot=0):
-    k = str(session_key or "")
-    cid = str(card_id or "").strip()
-    if not cid or not k:
-        return k
-    sfx = _slot_suffix(slot)
-    # 已经带过了就不要再叠（幂等）；带 slot 时后缀也要一起比，
-    # 否则 `web_x__card_s1` 会被再叠一层变成 `..._s1__card_s1`
-    if k.endswith("__" + cid + sfx):
-        return k
-    return k + "__" + cid + sfx
-
-
-def card_slot_of(key, card_id=""):
-    """反查一个线键是这张卡的第几个存档。读不出来当 0（老档）。"""
-    k = str(key or "")
-    cid = str(card_id or "").strip()
-    if not cid or not k:
-        return 0
-    for n in range(SLOT_MAX - 1, 0, -1):
-        if k.endswith("__" + cid + "_s%d" % n):
-            return n
-    return 0
 
 
 def resolve_line(session_key):
