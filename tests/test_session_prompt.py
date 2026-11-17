@@ -124,7 +124,7 @@ class SessionPromptGateTest(unittest.TestCase):
         agents.save_settings("qq", {"session_prompts":
                                     {"group_1": "换成新规则DEF"}})
         self.assertTrue(qq_bot._sync_session_head("group_1", "qq"))
-        from app.memory import peek_system
+        from app.features.chat.memory import peek_system
         head = peek_system("qq", "group_1")
         self.assertIn("新规则DEF", head)
         self.assertIn("[[TOOL:", head)

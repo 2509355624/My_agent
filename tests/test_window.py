@@ -36,7 +36,7 @@ import unittest
 from unittest import mock
 
 import app.agents as agents
-import app.memory as memory
+import app.features.chat.memory as memory
 import app.features.chat.longterm as longterm
 from app import usage
 from app.tools.normal import web_search

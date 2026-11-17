@@ -22,7 +22,7 @@ import app.agent as agent
 import app.agents as agents
 from app.features.image import comfy_status
 import app.features.chat.longterm as longterm
-import app.memory as memory
+import app.features.chat.memory as memory
 import app.qq_bot as qq_bot
 import app.features.chat.recent as recent
 

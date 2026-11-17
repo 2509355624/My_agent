@@ -69,7 +69,7 @@ from app.config import (
     QQ_PRIVATE_ENABLE, QQ_QUOTE_MAX_CHARS, QQ_TOKEN, QQ_TURN_TIMEOUT,
     QQ_WHITELIST_GROUPS, QQ_WHITELIST_USERS, QQ_WS_URL,
 )
-from app.memory import load_history, save_history
+from app.features.chat.memory import load_history, save_history
 
 try:
     from websockets.asyncio.client import connect as ws_connect
@@ -347,7 +347,7 @@ def _sync_session_head(session_key, aid):
     2026-10-03 实测：改一次 prompt.md → 31 条会话的头全部漂移，每条下次
     来消息各全价重读一遍约 22K 字（≈15K token）。**改人设前先攒着一起改。**
     """
-    from app.memory import peek_system
+    from app.features.chat.memory import peek_system
     head, aid = _session_head(session_key, aid)
     if peek_system(aid, session_key) == head:
         return False

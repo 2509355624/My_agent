@@ -18,7 +18,7 @@ import unittest
 from unittest import mock
 
 import app.agents as agents
-import app.memory as memory
+import app.features.chat.memory as memory
 import app.agent_prompt as prompt_mod
 
 

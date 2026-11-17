@@ -11,7 +11,7 @@ from app.core.cancel import is_cancelled
 from app.llm import (call_llm_stream, candidates, current_stream_meta,
                      current_usage, get_effective_config)
 from app import agents as agent_store
-from app.memory import trim_history
+from app.features.chat.memory import trim_history
 from app.tools import execute_tool
 
 log = logging.getLogger("agent")
@@ -844,7 +844,7 @@ def tail_tokens(history, extra_context=None):
     它——不预留的话，压缩后真实 prompt 会比预算高出一整条尾巴。详见
     memory.trim_window 的 reserve 参数。
     """
-    from app.memory import estimate_messages
+    from app.features.chat.memory import estimate_messages
 
     return estimate_messages([_status_message(history, extra_context)])
 

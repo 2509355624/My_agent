@@ -16,7 +16,8 @@ import logging
 import os
 import re
 
-from app.features.image import char_loras, qq_api
+from app.features.image import char_loras
+from app import qq_api
 from app.config import BASE_DIR
 
 log = logging.getLogger("lora_bot")
