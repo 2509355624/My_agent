@@ -16,6 +16,18 @@
 | 计费与生图运行数据 | `state/persona_billing.json`、`state/lora_*.json`、`state/image_log.jsonl`、`state/image_migrate.json` | 同路径 | 已迁移 |
 | 环境变量 | `agent_my_test/.env` | `.env` | 已复制；移除 `NAPCAT_QRCODE_PATH`，`QQ_WEBUI_PORT` 改为 `5099` |
 
+## 单测与真实运行数据的边界
+
+迁移完成后，`tools/preflight_runtime.py` 是真正按启动场景跑的门禁：它用真实 `agents/qq`、`skills/`、`state/persona_sessions.json` 和真实 HTTP 请求验证，当前全 PASS。
+
+全量单测仍会直接读真实 `.env`、`agents/qq`、`skills/`，因此迁移真实数据后结果会和“空数据基线”不同，不能把这类红项当成迁移失败：
+
+- 迁移前基线：`Ran 6457 tests`，failures 457 / errors 163 / skipped 11。
+- 迁移后：`Ran 6457 tests`，failures 133 / errors 38 / skipped 3。
+- 与基线相比：新增 15 条、减少 324 条红项。
+
+新增红项集中在 `test_prompt_sync`、`test_custom_model`、`test_llm_chain`、`test_persona_billing`、`test_skills`，原因是单测没有隔离真实 `.env`（例如 `LLM_PROVIDER=cx_a1b2c3d4`）、真实 `agents/qq` prompt 和 `skills/ai-prompts` 的引用格式。做纯单测基线时，应在不带 `.env` 的隔离环境跑；真实验收用上面的 preflight。
+
 ## 未迁移
 
 这些是旧项目的大体积缓存/备份/日志，不影响新项目启动和上述功能：
