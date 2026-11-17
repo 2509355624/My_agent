@@ -29,16 +29,9 @@
     min-height: 100%;
     background: var(--bg);
     color: var(--text);
-    font-family: "SF Mono", "JetBrains Mono", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
     font-size: 14px;
     line-height: 1.7;
-  }
-
-  body::before {
-    content: "";
-    position: fixed; inset: 0;
-    background: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(124, 92, 255, 0.15), transparent);
-    pointer-events: none; z-index: 0;
   }
 
   .wrap { position: relative; z-index: 1; max-width: 1400px; margin: 0 auto; padding: 24px 20px 48px; }
@@ -119,15 +112,26 @@
   .hint { text-align: center; font-size: 11px; color: var(--text-mute); margin-top: 10px; }
 
   .empty { grid-column: 1 / -1; text-align: center; color: var(--text-mute); padding: 56px 0; }
+
+  /* 2026-11-17：手机单列时缩略图按 3:4，不再一张占满一屏。 */
+  @media (max-width: 620px) {
+    .wrap { padding: 14px 14px 36px; }
+    body { line-height: 1.55; }
+    .bar { padding: 10px 12px; gap: 8px; }
+    .thumb { height: auto; aspect-ratio: 3 / 4; }
+    input, button { font-size: 16px; }
+    .pageinfo { min-width: 0; }
+  }
+
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>图片迁移</h1>
-    <span class="sub">翻一批、挑好的点一下，就复制一份到你的文件夹（只复制，原图不动）</span>
+    <h1>迁移</h1>
+    <span class="sub">看图 · 点一下复制过去（原图不动）</span>
     <span class="spacer"></span>
-    <a class="back" href="/">← 返回个人 Agent</a>
+    <a class="back" href="/">← 回首页</a>
   </header>
 
   <div class="bar">
