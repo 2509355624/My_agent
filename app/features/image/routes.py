@@ -40,7 +40,8 @@ from flask import (Blueprint, Response, jsonify, request, send_file,
                    send_from_directory)
 
 from app.features.image import comfy_out
-from app import comic, image_jobs, lora_slots
+from app.features.image import lora_slots
+from app import comic, image_jobs
 from app.features.image import out as image_out
 from app.features.image import gen_steps
 from app.features.image import gen_params

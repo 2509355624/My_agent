@@ -219,7 +219,7 @@ def rep_channels(entry):
     时该用的那个。代码只把事实摆出来，选哪个交给模型（2026-11-06 用户原则：
     代码只检测，判断权留给 AI）。
     """
-    from app import char_loras as _cl
+    from app.features.image import char_loras as _cl
     chans = {str(x) for x in (entry.get("channels") or [])}
     out = []
     for attr, rep in _REP_BY_GROUP:

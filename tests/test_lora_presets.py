@@ -11,7 +11,7 @@
 import os
 import unittest
 
-from app import lora_presets as lp
+from app.features.image import lora_presets as lp
 
 
 def _loras(n=1, name="moss-nai5.safetensors", strength=0.8):
@@ -399,7 +399,8 @@ class LegacySnapshotTest(_Base):
         self.assertEqual(lp.lora_string(p), "")
 
     def test_apply_slots_falls_back_to_template_names(self):
-        from app import lora_slots, skills
+        from app.features.image import lora_slots
+        from app import skills
         wf = skills.load_workflow(lora_slots.workflow_path("moss-qunyou"))
         before = {r["slot"]: r["name"] for r in lora_slots.read_slots(wf)}
         n = lora_slots.apply_slots(wf, [

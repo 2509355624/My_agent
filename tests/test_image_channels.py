@@ -2438,7 +2438,8 @@ class Anima2sChannelTest(unittest.TestCase):
             ("anima-2s", "一个少女"))
 
     def test_qq_and_persona_both_use_it(self):
-        from app import agents, char_loras, persona
+        from app.features.image import char_loras
+        from app import agents, persona
         from app.direct_gen import _allowed_skills
         self.assertTrue(agents.allows_skill("qq", self.NAME))
         self.assertIn(self.NAME, _allowed_skills())
@@ -2686,7 +2687,7 @@ class MossTwoChannelTest(unittest.TestCase):
     def test_light_bakes_the_nai5_prefix(self):
         """光影档挂着 nai5，但 `NAI5_SKILL` 只认 moss-qunyou，
         动态前缀不会给它拼——所以触发词必须烘焙在模板固定前缀里。"""
-        from app import lora_slots
+        from app.features.image import lora_slots
         wf = load_skill("moss-light")["workflow"]
         text = [n for n in wf.values()
                 if n.get("class_type") == "CLIPTextEncode"][0]["inputs"]["text"]

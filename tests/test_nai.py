@@ -13,7 +13,7 @@ from unittest import mock
 from PIL import Image
 
 from app import agents
-from app import nai
+from app.features.image import nai
 
 
 class GenerateTest(unittest.TestCase):

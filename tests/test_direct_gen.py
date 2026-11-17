@@ -4344,7 +4344,7 @@ class QuotedPresetTest(unittest.TestCase):
     """
 
     def setUp(self):
-        from app import lora_presets as lp
+        from app.features.image import lora_presets as lp
         lp.save("10000001", "233",
                 [{"slot": 1, "on": True, "strength": 1.0,
                   "name": "a.safetensors"}], public=True)

@@ -1356,7 +1356,7 @@ def _nick_lookup(qq):
 
 
 def _preset_pool_text():
-    from app import lora_presets
+    from app.features.image import lora_presets
     return lora_presets.describe_pool(nick=_nick_lookup)
 
 
@@ -1471,7 +1471,8 @@ def _save_preset_text(raw_name):
     复制成预设封面（2026-11-13 用户拍板：预设封面自动抓大大怪刚出的图，
     不用图片管理页手动存）。
     """
-    from app import anima_random, runbench_api
+    from app.features.image import anima_random
+    from app import runbench_api
     last = anima_random.load_last()
     if not last:
         return ("还没存到随心配配方——先玩一次「随心配」出图，"
@@ -2320,7 +2321,7 @@ def _enqueue(skill, prompt, text, source_image=False, seed=None,
     # 原话里带 `zdy-xxx` 令牌 → 交给下游套用那套 LoRA 槽位。
     # **在这里抽而不是让十几个调用点各传一遍**：漏掉一个的表现是「预设说了
     # 却没生效」，出图了、风格不对，最难查的那种。
-    from app import lora_presets as _lp
+    from app.features.image import lora_presets as _lp
     _hit = _lp.extract(text or "")
     _tok = ""
     if _hit:
@@ -2559,7 +2560,7 @@ def _role_key_ok(skill, key):
     """
     if not key:
         return ""
-    from app import char_loras
+    from app.features.image import char_loras
     return key if skill in char_loras.CHAR_LORA_SKILLS else ""
 
 
@@ -2628,8 +2629,8 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
     # **参考资料**——用不用由大大怪自己定，中间那层「角色库 AI 判定」已经删掉。
     # 没有候选、或检索炸了，整块为空，模板回到原样。
     try:
-        from app import char_loras as _cl
-        from app import lora_lib
+        from app.features.image import char_loras as _cl
+        from app.features.image import lora_lib
         # 点名的渠道压根没有角色库（krea2 / qwen / moss / nai 这些）→ 整块不拼，
         # 省 token、也免得模型照着候选块去填一个用不上的 character。
         # 没点名（named 空）时仍照拼：模型可能自己判进 anima 系，给了它就能选。
@@ -3386,7 +3387,7 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         # 判据「去掉令牌后剩不超过 4 个字」：`zdy-233`、`zdy-233 跑一版`、
         # `zdy-233 画个妹妹` 都算「只说预设」；带明确改图要求（「把衣服改成
         # 红色」）的不劫，仍旧交给 `_revise`。
-        from app import lora_presets as _lp
+        from app.features.image import lora_presets as _lp
         _ph = _lp.extract(text)
         if _ph:
             _rest = re.sub(r"[\s，,、。！!？?~～…·\-—]+", "",

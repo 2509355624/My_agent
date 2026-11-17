@@ -52,7 +52,7 @@ import json
 import logging
 import os
 
-from app import lora_slots
+from app.features.image import lora_slots
 from app.config import state_path
 from app.skills import load_skill
 

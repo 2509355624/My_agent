@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from app import char_loras
+from app.features.image import char_loras
 
 
 ENTRY = {"key": "sunna", "name": "苏娜",

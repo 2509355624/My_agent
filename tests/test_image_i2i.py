@@ -32,7 +32,8 @@ from PIL import Image
 
 from app.features.qq import stickers
 from app.features.image import comfy_src
-from app import agents, image_jobs, nai, qq_api, vision
+from app.features.image import nai
+from app import agents, image_jobs, qq_api, vision
 from app.skills import load_workflow
 from app.tools.normal import generate_image as gi
 

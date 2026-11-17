@@ -6,7 +6,8 @@
 import os
 import unittest
 
-from app import anima_random, runbench_api
+from app.features.image import anima_random
+from app import runbench_api
 
 
 class SaveLastTest(unittest.TestCase):

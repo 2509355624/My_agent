@@ -208,7 +208,7 @@ def match(skill, prompt):
     if skill not in CHAR_LORA_SKILLS:
         return None
     try:
-        from app import lora_lib
+        from app.features.image import lora_lib
         entry = lora_lib.resolve(prompt)
     except Exception:                                  # noqa: BLE001
         log.warning("角色库检索异常，跳过装填", exc_info=True)

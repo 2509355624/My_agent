@@ -49,8 +49,9 @@ from app.features.chat import longterm
 from app.features.chat import interject, recent
 from app.features.qq import stickers
 from app.features.chat import confirm_gate
+from app.features.image import lora_bot
 from app import (direct_gen, image_jobs,
-                 lora_bot, play_bot, solo_bot,
+                 play_bot, solo_bot,
                  moss_bot, persona, qq_api,
                  trigger, usage)
 from app.features.card import bot as card_bot

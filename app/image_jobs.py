@@ -2001,7 +2001,7 @@ def _process_nai(job):
     原会话。job.workflow 在这里其实是 prompt 字符串（enqueue 时这么塞的）。
     """
     try:
-        from app import nai
+        from app.features.image import nai
         i2i = getattr(job, "nai_i2i", None)
         if i2i:
             # 图生图的尺寸**跟着源图走**（prepare_image 算好并快照进 i2i），
@@ -2240,7 +2240,7 @@ def process(job):
     # 落过，这里只补 image_rel，别覆盖配方字段。
     if job.skill == "_anima_random":
         try:
-            from app import anima_random
+            from app.features.image import anima_random
             anima_random.save_last_image(names[0])
         except Exception:
             log.warning("补记随心配成品图路径失败", exc_info=True)

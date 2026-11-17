@@ -10,7 +10,7 @@ import os
 import random
 import unittest
 
-from app import anima_random
+from app.features.image import anima_random
 
 
 class DrawTest(unittest.TestCase):
@@ -109,7 +109,7 @@ class ApplyRandomTest(unittest.TestCase):
     """占位符替换：__MODEL_*__ / __LORA_*__ 全部换成真实名，不动其它节点。"""
 
     def _workflow(self):
-        p = os.path.join(os.path.dirname(anima_random.__file__), "..",
+        p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                          "skills", "_anima_random", "workflow.json")
         with open(p, encoding="utf-8") as f:
             return json.load(f)

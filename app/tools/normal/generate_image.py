@@ -11,7 +11,7 @@ from flask import request
 from app.features.image import comfy_src
 from app import image_jobs
 from app.features.image import char_guard
-from app import nai as nai_mod
+from app.features.image import nai as nai_mod
 from app.core.cancel import Cancelled, is_cancelled
 from app.config import (COMFYUI_URL, DISABLED_IMAGE_SKILLS,
                         IMAGE_DEFAULT_SKILL, QQ_AGENT_ID)
@@ -880,12 +880,12 @@ def build_t2i_workflow(skill, prompt, seed, user_text="", key=""):
     # nai5 触发词（2026-10-28）：moss 挂了 nai5 槽时按模板状态拼前缀。
     # 这里不知道调用方会不会显式关槽（跑图台），所以一律按模板拼，
     # 显式关的场景由 gen_api._run 里 strip_nai5_prefix 剥掉。
-    from app import lora_slots
+    from app.features.image import lora_slots
     prompt = lora_slots.nai5_prefix(skill) + prompt
     # 角色 LoRA（2026-11-04）：prompt 里点名了库里的角色 → 模板副本插一个
     # 角色 LoRA 节点、触发词追加进提示词。没命中零干预；文件缺失时
     # match 返回 None（宁可角色不像，不能整单报 value_not_in_list）。
-    from app import char_loras
+    from app.features.image import char_loras
     # `key`（2026-11-08）：角色卡上写死的 LoRA key。给了就直接查库，
     # 不再走向量召回 + 大模型判定——扮演配图每轮都出图，多一次判定就是
     # 多一次延迟和一次调用；卡上已经知道她是谁了，没必要再问一遍。
@@ -982,7 +982,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 查谁：群里看**本轮说话人**（群号不是人），私聊就是对方本人。
     # 群聊只认公开池、私聊先认自己的——分流规则在 lora_presets.resolve 里。
     if preset:
-        from app import lora_presets as _lp
+        from app.features.image import lora_presets as _lp
         from app import qq_api as _qq
         # 走局部变量而不是直接比对模块常量：test_image_channels 拿源码里
         # 「对 NAI 分流那行」当锚点，多一处同名语句会让它误判顺序。
@@ -1045,7 +1045,8 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # i2i 也一样进不来——不新增开关。横竖两个渠道（`nai` / `nai_wide`）也共用
     # 同一套闸和同一份额度，没有任何新开关。
     if skill in image_jobs.NAI_SKILLS:
-        from app import nai, qq_api
+        from app.features.image import nai
+        from app import qq_api
         from app.agents import nai_allowed
         # 种子这事儿到 NAI 门口就停：它是云端出的图，模型版本、参数都在别人
         # 机器上，同一个数在 NAI 那边不保证还是同一张图（用户 2026-10-02 明确
@@ -1211,7 +1212,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 照模板 `on_8` 决定；跑图台不走这里（gen_api._run → build_t2i_workflow，
     # 那边显式关槽时由 strip_nai5_prefix 剥）。moss 没有 i2i 骨架，走到
     # 这里的必然是文生图，不用分叉。
-    from app import lora_slots
+    from app.features.image import lora_slots
     # 把预设的槽位快照一起传进去：nai5 的触发词前缀要跟 LoRA 同进同退。
     # 不传的话前缀永远按**模板**默认（8 号开着）拼，群友在预设里关掉 8 号
     # 之后 LoRA 关了、`@//neoanime/` 那段还留在提示词里空喊。
@@ -1229,7 +1230,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 抽卡参数存进 job 上（_anima_random_draw），出图后 caption 带出来。
     anima_draw = None
     if skill == "_anima_random":
-        from app import anima_random
+        from app.features.image import anima_random
         from app import runbench_api
         # 复用预设（2026-11-13）：原话里点名了预设名（如「随心配 可爱画风」），
         # 直接读存好的配方出图，**不随机抽卡**。配方是「代码登记的事实」，
@@ -1263,7 +1264,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 角色 LoRA（2026-11-04）：QQ 直达生图也在这里装填。之前只有
     # `build_t2i_workflow`（网页跑图台 / 漫画 / 角色卡那几条）接了，
     # 群友在群里点名角色时一直没挂上 LoRA，画出来当然不像。
-    from app import char_loras
+    from app.features.image import char_loras
     workflow, prompt = char_loras.apply(skill, prompt, workflow,
                                         user_text=user_text,
                                         key=character)
@@ -1288,7 +1289,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
         # 走到这里说明这个渠道没有 MOSSLoRAToggle，只能靠 `名字:强度` 串，而
         # 这条预设一个名字都没记下来。宁可明确拒绝，也别静默提交一个
         # 「一个 LoRA 都没开」的工作流——群友会以为预设生效了。
-        from app import lora_presets as _lp2
+        from app.features.image import lora_presets as _lp2
         return ("「%s」这条预设没记下 LoRA 名字（老版网页存的），当前渠道又"
                 "没有槽位开关，套不了。让他回网页把槽位重新存一次。"
                 % _lp2.label(_lp2.clean_name(preset)))
