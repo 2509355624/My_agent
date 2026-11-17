@@ -269,6 +269,9 @@ from app.features.persona.finish import (
 _DRAW_ERR = threading.local()
 
 
+from app.features.persona.persona_shots import (
+    _shot_parts, draw_shot, is_shot_request, shot_outfit,
+)
 from app.features.persona.persona_images import (
     _draw_fail, _session_target, draw,
 )
@@ -410,81 +413,8 @@ MALE_PROTAGONIST = (
 SHOT_WORDS = ("出图", "画一张", "画一下", "来张图", "出张图", "画个图")
 
 
-def is_shot_request(text):
-    """这条消息是不是在要求「按当前场景出图」。
-
-    只认**整条消息**是触发词（可带 # 前缀、可带「一下」「吧」这类语气词），
-    不做子串匹配——扮演态里的「你刚才出图了？」是在聊天，不是在下命令。
-    """
-    t = str(text or "").strip()
-    if not t:
-        return False
-    if t.startswith("#"):
-        t = t[1:].strip()
-    if t in SHOT_WORDS:
-        return True
-    # 去掉结尾的语气词再比。**注意顺序**：先比原串再剥——「画一张」本身就在
-    # 词表里，先剥「一张」会剥成「画」，反而认不出（实测踩过）。
-    for tail in ("吧", "啊", "呀", "呢", "一下", "一张", "！", "!", "。", "."):
-        if t.endswith(tail):
-            t = t[: -len(tail)].strip()
-            if t in SHOT_WORDS:
-                return True
-    return False
 
 
-def _shot_parts(session_key, msg_index=None):
-    """「出图」要用的素材：`(用户原话, 她的正文, 画面行, 状态)`。
-
-    `msg_index=None` → 最后一轮（扫窗口）；数字 → **归档第 N 行**的 assistant
-    （必须是 assistant 行，行号只增不删，不会随窗口裁剪漂移）。
-    `comic_brief`（moss 漫画 brief）和 `shot_scene`（单张 CG）共用这套提取，
-    保证两个出图路径画的是同一轮。
-    """
-    session_key = resolve_line(session_key)
-    ent = _entry(session_key) or {}
-
-    last_user = ""
-    last_ai = ""
-    scene = ""                  # 「画面：」那一行——本轮画面的定稿
-    state = str(ent.get("state") or "").strip()
-
-    if msg_index is None:
-        hist = [m for m in trim(_load_hist(session_key))
-                if m.get("role") in ("user", "assistant")]
-        for m in reversed(hist):
-            if m["role"] == "assistant":
-                body, sc, _mo, _it, _st = split_turn(m["content"] or "")
-                if not last_ai:
-                    last_ai = body.strip()
-                    scene = (sc or "").strip()
-            else:
-                body = str(m["content"] or "").strip()
-                if not last_user:
-                    last_user = body
-            if last_user and last_ai:
-                break
-    else:
-        # 按**归档下标**定位（2026-11-04）。以前这里是「窗口里第几条 assistant」，
-        # 而窗口每次落盘都会裁，聊一轮整体前移一位——网页点旧气泡出图时传的
-        # 是当时的号，压缩后就指到别人那条上。归档只增不删，行号才是稳定锚。
-        try:
-            n = int(msg_index)
-        except (TypeError, ValueError):
-            n = -1
-        rows = load_archive(session_key)
-        if 0 <= n < len(rows) and rows[n].get("role") == "assistant":
-            last_ai, sc, _mo, _it, st = split_turn(rows[n].get("content") or "")
-            last_ai = last_ai.strip()
-            scene = (sc or "").strip()          # 用**那一轮**的画面，不是最后一轮
-            if st.strip():
-                state = st.strip()      # 用**那一轮**的状态，不是此刻的
-            # 往前找最近的一条用户消息
-            for j in range(n - 1, -1, -1):
-                if rows[j].get("role") == "user":
-                    last_user = str(rows[j].get("content") or "").strip()
-                    break
-    return last_user, last_ai, scene, state
 
 
 def shot_scene(session_key, msg_index=None):
@@ -496,73 +426,8 @@ def shot_scene(session_key, msg_index=None):
     return _shot_parts(session_key, msg_index)[2]
 
 
-def shot_outfit(session_key, msg_index=None):
-    """「出图」这一轮的「服饰：」行（当前穿着的英文定稿）。
-
-    优先取**那一轮**归档/窗口里的原文：点旧气泡出图时，画的是当时的穿着，
-    不是此刻的。老线没有这一行（功能上线前的归档），回落到当前固化的
-    `ent["outfit"]`；再没有就返回空串，`build_prompt` 走老拼法。
-
-    和 `_shot_parts` 分开，是为了不改它那个四元组返回（漫画 brief 也按它拆包）。
-    """
-    key = resolve_line(session_key)
-    ent = _entry(key) or {}
-    cur = str(ent.get("outfit") or "").strip()
-    if msg_index is None:
-        rows = [m for m in trim(_load_hist(key))
-                if m.get("role") == "assistant"]
-        if rows:
-            return split_outfit(str(rows[-1].get("content") or "")) or cur
-    else:
-        try:
-            n = int(msg_index)
-        except (TypeError, ValueError):
-            n = -1
-        rows = load_archive(key)
-        if 0 <= n < len(rows) and rows[n].get("role") == "assistant":
-            return split_outfit(str(rows[n].get("content") or "")) or cur
-    return cur
 
 
-def draw_shot(card, session_key, msg_index=None, reply_to="", on_submit=None,
-              landscape=False):
-    """「出图」→ `SHOT_SKILL`（silver）单张 CG，默认**竖屏**。
-
-    2026-11-09 用户拍板：默认渠道从 anima-2s 换回 `silver`，**横屏竖屏同一条**。
-    `landscape=True`（网页背景用）走 `image_jobs.landscape_workflow()` 把尺寸
-    节点宽高对调，不是新渠道，采样/LoRA 全都不动。
-
-    横屏唯一的实测坑：提示词里写「两个人并排」会被画成两个女孩（
-    `two people standing side by side` → 双胞胎式同款浴衣）。要「一起看」的
-    意思，靠 POV 那只手表达，别在提示词里数人数。
-
-    返回 `(文件名, note)`：note 非空 = 没画出来及**真实原因**（2026-11-08：
-    排队满 / 没在线 / 生成超时 / 跑完没图，各自说各自的）。**阻塞**几十秒，
-    调用方放后台线程。和 moss 漫画共用同一套画面提取（`_shot_parts`），
-    但不经编剧——画面行本来就是给生图写的英文定稿，直接拼角色外观串用。
-
-    引用内容（`extra`）在单张路径里**不参与**：画面行是权威，冲突时以它为准；
-    没有画面行时按拍板直接拒绝，不拿中文引用原文硬喂给 CLIP。
-    """
-    scene = shot_scene(session_key, msg_index)
-    if not scene:
-        return "", "这一轮没有可画的画面"
-    # 排查用（2026-11-05）：线上反馈「出图还是六格漫画」。这条日志把
-    # **实际用的渠道和画幅**打出来，一眼就能分辨是代码没生效（进程跑着旧
-    # 版本 → 没有这行）还是走了别的入口（这行有但渠道不是 SHOT_SKILL）。
-    outfit = shot_outfit(session_key, msg_index)
-    log.info("扮演出图：渠道=%s 画幅=%s 行号=%s 画面=%s 服饰=%s",
-             SHOT_SKILL, "横屏" if landscape else "竖屏", msg_index,
-             scene[:60], outfit[:60])
-    name = draw(scene, card, session_key, reply_to=reply_to,
-                skill=SHOT_SKILL, landscape=bool(landscape),
-                outfit=outfit, on_submit=on_submit)
-    if not name:
-        # 真实原因在 thread-local 上（draw 的返回值十几个调用方都当字符串用，
-        # 不改签名）。拿不到才退回老的那句笼统文案。
-        return "", (getattr(_DRAW_ERR, "reason", "")
-                    or "没画出来（排队满 / ComfyUI 没在线 / 被审核拦下）")
-    return name, ""
 
 
 def comic_brief(card, session_key, extra="", msg_index=None):
