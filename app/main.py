@@ -20,7 +20,7 @@ from app.features.image import audit as image_audit
 from app.features.image import migrate as image_migrate
 from app import logsetup
 from app import usage as usage_stats
-from app import qq_bill
+from app.features.qq import bill as qq_bill
 # 别名 `vision_mod` 是**必须**的：本文件里已有一个叫 `vision` 的路由函数
 # （POST /api/vision，网页端「让 AI 看图」），模块名直接被它盖掉，
 # 写成 `from app import vision` 会在调用处炸 AttributeError:
