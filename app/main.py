@@ -23,9 +23,9 @@ from app.core import usage as usage_stats
 from app.features.qq import bill as qq_bill
 # 别名 `vision_mod` 是**必须**的：本文件里已有一个叫 `vision` 的路由函数
 # （POST /api/vision，网页端「让 AI 看图」），模块名直接被它盖掉，
-# 写成 `from app import vision` 会在调用处炸 AttributeError:
+# 写成 `from app.integrations import vision` 会在调用处炸 AttributeError:
 # 'function' object has no attribute 'default_prompt'。
-from app import vision as vision_mod
+from app.integrations import vision as vision_mod
 from app.features.comic import routes as comic_api
 from app.features.comic import moss_api
 from app.features.image import routes as gen_api
@@ -2532,7 +2532,7 @@ def vision_models():
     带上当前生效的那个（`current`），好让前端默认选中它。
     `agent` 参数决定读谁的配置（管理页切 agent 时要跟着变），缺省用 QQ_AGENT_ID。
     """
-    from app import vision as vmod
+    from app.integrations import vision as vmod
 
     aid = (request.args.get("agent") or QQ_AGENT_ID).strip()
     if agent_store.safe_agent_id(aid) is None:
@@ -2945,7 +2945,7 @@ def vision_test():
     ⚠️ 超时故意给 200 秒：本地实测能到 180 秒还在跑，给 30 秒会永远失败。
     这是个手动按钮、不是对话热路径，慢一点无妨。
     """
-    from app import vision as vmod
+    from app.integrations import vision as vmod
 
     data = request.get_json(silent=True) or {}
     value = (data.get("value") or "").strip()

@@ -40,7 +40,8 @@ import uuid
 
 from flask import Blueprint, jsonify, request
 
-from app import llm, vision
+from app import llm
+from app.integrations import vision
 from app.config import DEEPSEEK_MODEL, ROOT_DIR, state_path
 from app.features.rag import rerank
 

@@ -113,7 +113,7 @@ class ModelCallLogTest(unittest.TestCase):
 
     def test_vision_call_is_logged(self):
         """识图绕开 llm.py 自己发请求，从前完全不产生 [llm] 行。"""
-        from app import vision
+        from app.integrations import vision
         resp = mock.Mock(status_code=200)
         resp.json.return_value = {"choices": [{"message": {"content": "猫"}}]}
         pid = sorted(vision.PROVIDERS)[0]

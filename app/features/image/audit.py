@@ -282,7 +282,7 @@ def check(path, timeout=None, prompt=None):
     **不抛异常**：读不到文件、识图失败、解析不出来，一律返回**拦截**的 Verdict
     （allow=False，failed=True）。调用方不需要 try/except。
     """
-    from app import vision
+    from app.integrations import vision
 
     if timeout is None:
         timeout = IMAGE_AUDIT_TIMEOUT

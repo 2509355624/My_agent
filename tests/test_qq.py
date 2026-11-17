@@ -484,9 +484,9 @@ class FileSegmentTest(unittest.TestCase):
         seen = []
         with mock.patch("app.qq_api.file_url",
                         return_value="https://e.com/real.jpg"), \
-             mock.patch("app.vision.fetch_image",
+             mock.patch("app.integrations.vision.fetch_image",
                         side_effect=lambda u: (seen.append(u), b"RAW")[1]), \
-             mock.patch("app.vision.to_data_url", return_value="data:x"):
+             mock.patch("app.integrations.vision.to_data_url", return_value="data:x"):
             out, dropped = qq_bot.SessionRunner._prepare_images(
                 ["fileid://group/9/7/F%2F1"])
         self.assertEqual(out, ["data:x"])

@@ -2786,7 +2786,7 @@ def _recall_tags(data_urls, numbered=True):
     numbered=True（回给用户看）多图带「（第 N 张）」前缀；False（结果
     直接当生成提示词入队）多图用「, 」拼接——中文前缀进提示词是污染。
     """
-    from app.vision import describe
+    from app.integrations.vision import describe
     urls = (data_urls or [])[:3]
     outs = []
     for i, data_url in enumerate(urls, 1):
@@ -2817,7 +2817,7 @@ def _reverse_text(tags):
     tags = (tags or "").strip()
     if not tags:
         return "没认出这张图，重发一次试试。"
-    from app import vision
+    from app.integrations import vision
     if vision.looks_like_refusal(tags):
         return _REVERSE_REFUSED_TEXT
     return _REVERSE_HEADER + "\n" + tags
@@ -2954,7 +2954,7 @@ def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):
         lang=_prompt_lang(channel or anchor_skill),
         text=text)
     from app.llm import call_llm
-    from app.vision import describe
+    from app.integrations.vision import describe
 
     def _ask_image(question):
         """改图管道的那一次调用（重问时按同一形态重放）。"""

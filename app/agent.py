@@ -667,7 +667,7 @@ def _vision_usable(text):
         return ""
     # 整段就是上游 API 的英文拒答 / 报错（见 vision.looks_like_api_refusal）——
     # 中文话术那条仍走下面的按句剥离，因为「拒绝开头 + 有效内容」要留那半段。
-    from app import vision as vision_mod
+    from app.integrations import vision as vision_mod
     if vision_mod.looks_like_api_refusal(text):
         return ""
     sents = [s for s in _SENT_SPLIT_RE.split(text) if s.strip()]
@@ -719,7 +719,7 @@ def _vision_notes(images, owners=None, question="", base=None):
     3. **截断到 _VISION_NOTE_MAX_CHARS**：识图文字块是历史里最大的一块可压缩
        脂肪（实测占群历史 28%），不截就会把会话顶破预算、逼出每轮压缩。
     """
-    from app.vision import build_prompt, describe
+    from app.integrations.vision import build_prompt, describe
 
     notes = []
     total = len(images)

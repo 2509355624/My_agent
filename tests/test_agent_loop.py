@@ -399,7 +399,7 @@ class AgentLoopTest(unittest.TestCase):
                 raise exc
             return text
 
-        p = mock.patch("app.vision.describe", fake)
+        p = mock.patch("app.integrations.vision.describe", fake)
         p.start()
         self.addCleanup(p.stop)
 

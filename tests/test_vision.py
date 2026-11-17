@@ -17,7 +17,7 @@ from unittest import mock
 
 import app.agent as agent
 import app.config as config
-import app.vision as vision
+import app.integrations.vision as vision
 from app.agent import _error_reply
 
 try:
@@ -155,30 +155,30 @@ def _resp(content=b"", status=200, text=""):
 
 class FetchImageTest(unittest.TestCase):
     def test_returns_raw_bytes(self):
-        with mock.patch("app.vision._session.get",
+        with mock.patch("app.integrations.vision._session.get",
                         return_value=_resp(b"\xff\xd8\xffabc")):
             self.assertEqual(vision.fetch_image("http://x/a.jpg"),
                              b"\xff\xd8\xffabc")
 
     def test_http_error_raises_runtime_error(self):
-        with mock.patch("app.vision._session.get", return_value=_resp(status=404)):
+        with mock.patch("app.integrations.vision._session.get", return_value=_resp(status=404)):
             with self.assertRaises(RuntimeError):
                 vision.fetch_image("http://x/a.jpg")
 
     def test_oversize_raises(self):
-        with mock.patch("app.vision._session.get",
+        with mock.patch("app.integrations.vision._session.get",
                         return_value=_resp(b"x" * 500)):
             with self.assertRaises(RuntimeError) as ctx:
                 vision.fetch_image("http://x/a.jpg", max_bytes=100)
             self.assertIn("过大", str(ctx.exception))
 
     def test_empty_body_raises(self):
-        with mock.patch("app.vision._session.get", return_value=_resp(b"")):
+        with mock.patch("app.integrations.vision._session.get", return_value=_resp(b"")):
             with self.assertRaises(RuntimeError):
                 vision.fetch_image("http://x/a.jpg")
 
     def test_network_error_becomes_runtime_error(self):
-        with mock.patch("app.vision._session.get",
+        with mock.patch("app.integrations.vision._session.get",
                         side_effect=OSError("connection refused")):
             with self.assertRaises(RuntimeError):
                 vision.fetch_image("http://x/a.jpg")
@@ -209,26 +209,26 @@ class LocalFileUrlTest(unittest.TestCase):
 
     def test_reads_the_local_copy(self):
         uri = self._uri("Anima_00471__bcaae650.png")
-        with mock.patch("app.vision._session.get") as get:
+        with mock.patch("app.integrations.vision._session.get") as get:
             self.assertEqual(vision.fetch_image(uri), b"\x89PNG fake")
             get.assert_not_called()
 
     def test_percent_escapes_are_decoded(self):
         uri = self._uri("a b.png", b"spaced")
-        with mock.patch("app.vision._session.get"):
+        with mock.patch("app.integrations.vision._session.get"):
             self.assertEqual(vision.fetch_image(uri), b"spaced")
 
     def test_expired_copy_says_so(self):
         uri = "file:///" + os.path.join(
             self.dir.name, "gone.png").replace("\\", "/")
-        with mock.patch("app.vision._session.get"):
+        with mock.patch("app.integrations.vision._session.get"):
             with self.assertRaises(RuntimeError) as ctx:
                 vision.fetch_image(uri)
             self.assertIn("过期", str(ctx.exception))
 
     def test_oversize_local_copy_raises(self):
         uri = self._uri("big.png", b"x" * 500)
-        with mock.patch("app.vision._session.get"):
+        with mock.patch("app.integrations.vision._session.get"):
             with self.assertRaises(RuntimeError) as ctx:
                 vision.fetch_image(uri, max_bytes=100)
             self.assertIn("过大", str(ctx.exception))
@@ -240,7 +240,7 @@ class LocalFileUrlTest(unittest.TestCase):
         fh.close()
         self.addCleanup(os.remove, fh.name)
         uri = "file:///" + fh.name.replace("\\", "/")
-        with mock.patch("app.vision._session.get",
+        with mock.patch("app.integrations.vision._session.get",
                         return_value=_resp(status=404)) as get:
             with self.assertRaises(RuntimeError):
                 vision.fetch_image(uri)
@@ -274,13 +274,13 @@ class DescribeTest(unittest.TestCase):
     def test_returns_stripped_text(self):
         r, body = self._ok()
         r.json.return_value = body
-        with mock.patch("app.vision._session.post", return_value=r):
+        with mock.patch("app.integrations.vision._session.post", return_value=r):
             self.assertEqual(vision.describe("data:image/jpeg;base64,AAA"), "一只猫")
 
     def test_payload_carries_image_and_default_model(self):
         r, body = self._ok("ok")
         r.json.return_value = body
-        with mock.patch("app.vision._session.post", return_value=r) as post:
+        with mock.patch("app.integrations.vision._session.post", return_value=r) as post:
             vision.describe("data:image/jpeg;base64,AAA")
         payload = post.call_args.kwargs["json"]
         self.assertEqual(
@@ -291,7 +291,7 @@ class DescribeTest(unittest.TestCase):
         self.assertEqual(payload["model"], config.PROVIDERS["mimo"]["model"])
 
     def test_http_error_raises_runtime_error(self):
-        with mock.patch("app.vision._session.post",
+        with mock.patch("app.integrations.vision._session.post",
                         return_value=_resp(status=429, text="QuotaExceeded")):
             with self.assertRaises(RuntimeError):
                 vision.describe("data:image/jpeg;base64,AAA")
@@ -299,7 +299,7 @@ class DescribeTest(unittest.TestCase):
     def test_unparsable_body_raises_runtime_error(self):
         r = _resp(status=200)
         r.json.side_effect = ValueError("not json")
-        with mock.patch("app.vision._session.post", return_value=r):
+        with mock.patch("app.integrations.vision._session.post", return_value=r):
             with self.assertRaises(RuntimeError):
                 vision.describe("data:image/jpeg;base64,AAA")
 
@@ -359,7 +359,7 @@ class VisionFallbackChainTest(unittest.TestCase):
     def test_falls_back_to_next_provider_on_failure(self):
         fake, seen = self._mock_post([(429, "QuotaExceeded"), (200, "一只猫")])
         with mock.patch.object(vision, "active_choice", return_value=("doubao", "")), \
-                mock.patch("app.vision._session.post", side_effect=fake):
+                mock.patch("app.integrations.vision._session.post", side_effect=fake):
             self.assertEqual(vision.describe("data:image/jpeg;base64,AAA"), "一只猫")
         # 两次调用：第一次 doubao 挂、第二次链头 deepseek 成功
         self.assertEqual(len(seen), 2)
@@ -368,7 +368,7 @@ class VisionFallbackChainTest(unittest.TestCase):
     def test_all_fail_raises_last_error(self):
         fake, seen = self._mock_post([(500, "a"), (500, "b"), (429, "c")])
         with mock.patch.object(vision, "active_choice", return_value=("doubao", "")), \
-                mock.patch("app.vision._session.post", side_effect=fake):
+                mock.patch("app.integrations.vision._session.post", side_effect=fake):
             with self.assertRaises(RuntimeError) as ctx:
                 vision.describe("data:image/jpeg;base64,AAA")
         self.assertEqual(len(seen), 3)          # 三家都试过
@@ -377,7 +377,7 @@ class VisionFallbackChainTest(unittest.TestCase):
     def test_explicit_provider_does_not_fall_back(self):
         # 显式传 provider = 审核那条路：失败就失败，不许换家。
         fake, seen = self._mock_post([(500, "boom")])
-        with mock.patch("app.vision._session.post", side_effect=fake):
+        with mock.patch("app.integrations.vision._session.post", side_effect=fake):
             with self.assertRaises(RuntimeError):
                 vision.describe("data:image/jpeg;base64,AAA", provider="mimo")
         self.assertEqual(len(seen), 1)
@@ -386,7 +386,7 @@ class VisionFallbackChainTest(unittest.TestCase):
         # 主选家名写错 = 配置错误，立刻报错，别把拼错的名字悄悄换成豆包。
         with mock.patch.object(vision, "active_choice",
                                return_value=("nonexistent", "")), \
-                mock.patch("app.vision._session.post") as post:
+                mock.patch("app.integrations.vision._session.post") as post:
             with self.assertRaises(RuntimeError) as ctx:
                 vision.describe("data:image/jpeg;base64,AAA")
         post.assert_not_called()
@@ -418,7 +418,7 @@ class VisionDeadlineTest(unittest.TestCase):
         return r
 
     def test_describe_passes_a_total_deadline(self):
-        with mock.patch("app.vision._session.post",
+        with mock.patch("app.integrations.vision._session.post",
                         return_value=self._ok()) as post:
             vision.describe("data:image/jpeg;base64,AAA")
         t = post.call_args.kwargs["timeout"]
@@ -427,13 +427,13 @@ class VisionDeadlineTest(unittest.TestCase):
         self.assertLessEqual(t.connect_timeout, t.total)
 
     def test_describe_honours_explicit_timeout(self):
-        with mock.patch("app.vision._session.post",
+        with mock.patch("app.integrations.vision._session.post",
                         return_value=self._ok()) as post:
             vision.describe("data:image/jpeg;base64,AAA", timeout=7)
         self.assertEqual(post.call_args.kwargs["timeout"].total, 7)
 
     def test_fetch_image_passes_a_total_deadline(self):
-        with mock.patch("app.vision._session.get",
+        with mock.patch("app.integrations.vision._session.get",
                         return_value=_resp(b"\xff\xd8\xffabc")) as get:
             vision.fetch_image("http://x/a.jpg")
         self.assertEqual(get.call_args.kwargs["timeout"].total,
@@ -447,7 +447,7 @@ class VisionDeadlineTest(unittest.TestCase):
 
     def test_timeout_failure_carries_elapsed(self):
         """卡住之后要能看出「卡了多久」——异常里带耗时，会一路传到 agent 的告警。"""
-        with mock.patch("app.vision._session.post",
+        with mock.patch("app.integrations.vision._session.post",
                         side_effect=OSError("Read timed out")):
             with self.assertRaises(RuntimeError) as ctx:
                 vision.describe("data:image/jpeg;base64,AAA")
@@ -473,13 +473,13 @@ class OllamaDescribeTest(unittest.TestCase):
         return r
 
     def test_hits_native_chat_endpoint(self):
-        with mock.patch("app.vision._session.post",
+        with mock.patch("app.integrations.vision._session.post",
                         return_value=self._ok()) as post:
             vision.describe("data:image/jpeg;base64,AAA", provider="ollama")
         self.assertTrue(post.call_args.args[0].endswith("/api/chat"))
 
     def test_images_are_bare_base64_and_cpu_forced(self):
-        with mock.patch("app.vision._session.post",
+        with mock.patch("app.integrations.vision._session.post",
                         return_value=self._ok()) as post:
             vision.describe("data:image/jpeg;base64,QUJD", provider="ollama")
         payload = post.call_args.kwargs["json"]
@@ -491,7 +491,7 @@ class OllamaDescribeTest(unittest.TestCase):
         self.assertIn("keep_alive", payload)
 
     def test_returns_native_message_content(self):
-        with mock.patch("app.vision._session.post", return_value=self._ok()):
+        with mock.patch("app.integrations.vision._session.post", return_value=self._ok()):
             self.assertEqual(
                 vision.describe("data:image/jpeg;base64,AAA", provider="ollama"),
                 "一只猫")
@@ -501,14 +501,14 @@ class OllamaDescribeTest(unittest.TestCase):
         不能回落 VISION_MODEL —— 否则给审核指定了云端 provider，却把读图那个
         本地模型名套了上去。"""
         with mock.patch.object(vision, "VISION_MODEL", "qwen3-vl:2b"), \
-             mock.patch("app.vision._session.post",
+             mock.patch("app.integrations.vision._session.post",
                         return_value=self._ok()) as post:
             vision.describe("data:image/jpeg;base64,AAA", provider="ollama")
         self.assertEqual(post.call_args.kwargs["json"]["model"],
                          config.PROVIDERS["ollama"]["model"])
 
     def test_timeout_failure_carries_elapsed(self):
-        with mock.patch("app.vision._session.post",
+        with mock.patch("app.integrations.vision._session.post",
                         side_effect=OSError("Read timed out")):
             with self.assertRaises(RuntimeError) as ctx:
                 vision.describe("data:image/jpeg;base64,AAA", provider="ollama")
@@ -517,8 +517,8 @@ class OllamaDescribeTest(unittest.TestCase):
     def test_usage_uses_ollama_counters(self):
         """ollama 的用量字段名跟 OpenAI 不一样（prompt_eval_count / eval_count）。
         记错就等于本地识图在用量表里查不到账。"""
-        with mock.patch("app.vision._session.post", return_value=self._ok()), \
-             mock.patch("app.usage.record") as rec:
+        with mock.patch("app.integrations.vision._session.post", return_value=self._ok()), \
+             mock.patch("app.core.usage.record") as rec:
             vision.describe("data:image/jpeg;base64,AAA", provider="ollama")
         self.assertEqual(rec.call_args.args[1], 811)            # miss
         self.assertEqual(rec.call_args.kwargs.get("output"), 42)
@@ -555,7 +555,7 @@ class VisionAttributionTest(unittest.TestCase):
     """
 
     def _patch_describe(self, text="一只猫"):
-        p = mock.patch("app.vision.describe", return_value=text)
+        p = mock.patch("app.integrations.vision.describe", return_value=text)
         p.start()
         self.addCleanup(p.stop)
 
@@ -671,7 +671,7 @@ class VisionRefusalFilterTest(unittest.TestCase):
 
     def test_refusal_becomes_failure_note_end_to_end(self):
         """走完 _with_vision：拒绝话术进不了拼给下游的文本。"""
-        p = mock.patch("app.vision.describe",
+        p = mock.patch("app.integrations.vision.describe",
                        return_value=self._PURE_REFUSALS[0])
         p.start()
         self.addCleanup(p.stop)
@@ -683,7 +683,7 @@ class VisionRefusalFilterTest(unittest.TestCase):
         """混合返回：有效那半段照常进下游，拒绝那半段不留。"""
         mixed = ("这张图片包含露骨的色情内容，我无法按你的要求进行完整描述。"
                  "角色后脑勺到马尾区域的发丝存在明显的结构混乱，发束走向不自然。")
-        p = mock.patch("app.vision.describe", return_value=mixed)
+        p = mock.patch("app.integrations.vision.describe", return_value=mixed)
         p.start()
         self.addCleanup(p.stop)
         out = agent._with_vision("帮我看看", ["data:1"], ["温知澄"])
@@ -736,7 +736,7 @@ class VisionQuestionTest(unittest.TestCase):
             seen["prompt"] = prompt
             return "一只猫"
 
-        with mock.patch("app.vision.describe", side_effect=fake):
+        with mock.patch("app.integrations.vision.describe", side_effect=fake):
             agent._with_vision("这个报错啥意思", ["data:1"])
         self.assertIn("这个报错啥意思", seen["prompt"])
 
@@ -747,7 +747,7 @@ class VisionQuestionTest(unittest.TestCase):
             prompts.append(prompt)
             return "一只猫"
 
-        with mock.patch("app.vision.describe", side_effect=fake):
+        with mock.patch("app.integrations.vision.describe", side_effect=fake):
             agent._with_vision("看看", ["data:1", "data:2"])
         self.assertEqual(len(prompts), 2)
         self.assertIn("第 1 张", prompts[0])
@@ -760,7 +760,7 @@ class VisionQuestionTest(unittest.TestCase):
             seen["prompt"] = prompt
             return "一只猫"
 
-        with mock.patch("app.vision.describe", side_effect=fake):
+        with mock.patch("app.integrations.vision.describe", side_effect=fake):
             agent._with_vision("", ["data:1"])
         self.assertEqual(seen["prompt"], vision._PROMPT)
 
@@ -888,7 +888,7 @@ class NoImageDetectorTest(unittest.TestCase):
             return r
 
         with mock.patch.object(vision, "active_choice", return_value=("doubao", "")), \
-                mock.patch("app.vision._session.post", side_effect=fake_post):
+                mock.patch("app.integrations.vision._session.post", side_effect=fake_post):
             out = vision.describe("data:image/jpeg;base64,AAA")
         self.assertEqual(out, "一只橘猫趴在窗台上")
         self.assertEqual(len(seen), 2)          # 第一家的「没图」被弃掉，换了一家

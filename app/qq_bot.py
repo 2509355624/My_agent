@@ -1231,7 +1231,7 @@ class SessionRunner:
         「看不到这张图」的降级路径（模型会如实说看不到，而不是编内容）。
         """
         from app.config import QQ_IMAGE_MAX_COUNT
-        from app.vision import fetch_image, to_data_url
+        from app.integrations.vision import fetch_image, to_data_url
 
         if not urls:
             return [], 0

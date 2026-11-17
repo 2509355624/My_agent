@@ -104,7 +104,7 @@ class CheckFailClosedTest(unittest.TestCase):
     def test_vision_error_is_fail_closed(self):
         path = _write_png()
         try:
-            with mock.patch("app.vision.describe",
+            with mock.patch("app.integrations.vision.describe",
                             side_effect=RuntimeError("识图请求失败（耗时 30.0s）")):
                 v = image_audit.check(path)
             self.assertFalse(v.allow)
@@ -115,7 +115,7 @@ class CheckFailClosedTest(unittest.TestCase):
     def test_unparseable_reply_is_fail_closed(self):
         path = _write_png()
         try:
-            with mock.patch("app.vision.describe",
+            with mock.patch("app.integrations.vision.describe",
                             return_value="我觉得这张图还行吧"):
                 v = image_audit.check(path)
             self.assertFalse(v.allow)
@@ -148,7 +148,7 @@ class AuditDeadlineTest(unittest.TestCase):
     def _check_while_hanging(self, **kwargs):
         path = _write_png()
         try:
-            with mock.patch("app.vision.describe", side_effect=self._hang):
+            with mock.patch("app.integrations.vision.describe", side_effect=self._hang):
                 started = time.monotonic()
                 v = image_audit.check(path, **kwargs)
                 return v, time.monotonic() - started
@@ -173,7 +173,7 @@ class AuditDeadlineTest(unittest.TestCase):
         """还得往下传：只在上层掐表的话，挂死的线程会赖到 120 秒才收场。"""
         path = _write_png()
         try:
-            with mock.patch("app.vision.describe", return_value=self._PASS) as m:
+            with mock.patch("app.integrations.vision.describe", return_value=self._PASS) as m:
                 image_audit.check(path, timeout=7)
             self.assertEqual(m.call_args.kwargs["timeout"], 7)
         finally:
@@ -183,7 +183,7 @@ class AuditDeadlineTest(unittest.TestCase):
         """加了线程壳之后，识图抛的异常仍要原样落到 fail-closed。"""
         path = _write_png()
         try:
-            with mock.patch("app.vision.describe",
+            with mock.patch("app.integrations.vision.describe",
                             side_effect=RuntimeError("识图请求失败（耗时 12.0s）")):
                 v = image_audit.check(path, timeout=5)
             self.assertFalse(v.allow)
@@ -198,7 +198,7 @@ class CheckVerdictTest(unittest.TestCase):
     def _check_with(self, reply):
         path = _write_png()
         try:
-            with mock.patch("app.vision.describe", return_value=reply):
+            with mock.patch("app.integrations.vision.describe", return_value=reply):
                 return image_audit.check(path)
         finally:
             os.remove(path)
@@ -331,9 +331,9 @@ class AuditFallbackTest(unittest.TestCase):
                 raise RuntimeError("中转站 502")
             return '{"allow": true, "category": "ok"}'
 
-        with mock.patch("app.vision.audit_candidates",
+        with mock.patch("app.integrations.vision.audit_candidates",
                         return_value=[("relay", "relay-model"), ("deepseek", "")]), \
-             mock.patch("app.vision.describe", side_effect=describe):
+             mock.patch("app.integrations.vision.describe", side_effect=describe):
             verdict = image_audit.check(self.path, timeout=1)
 
         self.assertTrue(verdict.allow)
@@ -341,9 +341,9 @@ class AuditFallbackTest(unittest.TestCase):
         self.assertEqual(calls, [("relay", "relay-model"), ("deepseek", "")])
 
     def test_all_audit_providers_fail_closed(self):
-        with mock.patch("app.vision.audit_candidates",
+        with mock.patch("app.integrations.vision.audit_candidates",
                         return_value=[("relay", "relay-model"), ("deepseek", "")]), \
-             mock.patch("app.vision.describe",
+             mock.patch("app.integrations.vision.describe",
                         side_effect=RuntimeError("服务不可用")):
             verdict = image_audit.check(self.path, timeout=1)
 
@@ -366,14 +366,14 @@ class AllowSendTest(unittest.TestCase):
     def test_disabled_never_calls_vision(self):
         """开关没开时**一次识图都不发** —— 这是热路径上的硬要求。"""
         with self._with_enabled(False), \
-             mock.patch("app.vision.describe") as desc:
+             mock.patch("app.integrations.vision.describe") as desc:
             self.assertTrue(image_audit.allow_send(
                 self.path, "qq", "group", "123"))
         desc.assert_not_called()
 
     def test_enabled_and_clean_passes(self):
         with self._with_enabled(True), \
-             mock.patch("app.vision.describe",
+             mock.patch("app.integrations.vision.describe",
                         return_value='{"allow": true, "category": "ok"}'), \
              mock.patch.object(image_audit, "_notify_blocked") as notify:
             self.assertTrue(image_audit.allow_send(
@@ -382,7 +382,7 @@ class AllowSendTest(unittest.TestCase):
 
     def test_enabled_and_nudity_blocks_and_notifies(self):
         with self._with_enabled(True), \
-             mock.patch("app.vision.describe",
+             mock.patch("app.integrations.vision.describe",
                         return_value='{"allow": false, "category": "nudity"}'), \
              mock.patch.object(image_audit, "_notify_blocked") as notify:
             self.assertFalse(image_audit.allow_send(
@@ -392,7 +392,7 @@ class AllowSendTest(unittest.TestCase):
     def test_vision_failure_blocks(self):
         """fail-closed 的端到端验证：识图挂了，图发不出去，并且回一句提示。"""
         with self._with_enabled(True), \
-             mock.patch("app.vision.describe", side_effect=RuntimeError("boom")), \
+             mock.patch("app.integrations.vision.describe", side_effect=RuntimeError("boom")), \
              mock.patch.object(image_audit, "_notify_blocked") as notify:
             self.assertFalse(image_audit.allow_send(
                 self.path, "qq", "group", "123"))
@@ -401,7 +401,7 @@ class AllowSendTest(unittest.TestCase):
     def test_notify_false_silent_block(self):
         """notify=False（随机口令静默重抽）：拦下但**不回话**，话术归 image_jobs。"""
         with self._with_enabled(True), \
-             mock.patch("app.vision.describe",
+             mock.patch("app.integrations.vision.describe",
                         return_value='{"allow": false, "category": "pose"}'), \
              mock.patch.object(image_audit, "_notify_blocked") as notify:
             self.assertFalse(image_audit.allow_send(
@@ -411,7 +411,7 @@ class AllowSendTest(unittest.TestCase):
     def test_web_target_always_passes(self):
         """target=None（网页端）直接放行，连开关都不读。"""
         with mock.patch.object(agents, "image_audit_enabled") as gate, \
-             mock.patch("app.vision.describe") as desc:
+             mock.patch("app.integrations.vision.describe") as desc:
             self.assertTrue(image_audit.allow_send(
                 self.path, "qq", None, None))
         gate.assert_not_called()
@@ -425,7 +425,7 @@ class AllowSendTest(unittest.TestCase):
         （16:26 实测同一会话第 3 页被拦、第 4 页正常）。
         """
         with mock.patch.object(agents, "image_audit_enabled") as gate, \
-             mock.patch("app.vision.describe") as desc, \
+             mock.patch("app.integrations.vision.describe") as desc, \
              mock.patch("app.features.image.review.record") as rec:
             self.assertTrue(image_audit.allow_send(
                 self.path, "qq", "private", "web_2509355624"))
@@ -436,7 +436,7 @@ class AllowSendTest(unittest.TestCase):
     def test_numeric_target_not_confused_with_web(self):
         """QQ 号是纯数字，不会被 `web_` 前缀判定误伤——开关照读、照审。"""
         with self._with_enabled(True), \
-             mock.patch("app.vision.describe",
+             mock.patch("app.integrations.vision.describe",
                         return_value='{"allow": false, "category": "nudity"}'):
             self.assertFalse(image_audit.allow_send(
                 self.path, "qq", "private", "2509355624"))
@@ -450,7 +450,7 @@ class AllowSendTest(unittest.TestCase):
         """
         with mock.patch.object(agents, "image_audit_enabled",
                                side_effect=OSError("settings 读挂了")), \
-             mock.patch("app.vision.describe") as desc:
+             mock.patch("app.integrations.vision.describe") as desc:
             self.assertTrue(image_audit.allow_send(
                 self.path, "qq", "group", "123"))
         desc.assert_not_called()
@@ -632,7 +632,7 @@ class PromptOverrideTest(unittest.TestCase):
         """check() 不传 prompt（测试、或直接调用）时仍然是内置那份。"""
         path = _write_png()
         try:
-            with mock.patch("app.vision.describe",
+            with mock.patch("app.integrations.vision.describe",
                             return_value='{"allow": true}') as desc:
                 image_audit.check(path)
             self.assertEqual(desc.call_args[1]["prompt"], image_audit._PROMPT)
@@ -648,7 +648,7 @@ class PromptOverrideTest(unittest.TestCase):
                  mock.patch.object(agents, "load_settings",
                                    return_value={"image_audit_prompt":
                                                  "我的口径"}), \
-                 mock.patch("app.vision.describe",
+                 mock.patch("app.integrations.vision.describe",
                             return_value='{"allow": true}') as desc:
                 self.assertTrue(image_audit.allow_send(
                     path, "qq", "group", "123"))

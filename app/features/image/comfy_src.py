@@ -92,7 +92,7 @@ def resolve(spec):
     把垫了哪张说错。失败抛 RuntimeError。
     """
     from app import qq_api
-    from app.vision import fetch_image
+    from app.integrations.vision import fetch_image
 
     spec = str(spec or "").strip()
     target, target_id = qq_api.current_context()

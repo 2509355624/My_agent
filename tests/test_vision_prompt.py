@@ -18,7 +18,7 @@ from unittest import mock
 
 from app import agents
 from app import main
-from app import vision
+from app.integrations import vision
 
 
 class BuildPromptBaseTest(unittest.TestCase):
@@ -108,7 +108,7 @@ class AgentUsesCustomPromptTest(unittest.TestCase):
             seen.append(prompt)
             return "一只猫"
 
-        with mock.patch("app.vision.describe", fake_describe), \
+        with mock.patch("app.integrations.vision.describe", fake_describe), \
              mock.patch.object(agents, "vision_prompt",
                                return_value=custom) as vp:
             out = self._call(**kw)
@@ -138,7 +138,7 @@ class AgentUsesCustomPromptTest(unittest.TestCase):
     def test_no_agent_id_falls_back_to_builtin(self):
         """老调用方不传 agent_id（含测试里的直接调用）→ 行为与从前一致。"""
         seen = []
-        with mock.patch("app.vision.describe",
+        with mock.patch("app.integrations.vision.describe",
                         lambda data_url, timeout=None, prompt=None:
                         seen.append(prompt) or "一只猫"):
             from app import agent

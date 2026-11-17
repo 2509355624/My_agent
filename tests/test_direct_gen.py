@@ -1019,7 +1019,7 @@ class QuoteImageIntentTest(unittest.TestCase):
                                return_value="group_1"), \
              mock.patch.object(direct_gen.qq_api, "current_quoted_text",
                                return_value=quoted), \
-             mock.patch("app.vision.describe", return_value=seen), \
+             mock.patch("app.integrations.vision.describe", return_value=seen), \
              mock.patch.object(direct_gen.image_log, "lookup",
                                return_value=lookup_row), \
              mock.patch.object(gi, "_generate_image",
@@ -1256,7 +1256,7 @@ class RevisionPipelineTest(unittest.TestCase):
                                return_value="group_1"), \
              mock.patch.object(direct_gen.qq_api, "current_quoted_text",
                                return_value=quoted), \
-             mock.patch("app.vision.describe",
+             mock.patch("app.integrations.vision.describe",
                         side_effect=describe_side_effect,
                         return_value=seen) as m_describe, \
              mock.patch.object(direct_gen.image_log, "lookup",
@@ -2088,7 +2088,7 @@ class QuotedComicTest(unittest.TestCase):
                                return_value="private_455242826"), \
              mock.patch.object(direct_gen.qq_api, "current_quoted_text",
                                return_value=quoted), \
-             mock.patch("app.vision.describe", return_value=seen), \
+             mock.patch("app.integrations.vision.describe", return_value=seen), \
              mock.patch.object(direct_gen.image_log, "lookup",
                                return_value=None), \
              mock.patch("app.llm.call_llm", return_value=seen), \
@@ -2244,7 +2244,7 @@ class NamedChannelBeatsComicTest(unittest.TestCase):
                                return_value=""), \
              mock.patch.object(direct_gen.image_log, "lookup",
                                return_value=None), \
-             mock.patch("app.vision.describe",
+             mock.patch("app.integrations.vision.describe",
                         side_effect=[json.dumps(self.COMIC),
                                      json.dumps(self.SINGLE)]) as m_desc, \
              mock.patch.object(gi, "_generate_image",
@@ -2604,7 +2604,7 @@ class DescribeImageTest(unittest.TestCase):
                                return_value="group_1"), \
              mock.patch.object(direct_gen.qq_api, "current_quoted_text",
                                return_value=quoted), \
-             mock.patch("app.vision.describe",
+             mock.patch("app.integrations.vision.describe",
                         side_effect=describe_side_effect,
                         return_value=describe_reply) as m_describe, \
              mock.patch.object(direct_gen.image_log, "lookup",
@@ -2653,7 +2653,7 @@ class ReverseTriggerTest(unittest.TestCase):
                                return_value="group_1"), \
              mock.patch.object(direct_gen.qq_api, "current_quoted_text",
                                return_value=quoted), \
-             mock.patch("app.vision.describe",
+             mock.patch("app.integrations.vision.describe",
                         return_value=describe_reply) as m_describe, \
              mock.patch.object(direct_gen.image_log, "lookup",
                                return_value=lookup_row), \
@@ -2745,7 +2745,7 @@ class MultiImageReverseTest(unittest.TestCase):
                                return_value="group_1"), \
              mock.patch.object(direct_gen.qq_api, "current_quoted_text",
                                return_value=""), \
-             mock.patch("app.vision.describe",
+             mock.patch("app.integrations.vision.describe",
                         side_effect=describe_side), \
              mock.patch.object(gi, "_generate_image",
                                return_value=RECEIPT) as m_gen:
@@ -2785,7 +2785,7 @@ class BareImageTest(unittest.TestCase):
                                return_value="private_9"), \
              mock.patch.object(direct_gen.qq_api, "current_quoted_text",
                                return_value=""), \
-             mock.patch("app.vision.describe",
+             mock.patch("app.integrations.vision.describe",
                         return_value=seen) as m_describe, \
              mock.patch.object(gi, "_generate_image",
                                return_value=RECEIPT) as m_gen:
@@ -3217,7 +3217,7 @@ class PromptAskNarrowTest(unittest.TestCase):
                                return_value="group_1"), \
              mock.patch.object(direct_gen.qq_api, "current_quoted_text",
                                return_value=quoted), \
-             mock.patch("app.vision.describe",
+             mock.patch("app.integrations.vision.describe",
                         return_value=describe_reply) as m_describe, \
              mock.patch.object(direct_gen.image_log, "lookup",
                                return_value=lookup_row), \
@@ -3296,7 +3296,7 @@ class ViewPromptKeywordTest(unittest.TestCase):
                                return_value="group_1"), \
              mock.patch.object(direct_gen.qq_api, "current_quoted_text",
                                return_value=quoted), \
-             mock.patch("app.vision.describe",
+             mock.patch("app.integrations.vision.describe",
                         return_value=describe_reply) as m_describe, \
              mock.patch.object(direct_gen.image_log, "lookup",
                                return_value=lookup_row), \
@@ -3907,7 +3907,7 @@ class DecidePrefetchTest(unittest.TestCase):
 class ReviseSearchTest(unittest.TestCase):
     """改图管道 `_revise` 也要吃前置搜索的资料。
 
-    2026-10-06 查真机日志发现的缺口：`_revise` 走 `app.vision.describe()`，
+    2026-10-06 查真机日志发现的缺口：`_revise` 走 `app.integrations.vision.describe()`，
     **根本不经过 `_translate`**，所以群里最常见的「图生图，角色换XX」
     从来没走过搜索（芽衣 / 琪亚娜 / 伊洛玛丽三轮日志里零文本 LLM 调用）。
     """
@@ -3920,7 +3920,7 @@ class ReviseSearchTest(unittest.TestCase):
             seen["prompt"] = prompt or ""
             return '{"skill": "hd_3_clear", "prompt": "raiden mei, 1girl"}'
 
-        with mock.patch("app.vision.describe", side_effect=fake_describe):
+        with mock.patch("app.integrations.vision.describe", side_effect=fake_describe):
             with mock.patch.object(direct_gen, "_enqueue", return_value="ok"):
                 with mock.patch.object(direct_gen, "_remember_job"):
                     direct_gen._revise("角色换芽衣", ["http://x/1.png"], [],
@@ -4356,7 +4356,7 @@ class QuotedPresetTest(unittest.TestCase):
                                return_value="group_1"), \
              mock.patch.object(direct_gen.qq_api, "current_quoted_text",
                                return_value=""), \
-             mock.patch("app.vision.describe", return_value=seen), \
+             mock.patch("app.integrations.vision.describe", return_value=seen), \
              mock.patch.object(direct_gen.image_log, "lookup",
                                return_value=None), \
              mock.patch.object(gi, "_generate_image",

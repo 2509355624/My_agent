@@ -109,7 +109,7 @@ class OutboundProxyTest(unittest.TestCase):
         self.assertFalse(llm._session.trust_env)
 
     def test_vision_session_ignores_system_proxy(self):
-        from app import vision
+        from app.integrations import vision
         self.assertFalse(vision._session.trust_env)
 
 

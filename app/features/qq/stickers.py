@@ -35,7 +35,7 @@ import threading
 import time
 
 from app import agents as agent_store
-from app.vision import fetch_image, sniff_mime
+from app.integrations.vision import fetch_image, sniff_mime
 
 log = logging.getLogger("stickers")
 
@@ -147,7 +147,7 @@ def _tag(data_url):
     （"猫瘫在桌上打滚"和"熊猫头瞪眼"都是"无语"，但用起来完全两码事）。
     """
     from app.config import VISION_TIMEOUT
-    from app.vision import describe
+    from app.integrations.vision import describe
 
     prompt = (
         "这是QQ聊天里的表情包。先用不超过12个字描述画面内容"
@@ -233,7 +233,7 @@ def ingest(agent_id, url, sender):
             log.warning("表情包落盘失败：%s", exc)
             return "fail", None, "落盘失败"
         try:
-            from app.vision import to_data_url
+            from app.integrations.vision import to_data_url
             desc, tags = _tag(to_data_url(raw))
         except Exception:
             desc, tags = "", []
