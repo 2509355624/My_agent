@@ -249,7 +249,6 @@ NOTE_SOFT = 900
 # 2026-11-10 放宽到 600：用户报「跨天记不住细节」，320 字把账本每节末尾
 # 2~3 条压成骨架，具体物件与事件被裁掉。多出来的字落在末尾 miss 区，
 # 每轮约多 200 token，比把细节丢了再让模型编一遍便宜。
-STORY_MAX_CHARS = 600
 
 # 扮演态的静默窗口（秒）：这之内的连发算同一条。用户 2026-10-16 定的 10 秒。
 # 群聊默认那 1.5 秒是给「连发三句问同一件事」用的；聊天不一样——人打字是
@@ -267,6 +266,10 @@ from app.features.persona.contract import (
 )
 
 from app.features.persona import state_store
+from app.features.persona.story import (
+    STORY_MAX_CHARS, _clip_items, _ledger_section,
+    _shares_phrase, story_line,
+)
 
 
 
@@ -4254,140 +4257,6 @@ def _gameday_block(gd, new_day=False):
         lines.append("这一天已经过了很久，天色不早了。这一拍可以从容收住，"
                      "眼前正在发生的事也可以接着往下演。")
     return "\n".join(lines)
-
-
-def _ledger_section(note, key):
-    """从六小节账本里抽一节的条目；散文账本返回 []。
-
-    账本有两种历史形态：2026-11-05 之后是六小节 Markdown，之前是整段散文
-    （`_clip_note` 保头保尾截断）。这里只认前者，散文不去猜结构——猜错比
-    不拼更糟。key 用子串匹配，所以「约定」能对上「约定与未完成」。
-    """
-    text = str(note or "")
-    if not text.strip() or "#" not in text:
-        return []
-    out, cur = [], ""
-    for line in text.splitlines():
-        s = line.strip()
-        m = re.match(r"^#{1,3}\s*(.+?)\s*$", s)
-        if m:
-            cur = m.group(1)
-            continue
-        if not s or not cur or key not in cur:
-            continue
-        s = re.sub(r"^[-*·]\s*", "", s)
-        if s:
-            out.append(s)
-    return out
-
-
-def _clip_items(items, count, per):
-    """取最后 count 条、每条压到 per 字，去重保序。
-
-    条目标自带的句末标点先剥掉：账本每条都以「。」结尾，直接拿「；」
-    连起来会拼出「。；」这种双重标点。
-    """
-    out, seen = [], set()
-    for s in (items or [])[-max(1, int(count)):]:
-        s = " ".join(str(s or "").split()).rstrip("。；，、")
-        if not s or s in seen:
-            continue
-        seen.add(s)
-        out.append(s if len(s) <= per else s[:per].rstrip("。；，、") + "…")
-    return out
-
-
-_PUNCT_CHARS = "，。；、！？…—·「」“”‘’（）()[],.!?;: \t\n"
-
-
-def _shares_phrase(a, b, thr=0.35):
-    """两句话是不是在说同一件事（去标点后的字符重叠度）。
-
-    用来判断「gameday.plan」和账本「约定与未完成」是不是同一条约定：
-    玩家在同一条线上，这两处经常记着同一件事（一个结构化、一个一句话），
-    不去重就会在近因位连写两遍，白白摊薄注意力。
-
-    用字符集合的 Jaccard 而不是子串匹配：两边措辞常常是改写过的
-    （「一起买菜回家做饭」对「下课后一起去超市买菜，然后上你家做饭」），
-    4 字子串一个都命不中，但字符重叠度能到 0.39；而真正无关的那条
-    （「下一顿早餐她亲手做给你吃」）只有 0.11，阈值 0.35 能分开。
-    """
-    sa = {ch for ch in str(a or "") if ch not in _PUNCT_CHARS}
-    sb = {ch for ch in str(b or "") if ch not in _PUNCT_CHARS}
-    if len(sa) < 4 or len(sb) < 4:
-        return False
-    return len(sa & sb) / len(sa | sb) >= thr
-
-
-def story_line(gd, note=""):
-    """【故事到现在】——时间、已经发生的事、还没完成的事，排成一条线。
-
-    2026-11-07 用户报「AI 不知道前面几轮聊的事情怎么发展下来」。诊断下来
-    不是窗口太小，是**没有任何一层按时间把因果串起来**：12 条窗口是散的
-    对话，账本是六小节的条目，gameday 只有天数地点。模型每一拍都要自己
-    从这三处归纳「我现在在故事哪一段」，长对话里这步最容易失败。
-
-    这里只做重组，不新增信息、不调模型：
-      · 时间线来自 `gameday`（第几天 / 时段 / 所在地）；
-      · 已经发生来自 `gameday.event` + 账本「你的事 / 她的事」末尾几条；
-      · 还没完成来自 `gameday.plan` + 账本「约定与未完成」。
-
-    任一部分缺失就跳过那一段；全空返回空串——新线、自由模式没开天数时，
-    那 12 条窗口本来就覆盖了全部历史，不需要额外提醒。
-    """
-    gd = gd if isinstance(gd, dict) else {}
-    day = _as_int(gd.get("day"), 0, 0, 99999)
-    phase = str(gd.get("phase") or "").strip()
-    place = str(gd.get("place") or "").strip()
-    event = str(gd.get("event") or "").strip()
-    plan = str(gd.get("plan") or "").strip()
-    plan_day = _as_int(gd.get("plan_day"), 0, 0, 99999)
-
-    ledger = _ledger_fix_pronouns(note) if note else ""
-    done = (_clip_items(_ledger_section(ledger, "你的事"), 3, 60)
-            + _clip_items(_ledger_section(ledger, "她的事"), 3, 60))
-    todo = _clip_items(_ledger_section(ledger, "约定"), 4, 50)
-
-    parts = []
-    if day:
-        stamp = "第 %d 天" % day
-        if phase:
-            stamp += " · " + phase
-        if place:
-            stamp += " · " + place
-        parts.append("时间：" + stamp)
-    if event:
-        # `_roll_event` 给兑现过的约定加了「已经办完：」前缀，展示时去掉。
-        if event.startswith("已经办完："):
-            parts.append("今天已经办完：" + event[len("已经办完："):])
-        else:
-            parts.append("今天：" + event)
-    if done:
-        parts.append("已经发生：" + "；".join(done))
-    if plan:
-        if plan_day and plan_day > day:
-            when = "（约在第 %d 天）" % plan_day
-        elif plan_day:
-            when = "（第 %d 天约的，那天已经过了）" % plan_day
-        else:
-            when = ""
-        # 账本里已经记着同一条约定时只留结构化那条：它带天数，信息更全。
-        todo = [t for t in todo if not _shares_phrase(plan, t)]
-        todo = [plan + when] + todo
-    if todo:
-        # 2026-11-10：以前硬写「还没完成：」＝代码替模型断言这件事没做完。
-        # 账本里明明写着「已破 / 已拿走 / 不会再做了」也照样被列成待办，
-        # 跨天就一遍遍重演。改成只报「账本记着」，判断权交回模型。
-        parts.append("账本里还记着的约定：" + "；".join(todo[:5]))
-    if not parts:
-        return ""
-    body = "\n".join(parts)
-    if len(body) > STORY_MAX_CHARS:
-        body = body[:STORY_MAX_CHARS].rstrip("；，、") + "…"
-    return ("【故事到现在】\n" + body
-            + "\n已经办完的事就是过去了；约定做到没做到，对照上面的事实和"
-              "刚才的对话自己判断，做过的事留在昨天。"
-              "这一拍接着眼前正在发生的事往下写。")
 
 
 def game_day(session_key):
