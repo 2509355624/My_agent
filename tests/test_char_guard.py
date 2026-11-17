@@ -8,7 +8,7 @@
 import unittest
 from unittest import mock
 
-from app import char_guard
+from app.features.image import char_guard
 
 
 HU_TAO_PROMPT = (
