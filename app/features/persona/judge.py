@@ -11,7 +11,9 @@ from app.features.persona.judge_fields import (
     _director_fields, _item_keys_text, _judge_ledger, _norm_finish,
 )
 from app.features.persona.prompt_facts import _FACTS_GUIDE
-from app.features.persona.prompts import _INTENT_PROMPT, _SCORE_PROMPT
+from app.features.persona.prompts import (
+    _INTENT_PROMPT, _SCORE_PROMPT, _SCORE_PROMPT_V2,
+)
 
 log = logging.getLogger("persona")
 
@@ -185,4 +187,110 @@ def judge_intent_scored(card, said, state="", line_key="", gameday=None,
     log.info("[score] act=%r spot=%r excite=%r dev=%r Δ=%r",
              d.get("act"), d.get("spot"), d.get("excite"), d.get("dev"),
              d.get("delta"))
+    return intent, note, score
+
+
+def score_profile(card, state="", key=""):
+    from app.features.persona import service as svc
+    """打分用的「她是谁」：名字 + 当前状态 + 性格 + 设定。
+
+    2026-11-03：以前只传名字，等于所有卡共用一把尺子，谁都不难攻略。现在把
+    性格和设定给打分模型，让它按**这个人的感受**判分值——黏人的角色靠近就
+    加分，戒备的角色同样的靠近要扣分，难度自然长在卡上，而不是长在代码里。
+
+    截断是为了控制这段的长度：personality 常见一两百字，description 可能
+    几千字，全塞进去既慢又容易把「他说的」挤到后面被忽略。1600 字的卡
+    前面这段就够模型认人了。
+    """
+    c = card if isinstance(card, dict) else {}
+    name = svc.char_name(c, "对方", key=key)
+    lines = ["- 名字：" + name + (("（" + state + "）") if state else "")]
+    p = str(c.get("personality") or "").strip()
+    if p:
+        lines.append("- 性格：" + p[:200])
+    d = str(c.get("description") or "").strip()
+    if d:
+        lines.append("- 设定：" + d[:300])
+    sb = svc._state_behavior_text(c)
+    if sb:
+        lines.append("- 状态下的她（不是阈值，是她高值时会怎么变）：\n" + sb)
+    return "\n".join(lines)
+
+
+# ── v2 正向关系线的第一段（2026-11-08）─────────────────────────
+# 和上面那份 v1 打分提示词完全分开：v1 那套服务的是老档的距离层级 /
+# 冲动 / 高潮 / 堕落 / 开发度，v2 一条都不碰。这里只判四条正向轴，
+# 而且**每一轴都用中文把「这个数是什么意思」说清楚**——只扔英文字段名
+# 给第二段演员，它根本不知道前面算的表白值代表什么，等于白算。
+
+
+def judge_v2(card, said, state="", line_key="", gameday=None,
+             history=None, note=""):
+    from app.features.persona import service as svc
+    """v2 的第一段：意图 + 四条正向轴 + 分段/导演条。返回 `(intent, note, score)`。
+
+    判断失败返回 `(None, "", None)`——按 0 分走，不让整轮回不了话。
+    """
+    gd = gameday if isinstance(gameday, dict) else {}
+    plan = str(gd.get("plan") or "").strip()
+    ctx = affection.scoring_ctx(line_key) or {}
+    # 前缀缓存（2026-11-10）：模板里「稳定规则在前、这一轮事实在末尾」。
+    # 早期版本把动态数值放在第 3 行，整段提示词每轮都变，hit 恒为 0；
+    # 现在前半段逐字节不变，DeepSeek 能整段命中，只有末尾事实按 miss 付。
+    # 调用仍是单条 user 消息，消息结构没动。
+    prompt = _SCORE_PROMPT_V2 % {
+        "relation_name": ctx.get("relation_name") or "正常关系",
+        "relation_desc": ctx.get("relation_desc") or "",
+        "together": ("你们已经在一起了。" if ctx.get("together")
+                     else "还没在一起；没表白之前，关系档不会自己往前跳。"),
+        "contact_name": ctx.get("contact_name") or "还没碰过",
+        "confess": int(ctx.get("confess") or 0),
+        "confess_max": int(ctx.get("confess_max") or 50),
+        "confess_name": ctx.get("confess_name") or "还没想过",
+        "confess_desc": ctx.get("confess_desc") or "",
+        "yandere_name": ctx.get("yandere_name") or "没有",
+        "dev": ctx.get("devText") or "（五处都还没被开发过）",
+        "item_keys": _item_keys_text(),
+        "recent": ctx.get("recent") or "（你们还没什么交集）",
+        "gday": _day_of(gd),
+        "gphase": str(gd.get("phase") or "还没定"),
+        "gplan": _plan_fact(gd, plan),
+        "profile": svc._score_profile(card, "", key=line_key),
+        # 上一轮状态逐轮会变，从「她是谁」里拆出来留在事实段：
+        # 卡面那段因此恒定，能整段吃前缀缓存；信息一点没少给。
+        "state_line": ("她上一轮身上的状态：" + str(state) + "\n")
+                      if str(state or "").strip() else "",
+        "said": str(said or "")[:2000],
+        "history": svc._judge_recent(history),
+        "ledger": _judge_ledger(note),
+        "facts_guide": _FACTS_GUIDE,
+    }
+    try:
+        raw = svc._llm_call([{"role": "user", "content": prompt}], timeout=LLM_JUDGE_TIMEOUT)
+    except Exception:                            # noqa: BLE001
+        log.warning("v2 打分调用失败，按 0 分走")
+        return None, "", None
+    d = _parse_json_loose(raw)
+    if not isinstance(d, dict):
+        log.warning("v2 没交 JSON，按 0 分走（共 %d 字）：头=%r 尾=%r",
+                    len(str(raw or "")), str(raw or "")[:120],
+                    str(raw or "")[-120:])
+        return None, "", None
+    intent = str(d.get("intent") or "").strip().lower()
+    if intent not in INTENTS:
+        intent = None
+    note = str(d.get("note") or "").strip()[:30]
+    # settle_v2 只认这个 dict，少带一项等于模型白判。
+    score = {k: d.get(k) for k in (
+        "delta", "turn_type", "reason", "contact", "confess", "finish",
+        "yandere", "proposal", "accept", "refused_confession", "facts",
+        "addressed", "secret", "time", "phase", "plan", "place")}
+    # adult（2026-11-08）：身体这条线。**原样透传，不在这里净化**——
+    # 结算器 affection_v2_adult.apply 负责 clamp/闸门/回落/去重，
+    # 这里多改一处就多一个离线口径。
+    if isinstance(d.get("adult"), dict):
+        score["adult"] = d["adult"]
+    # items（2026-11-08）：原样透传，净化在 app/items.py 里做。
+    if isinstance(d.get("items"), dict):
+        score["items"] = d["items"]
     return intent, note, score
