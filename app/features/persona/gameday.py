@@ -337,3 +337,11 @@ def skip_day(session_key, sender="", sender_uin="", days=1, doing=""):
     svc._save_mood(key, mood, intensity, state, prev_state, outfit=outfit)
     svc._bump_turn(key)
     return svc.Turn(reply, scene, mood, intensity, state, None)
+
+
+def _apply_gameday(key, score=None, force_new_day=False, days=1):
+    """把这一轮的时间推进落账，返回最新 svc.gameday。"""
+    from app.features.persona import service as svc
+
+    return svc.gameday.apply(key, score, force_new_day, days,
+                         load_state=svc._load_state, save_state=svc._save_state)

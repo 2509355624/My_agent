@@ -260,6 +260,7 @@ from app.features.persona import mood as _mood_store
 from app.features.persona import gameday
 from app.features.persona.wipe import clear, erase as _erase, wipe
 from app.features.persona.commands import handle_command
+from app.features.persona.gameday import _apply_gameday
 _DRAW_ERR = threading.local()
 
 
@@ -1723,10 +1724,6 @@ def _director_block(info, plot=""):
 
 # 同一天聊过这个轮数，就往注入里塞一句「天色不早了」——兜底用，
 # 正常的过夜应该由打分 AI 的 time=overnight 触发。
-def _apply_gameday(key, score=None, force_new_day=False, days=1):
-    """把这一轮的时间推进落账，返回最新 gameday。"""
-    return gameday.apply(key, score, force_new_day, days,
-                         load_state=_load_state, save_state=_save_state)
 
 
 # ─── 怀孕 / 时间跳跃（2026-11-05）────────────────────────
