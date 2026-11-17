@@ -23,7 +23,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-from app import image_jobs, image_log, job_ledger
+from app import image_jobs, job_ledger
+from app.features.image import log as image_log
 
 
 class _TempLedger(unittest.TestCase):

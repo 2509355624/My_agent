@@ -172,7 +172,8 @@ import time
 
 import requests
 
-from app import comfy_gate, comfy_launch, comfy_out, comfy_progress, image_log
+from app import comfy_gate, comfy_launch, comfy_out, comfy_progress
+from app.features.image import log as image_log
 from app.cancel import Cancelled, is_cancelled
 from app.config import (BASE_DIR, COMFY_MIN_FREE_RAM_GB, COMFY_MIN_FREE_VRAM_GB,
                         COMFY_RELEASE_AFTER_COMIC,
@@ -728,7 +729,7 @@ class Job:
         self.started = None
         # 这张图的编号（形如 HT-20261001-074112-384）。发图时当 caption 贴在
         # 图片上，群友引用那条消息时编号会跟着引用回到模型眼前
-        # （见 app/image_log.py）。
+        # （见 app/features/image/log.py）。
         # **在入队这一刻定下来**：worker 发图要用它，之后写账本也要用它，两处
         # 必须是同一个值。传 tag 只给测试固定编号用。
         self.tag = tag or image_log.new_tag()
@@ -1114,7 +1115,7 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
     """把一张图排进**它该去的那条通道**的队列，返回 (job, reason)。
 
     prompt 是模型写的那段原始提示词，只用来**出图后记进账本**（编号 → 提示词，
-    见 app/image_log.py）；生图本身用的是 workflow，这里传不传都不影响出图。
+    见 app/features/image/log.py）；生图本身用的是 workflow，这里传不传都不影响出图。
 
     reason 非 None 表示没接（此时 job 为 None），它是一句可以直接转述给对方
     的话。三种拒收：这条队排太长、这个会话自己排太多、重渠道已经排了太多。
@@ -3138,7 +3139,7 @@ def _caption(tag, path, skill, image_out, seed=None, anima_draw=None):
     """图上那行字：`编号 · 分辨率 · 渠道 · seed 数字`。
 
     编号**必须在最前且原样**——它是群友引用那条消息时被正则抠回来的锚点
-    （见 app/image_log.py，TAG_RE 只认 `HT-` 开头那一串）。后面几项纯粹是给
+    （见 app/features/image/log.py，TAG_RE 只认 `HT-` 开头那一串）。后面几项纯粹是给
     人看的附注，读不出来就少一项，不影响编号。
 
     为什么要在这行里带 seed（2026-10-02 用户提，需求是「图有多手多脚，拿种子
@@ -3266,7 +3267,7 @@ def _send_image(target, target_id, filename, tag="", skill="", seed=None,
     调用方靠它区分「发了」和「被拦了」，别把拦截记成发送失败。
 
     tag / skill / seed 是这张图的编号、渠道和种子，作为 caption 和图片放在
-    **同一条消息**里（见 app/image_log.py 与本文件 `_caption`）：群友引用这条
+    **同一条消息**里（见 app/features/image/log.py 与本文件 `_caption`）：群友引用这条
     消息时它们会跟着引用回到模型眼前。不传 tag = 不加那行字，行为与从前一致；
     不传 seed = 那一段不写。
 

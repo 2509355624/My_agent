@@ -1,4 +1,4 @@
-"""生图编号（app/image_log.py）的格式约束 + 编号→提示词账本。
+"""生图编号（app/features/image/log.py）的格式约束 + 编号→提示词账本。
 
 最要紧的一条是 **编号必须原样活过 `qq_api.to_qq_text`**：发图时它是 caption，
 会先过一遍 Markdown 降级——行首的 `-`/`*`/`+` 会被当列表符剥掉、行首 `#`
@@ -13,7 +13,7 @@ import time
 import unittest
 
 import app.config as config
-from app import image_log
+from app.features.image import log as image_log
 from app import qq_api
 
 

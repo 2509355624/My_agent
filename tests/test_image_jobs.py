@@ -16,7 +16,7 @@ import requests
 import app.agents as agents
 from app import comfy_src
 from app import image_jobs
-from app import image_log
+from app.features.image import log as image_log
 from app import nai
 from app import qq_api
 from app import skills

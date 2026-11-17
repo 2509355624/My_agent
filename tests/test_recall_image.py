@@ -10,7 +10,7 @@ import os
 import tempfile
 import unittest
 
-from app import image_log
+from app.features.image import log as image_log
 from app.tools.normal import recall_image
 
 

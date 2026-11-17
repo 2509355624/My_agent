@@ -344,7 +344,7 @@ def approve(rid):
         # 去了，不补的话「引用这张图问提示词」会查不到。
         if row.get("tag"):
             try:
-                from app import image_log
+                from app.features.image import log as image_log
                 image_log.save(row["tag"], prompt=row.get("prompt") or "",
                                file=row.get("src_file") or "",
                                skill=row.get("skill") or "", target=target,

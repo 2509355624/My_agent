@@ -7,14 +7,14 @@
 摘要掉。于是它只能**现编一段**，跟当时真正跑的那段不是一回事，对方照着跑
 出来的图也对不上。
 
-账本（`app/image_log.py`，`state/image_log.jsonl`）存的就是「编号 → 提示词」
+账本（`app/features/image/log.py`，`state/image_log.jsonl`）存的就是「编号 → 提示词」
 这份对应关系。这个工具只做一件事：拿编号去查，把**当时那一段原文**还给模型。
 拿到之后是原样转述、还是拿去重新生一张，由模型自己决定。
 
 ## 编号从哪来
 
 发图时编号是 caption、和图片在同一条消息里。群友**引用**那条消息，编号就
-跟着引用回到模型眼前（见 app/image_log.py 的模块注释）。所以模型通常是「在
+跟着引用回到模型眼前（见 app/features/image/log.py 的模块注释）。所以模型通常是「在
 对方引用的正文里看到一个 HT-... 」——把它填进来就行。
 
 工具对入参做了兜底：贴一整段引用正文进来也认（内部会正则抠编号），不用
@@ -23,7 +23,7 @@
 
 import time
 
-from app import image_log
+from app.features.image import log as image_log
 
 # 一次最多查几个编号：防止模型把一整段历史贴进来，一口气翻几百行
 _MAX_PER_CALL = 5

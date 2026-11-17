@@ -89,7 +89,7 @@ class RecordTest(_TmpCase):
         """RV- 前缀：撞上 HT- 会被账本正则当成图号，查到错的提示词。"""
         rid = image_review.record(self.src, "group", "233")
         self.assertTrue(rid.startswith("RV-"))
-        from app import image_log
+        from app.features.image import log as image_log
         self.assertEqual([], image_log.find_tags(rid),
                          "二审 id 不能长得像生图编号")
 
@@ -169,7 +169,7 @@ class ApproveTest(_TmpCase):
         """账本只在真发出去之后记——补发完了就得补上，否则引用查不到提示词。"""
         rid = self._blocked()
         with mock.patch("app.qq_api.send_image"), \
-             mock.patch("app.image_log.save") as save:
+             mock.patch("app.features.image.log.save") as save:
             ok, _msg = image_review.approve(rid)
         self.assertTrue(ok)
         save.assert_called_once()

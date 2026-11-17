@@ -77,7 +77,8 @@ import os
 import re
 import time
 
-from app import image_jobs, image_log, llm, qq_api, random_tags, trigger
+from app import image_jobs, llm, qq_api, random_tags, trigger
+from app.features.image import log as image_log
 from app.config import IMAGE_DEFAULT_SKILL, QQ_GROUP_KEYWORDS
 from app.confirm_gate import _ATTRIBUTION_RE
 from app.skills import list_skills, load_skill
