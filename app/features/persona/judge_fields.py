@@ -7,7 +7,7 @@ from app.features.persona.prompt_facts import _parse_facts
 NOTE_MAX_CHARS = 1000
 
 _RAG_DETAIL_RE = re.compile(
-    r"第一次|初次|初夜|初吻|初口|初后|破处|原话|"
+    r"第一次|初次|初夜|初吻|初口|初后|破处|细节|原话|"
     r"当时.{0,8}(?:说|讲)|具体.{0,6}(?:哪|什么|怎么|几)|"
     r"在哪|什么时候|几点|哪天")
 _RAG_PAST_RE = re.compile(

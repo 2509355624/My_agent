@@ -654,6 +654,19 @@ class TurnTest(PersonaBase):
             persona.run_turn(self.KEY, "上次我们干嘛了", "private")
         self.assertEqual(bb.call_args.kwargs.get("mode"), "summary")
 
+    def test_rag_detail_route_uses_lean_block(self):
+        """detail 仍会翻旧账，但组装层按问法只取需要的层，不每轮拖全量。"""
+        with mock.patch.object(persona, "_judge_intent_scored",
+                               return_value=("neutral", "", {"rag": "detail"})), \
+             mock.patch.object(persona.llm, "call_llm", return_value="嗯。"), \
+             mock.patch.object(persona_rag, "enabled_for", return_value=True), \
+             mock.patch.object(persona_rag, "warm"), \
+             mock.patch.object(persona_rag, "build_block",
+                               return_value="【相关回忆】") as bb:
+            persona.run_turn(self.KEY, "上次我们干嘛了", "private")
+        self.assertEqual(bb.call_args.kwargs.get("mode"), "detail")
+        self.assertTrue(bb.call_args.kwargs.get("lean"))
+
     def test_judge_orders_do_not_reach_the_actor(self):
         """编剧只记数值和事实：它不再给「这一拍怎么写」的指令（2026-11-09）。
 

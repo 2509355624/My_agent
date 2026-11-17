@@ -198,7 +198,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         try:
             rblock = svc.persona_rag.build_block(
                 key, visible, day=day_before, context=svc._rag_context(hist),
-                mode=rag_mode)
+                mode=rag_mode, lean=(rag_mode == "detail"))
         except Exception:                                # noqa: BLE001
             svc.log.exception("回忆注入失败 %s", key)
     if rag_on:

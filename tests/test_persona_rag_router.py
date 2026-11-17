@@ -29,6 +29,7 @@ class RagValueTest(unittest.TestCase):
         self.assertEqual(F.rag_fallback("上次我们干嘛了"), "summary")
         self.assertEqual(F.rag_fallback("第一次是在哪"), "detail")
         self.assertEqual(F.rag_fallback("你当时原话怎么说的"), "detail")
+        self.assertEqual(F.rag_fallback("说说那天的细节"), "detail")
 
     def test_resolve_rag_lets_explicit_past_upgrade(self):
         self.assertEqual(F.resolve_rag("none", "继续"), "none")

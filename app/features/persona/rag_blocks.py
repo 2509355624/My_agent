@@ -4,7 +4,8 @@
 `rag.py` 只负责检索/入库/回填；本文件负责把检索结果挑成注入块：
   · `_fact_block` —— 锚点 / 批次 / 原子事实的标签与名额；
   · `_raw_block`  —— 原文层的预算；
-  · `build_block` —— 两路检索 + 三态（detail / summary）拼装。
+  · `build_block` —— 两路检索 + 三态（detail / summary）拼装；
+    detail 可传 `lean=True`，按问法只取锚点或原文中真正需要的那一层。
 
 所有检索都通过 `rag` 模块对象调用，不直接 import 函数——这样测试和
 展示页对 `persona_rag.retrieve` / `_anchor_docs` 的 patch 仍然生效，
@@ -203,14 +204,18 @@ def _raw_block(docs, trace=None):
 
 
 def build_block(line, query, k=None, day=None, context="", trace=None,
-                extra_lines=(), max_hits=None, mode="detail"):
+                extra_lines=(), max_hits=None, mode="detail", lean=False):
     """拼成能直接塞进最后一条玩家消息的一段；没命中返回空串。
 
     `mode`（2026-11-18）：编剧三态路由的落点。
-      · detail —— 原行为：锚点 + 批次 + 事实 + 原文；
+      · detail —— 锚点 + 批次 + 事实 + 原文；
       · summary —— 批次优先，只留少量事实，不拿原文和锚点；
       · none —— 调用方直接跳过本函数（这里也按 detail 处理，防止误传）。
-    旧调用方不传 mode，默认 detail，返回值和顺序一点不变。
+    旧调用方不传 mode，默认 detail，返回值仍按老行为。
+
+    `lean`（2026-11-18）：只对 detail 生效。泛问「上次」时不再无条件
+    拖上 1,600 字原话和十几条锚点；只有问法里出现「第一次/初夜」才取
+    锚点，出现「原话/当时说/细节」才取原文。summary 本来就两样都不拿。
 
     `extra_lines`（2026-11-15）：额外的只读库。展示页用「母本知识库 +
     访客私有线」两路合并检索；为空时走原来的单库路径，返回值和顺序
@@ -260,9 +265,12 @@ def build_block(line, query, k=None, day=None, context="", trace=None,
     if max_hits:
         docs = docs[:max_hits]
     # 锚点（第一次/初夜/关系确认…）不看距离，直接排最前，见 `_anchor_docs`。
-    # summary 不拿锚点：显式的「第一次」由路由兜底升到 detail，不该在泛问
-    # 「上次」时把十几条只发生一次的事实全塞进去。
-    if not summary:
+    # summary 不拿锚点；detail + lean 也只在问法真的指向「第一次」时才拿，
+    # 避免泛问「上次」时把十几条只发生一次的事实全塞进去。
+    need_anchor = not summary and (not lean or rag_modes.needs_anchor(query))
+    if not need_anchor:
+        docs = [d for d in docs if not rag_modes.is_anchor(d)]
+    if need_anchor:
         anchor = store._anchor_docs(line)
         if anchor:
             seen = {str(d.get("id") or "") for d in anchor}
@@ -277,6 +285,7 @@ def build_block(line, query, k=None, day=None, context="", trace=None,
         trace.clear()
         trace.update({
             "mode": rag_modes.normalize(mode),
+            "lean": bool(lean),
             "query": str(query or ""),
             "context_query": str(context or ""),
             "hit_count": len(docs),
@@ -300,7 +309,8 @@ def build_block(line, query, k=None, day=None, context="", trace=None,
     fact = _fact_block(docs, recent, trace=trace, mode=mode)
     if fact:
         parts.append(fact)
-    if not summary:
+    raw = ""
+    if not summary and (not lean or rag_modes.needs_quote(query)):
         raw = _raw_block(_rec_raw(query), trace=trace)
         if raw:
             parts.append(raw)
@@ -313,10 +323,12 @@ def build_block(line, query, k=None, day=None, context="", trace=None,
             "旧事只能补充，不会被近期闲聊覆盖；里面写到「明天」「下次」的约定"
             "都是当时那一轮的说法，不代表今天还欠着。")
     else:
+        raw_note = ("原话是当时确实说过、做过的细节，用来说明「是谁说的、"
+                    "当时怎么说的」；" if raw else "")
         parts.append(
             "【用法】用户问起自己/双方/角色的既有事实，或「昨天/上次发生过什么」时，"
-            "以此为准。原话是当时确实说过、做过的细节，用来说明「是谁说的、"
-            "当时怎么说的」；当前这一拍接着往下演，正在发生的比旧话更重要。"
+            "以此为准。" + raw_note +
+            "当前这一拍接着往下演，正在发生的比旧话更重要。"
             "旧事实只能补充，不会被近期闲聊覆盖。"
             "她主动提昨天的事是好的，用已经发生过的口吻提；里面写到「明天」"
             "「下次」的约定都是当时那一轮的说法，不代表今天还欠着。")
