@@ -10,7 +10,7 @@
 import unittest
 
 try:
-    from app.rag.vector_store import safe_collection_name
+    from app.features.rag.vector_store import safe_collection_name
     _IMPORT_ERROR = None
 except Exception as e:  # pragma: no cover - 取决于环境是否装了 chromadb
     safe_collection_name = None

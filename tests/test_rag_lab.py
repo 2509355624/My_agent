@@ -19,7 +19,7 @@ from unittest import mock
 
 import flask
 
-from app import rag_lab
+from app.features.rag import lab as rag_lab
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SAMPLE = os.path.join(ROOT, "web", "raglab-sample.md")
@@ -765,9 +765,9 @@ class DaemonStdioEncodingTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        with open(os.path.join(ROOT, "app", "rag", "rag_daemon.py"), encoding="utf-8") as f:
+        with open(os.path.join(ROOT, "app", "features", "rag", "rag_daemon.py"), encoding="utf-8") as f:
             cls.src = f.read()
-        with open(os.path.join(ROOT, "app", "rag", "rag_client.py"), encoding="utf-8") as f:
+        with open(os.path.join(ROOT, "app", "features", "rag", "rag_client.py"), encoding="utf-8") as f:
             cls.client = f.read()
 
     def test_all_three_streams_are_pinned_to_utf8(self):

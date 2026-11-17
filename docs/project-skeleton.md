@@ -192,6 +192,7 @@ def run(job_id: str) -> None:
 | `comic` | `comic*.py`、`moss_*.py`、`silver_comic.py` | 漫画、编剧、渲染、额度、作品 |
 | `persona` | `persona*.py`、`affection*.py`、`galgame.py`、`pregnancy.py`、`achievements.py`、`items.py` | 角色扮演、计费、记忆、查看台 |
 | `rag` | `rag/`、`rag_lab.py`、`rerank.py` | 文档问答、切片、检索、重排 |
+| `rag` 迁移后 | `features/rag/lab.py`、`rag_client.py`、`rag_daemon.py`、`vector_store.py`、`rerank.py` | 已接线，URL 不变 |
 | `novel` | `novel.py`、`novel_api.py`、`novel_writing.py` | 小说模式、世界书、裁定链 |
 | `card` | `card_api.py`、`card_bot.py`、`card_maker.py` | 角色卡生成、封面、五框 |
 | `card` 迁移后 | `features/card/routes.py`、`bot.py`、`service.py` | 已接线，URL 不变 |

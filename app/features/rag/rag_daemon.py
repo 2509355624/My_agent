@@ -15,7 +15,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 HERE = Path(__file__).parent
-ROOT = HERE.parent.parent
+ROOT = HERE.parent.parent.parent
 load_dotenv(ROOT / ".env")
 
 # 把项目根加入 sys.path，确保子进程直接运行脚本时也能导入
@@ -23,8 +23,8 @@ import sys as _sys
 if str(ROOT) not in _sys.path:
     _sys.path.insert(0, str(ROOT))
 
-from app.rag.local_embeddings import LocalEmbeddings, DEFAULT_MODEL  # noqa: E402
-from app.rag.vector_store import VectorStore  # noqa: E402
+from app.features.rag.local_embeddings import LocalEmbeddings, DEFAULT_MODEL  # noqa: E402
+from app.features.rag.vector_store import VectorStore  # noqa: E402
 
 
 def _force_utf8_stdio() -> None:

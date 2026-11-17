@@ -152,8 +152,8 @@ app.register_blueprint(showcase_api.bp)
 
 # 展示页的「文档问答」标签（2026-11-15）：清洗 → 大模型切分 → 小模型向量化 →
 # 检索问答，每一步的中间数据都回给前端。独立 daemon + 独立向量目录，不碰
-# 角色扮演那套记忆库（见 app/rag_lab.py 模块头）。
-from app import rag_lab                            # noqa: E402
+# 角色扮演那套记忆库（见 app/features/rag/lab.py 模块头）。
+from app.features.rag import lab as rag_lab                            # noqa: E402
 app.register_blueprint(rag_lab.bp)
 
 # 角色扮演「查看台」（2026-11-03）：看谁玩过、聊了什么。

@@ -22,6 +22,8 @@ import os
 import sys
 import threading
 
+from app.config import ROOT_DIR
+
 log = logging.getLogger("rerank")
 
 # 测试进程不加载 1GB 模型（和 persona_rag._TESTING 同一惯例）：unittest 环境
@@ -29,7 +31,7 @@ log = logging.getLogger("rerank")
 # 假模型验证。生产进程没有 unittest，默认开。
 _TESTING = "unittest" in sys.modules
 
-_HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_HERE = ROOT_DIR
 _MODEL_DIR = os.getenv(
     "RAG_RERANK_MODEL", os.path.join(_HERE, "models", "bge-reranker-base")).strip()
 _BATCH = max(1, int(os.getenv("RAG_RERANK_BATCH", "16") or 16))

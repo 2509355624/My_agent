@@ -76,7 +76,7 @@ def _doc(c):
 def _emb():
     global _EMB
     if _EMB is None:
-        from app.rag.local_embeddings import LocalEmbeddings
+        from app.features.rag.local_embeddings import LocalEmbeddings
         _EMB = LocalEmbeddings(model_name=PERSONA_RAG_MODEL, device="cpu")
         log.info("角色库向量模型就绪：%s", PERSONA_RAG_MODEL)
     return _EMB

@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from ..config import ROOT_DIR
+from app.config import ROOT_DIR
 
 
 class RagClient:

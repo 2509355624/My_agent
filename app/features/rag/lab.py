@@ -40,8 +40,9 @@ import uuid
 
 from flask import Blueprint, jsonify, request
 
-from app import llm, rerank, vision
-from app.config import DEEPSEEK_MODEL, state_path
+from app import llm, vision
+from app.config import DEEPSEEK_MODEL, ROOT_DIR, state_path
+from app.features.rag import rerank
 
 log = logging.getLogger("rag_lab")
 
@@ -70,8 +71,7 @@ SCAN_PAGE_CHARS = 50           # 一页抽出来不到这么多字 → 按「没
 LAB_EMBED_MODEL = os.getenv("RAG_LAB_MODEL", "BAAI/bge-small-zh-v1.5").strip()
 LAB_DATA_DIR = os.getenv(
     "RAG_LAB_DATA_DIR",
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                 "vector_store", "chroma_lab"))
+    os.path.join(ROOT_DIR, "vector_store", "chroma_lab"))
 
 _STATE = state_path("rag_lab_sessions.json")
 _LOCK = threading.Lock()
@@ -116,7 +116,7 @@ def _client():
     global _CLIENT
     with _CLIENT_LOCK:
         if _CLIENT is None:
-            from app.rag.rag_client import RagClient
+            from app.features.rag.rag_client import RagClient
             _CLIENT = RagClient(env_extra={
                 "LOCAL_EMBEDDING_MODEL": LAB_EMBED_MODEL,
                 "RAG_DATA_DIR": LAB_DATA_DIR,

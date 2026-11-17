@@ -568,7 +568,8 @@ def cmd_run(args):
         # 只放 llm 的 INFO，别的模块保持安静——`[cache]` 是 `app.llm` 打的。
         import logging
         logging.basicConfig(level=logging.INFO, format="%(message)s")
-        for name in ("app.rag", "rag", "LocalEmbeddings", "sentence_transformers"):
+        for name in ("app.features.rag", "app.rag", "rag",
+                     "LocalEmbeddings", "sentence_transformers"):
             logging.getLogger(name).setLevel(logging.WARNING)
     persona = _persona()
     if not persona._entry(key):

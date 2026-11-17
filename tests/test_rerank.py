@@ -10,7 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import rerank
+from app.features.rag import rerank
 
 
 class RerankTest(unittest.TestCase):

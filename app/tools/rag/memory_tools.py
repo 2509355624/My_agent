@@ -11,8 +11,8 @@ import time
 import uuid
 
 from app.qq_api import current_context
-from app.rag.rag_client import RagClient
-from app.rag.vector_store import safe_collection_name
+from app.features.rag.rag_client import RagClient
+from app.features.rag.vector_store import safe_collection_name
 
 # 记忆 collection 前缀
 _MEMORY_PREFIX = "memory_"

@@ -9,8 +9,8 @@ qq_api.current_context() 取，绝不接受模型传入——模型无法跨 QQ 
 import time
 
 from app.qq_api import current_context
-from app.rag.rag_client import RagClient
-from app.rag.vector_store import safe_collection_name
+from app.features.rag.rag_client import RagClient
+from app.features.rag.vector_store import safe_collection_name
 
 # 预设 collection 前缀
 _PRESET_PREFIX = "presets_"

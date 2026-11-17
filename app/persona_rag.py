@@ -48,7 +48,7 @@ import sys
 import threading
 import time
 
-from app import rerank
+from app.features.rag import rerank
 from app.config import (
     PERSONA_MODEL, PERSONA_PROVIDER,
     PERSONA_RAG, PERSONA_RAG_DATA_DIR, PERSONA_RAG_INGEST_EVERY,
@@ -182,7 +182,7 @@ def collection_name(line):
 def _client():
     global _CLIENT
     if _CLIENT is None:
-        from app.rag.rag_client import RagClient
+        from app.features.rag.rag_client import RagClient
         _CLIENT = RagClient(env_extra={
             "LOCAL_EMBEDDING_MODEL": PERSONA_RAG_MODEL,
             "RAG_EMBED_DEVICE": "cpu",
