@@ -317,7 +317,7 @@ class DescribeTest(unittest.TestCase):
 
 
 class VisionFallbackChainTest(unittest.TestCase):
-    """识图**专用**降级链（豆包→mimo→deepseek，2026-10-07 用户拍板）。
+    """识图**专用**降级链（deepseek → mimo，2026-11-15 定）。
 
     关键不变式：
     1. 走管理页/.env 那条路（不显式传 provider）时，首选失败要**依次降级**，
@@ -328,14 +328,14 @@ class VisionFallbackChainTest(unittest.TestCase):
     4. 全链都挂才抛出异常。
     """
 
-    def test_chain_order_is_doubao_mimo_deepseek(self):
+    def test_chain_order_is_deepseek_then_mimo(self):
         cands = vision._chain_candidates("doubao", "")
         self.assertEqual([p for p, _ in cands],
-                         ["doubao", "mimo", "deepseek"])
+                         ["doubao", "deepseek", "mimo"])
 
     def test_primary_is_tried_first_and_not_duplicated(self):
         cands = vision._chain_candidates("mimo", "")
-        self.assertEqual([p for p, _ in cands], ["mimo", "doubao", "deepseek"])
+        self.assertEqual([p for p, _ in cands], ["mimo", "deepseek"])
 
     def test_primary_model_is_preserved(self):
         cands = vision._chain_candidates("deepseek", "deepseek-flash")
@@ -361,9 +361,9 @@ class VisionFallbackChainTest(unittest.TestCase):
         with mock.patch.object(vision, "active_choice", return_value=("doubao", "")), \
                 mock.patch("app.vision._session.post", side_effect=fake):
             self.assertEqual(vision.describe("data:image/jpeg;base64,AAA"), "一只猫")
-        # 两次调用：第一次doubao 挂、第二次 mimo 成功
+        # 两次调用：第一次 doubao 挂、第二次链头 deepseek 成功
         self.assertEqual(len(seen), 2)
-        self.assertIn("xiaomimimo", seen[1])
+        self.assertIn("api.deepseek.com", seen[1])
 
     def test_all_fail_raises_last_error(self):
         fake, seen = self._mock_post([(500, "a"), (500, "b"), (429, "c")])
@@ -827,6 +827,72 @@ class RefusalDetectorTest(unittest.TestCase):
         # 窄判据不认（agent 出口不该拦，它要把后半段留下）
         self.assertFalse(vision.looks_like_api_refusal(mixed))
         self.assertIn("发束走向不自然", agent._vision_usable(mixed))
+
+
+class NoImageDetectorTest(unittest.TestCase):
+    """「上游压根没收到图」判据（2026-11-15）。
+
+    背景见 `vision._NOIMAGE_RE` 上方：HF 中转的 `deepseek-v4.1-flash` 在
+    custom_providers.json 里标着 `vision: true`，实际把 `image_url` 整个丢掉、
+    回一句「No image provided」。它 **HTTP 200、不抛异常**，所以 describe 的
+    降级链一动不动，这句话就一路变成「反推的是：…」发给用户——233 的粉丝群
+    13:31~13:34 连挂 6 次就是这么来的。
+    """
+
+    # 下面 5 条是 2026-11-15 生产日志里的原文（中英都有）
+    REAL_REPLIES = (
+        "No image was provided, so I cannot extract the visible details.",
+        "我没有收到图片——这条消息里只有文字说明，没有附带任何图像内容，所以我无法看到需要反推的细节。",
+        "no image attached, no visible details available",
+        "No image provided, please upload the image so I can reconstruct the prompt.",
+        "我目前看不到图片，请上传图片或描述其内容，我才能用一句话说明其中的形状和颜色。",
+    )
+
+    def test_production_replies_are_hit(self):
+        for t in self.REAL_REPLIES:
+            with self.subTest(t=t[:26]):
+                self.assertTrue(vision.looks_like_no_image(t))
+
+    def test_real_tag_output_is_not_hit(self):
+        """正常反推结果绝不能误判——误判一次就等于白瞎一张图。"""
+        tags = ("1girl, solo, whale girl, light blue hair, long hair, fin ears, "
+                "white blouse, blue skirt, standing on the left side of a red "
+                "wooden desk, holding a white mug in her right hand, outdoors, "
+                "warm afternoon sunlight, anime style")
+        self.assertFalse(vision.looks_like_no_image(tags))
+        self.assertFalse(vision.looks_like_no_image(
+            "这张图中有一个带有白色边框的蓝色长方形，其中心是一个黄色的圆形。"))
+        self.assertFalse(vision.looks_like_no_image(""))
+
+    def test_long_text_is_left_to_the_sentence_splitter(self):
+        """超过 300 字的多半是「看不到 + 一堆猜测」，按拒答同一口径放行，
+        交给 agent._vision_usable 按句剥离。"""
+        long = "No image provided. " + "这里是一段很长的补充说明。" * 40
+        self.assertGreater(len(long), vision._REFUSE_MAX_LEN)
+        self.assertFalse(vision.looks_like_no_image(long))
+
+    def test_blind_provider_triggers_fallback(self):
+        """核心修复：上游说「没图」时必须抛异常，降级链才能换到下一家。
+
+        改这里之前的行为是「当成识图结果返回」，所以这条测试就是那条
+        bug 的回归守卫。
+        """
+        seen = []
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            seen.append(url)
+            r = _resp(status=200)
+            r.json.return_value = {"choices": [{"message": {"content": (
+                "No image was provided, so I cannot extract the visible details."
+                if len(seen) == 1 else "一只橘猫趴在窗台上")}}]}
+            return r
+
+        with mock.patch.object(vision, "active_choice", return_value=("doubao", "")), \
+                mock.patch("app.vision._session.post", side_effect=fake_post):
+            out = vision.describe("data:image/jpeg;base64,AAA")
+        self.assertEqual(out, "一只橘猫趴在窗台上")
+        self.assertEqual(len(seen), 2)          # 第一家的「没图」被弃掉，换了一家
+        self.assertIn("api.deepseek.com", seen[1])
 
 
 if __name__ == "__main__":

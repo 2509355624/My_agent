@@ -50,7 +50,12 @@ log = logging.getLogger("vision")
 # 2026-10-25 用户拍板：普通识图主选由 agents/<id>/settings.json 的 vision_model
 # 给，备用只留 DeepSeek 官方；原链里的 doubao / mimo 撤掉，避免把纯文本或已是
 # 首选的 provider 重复试一遍。
-VISION_FALLBACK_CHAIN = ("deepseek",)
+#
+# 2026-11-15 把 **mimo 加回第二备用**：当时撤它的理由是「纯文本」，实测不成立
+# （同一张 320×200 PNG，mimo 准确描述出蓝底白框黄圆）。现在主选已从 HF 中转
+# 换成 deepseek 官方，链里只剩一家等于没有兜底——deepseek 那边一欠费/限流，
+# 群友引用图就整条读不出来。
+VISION_FALLBACK_CHAIN = ("deepseek", "mimo")
 
 
 # ─── 「上游拒答 / 报错被当成识图结果」的判据（2026-10-07）──────────────
@@ -89,7 +94,50 @@ _TAGLIKE_RE = re.compile(r"[a-z][a-z0-9_]{2,}\s*,")
 
 # 整段超过这么多字就不再当「纯拒答」：真拒答都很短；长文多半是
 # 「拒绝开头 + 有效内容」，留给 agent._vision_usable 按句剥离。
+# （「上游没收到图」判据也共用这一档上限，见下面 _NOIMAGE_RE。）
 _REFUSE_MAX_LEN = 300
+
+# ─── 「上游压根没收到图」（2026-11-15）──────────────────────────────────
+#
+# 跟拒答是**两种不同的失败**，但后果一样：这句话会被当成反推结果发给用户。
+# 现象（233 的粉丝群 13:31~13:34 连挂 6 次，私聊同样）：
+#   「No image was provided, so I cannot extract the visible…」
+#   「我没有收到图片——这条消息里只有文字说明…」
+#   「no image attached, no visible details available」
+#   「我目前看不到图片，请上传图片或描述其内容」（中文、实测原文）
+#
+# 根因是 **provider 谎报 vision=True**，不是图没取到：`_prepare_images` 那条路
+# 失败会打 `取图失败` warning，实测没有；同一张 data URL 换 deepseek 官方 /
+# mimo 都能正常读出内容（2026-11-15 实测：320×200 PNG，cx 说看不到、另两家
+# 准确描述出「白色边框蓝底 + 黄色圆形」）。HF 中转的 `deepseek-v4.1-flash`
+# 只是把 image_url 整个丢掉，然后按纯文本回一句「没图」。
+#
+# ⚠️ 它 **HTTP 200、不抛异常**，所以 describe 的降级链永远不触发——这是这条
+# 故障能持续几小时的原因。判据放在 `_describe_one` 里**抛异常**，才能让它
+# 正常走到 VISION_FALLBACK_CHAIN 的下一家。
+_NOIMAGE_RE = re.compile(
+    r"no image (?:was |is |has been )?(?:provided|attached|given|supplied|found)"
+    r"|\bno image\b"                                  # 兜底：no image + 任意后缀
+    r"|(?:can'?t|cannot|unable to|not able to) (?:see|view|access) (?:the |any )?image"
+    r"|没有(?:收到|看到|附上|提供)(?:任何)?图[片像]"
+    r"|未(?:收到|附上|上传)(?:任何)?图[片像]"
+    r"|看不到图[片像]?"
+    r"|无法(?:查看|看到|读取|识别)图[片像]"
+    r"|请(?:重新)?上传图[片像]",
+    re.I)
+
+
+def looks_like_no_image(text):
+    """整段就是「我没收到图」——不是画面描述，也不是提示词。
+
+    长度上限跟拒答同一档（真报错都很短）；命中即判**这次识图失败**，让调用
+    方换下一家，绝不把这句话当反推结果发出去。
+    """
+    t = (text or "").strip()
+    if not t or len(t) > _REFUSE_MAX_LEN:
+        return False
+    return bool(_NOIMAGE_RE.search(t))
+
 
 
 def looks_like_api_refusal(text):
@@ -570,6 +618,15 @@ def _describe_one(data_url, timeout, prompt, provider, model):
         except Exception as exc:
             raise RuntimeError("识图响应无法解析（耗时 %.1fs）：%s"
                                % (time.monotonic() - started, exc))
+
+    # ⚠️ 上游「没收到图」必须在这里判失败，不能当结果返回（2026-11-15）：
+    # provider 谎报 vision=True 时 HTTP 200 + 一句「No image provided」，若不抛
+    # 异常，describe 的降级链永远不动，这句话就会一路变成「反推的是：…」。
+    # 抛出去 = 换下一家（见 _NOIMAGE_RE 上方实测记录）。
+    if looks_like_no_image(text):
+        raise RuntimeError("识图 %s 没收到图（%d 字：%s）"
+                           % (pid, len(text),
+                              text[:60].replace("\n", " ")))
 
     # 完成日志：从前只有开始那一条，一次识图卡住时日志上只剩个孤零零的起点，
     # 分不清是「卡在识图」还是「卡在后面的对话」（2026-09-29 排查就吃了这个亏：
