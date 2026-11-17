@@ -270,7 +270,7 @@ def image_quota_allowed(agent_id, target, target_id):
         return True, ""
     if str(target_id) in private_image_quota_whitelist(agent_id):
         return True, ""
-    from app import image_quota
+    from app.features.image import quota as image_quota
     used = image_quota.used(target_id)
     if used >= limit:
         return False, ("今天私聊生图的额度用完了（%d/%d 张）" % (used, limit))
@@ -314,7 +314,7 @@ def image_quota_line(agent_id, target, target_id):
     if str(target_id) in private_image_quota_whitelist(agent_id):
         state = "这个人在免额名单里，**不限量**，可以直接画。"
     else:
-        from app import image_quota
+        from app.features.image import quota as image_quota
         used = image_quota.used(target_id)
         if used >= limit:
             state = ("今天已用 %d/%d 张，**已经用满**，要等**明天 00:00**（本地"
@@ -338,7 +338,7 @@ def private_image_quota_info(agent_id, target_id):
 
     limit 为 0 表示不限量（管理页显示「不限」而不是「0 张」）。
     """
-    from app import image_quota
+    from app.features.image import quota as image_quota
     return {"limit": private_image_daily_limit(agent_id),
             "used": image_quota.used(target_id),
             "whitelisted": str(target_id) in private_image_quota_whitelist(agent_id)}

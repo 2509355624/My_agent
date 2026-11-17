@@ -9,5 +9,6 @@
 `gen_params.py`、`gen_steps.py`、`comfy_*.py`、`lora_*.py`、`anima_random.py`、`nai.py`、
 `outfit_api.py`。完整映射见 `docs/project-skeleton.md` 第 4 节。
 
-状态：`log.py`（生图编号 → 提示词账本）与 `out.py`（发图副本/临时目录）已迁入并接线；
-`image_jobs.py` 仍留在根目录，它的测试直接 patch 内部函数，硬拆前要先定测试兼容策略。
+状态：`log.py`（生图编号 → 提示词账本）、`out.py`（发图副本/临时目录）、
+`quota.py`（私聊额度）已迁入并接线；`image_jobs.py` 仍留在根目录，它的测试直接
+patch 内部函数，硬拆前要先定测试兼容策略。

@@ -2380,7 +2380,7 @@ def _finish(job):
         refund = job.quota_charged and not ok
     if refund:
         # 放在锁外：退款要落盘，不该占着队列锁做磁盘 IO。
-        from app import image_quota
+        from app.features.image import quota as image_quota
         left = image_quota.refund(job.target_id)
         log.info("这张没出图，退还私聊额度：%s 今日已用 %d 张",
                  job.target_id, left)

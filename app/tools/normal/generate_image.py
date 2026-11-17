@@ -387,7 +387,7 @@ def _charge_quota(job, target, target_id):
     """
     if target != "private":
         return ""
-    from app import image_quota
+    from app.features.image import quota as image_quota
     n = image_quota.charge(target_id)
     job.quota_charged = True
     log.info("私聊生图额度：%s 今日已用 %d 张", target_id, n)
