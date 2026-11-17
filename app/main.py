@@ -147,7 +147,7 @@ from app import persona_api                        # noqa: E402
 app.register_blueprint(persona_api.bp)
 
 # 公开产品展示页：独立干净素材与会话线，不挂到内部扮演 blueprint 上。
-from app import showcase_api                       # noqa: E402
+from app.features.showcase import routes as showcase_api                       # noqa: E402
 app.register_blueprint(showcase_api.bp)
 
 # 展示页的「文档问答」标签（2026-11-15）：清洗 → 大模型切分 → 小模型向量化 →

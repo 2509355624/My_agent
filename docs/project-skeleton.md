@@ -190,6 +190,8 @@ def run(job_id: str) -> None:
 | `core` 迁移后 | `core/config/*`、`cancel.py`、`logsetup.py`、`usage.py`、`provider_store.py`、`model_catalog.py` 已接线；`admin_auth.py`、`friend_auth.py` 仍留根 | 配置、取消信号、日志、用量账本、自定义中转站、模型清单；鉴权待归位 |
 | `gallery` | `gallery.py`、`gallery_api.py` | 作品画廊、扫描、权限 |
 | `gallery` 迁移后 | `features/gallery/gallery.py`、`routes.py` 已接线 | 画廊扫描与接口已归位；`friend_auth` 仍留根 |
+| `showcase` | `showcase_api.py`、`showcase_prompts.py` | 公开展示页数据与提示词 |
+| `showcase` 迁移后 | `features/showcase/routes.py`、`prompts.py` 已接线 | 展示页接口与提示词已归位，URL 不变 |
 | `chat` | `agent.py`、`agent_prompt.py`、`memory.py`、`longterm.py`、`llm.py`、`vision.py`、`search_agent.py`、`interject.py`、`chat_bg.py`、`confirm_gate.py`、`cancel.py` | 对话循环、提示词、记忆、模型路由 |
 | `chat` 迁移后 | `features/chat/background.py`、`longterm.py`、`recent.py`、`interject.py`、`confirm_gate.py`、`memory.py`、`agent_prompt.py`、`search_agent.py` 已接线；`agent.py`、`llm.py` 等仍待迁 | 背景图、长期记忆、近期窗口、主动插话、确认门、会话读写、系统提示词、联网搜索先归位；对话主循环/模型层待拆 |
 | `image` | `image_jobs.py`、`image_audit.py`、`image_log.py`、`image_migrate.py`、`image_out.py`、`image_quota.py`、`image_review.py`、`direct_gen.py`、`gen_api.py`、`gen_params.py`、`gen_steps.py`、`comfy_*.py`、`lora_*.py`、`anima_random.py`、`nai.py`、`outfit_api.py` | 生图、渠道、队列、审核、LoRA |

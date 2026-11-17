@@ -9,7 +9,8 @@ from unittest import mock
 from flask import Flask
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from app import showcase_api, showcase_prompts  # noqa: E402
+from app.features.showcase import prompts as showcase_prompts
+from app.features.showcase import routes as showcase_api  # noqa: E402
 
 
 class _FakeDone:
