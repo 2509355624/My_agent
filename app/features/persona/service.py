@@ -293,6 +293,10 @@ from app.features.persona.prompts import (
 )
 
 from app.features.persona.user_block import _visible_user_text, render_user_block
+from app.features.persona import head_builder
+from app.features.persona.head_builder import (
+    _env_note, _guard_block, _note_block, _state_block,
+)
 from app.features.persona.prompt_facts import (
     FACT_MAX, FACT_TEXT_MAX, _FACTS_GUIDE, _facts_block, _outfit_block,
     _parse_facts, _place_block,
@@ -1972,142 +1976,12 @@ def _split_meta(text):
 # 「道歉 / 声明身份 / 跳出角色」这些念头一个个点亮一遍。现在只说要做什么。
 
 
-def _guard_block():
-    """要不要在系统头最前面拼这段框定。读 `config/persona.json`，缺省开。"""
-    try:
-        with open(os.path.join(BASE_DIR, "config", "persona.json"),
-                  encoding="utf-8") as fh:
-            cfg = json.load(fh)
-        on = bool((cfg.get("guard") or {}).get("enabled", True))
-    except Exception:                                  # noqa: BLE001
-        on = True
-    return _GUARD_TEXT if on else ""
-
-
-def _note_block(note):
-    """「之前的事」小记块：旧账本可能带第三人称，注入前先纠成「你」。"""
-    if not str(note or "").strip():
-        return ""
-    return "【之前的事】\n" + _ledger_fix_pronouns(note).strip()
-
-
-def _state_block(state):
-    """「她此刻的样子」：上一轮结束时的状态，接着它往下演。"""
-    state = str(state or "").strip()
-    if not state:
-        return ""
-    return ("## 她此刻的样子\n\n" + _PRONOUN_HE.sub("你", state)
-            + "\n\n（这是上一轮结束时的状态，接着它往下演，"
-              "不要自己给她换回原来的衣服）")
-
-
 def build_head(card, session_key, sender, note="", state="", intimate=True,
                mode="normal", dynamic=True):
-    """扮演态的系统头：角色人设 + 输出契约 + 环境（+ 小记 + 此刻状态）。
-
-    `dynamic`（2026-11-10 缓存优化 Phase A）：是否把「小记（之前的事）」和
-    「上一轮状态（她此刻的样子）」这两块**逐轮会变**的内容拼进 head。默认
-    True（其它所有调用方都走默认，行为不变）；只有 `run_turn` 传 False，把
-    这两块挪到末尾玩家消息，让 system 头成为逐字节稳定的前缀，DeepSeek 的
-    前缀缓存才能整段命中（实测第二轮输入 token 翻倍就是被这些动态块打散的）。
-
-    `mode`（2026-11-06）：酒馆 sysprompt 档位那一层，`writing_style.head_style`
-    给的**一句**正向短句，拼在契约之后。默认 `normal` 不拼。
-    `card_sketch` 那一小段卡面速写则对所有会话生效，与档位无关。
-
-    **刻意不带别的东西**——不拼工具目录、不拼 Skill 目录、不拼表情包清单、
-    不拼长期记忆，也不拼任何审核 / 限制条款。用户 2026-10-16 点名：
-    「人设是什么，人设就是什么」；扮演态本来就不给模型工具，拼那些它也用
-    不上、还白烧 token（他那套角色扮演系统里，一万字的提示词有五千字是
-    审核话术，他明确不要这个）。
-
-    `state`（2026-11-02）：上一轮她身上的状态（穿着 / 位置 / 接触）。不喂回去
-    的话，模型每轮都从零猜「她现在穿什么」，几轮之后衣服会自己长回来。
-
-    `intimate`（2026-11-03）：要不要拼亲密场景那 900 字写法。默认 True
-    （老调用方、测试都不受影响）；`run_turn` 只在意图判断为 `intimate`
-    或 `neutral` 时传 True，`joke` / `literal` / `insult` 传 False——
-    那几种场合用不上「器官怎么叫、动词怎么选」，留着只是分走注意力。
-    """
-    parts = []
-    g = _guard_block()
-    if g:
-        parts.append(g)
-    persona = str(card.get("systemPrompt") or "").strip()
-    parts.append(persona if persona else "你是%s。" % card["name"])
-    # 卡面速写（2026-11-06）：`description` / `personality` 一直写在卡里却没进
-    # 提示词。酒馆的卡是自包含的，这里先把**已有的事实**接上，不去替角色编
-    # 新设定；systemPrompt 里已经说过的会由 card_sketch 自动跳过。
-    sketch = writing_style.card_sketch(card)
-    if sketch:
-        parts.append(sketch)
-    # 示例对话（2026-11-03）：放在人设之后、契约之前。
-    #
-    # 为什么不放最后：放最后模型会把它当成「上一轮的输出」，接着往下写；
-    # 放人设后面，它读起来是「这个人说话是这样的」——示范作用更强。
-    #
-    # 为什么要在契约之前：契约里有格式要求（正文 + 三行），示例只示范**文风**
-    # 和**节奏**，格式交给契约。顺序反了的话，模型会照抄示例的格式。
-    ex = str(card.get("exampleDialogue") or "").strip()
-    if ex:
-        parts.append("## 她说话的示范（**只学语气和节奏，不要照抄内容**）\n\n"
-                     + writing_style.format_examples(ex))
-    # 房间与私物（2026-11-03）：只在私聊里给，群里那个场景用不上，白占预算。
-    # 当**素材**而不是规则——"她房间里有什么"定了以后，几次场外探索才连得上。
-    room = str(card.get("room") or "").strip()
-    if room and not str(session_key or "").startswith("group_"):
-        parts.append("## 她的房间（你离开她视线、进她房间时的素材，"
-                     "可以自由发挥，不必全用）\n\n" + room)
-    # 状态值全书（2026-11-07 方案 C）：**总是拼**，不跟 `intimate` 走。
-    #
-    # 为什么总是拼：它放在 system 前段、逐字节不变，前缀缓存整段命中；如果
-    # 按轮次时有时无，前缀每轮都变，缓存全 miss——省下的 token 又赔回去。
-    # 为什么敢全量：模型看到的是**整条曲线**（同一根轴的上下档位），
-    # 而不只是「你现在在这一档」，它才知道自己该往哪个方向写。
-    #
-    # 位置在契约**之前**：契约末尾那段人称强调是「长上下文里开头规则会被稀释」
-    # 的补救，全书排到它后面会把这段挤出注意力窗口。
-    sg = writing_skills.state_guide()
-    if sg:
-        parts.append(sg)
-    cname = char_name(card, key=session_key)
-    parts.append((_CONTRACT if intimate else _CONTRACT_NO_INTIMATE).replace(
-        "{NAME}", cname))
-    # 档位放契约之后：这一层只回答「这一局怎么写」，人设和格式都在它前面，
-    # 不会抢「她是谁」的位置。常态档不拼，head 和以前逐字节一样。
-    sty = writing_style.head_style(mode)
-    if sty:
-        parts.append(sty)
-    # 群聊多压一道尺度约束（2026-11-02）：私聊交给角色卡人设，群里不放开。
-    if str(session_key or "").startswith("group_"):
-        parts.append(_GROUP_NOTE)
-    parts.append(_env_note(session_key, sender))
-    # 小记（之前的事）和上一轮状态（她此刻的样子）是**逐轮会变的**内容。
-    # 默认拼进 head（其它调用方都走默认，行为不变）；`run_turn` 传
-    # `dynamic=False`，把这两块挪到末尾玩家消息，让 system 头成为逐字节
-    # 稳定的前缀，DeepSeek 前缀缓存才能整段命中（缓存优化 Phase A）。
-    if dynamic:
-        nb = _note_block(note)
-        if nb:
-            parts.append(nb)
-        sb = _state_block(state)
-        if sb:
-            parts.append(sb)
-    return "\n\n".join(parts)
-
-
-def _env_note(session_key, sender):
-    """告诉它此刻在私聊还是群里、是谁在跟它说话。
-
-    群里必须点出说话人：角色面对的是「一屋子人」，不点名它就会答成一对多；
-    私聊没有这个问题，也不需要昵称。
-    """
-    target, _, tid = (session_key or "").partition("_")
-    if target == "group":
-        return ("## 当前环境\n\n你在一个 QQ 群里（群号 %s），群里有很多人。"
-                "刚才跟你说话的是%s，回他一个就行，别管其他人。"
-                % (tid, sender or "群里某个人"))
-    return "## 当前环境\n\n你在跟一个人私聊（QQ %s）。" % tid
+    """扮演态的系统头；`dynamic=False` 把小记和状态留给末尾玩家消息。"""
+    return head_builder.build(
+        card, session_key, sender, char_name(card, key=session_key),
+        note=note, state=state, intimate=intimate, mode=mode, dynamic=dynamic)
 
 
 # ── 精确输入（2026-11-06 用户要求）──────────────────────────
