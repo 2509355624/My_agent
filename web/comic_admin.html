@@ -18,8 +18,6 @@
   html, body { min-height: 100%; background: var(--bg); color: var(--text);
     font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
     font-size: 14px; line-height: 1.7; }
-  body::before { content: ""; position: fixed; inset: 0; pointer-events: none;
-    background: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(124,92,255,.15), transparent); }
   .wrap { position: relative; max-width: 1000px; margin: 0 auto; padding: 22px 16px 60px; }
   header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
   h1 { font-size: 19px; font-weight: 600; }
@@ -97,17 +95,23 @@
     /* 表格窄列里的「补发到 QQ」会逐字竖排成 90px 高，锁成一行 */
     button { white-space: nowrap; }
   }
+
+  @media (max-width: 560px) {
+    input[type=text], input[type=number], select { font-size: 16px; }
+    .acc { padding: 10px 11px; }
+    .quota { grid-template-columns: repeat(2, 1fr); }
+  }
+
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>漫画台管理</h1>
-    <span class="sub">谁用了漫画台 · 各剩几次 · 给他加次数</span>
+    <h1>漫画额度</h1>
     <span class="spacer"></span>
     <button class="ghost" id="reload">刷新</button>
-    <a class="back" href="/comic">漫画工作台 →</a>
-    <a class="back" href="/admin">Agent 管理 →</a>
+    <a class="back" href="/comic_works">作品</a>
+    <a class="back" href="/">← 回首页</a>
   </header>
 
   <div class="bar" id="bar"></div>
@@ -119,25 +123,20 @@
       <div class="row" id="defaultsFields"></div>
       <div class="row" style="margin-top:9px;">
         <button class="btn" id="saveDefaults">保存默认</button>
-        <span class="hint">只影响之后新建的账号；已经单独加过次数的账号不受影响。</span>
+        <span class="hint">只影响新账号。</span>
       </div>
     </div>
   </div>
 
   <div class="card">
     <h2>谁用了漫画台 <span class="hint" id="accCount"></span></h2>
-    <div class="hint" style="margin-bottom:10px;">
-      「剩」是还能用几次，「共」是你给他的总次数，括号里是已经用掉的。
-      要加次数直接点下面的按钮，一次加一点，不用自己算总数。编剧模型统一走站主默认，不用配置。
-    </div>
+    <div class="hint" style="margin-bottom:10px;">剩 = 还能用；共 = 给过的总次数。</div>
     <div id="accounts"><div class="empty">读取中…</div></div>
   </div>
 
   <div class="card">
     <h2>给还没用过的人先加次数</h2>
-    <div class="hint" style="margin-bottom:9px;">
-      填对方 QQ，点一下就建号并加上次数；他打开漫画工作台就能直接用了。
-    </div>
+    <div class="hint" style="margin-bottom:9px;">填 QQ，点一下就建号并加次数。</div>
     <div class="row new">
       <input type="text" id="newQQ" placeholder="对方 QQ 号" inputmode="numeric"
              autocomplete="off" spellcheck="false">
@@ -147,7 +146,7 @@
       <button class="ghost btn-add" data-kind="portrait" data-n="1">+1 写真</button>
     </div>
     <div class="row new" style="margin-top:8px;">
-      <span class="hint">或直接填数量一次加：</span>
+      <span class="hint">填数量：</span>
       <input type="number" id="newNum" class="ca-n" min="1" max="10000"
              value="1" inputmode="numeric" aria-label="要加的数量">
       <select id="newKind" aria-label="类型"></select>
