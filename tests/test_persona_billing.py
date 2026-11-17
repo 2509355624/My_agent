@@ -23,7 +23,7 @@ import flask
 
 from app import config, llm, persona_api
 from app.features.admin import routes as persona_admin_api
-from app import persona_billing as bill
+from app.features.persona import billing as bill
 
 TZ = ZoneInfo("Asia/Shanghai")
 QQ = "2509355624"

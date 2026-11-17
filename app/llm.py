@@ -240,7 +240,7 @@ def _resolve_force_candidate():
         return None
     if f[0] == "paid":
         try:
-            from app import persona_billing
+            from app.features.persona import billing as persona_billing
             if persona_billing.paid_enabled():
                 return persona_billing.paid_target()
         except Exception:
@@ -301,7 +301,7 @@ def _note_persona_used(pid, eff):
         return
     try:
         # 2026-11-10：代充用户中转站挂了会落到付费官方，不能还标成「免费」。
-        from app import persona_billing
+        from app.features.persona import billing as persona_billing
         if (pid, str(eff.get("model") or "")) == persona_billing.paid_target():
             _custom_ctx.used = {"kind": "paid",
                                 "name": "官方 DeepSeek（站主代充）",
@@ -591,7 +591,7 @@ def _record_usage(usage, elapsed=None, provider="", model="", kind="llm"):
         # 2026-11-10 代充：同步/流式共用的唯一采集点。只有「真的打到付费段」
         # 的调用才扣钱；免费中转 / 自带 Key 记零元流水。调用失败没有 usage，
         # 根本走不到这里，天然不会误扣。
-        from app import persona_billing
+        from app.features.persona import billing as persona_billing
         persona_billing.record_call(provider=provider, model=model,
                                     hit=hit or 0, miss=miss or 0, out=out,
                                     kind=kind, tag=tag)
@@ -834,7 +834,7 @@ def candidates(provider=None, model=None, require_vision=False, strict=False):
                    for i in range(len(persona_customs()))]
         paid = []
         try:
-            from app import persona_billing
+            from app.features.persona import billing as persona_billing
             if persona_billing.paid_enabled():
                 paid = [persona_billing.paid_target()]
         except Exception:                # 账本挂了不能拦住聊天

@@ -33,7 +33,7 @@ import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from app import persona_billing
+from app.features.persona import billing as persona_billing
 from app import usage as usage_stats
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")

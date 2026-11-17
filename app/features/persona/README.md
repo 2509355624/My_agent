@@ -8,4 +8,5 @@
 `persona_rag.py`、`affection.py`、`affection_v2_adult.py`、`galgame.py`、`pregnancy.py`、
 `achievements.py`、`items.py`。完整映射见 `docs/project-skeleton.md` 第 4 节。
 
-状态：空包，未接线。`persona.py` 是 441 KB God 文件，冻结增长；迁移时按“人设/记忆/计费/查看台”拆，不整文件搬。
+状态：`billing.py`（原 `persona_billing.py`）已迁入并接线；`persona.py` 仍是 441 KB
+God 文件，冻结增长，按“人设/记忆/计费/查看台”拆，不整文件搬。

@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 from app import config
-from app import persona_billing
+from app.features.persona import billing as persona_billing
 from app.features.qq import bill as qq_bill
 from app import usage as usage_stats
 
