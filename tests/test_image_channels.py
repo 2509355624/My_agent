@@ -2732,5 +2732,108 @@ class MossTwoChannelTest(unittest.TestCase):
         self.assertEqual(by_id["moss-light"]["steps"], "25")
 
 
+class JiguangSingleChannelTest(unittest.TestCase):
+    """`krea2-jiguang-1x`（极光单次）—— 2026-11-17 新增的第二条极光。
+
+    用户原话：「加装一个 krea2 生图，极光的，然后设置单次采样，然后分辨率是
+    1024x1536」；三个岔路当场拍板：**新增独立渠道不动老极光**、**末尾不挂
+    2x 超分（成品就 1024×1536）**、**步数照抄极光第一段的 8 步**。
+
+    这条渠道存在的意义就是「不放大」，所以断言主体是 **NotIn**：没有 latent
+    放大、没有第二段 KSampler、没有像素超分。哪天有人「顺手」给它补回放大链，
+    它就和 `krea2-jiguang` 完全一样了，还占掉一个渠道名——这里拦下来。
+    """
+
+    NAME = "krea2-jiguang-1x"
+
+    def setUp(self):
+        from app.skills import load_workflow
+        path = os.path.join(SKILLS, self.NAME, "workflow.json")
+        self.wf = load_workflow(path)
+        self.assertIsNotNone(self.wf, "workflow.json 读不出来")
+
+    def _node(self, cls):
+        hits = _all(self.wf, cls)
+        self.assertEqual(len(hits), 1, "%s 应该正好一个，实际 %s" % (cls, hits))
+        return self.wf[hits[0]]["inputs"]
+
+    def test_one_sampler_only(self):
+        """只有一段采样：8 步 / cfg 1 / denoise 1 / euler + simple。"""
+        ks = self._node("KSampler")
+        self.assertEqual(ks["steps"], 8)
+        self.assertEqual(ks["cfg"], 1)
+        self.assertEqual(ks["denoise"], 1)
+        self.assertEqual(ks["sampler_name"], "euler")
+        self.assertEqual(ks["scheduler"], "simple")
+
+    def test_no_upscale_chain_at_all(self):
+        """整条放大链都不该出现——这是它和 `krea2-jiguang` 的唯一区别。"""
+        for cls in ("LatentUpscaleBy", "UpscaleModelLoader",
+                    "ImageUpscaleWithModel"):
+            self.assertEqual(_all(self.wf, cls), [], cls)
+
+    def test_canvas_is_1024x1536_and_goes_straight_to_save(self):
+        """1024×1536 → KSampler → VAEDecode → SaveImage，中间不插任何节点。"""
+        latent_ids = _all(self.wf, "EmptyLatentImage")
+        self.assertEqual(len(latent_ids), 1)
+        latent = self.wf[latent_ids[0]]["inputs"]
+        self.assertEqual((latent["width"], latent["height"]), (1024, 1536))
+
+        sampler_id = _all(self.wf, "KSampler")[0]
+        self.assertEqual(self.wf[sampler_id]["inputs"]["latent_image"],
+                         [latent_ids[0], 0])
+
+        decode_id = _all(self.wf, "VAEDecode")[0]
+        self.assertEqual(self.wf[decode_id]["inputs"]["samples"],
+                         [sampler_id, 0])
+        save = self._node("SaveImage")
+        self.assertEqual(save["images"], [decode_id, 0])
+        self.assertEqual(save["filename_prefix"], "Krea2_jiguang_1x")
+
+    def test_single_seed_placeholder(self):
+        """单段 → 原文只有一个 `__SEED__`（两段渠道是两个）。"""
+        self.assertEqual(_raw(self.NAME).count("__SEED__"), 1)
+
+    def test_same_lora_as_full_jiguang(self):
+        """挂同一个极光 LoRA，只挂 model、强度 1.0（同族传统）。"""
+        lora = self._node("LoraLoaderModelOnly")
+        self.assertEqual(lora["lora_name"], "krea2_极光旧梦L-1.1.safetensors")
+        self.assertEqual(lora["strength_model"], 1)
+        self.assertEqual(lora["model"], ["1", 0])      # GGUF 底模，不挂 clip
+
+    def test_not_a_copy_of_full_jiguang(self):
+        """两份工作流不能是同一份文件（复制目录后忘了改的经典翻车）。"""
+        self.assertNotEqual(_raw(self.NAME), _raw("krea2-jiguang"))
+
+    def test_landscape_swaps_to_1536x1024(self):
+        """横屏走 `landscape_workflow()` 自动对调，成品跟着横过来。"""
+        from app.image_jobs import landscape_workflow
+        wide = landscape_workflow(self.wf)
+        latent_id = _all(wide, "EmptyLatentImage")[0]
+        latent = wide[latent_id]["inputs"]
+        self.assertEqual((latent["width"], latent["height"]), (1536, 1024))
+        # 原对象不能被就地改（静默重抽会递归调 process，改两次等于没改）
+        orig = _all(self.wf, "EmptyLatentImage")[0]
+        self.assertEqual((self.wf[orig]["inputs"]["width"],
+                          self.wf[orig]["inputs"]["height"]), (1024, 1536))
+
+    def test_shows_up_on_gen_pad_with_chinese_label(self):
+        """跑图台渠道列表自动带出来（`_allowed_skills` 扫目录 + SKILL.md label）。"""
+        from app.gen_api import channels
+        by_id = {c["id"]: c for c in channels()}
+        self.assertIn(self.NAME, by_id)
+        self.assertEqual(by_id[self.NAME]["label"], "极光单次")
+        self.assertEqual(by_id[self.NAME]["steps"], "8")
+
+    def test_no_extra_timeout_entry(self):
+        """不单独配超时——1024×1536 单段比完整版快得多，吃 180 兜底就够。
+
+        完整版 `krea2-jiguang` 是 300 秒（它要到 3328×4864）。这条要是也进
+        `SKILL_TIMEOUTS`，说明有人把它当成完整版在调，先回来看这条测试。
+        """
+        from app import image_jobs
+        self.assertNotIn(self.NAME, image_jobs.SKILL_TIMEOUTS)
+
+
 if __name__ == "__main__":
     unittest.main()
