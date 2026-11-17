@@ -197,7 +197,7 @@ def _audit(path, target, target_id, cid, skill, seed):
     settings 读、不发网络请求），拦下时它会自己回一句并进人工二审队列。
     这里只负责「不给它图」。
     """
-    from app import image_audit
+    from app.features.image import audit as image_audit
     try:
         return image_audit.allow_send(
             path, QQ_AGENT_ID, target, target_id,

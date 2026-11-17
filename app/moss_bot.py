@@ -929,7 +929,7 @@ def _send_image(target, target_id, rel, caption, reply_to="", sender_uin=None):
     图这条**一定带引用**（`reply_to` 是点单那句）：这里从前把 reply_to 收下
     却没用，结果文字回执引用着、图本身裸发——用户要的就是图跟着引用回来。
     """
-    from app import image_audit
+    from app.features.image import audit as image_audit
     from app.agents import image_send_format
 
     # 网页模式：图已经落在磁盘上了，前端自己去 `/api/persona/comic` 取，

@@ -652,7 +652,7 @@ class ReceiptTest(unittest.TestCase):
                                return_value=("她醒了", "桌上")), \
              mock.patch.object(image_out, "prepare_for_send",
                                lambda f, fmt="jpg": next(paths)), \
-             mock.patch("app.image_audit.allow_send", return_value=True), \
+             mock.patch("app.features.image.audit.allow_send", return_value=True), \
              mock.patch("app.agents.image_send_format", return_value="jpg"), \
              mock.patch.object(qq_api, "send_image", fake_send):
             moss_bot._render_and_send("group", "1103174141", self.sid,

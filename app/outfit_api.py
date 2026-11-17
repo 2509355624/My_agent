@@ -422,7 +422,7 @@ def _audit(path, target, target_id, tag):
     会回一句提示，并把图存进 `state/review/` 等人工二审。
     这里只负责「不给它图」。
     """
-    from app import image_audit
+    from app.features.image import audit as image_audit
     try:
         return image_audit.allow_send(
             path, QQ_AGENT_ID, target, target_id,

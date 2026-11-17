@@ -1116,7 +1116,7 @@ class SendImageTest(unittest.TestCase):
 
     def test_audit_block_sends_nothing_at_all(self):
         """被审核拦下时连编号也不发——没图却挂个编号，比什么都不发更糟。"""
-        from app import image_audit
+        from app.features.image import audit as image_audit
         p1, p2, sent = self._capture_captions()
         with p1, p2, mock.patch.object(image_audit, "allow_send",
                                        return_value=False):
@@ -3228,7 +3228,7 @@ class NaiCloudTest(_Base):
 
     def test_nai_blocked_by_audit_sends_nothing(self):
         """审核拦下 NAI 的图：不发图、不报错（提示由 image_audit 自己回）。"""
-        from app import image_audit
+        from app.features.image import audit as image_audit
         with mock.patch.object(image_audit, "allow_send", return_value=False):
             self._enqueue(("group", "9"), wf="x", skill="nai")
             image_jobs._drain()

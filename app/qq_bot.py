@@ -2085,7 +2085,7 @@ class SessionRunner:
 
         # 一轮里的多张图用同一个格式，别每张都去读一遍 settings（热路径）
         fmt = image_send_format(QQ_AGENT_ID, self.target, self.target_id)
-        from app import image_audit
+        from app.features.image import audit as image_audit
         blocked = 0
         for name in images:
             try:

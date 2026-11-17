@@ -472,7 +472,7 @@ class AuditGateTest(unittest.TestCase):
     """
 
     def test_audit_calls_existing_allow_send(self):
-        from app import image_audit
+        from app.features.image import audit as image_audit
         with mock.patch.object(image_audit, "allow_send",
                                return_value=True) as m:
             self.assertTrue(outfit_api._audit("/x.png", "group", "123", "OF-1"))
@@ -483,7 +483,7 @@ class AuditGateTest(unittest.TestCase):
         self.assertEqual((kw.get("meta") or {}).get("kind"), "outfit")
 
     def test_audit_exception_means_no_send(self):
-        from app import image_audit
+        from app.features.image import audit as image_audit
         with mock.patch.object(image_audit, "allow_send",
                                side_effect=RuntimeError("boom")):
             self.assertFalse(outfit_api._audit("/x.png", "private", "1", "t"))

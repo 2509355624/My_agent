@@ -24,7 +24,7 @@ import unittest
 from unittest import mock
 
 from app import image_review
-from app.image_audit import Verdict
+from app.features.image.audit import Verdict
 
 
 class _TmpCase(unittest.TestCase):
@@ -338,7 +338,7 @@ class AuditHookTest(unittest.TestCase):
     """审核闸门判违规 → 自动进队（这是队列唯一的写入点）。"""
 
     def test_blocked_image_lands_in_the_queue(self):
-        from app import image_audit
+        from app.features.image import audit as image_audit
         dir_ = tempfile.mkdtemp(prefix="review_hook_")
         self.addCleanup(shutil.rmtree, dir_, True)
         with open(os.path.join(dir_, "p.jpg"), "wb") as f:
@@ -367,7 +367,7 @@ class AuditHookTest(unittest.TestCase):
 
     def test_queue_failure_does_not_change_the_verdict(self):
         """二审队列写不进去，图照旧按拦截处理。"""
-        from app import image_audit
+        from app.features.image import audit as image_audit
         dir_ = tempfile.mkdtemp(prefix="review_hook2_")
         self.addCleanup(shutil.rmtree, dir_, True)
         path = os.path.join(dir_, "p.jpg")
@@ -384,7 +384,7 @@ class AuditHookTest(unittest.TestCase):
         sg.assert_called_once()
 
     def test_allowed_image_never_enters_the_queue(self):
-        from app import image_audit
+        from app.features.image import audit as image_audit
         with mock.patch.object(image_audit, "check",
                                return_value=Verdict(True)), \
              mock.patch("app.agents.image_audit_enabled", return_value=True), \
