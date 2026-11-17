@@ -428,20 +428,20 @@ class PanelContractTest(unittest.TestCase):
                 "contacts": [], "contact": 2, "day": 3, "turns": 12, "adult": st}
 
     def test_v2_panel_carries_adult(self):
-        from app import affection
+        from app.features.persona import affection
         p = affection._v2_panel(self._rec(), None)
         self.assertIn("adult", p)
         self.assertTrue(p["adult"]["rows"])
 
     def test_rows_have_every_axis(self):
-        from app import affection
+        from app.features.persona import affection
         p = affection._v2_panel(self._rec(), None)
         axes = [r["axis"] for r in p["adult"]["rows"]]
         for a in ("arousal", "excite", "corrupt", "submit", "shame", "control"):
             self.assertIn(a, axes)
 
     def test_arousal_row_is_tier(self):
-        from app import affection
+        from app.features.persona import affection
         p = affection._v2_panel(self._rec(), None)
         row = [r for r in p["adult"]["rows"] if r["axis"] == "arousal"][0]
         self.assertEqual(row["type"], "tier")
@@ -450,26 +450,26 @@ class PanelContractTest(unittest.TestCase):
         self.assertIn("gateActive", row)
 
     def test_shame_row_has_soft_cap(self):
-        from app import affection
+        from app.features.persona import affection
         p = affection._v2_panel(self._rec(), None)
         row = [r for r in p["adult"]["rows"] if r["axis"] == "shame"][0]
         self.assertEqual(row["softCap"], 50)
 
     def test_control_row_has_neutral(self):
-        from app import affection
+        from app.features.persona import affection
         p = affection._v2_panel(self._rec(), None)
         row = [r for r in p["adult"]["rows"] if r["axis"] == "control"][0]
         self.assertEqual(row["neutral"], 50)
 
     def test_corrupt_submit_marked_gated(self):
-        from app import affection
+        from app.features.persona import affection
         p = affection._v2_panel(self._rec(), None)
         for axis in ("corrupt", "submit"):
             row = [r for r in p["adult"]["rows"] if r["axis"] == axis][0]
             self.assertTrue(row.get("gated"), "%s 该标「好感为负才涨」" % axis)
 
     def test_parts_have_dev_and_sense(self):
-        from app import affection
+        from app.features.persona import affection
         p = affection._v2_panel(self._rec(), None)
         parts = p["adult"]["parts"]
         self.assertEqual(len(parts), 5)
@@ -479,14 +479,14 @@ class PanelContractTest(unittest.TestCase):
         self.assertEqual(pussy["name"], "小穴")
 
     def test_contact_name_resolved(self):
-        from app import affection
+        from app.features.persona import affection
         p = affection._v2_panel(self._rec(), None)
         self.assertEqual(p["adult"]["contact"], "pussy")
         self.assertEqual(p["adult"]["contactName"], "小穴")
 
     def test_panel_survives_broken_adult(self):
         """成人向数据坏了，整页不该白屏——adult 返回 None，前端跳过这块。"""
-        from app import affection
+        from app.features.persona import affection
         rec = {"schema": 2, "value": 10, "mode": "raid", "adult": "垃圾数据"}
         p = affection._v2_panel(rec, None)
         self.assertIn("schema", p)          # 面板本身照常
@@ -566,7 +566,7 @@ class AxisHelpTest(unittest.TestCase):
 
     def _panel(self):
         from app.features.persona import adult as ad
-        from app import affection
+        from app.features.persona import affection
         rec = {"schema": 2, "value": 45, "mode": "raid", "confess": 20,
                "contacts": [], "contact": 2, "day": 3, "turns": 12,
                "adult": ad.normalize({**ad.empty_state(), "arousal": "want",
@@ -642,7 +642,7 @@ class RelationAxisHelpTest(unittest.TestCase):
 
     def _panel(self):
         from app.features.persona import adult as ad
-        from app import affection
+        from app.features.persona import affection
         rec = {"schema": 2, "value": 45, "mode": "raid", "confess": 20,
                "contacts": [], "contact": 2, "day": 3, "turns": 12,
                "adult": ad.normalize({**ad.empty_state(), "excite": 62,
@@ -658,7 +658,7 @@ class RelationAxisHelpTest(unittest.TestCase):
             self.assertTrue(h[k].get("body"))
 
     def test_relation_help_comes_from_config(self):
-        from app import affection
+        from app.features.persona import affection
         cfg = affection._v2_config()
         for key in ("value", "confess", "yandere", "contacts", "proposal"):
             h = (cfg.get(key) or {}).get("help")

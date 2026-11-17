@@ -18,7 +18,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-import app.affection as A
+from app.features.persona import affection as A
 import app.core.agents as agents
 from app.features.persona import service as P
 

@@ -509,7 +509,7 @@ class SessionAffTest(PersonaApiBase):
 
     def test_last_assistant_message_carries_status(self):
         key = self._line()
-        from app import affection
+        from app.features.persona import affection
         affection.set_mode(key, True)
         self._seed(key)
         msgs = self.get("/api/persona/session")["messages"]
@@ -521,7 +521,7 @@ class SessionAffTest(PersonaApiBase):
     def test_free_mode_has_no_status(self):
         """自由模式下数值是封存的，别在气泡下面摆一条不动的进度。"""
         key = self._line()
-        from app import affection
+        from app.features.persona import affection
         affection.set_mode(key, True)
         affection.set_mode(key, False)
         self._seed(key)

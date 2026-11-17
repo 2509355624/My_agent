@@ -14,5 +14,6 @@
 `achievements.py`）、`writing_style.py`（原 `writing_style.py`）、`writing_skills.py`
 （原 `app/writing_skills.py`，亲密写法规范切片）、`galgame.py`（原
 `galgame.py`）、`routes.py`（原 `app/persona_api.py`，网页角色扮演 Blueprint）、
-`service.py`（原 `app/persona.py`，角色池/扮演态/出图编排）已迁入并接线；
+`service.py`（原 `app/persona.py`，角色池/扮演态/出图编排）、`affection.py`（原
+`app/affection.py`，攻略模式好感数值/档位/结算）已迁入并接线；
 `service.py` 仍是 441 KB 大文件，冻结增长，后续按“人设/记忆/计费/查看台”拆。

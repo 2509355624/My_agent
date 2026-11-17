@@ -206,7 +206,7 @@ def _guest_free(ckey):
     if isinstance(aff, dict) and str(aff.get("mode") or "") == "free":
         return
     try:
-        from app import affection
+        from app.features.persona import affection
         affection.set_mode(ckey, False)
     except Exception:                                     # noqa: BLE001
         log.warning("游客线转自由模式失败 %s", ckey, exc_info=True)
@@ -497,7 +497,7 @@ def my_cards_list():
     # 起点那几颗问号的文案：全从 v2 配置读（`affection.v2_start_help`），
     # 前端一份文案都不写死——改配置不用重启、也不用动 HTML。
     try:
-        from app import affection
+        from app.features.persona import affection
         help_ = affection.v2_start_help()
     except Exception:                                     # noqa: BLE001
         help_ = {}
@@ -722,7 +722,7 @@ def history():
 def _aff_status(key):
     """这条线的好感状态（给网页状态条）；没开过攻略返回 None。"""
     try:
-        from app import affection
+        from app.features.persona import affection
         return affection.status(key)
     except Exception:                                     # noqa: BLE001
         return None
@@ -736,7 +736,7 @@ def _aff_panel(key):
     只有 status 是不够的——它拿不到「下一级叫什么、还差多少」之外的行。
     """
     try:
-        from app import affection
+        from app.features.persona import affection
         return affection.panel(key)
     except Exception:                                     # noqa: BLE001
         return None
@@ -904,7 +904,7 @@ def switch():
     # 默认攻略模式（2026-11-04）：切过来就把好感记录建好（按这张卡的起点），
     # 右栏一打开就有「关系 · 攻略模式」，不用等玩家先发一句话。
     try:
-        from app import affection
+        from app.features.persona import affection
         affection.status(ckey)
     except Exception:                                     # noqa: BLE001
         pass
@@ -1627,7 +1627,7 @@ def affection_mode():
     同一条线在 QQ 端发「攻略模式 / 自由模式」是同一套状态（affection 模块），
     两边切来切去互不冲突。没在演谁时返回 400。
     """
-    from app import affection
+    from app.features.persona import affection
     body = request.get_json(silent=True) or {}
     mode = str(body.get("mode") or "").strip().lower()
     if mode not in ("raid", "free"):
@@ -1743,7 +1743,7 @@ def affection_mercy():
     把出口对游客关上等于让人卡死在结局页面。它只是一次数值搬移，没有
     LLM 成本。
     """
-    from app import affection
+    from app.features.persona import affection
     role, who, token = _who()
     if role == "guest":
         ckey = _guest_line(who)

@@ -18,7 +18,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-import app.affection as affection
+from app.features.persona import affection as affection
 from app.features.persona import service as persona
 
 RAW = (

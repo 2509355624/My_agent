@@ -14,7 +14,7 @@
 
 import unittest
 
-import app.affection as affection
+from app.features.persona import affection as affection
 from app.features.persona import service as persona
 import app.features.persona.writing_skills as ws
 

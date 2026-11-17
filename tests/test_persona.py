@@ -25,7 +25,7 @@ import unittest
 from unittest import mock
 
 import app.core.agents as agents
-import app.affection as affection
+from app.features.persona import affection as affection
 from app.features.persona import service as persona
 from app.features.persona import rag as persona_rag
 
@@ -2984,7 +2984,7 @@ class GameDayTest(PersonaBase):
 
     def test_skip_day_closes_yesterdays_scene(self):
         """睡到第二天：昨晚进行中的场景要收场，别带着高潮值过夜。"""
-        from app import affection
+        from app.features.persona import affection
         line = persona.resolve_line(self.KEY)
         affection.set_mode(line, True)
         affection.settle(line, {"delta": 1, "turn_type": "action",

@@ -201,7 +201,7 @@ def run(job_id: str) -> None:
 | `comic` | `comic*.py`、`moss_*.py`、`silver_comic.py` | 漫画、编剧、渲染、额度、作品 |
 | `comic` 迁移后 | `features/comic/` 的 `quota/thumb/prompt_suffix/delivery/portrait/story/render_opts/writer/moss_msgs/moss_prompt/moss_series/moss_api/moss_comic/moss_bot/silver_comic/soda_letter/routes` 已接线；漫画主流程暂留根目录 | 漫画额度、缩略图、提示词后缀、交付、头像、故事、渲染参数、编剧、Moss 消息/提示词/连载/接口/核心/机器人、漫画核心/Agent、Silver 编剧、Soda 排字、工作台接口；分镜/渲染再细分 |
 | `persona` | `persona*.py`、`affection*.py`、`galgame.py`、`pregnancy.py`、`achievements.py`、`items.py` | 角色扮演、计费、记忆、查看台 |
-| `persona` 迁移后 | `features/persona/` 已接线 `billing`、`adult`、`rag`、`pregnancy`、`items`、`achievements`、`writing_style`、`writing_skills`、`galgame`、`routes`、`service` | 计费、成人状态、长期记忆、怀孕、道具、成就、写法档位、亲密写法切片、Galgame、网页角色扮演接口、角色池/扮演态/出图编排；service 内部待按人设/记忆/计费/查看台拆 |
+| `persona` 迁移后 | `features/persona/` 已接线 `billing`、`adult`、`rag`、`pregnancy`、`items`、`achievements`、`writing_style`、`writing_skills`、`galgame`、`routes`、`service`、`affection` | 计费、成人状态、长期记忆、怀孕、道具、成就、写法档位、亲密写法切片、Galgame、网页角色扮演接口、角色池/扮演态/出图编排、攻略好感数值；service 内部待按人设/记忆/计费/查看台拆 |
 | `rag` | `rag/`、`rag_lab.py`、`rerank.py` | 文档问答、切片、检索、重排 |
 | `rag` 迁移后 | `features/rag/lab.py`、`rag_client.py`、`rag_daemon.py`、`vector_store.py`、`rerank.py` | 已接线，URL 不变 |
 | `novel` | `novel.py`、`novel_api.py`、`novel_writing.py` | 小说模式、世界书、裁定链 |

@@ -56,7 +56,7 @@ def _keys():
 # ── 名字（跟着层级名 / 档位名走）────────────────────────
 
 def _lname(n, cfg, card):
-    from app import affection as A
+    from app.features.persona import affection as A
     try:
         return A.level_name(n, cfg, card) or ""
     except Exception:                                     # noqa: BLE001
@@ -64,7 +64,7 @@ def _lname(n, cfg, card):
 
 
 def _tname(key, cfg, level):
-    from app import affection as A
+    from app.features.persona import affection as A
     try:
         t = next((x for x in ((cfg or {}).get("tiers") or [])
                   if x.get("key") == key), None)

@@ -67,7 +67,7 @@ from app.features.persona import writing_style
 from app.features.persona import writing_skills
 from app.features.qq import trigger
 from app.integrations import llm
-from app import (affection)
+from app.features.persona import affection
 from app.config import (BASE_DIR, PERSONA_MODEL, PERSONA_MODEL_DEFAULT,
                         PERSONA_MODELS, PERSONA_PROVIDER,
                         persona_model_of,
@@ -711,7 +711,7 @@ def body_state_block(aff_res, gd=None):
     except (TypeError, ValueError):
         return ""
     try:
-        from app import affection
+        from app.features.persona import affection
     except Exception:                                     # noqa: BLE001
         return ""
     gd = gd if isinstance(gd, dict) else {}
@@ -816,7 +816,7 @@ def intimate_guide(aff_res=None):
     if ex > 0:
         # 高潮值的档位 key（cold/awake/rising/edge/over）由 affection 侧算好
         try:
-            from app import affection
+            from app.features.persona import affection
             lv = affection.orgasm_level(ex) or {}
         except Exception:                                 # noqa: BLE001
             lv = {}
