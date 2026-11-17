@@ -68,7 +68,8 @@ bp = Blueprint("outfit", __name__)
 
 # 双图工作流骨架（_ 前缀 = 内部专用，不出现在普通渠道列表里）
 _SKILL_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))))),
     "skills", "_qwen_outfit")
 _WORKFLOW = os.path.join(_SKILL_DIR, "workflow.json")
 

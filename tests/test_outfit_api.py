@@ -23,7 +23,8 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import friend_auth, outfit_api, main
+from app.features.image import outfit_api
+from app import friend_auth, main
 
 
 def _png_bytes():
@@ -496,8 +497,8 @@ class AuditGateTest(unittest.TestCase):
         self.assertIn("_write_job(tag, delivered=False)", src)
 
     def test_page_does_not_claim_delivery_when_blocked(self):
-        p = os.path.join(os.path.dirname(outfit_api.__file__),
-                         "..", "web", "outfit.html")
+        p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "web", "outfit.html")
         with open(p, encoding="utf-8") as f:
             html = f.read()
         self.assertIn("function done(delivered)", html)

@@ -39,7 +39,7 @@ from flask import (Flask, Response, g, jsonify, make_response, redirect, request
 from app import friend_auth
 from app import guest_view
 from app.config import WEB_DIR, WORKSHOP_HTML
-from app.logsetup import setup as log_setup
+from app.core.logsetup import setup as log_setup
 
 log = logging.getLogger("friend_app")
 

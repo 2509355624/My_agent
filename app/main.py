@@ -34,7 +34,7 @@ from app import friend_site
 from app import gallery_api
 from app.features.card import routes as card_api
 from app import output_api
-from app import outfit_api
+from app.features.image import outfit_api
 from app.features.novel import routes as novel_api
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         PROVIDERS, OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
