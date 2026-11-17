@@ -86,7 +86,9 @@ class WorkflowBuildTest(unittest.TestCase):
     def test_prompt_selected_by_mode(self):
         wf_o = outfit_api._build_workflow("t.png", "s.png", "outfit")
         wf_p = outfit_api._build_workflow("t.png", "s.png", "pose")
-        self.assertIn("clothing", wf_o["20"]["inputs"]["prompt"])
+        # 官方换装句式是 "… is wearing …"；换姿势那句不含 wearing
+        self.assertIn("wearing", wf_o["20"]["inputs"]["prompt"])
+        self.assertNotIn("wearing", wf_p["20"]["inputs"]["prompt"])
         self.assertIn("pose", wf_p["20"]["inputs"]["prompt"])
         self.assertNotEqual(wf_o["20"]["inputs"]["prompt"],
                             wf_p["20"]["inputs"]["prompt"])
@@ -95,18 +97,24 @@ class WorkflowBuildTest(unittest.TestCase):
         self.assertEqual(outfit_api.MODES, ("outfit", "pose"))
 
     def test_outfit_prompt_names_both_images(self):
-        """换装那段必须点名 Image 1 / Image 2，且要求剥掉原衣。
+        """换装提示词必须是官方那句短句式，不许再堆禁令。
 
-        2026-11-15 用户报「两张图都给了，出来还是原来的衣服」。同一对图实测：
-        旧版两句祈使句（"the first image" / "the second image"）模型直接忽略
-        参考图、原样还原主图；改成点名 Image 1/Image 2 + 「strip off everything
-        she is currently wearing」之后稳定换装成功，连主图原有的外套都去掉了。
-        这条守住那两处措辞，别被"精简"回去。
+        2026-11-15 三版实测：两句祈使（"first image"/"second image"）模型直接
+        还原主图；四百字点名版堆了六处 must be ignored/must not appear，用户
+        实测「完全没变，还是图2 原样」。官方多图示例只有一句：
+        "The girl from Image 1 is wearing the black dress from Image 2 …"。
+        这条守住三件事：点名两图、够短、不出现禁令词。
         """
         p = outfit_api.PROMPTS["outfit"]
-        self.assertIn("Image 1", p)
-        self.assertIn("Image 2", p)
-        self.assertIn("Strip off everything she is currently wearing", p)
+        self.assertIn("from Image 1", p)
+        self.assertIn("from Image 2", p)
+        # 官方句式：某图的人 wearing 某图的衣服
+        self.assertIn("wearing", p)
+        # 短：一句话说清关系和保留项，别写成小作文
+        self.assertLess(len(p), 220, "换装提示词超过 220 字符，又写成小作文了")
+        for banned in ("must be ignored", "must not appear", "Strip off",
+                       "nothing of her original clothing"):
+            self.assertNotIn(banned, p, "禁令句式会把注意力锁在被禁对象上")
         # 两句短祈使句就是失效的那版，别再退回去
         self.assertNotIn("Keep the person in the first image", p)
 
@@ -453,6 +461,54 @@ class UploadRetryTest(unittest.TestCase):
         self.assertIn("setTimeout(res, 800 * attempt)", self.retry_fn)
         # 重传期间给中文进度，不留白让用户以为卡死
         self.assertIn("正在自动重传", self.retry_fn)
+
+
+class AuditGateTest(unittest.TestCase):
+    """换装结果外发前必须过**现有**图片审核闸，不许另造一套。
+
+    2026-11-15 用户要求「换装生图结果要进审核机器人」。仓库里已经有
+    `app/image_audit.allow_send`（三层开关 + fail-closed + 人工二审），
+    `card_bot._audit` 是现成的调用样板，这里照同样的口径接。
+    """
+
+    def test_audit_calls_existing_allow_send(self):
+        from app import image_audit
+        with mock.patch.object(image_audit, "allow_send",
+                               return_value=True) as m:
+            self.assertTrue(outfit_api._audit("/x.png", "group", "123", "OF-1"))
+        args, kw = m.call_args
+        self.assertEqual(args[0], "/x.png")      # 要发出去的那份字节
+        self.assertEqual(args[2], "group")
+        self.assertEqual(args[3], "123")
+        self.assertEqual((kw.get("meta") or {}).get("kind"), "outfit")
+
+    def test_audit_exception_means_no_send(self):
+        from app import image_audit
+        with mock.patch.object(image_audit, "allow_send",
+                               side_effect=RuntimeError("boom")):
+            self.assertFalse(outfit_api._audit("/x.png", "private", "1", "t"))
+
+    def test_deliver_runs_inside_audit_branch(self):
+        with open(outfit_api.__file__, encoding="utf-8") as f:
+            src = f.read()
+        # 顺序必须是「先审 → 过了才发」，别把 _deliver 挪到 if 外面
+        self.assertRegex(src, r"if _audit\([^)]*\):\s*\n\s+_deliver\(")
+        self.assertIn("_write_job(tag, delivered=False)", src)
+
+    def test_page_does_not_claim_delivery_when_blocked(self):
+        p = os.path.join(os.path.dirname(outfit_api.__file__),
+                         "..", "web", "outfit.html")
+        with open(p, encoding="utf-8") as f:
+            html = f.read()
+        self.assertIn("function done(delivered)", html)
+        self.assertIn("没过审", html)
+        # 被拦时不许再写「已同时发回你的 QQ」
+        self.assertIn('$("resultTip").textContent', html)
+
+    def test_status_exposes_delivered(self):
+        with open(outfit_api.__file__, encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn('"delivered": bool(row.get("delivered"))', src)
 
 
 if __name__ == "__main__":

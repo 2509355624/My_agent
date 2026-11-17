@@ -59,7 +59,7 @@ import uuid
 from flask import Blueprint, jsonify, request, send_file
 
 from app import comfy_src, friend_auth, image_jobs, qq_api
-from app.config import state_path
+from app.config import QQ_AGENT_ID, state_path
 from app.skills import load_workflow
 
 log = logging.getLogger("outfit_api")
@@ -79,35 +79,25 @@ _UPLOAD_MAX = 12 << 20           # 单张上传上限 12MB（前端已压到几�
 _SUBMIT_PER_IP_HOUR = 8          # 每 IP 每小时最多提交 8 张
 
 # 固定提示词（英文，主图 + 参考 + 保留项三段式；零 LLM）。
-# 依据：阿里云 Qwen-Image-Edit 官方例 + Qwen-Image-2.1 提示词手册 +
-# 社区实测 skill——Qwen 图编辑吃「一句祈使指令 + 显式锁定保留项」，
-# 不是场景描述。换装/换姿势是确定性操作，没有要模型临场判断的部分。
+# 依据：阿里云 Qwen-Image-Edit 官方多图示例的提示词本身。
+# 官方原句（三图版）：
+#   "The girl from Image 1 is wearing the black dress from Image 2 and
+#    sitting in the pose from Image 3."
+# 结论一：官方约定 `image_1` = 被保留的那个人，`image_2` = 衣服来源。所以
+#         「要穿的人」必须喂给 image_1（`_run` 里对调的就是这件事）。
+# 结论二：官方换装提示词**只有一句**，肯定是，只讲关系。
 #
-# 2026-11-15 重写换装那段（原版是 "Keep the person in the first image
-# unchanged ... Replace only the clothing with the outfit from the second
-# image"，只有两句）。用户报「两张图都给了，出来的还是原来的衣服」。
-# 同一对图、同一份工作流实测三版：
-#   ① 原版两句祈使句      → 输出几乎逐像素等于主图，参考图等于没进去
-#   ② 明确 Image 1/Image 2 → 换装成功（鲨鱼T恤 + 黑色短裤都对）
-#   ③ 再加「剥离原衣」    → 连主图那件米色外套也去掉了，只剩图2 的整套
-# 差别不在工作流（静态检查过 images.image_1/2 与 latent 都对），在措辞：
-# 两张**都是人物**时，模型会把「the second image 里的衣服」理解成「她已经
-# 穿着的东西」，于是原样还原主图。点名 Image 1/Image 2 并把「图2 里除了
-# 衣服以外的东西全部忽略」写死，才压得住。
+# 2026-11-15 三版实测（同一对图、同一份工作流）：
+#   ① 原版两句祈使（"first image"/"second image"）→ 输出几乎等于主图
+#   ② 点名 Image 1/Image 2，四百余字，六处 must be ignored/must not appear
+#      → 用户实测「完全没变，还是图2 原样」
+#   ③ 照官方一句式（当前版本）→ 见 `tools/_verify_outfit_prompt.py`
+# 教训：禁令堆多了会把注意力锁在被禁对象上；官方句式短、肯定、只讲关系。
+# 以后要调这段，先跑 `tools/_verify_outfit_prompt.py` 出一组对照图再说话，
+# 不要凭感觉加形容词。
 PROMPTS = {
-    "outfit": ("Image 1 is the person who must be preserved: her face, identity, "
-               "hairstyle, body proportions, pose, camera angle, lighting and "
-               "background must stay exactly as in Image 1. Image 2 is a clothing "
-               "reference only. Dress the person in Image 1 in the complete outfit "
-               "from Image 2 - every piece of it, with its exact design, cut, color, "
-               "pattern and material. Strip off everything she is currently wearing, "
-               "including outer layers, tops, bottoms and any accessory that is not "
-               "part of Image 2's outfit; nothing of her original clothing may "
-               "remain on her body. Everything else about Image 2 - the person "
-               "wearing it, her face, hair, body, pose, background and art style - "
-               "must be ignored and must not appear in the result. The final image "
-               "must be the SAME person from Image 1, in the SAME pose and the SAME "
-               "background, wearing ONLY the complete outfit from Image 2."),
+    "outfit": ("The woman from Image 1 is wearing the complete outfit from "
+               "Image 2, with her face, hair, pose and background unchanged."),
     "pose": ("Keep the person in the first image unchanged — face, identity, "
              "outfit and background. Replace only the pose with the pose of the "
              "person in the second image, matching arm and hand positions and "
@@ -303,7 +293,9 @@ def api_status():
     if not row or row.get("token") != k:
         return jsonify({"ok": False, "error": "找不到这次任务"}), 404
     return jsonify({"ok": True, "state": row.get("state"),
-                    "file": row.get("file") or "", "error": row.get("error") or ""})
+                    "file": row.get("file") or "",
+                    "delivered": bool(row.get("delivered")),
+                    "error": row.get("error") or ""})
 
 
 @bp.route("/api/outfit/img", methods=["GET"])
@@ -397,8 +389,16 @@ def _run(tag, k, parsed, mode, path_a, path_b):
         with open(out, "wb") as fw:
             fw.write(data)
         _write_job(tag, state="done", file=out)
-        # 推回原会话：私聊发文件、群发图片消息段
-        _deliver(target, target_id, out)
+        # 外发前过现有审核闸（2026-11-15 用户要求：换装结果要进审核机器人）。
+        # 不另造一套，直接调 `image_audit.allow_send`——三层开关、fail-closed、
+        # 拦下的图进 state/review/ 人工二审、管理员过审能补发回本会话，全在
+        # 那条既有链路里（`card_bot._audit` 是同样的用法）。
+        if _audit(out, target, target_id, tag):
+            _deliver(target, target_id, out)
+            _write_job(tag, delivered=True)
+        else:
+            log.info("换装 %s 没过审，图留在网页不推 QQ", tag)
+            _write_job(tag, delivered=False)
     except Exception as e:
         err = str(e) or e.__class__.__name__
         log.warning("换装任务 %s 失败：%s", tag, err)
@@ -411,6 +411,25 @@ def _run(tag, k, parsed, mode, path_a, path_b):
                 qq_api.send_group(int(target_id), txt)
         except Exception:
             log.warning("换装失败通知也没发出去", exc_info=True)
+
+
+def _audit(path, target, target_id, tag):
+    """换装结果发 QQ 前过**现有**图片审核闸，不另立一套口径。
+
+    跟 `card_bot._audit` 同一个用法：`allow_send` 是唯一闸门，按群/私聊三层
+    开关判，没开就直接放行（一次 settings 读、不发网络请求）；开了才送识图
+    模型。判违规 / 审核没响应都返回 False（fail-closed），`allow_send` 自己
+    会回一句提示，并把图存进 `state/review/` 等人工二审。
+    这里只负责「不给它图」。
+    """
+    from app import image_audit
+    try:
+        return image_audit.allow_send(
+            path, QQ_AGENT_ID, target, target_id,
+            meta={"kind": "outfit", "tag": tag, "caption": "换装结果"})
+    except Exception as exc:                                 # noqa: BLE001
+        log.warning("换装审核异常（按不发处理）：%s", exc)
+        return False
 
 
 def _deliver(target, target_id, path):
