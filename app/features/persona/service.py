@@ -297,6 +297,9 @@ from app.features.persona import head_builder
 from app.features.persona.head_builder import (
     _env_note, _guard_block, _note_block, _state_block,
 )
+from app.features.persona.history_render import (
+    pronoun_to_name as _pronoun_to_name, render_hist as _render_hist,
+)
 from app.features.persona.prompt_facts import (
     FACT_MAX, FACT_TEXT_MAX, _FACTS_GUIDE, _facts_block, _outfit_block,
     _parse_facts, _place_block,
@@ -2068,53 +2071,6 @@ def _rag_context(hist, rounds=2):
         if text:
             parts.append("%s：%s" % (who, text[:80]))
     return " / ".join(parts)
-
-
-def _pronoun_to_name(content, name):
-    """历史示范里的「她」换成卡名（2026-11-07 二改）。
-
-    历史 12 条是强 few-shot：通篇「她」的示范会把「用名字叫她」的人称锚点
-    直接压死（实测两轮 0 次名字）。照「他→你」同一手法，只在**送模型前**
-    的副本上替换，落盘数据保持原样。先处理「她们」，避免拆成「学妹们」后
-    又多出一个孤「们」；台词里自称是「我」，不受影响。
-    """
-    n = str(name or "").strip()
-    if not n or n == "她":
-        return str(content)
-    text = str(content)
-    text = text.replace("她们", n + "们")
-    return text.replace("她", n)
-
-
-def _render_hist(hist, name="", alias=""):
-    """历史里带 `seg` 的用户消息按分段渲染；老消息没有 `seg` 就用原文。
-
-    这一步只在**送进模型前**做，落盘/网页回看仍用原文——否则展示层会冒出
-    「他说的 / 他做的」这种内部标签。`name` 是她现在的名字：assistant 示范里的
-    「她」一起换成名字，让人称和契约一致（见 `_pronoun_to_name`）。
-
-    `alias`（2026-11-09）：卡名。用户中途给她起了真正的名字（charName）时，
-    旧历史里留下的卡名也要在这份副本里换掉，否则模型会照着旧示范继续喊
-    「青梅竹马」。落盘数据不动。
-    """
-    out = []
-    for m in hist or []:
-        if not isinstance(m, dict):
-            continue
-        content = str(m.get("content") or "")
-        # 旧回复里的「他」和【心声】标签都是历史示范（2026-11-06），模型会照着
-        # 历史学，所以送模型前在这份副本上一起清掉；落盘数据保持原样。
-        if m.get("role") == "assistant":
-            content = _strip_monologue_tag(content)
-            content = _PRONOUN_HE.sub("你", content)
-            if alias and name and alias != name:
-                content = content.replace(alias, name)
-            content = _pronoun_to_name(content, name)
-        if m.get("role") == "user" and m.get("seg"):
-            content = render_user_block(m["seg"], m.get("addressed", True),
-                                        fallback=content)
-        out.append({"role": m.get("role"), "content": content})
-    return out
 
 
 # ─── 意图判断（两段式第一段，2026-11-02）────────────────────
