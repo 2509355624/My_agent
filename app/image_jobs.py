@@ -2064,7 +2064,7 @@ def _ledger_add(job):
     if not pid:
         return
     try:
-        from app import job_ledger
+        from app.features.image import job_ledger
         job_ledger.add({
             "tag": job.tag,
             "prompt_id": pid,
@@ -2086,7 +2086,7 @@ def _ledger_done(job):
     if not tag:
         return
     try:
-        from app import job_ledger
+        from app.features.image import job_ledger
         job_ledger.remove(tag)
     except Exception:
         log.warning("任务账本清理失败（重启后可能重投一张）", exc_info=True)
@@ -3326,7 +3326,7 @@ def _resume_one(tag, rec):
             return True
         rec["attempts"] = attempts
         try:
-            from app import job_ledger
+            from app.features.image import job_ledger
             job_ledger.add(rec)
         except Exception:
             log.warning("恢复：%s 记尝试次数失败", tag, exc_info=True)
@@ -3353,7 +3353,7 @@ def resume_pending():
             return None
         _resumed = True
     try:
-        from app import job_ledger
+        from app.features.image import job_ledger
         pending = job_ledger.load()
     except Exception:
         log.warning("恢复：读账本失败，本次跳过", exc_info=True)
@@ -3363,7 +3363,7 @@ def resume_pending():
     log.info("恢复：账本里有 %d 张没投递完的图，开始补发", len(pending))
 
     def run():
-        from app import job_ledger
+        from app.features.image import job_ledger
         for tag, rec in pending.items():
             try:
                 done = _resume_one(tag, rec)

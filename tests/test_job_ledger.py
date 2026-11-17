@@ -23,7 +23,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-from app import image_jobs, job_ledger
+from app.features.image import job_ledger
+from app import image_jobs
 from app.features.image import log as image_log
 
 
