@@ -298,16 +298,17 @@ tests/
 - 先搬 `paths.py`（绝对路径、`state_path`）和 `env.py`（`.env`、`_env_bool`）。
 - `app/config.py` 从新模块 import，旧名字继续可用；不一次改 106 个调用方。
 - 测试锁 `BASE_DIR`、`ROOT_DIR`、`WEB_DIR`、`DATA_DIR`、`state_path()`。
-- 已完成 `paths` / `env` / `llm` / `runtime` / `image` / `vision` / `rag` /
-  `web` / `card` / `qq` / `watchdog`：`llm.py` 管降级链、超时、重试、TTL、
-  预算；`runtime.py` 存 `data/runtime_settings.json`，管理页通过
-  `/api/llm/settings` 读写，下一次请求即生效；`image.py` 管 ComfyUI 地址/启动
-  参数、生图渠道、显存/内存水位、生图审核阈值、NAI 开关；`vision.py` 管通用
-  识图 provider/模型、超时、缩放、提示词上限；`rag.py` 管知识库开关、角色
-  记忆向量库、世界书预算；`web.py` 管主站端口、管理访问范围、画廊根目录、
-  工坊入口；`card.py` 管内置卡保护名单；`qq.py` 管 QQ 接入、回复策略、主动
-  接话、长期记忆和掉线通知；`watchdog.py` 管静默判据和 ComfyUI 分支总闸。
-- 后续按 `persona` → 上下文/压缩 → `__init__` 显式导出顺序收尾。
+- 已完成 `paths` / `env` / `llm` / `persona` / `runtime` / `image` / `vision` /
+  `rag` / `web` / `card` / `qq` / `watchdog`：`llm.py` 管降级链、超时、重试、
+  TTL、预算；`persona.py` 管角色扮演默认模型和玩家白名单；`runtime.py` 存
+  `data/runtime_settings.json`，管理页通过 `/api/llm/settings` 读写，下一次
+  请求即生效；`image.py` 管 ComfyUI 地址/启动参数、生图渠道、显存/内存水位、
+  生图审核阈值、NAI 开关；`vision.py` 管通用识图 provider/模型、超时、缩放、
+  提示词上限；`rag.py` 管知识库开关、角色记忆向量库、世界书预算；`web.py`
+  管主站端口、管理访问范围、画廊根目录、工坊入口；`card.py` 管内置卡保护
+  名单；`qq.py` 管 QQ 接入、回复策略、主动接话、长期记忆和掉线通知；
+  `watchdog.py` 管静默判据和 ComfyUI 分支总闸。
+- 后续按上下文/压缩 → `DEFAULT_AGENT_ID` → `__init__` 显式导出顺序收尾。
 
 ### 第三步：`bootstrap.py` + 入口
 

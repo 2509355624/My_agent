@@ -57,8 +57,9 @@ app/core/config/
 6. `web.py` + `card.py`。
 7. `qq.py`（`WEBUI_PORT`、`NOTIFY_*` 一并归入；`runtime.py` 已提前完成）。
 8. `watchdog.py`。
-9. `persona.py`。
-10. `__init__.py` 改成显式导出；`app/config.py` 最后变成 shim。
+9. `persona.py`（角色模型默认值与白名单）。
+10. 上下文/压缩配置与 `DEFAULT_AGENT_ID`。
+11. `__init__.py` 改成显式导出；`app/config.py` 最后变成 shim。
 
 每一步：旧 `app/config.py` 只减不增；新模块成为该域的唯一实现；跑
 `test_core_config.py` + 相关 feature 测试；不允许两边各留一份同名常量。

@@ -18,6 +18,7 @@ from app.core.config.paths import (
     state_path,
 )
 
+from app.core.config.persona import *  # noqa: F401,F403
 from app.core.config.llm import *  # noqa: F401,F403
 from app.core.config.image import *  # noqa: F401,F403
 from app.core.config.vision import *  # noqa: F401,F403
