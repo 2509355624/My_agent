@@ -1929,14 +1929,12 @@ class NoteBudgetTest(unittest.TestCase):
         # 2026-11-07：加「真人感的底子」+「这一拍的戏」两节约 700 字（+450 token），
         # 门槛放到 9200，仍在生图链路的两倍以内。
         #
-        # 2026-11-07 晚（方案 C）：状态值全书 1.1 万字进 system。这条**不再**
-        # 用 9200 卡——它算的是原始 token，而全书放在前缀的冻结段，DeepSeek
-        # 缓存命中后按 1/10 计费，实际每轮成本只涨约 700 token 等价。
-        # 保留断言是为了防「又有人往 head 里塞一万字动态内容」：全书必须在
-        # 冻结段，所以这里同时检查它确实来自 state_guide（可缓存），
-        # 而不是每轮现拼的。
+        # 2026-11-07 晚（方案 C）曾把状态值全书 1.1 万字放进 system 前缀。
+        # 2026-11-18 改为：原书仍完整保留在 state-guide.md / state_rules.py，
+        # 但每轮只按当前数值注入命中档位的原文（state_policy / state_inject）。
+        # 这里反过来断言整本书**不**在 head，防止有人又把 1.1 万字固定前缀塞回来。
         from app.features.persona import writing_skills
-        self.assertIn(writing_skills.state_guide(), head)
+        self.assertNotIn(writing_skills.state_guide(), head)
         self.assertLess(approx_tokens, 20000,
                         "扮演一轮 %.0f token，超过缓存前预算" % approx_tokens)
 

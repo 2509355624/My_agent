@@ -2,6 +2,8 @@
 
 import logging
 
+from app.features.persona import state_inject
+
 log = logging.getLogger("persona")
 
 
@@ -383,6 +385,12 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         body = svc.body_state_block(aff_res, gd)
         if body:
             dyn_parts.append(body)
+        # 状态原文分层注入（2026-11-18）：只把当前命中档位的原书原文贴进
+        # 这一轮，不再把整本 1.1 万字固定塞进 system 头。选择在 state_policy，
+        # 这里只负责拼；不设字数上限——现实里有几条就注入几条。
+        state_txt = state_inject.build(aff_res, gd)
+        if state_txt:
+            dyn_parts.append(state_txt)
 
     # 第一轮把网页上那段开场导读也发给模型（2026-11-04）。
     # 否则玩家照着导读里的场景开口（「咖啡好香」），模型手里根本没这个场景，

@@ -423,12 +423,10 @@ def _combo_hits(aff_res, gd):
 
 
 def body_state_block(aff_res, gd=None):
-    """「你现在在」+ 组合命中（2026-11-07 方案 C）。
+    """「你现在在」的常规数值快照（2026-11-18 分层后）。
 
-    全书（`skills/writing/00-state-guide/state-guide.md`）负责「这一档怎么写」，
-    这里只负责两件事：
-      1. 报当前数值和档位名——模型拿名字回全书里找同名小节；
-      2. 算组合命中——单轴管不了的事，一句话把它拉到第 12 节。
+    这里只报当前数值、档位名和组合命中；「这一档怎么写」的原文由
+    `state_inject` 按当前数值在后面注入，不再回整本书里找。
     全书读不到时退回内置的 `_TIME_LAYERS` / `_AROUSAL_LAYERS`（旧路径）。
 
     只读 `affection.settle()` 的返回值，不碰任何存储。
@@ -462,10 +460,10 @@ def body_state_block(aff_res, gd=None):
 
     book = writing_skills.state_guide()
     if book:
-        lines = ["## 你现在在（回《状态值全书》找同名小节，先看第 12 节）"]
-        lines.append("好感 %d（%s）· 感情 %s · 戒备 %d"
-                     % (val, tier.get("name") or "—",
-                        affection.level_name(aff_res.get("level")) or "—", sus))
+        lines = ["## 你现在在（常规数值快照；具体档位原文按当前值在后面注入）"]
+        lines.append("好感 %d（%s）· 身体进度 %s · 戒备 %d"
+                      % (val, tier.get("name") or "—",
+                         affection.level_name(aff_res.get("level")) or "—", sus))
         lines.append("冲动 %d（%s）· 高潮 %d（%s）"
                      % (ar, al.get("name") or "—", ex, ol.get("name") or "—"))
         lines.append("堕落 %d（%s）· 屈服 %d（%s）"

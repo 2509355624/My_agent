@@ -4,7 +4,7 @@ import json
 import os
 
 from app.config import BASE_DIR
-from app.features.persona import writing_skills, writing_style
+from app.features.persona import writing_style
 from app.features.persona.contract import _CONTRACT, _CONTRACT_NO_INTIMATE, _GROUP_NOTE
 from app.features.persona.ledger_text import _PRONOUN_HE, _ledger_fix_pronouns
 from app.features.persona.prompts import _GUARD_TEXT
@@ -69,9 +69,6 @@ def build(card, session_key, sender, cname, note="", state="", intimate=True,
     if room and not str(session_key or "").startswith("group_"):
         parts.append("## 她的房间（你离开她视线、进她房间时的素材，"
                      "可以自由发挥，不必全用）\n\n" + room)
-    sg = writing_skills.state_guide()
-    if sg:
-        parts.append(sg)
     parts.append((_CONTRACT if intimate else _CONTRACT_NO_INTIMATE).replace(
         "{NAME}", cname))
     sty = writing_style.head_style(mode)
