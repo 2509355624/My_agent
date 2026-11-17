@@ -214,7 +214,7 @@ class ScopeTest(unittest.TestCase):
                                seen.setdefault("p", prompt) or "猫瘫在桌上｜无语"), \
              mock.patch.object(agents, "vision_prompt",
                                return_value="跟我无关"):
-            from app import stickers
+            from app.features.qq import stickers
             stickers._tag("data:1")
         self.assertIn("情绪或使用场景标签", seen["p"])
         self.assertNotIn("跟我无关", seen["p"])

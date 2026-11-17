@@ -30,7 +30,8 @@ from unittest import mock
 
 from PIL import Image
 
-from app import agents, comfy_src, image_jobs, nai, qq_api, stickers, vision
+from app.features.qq import stickers
+from app import agents, comfy_src, image_jobs, nai, qq_api, vision
 from app.skills import load_workflow
 from app.tools.normal import generate_image as gi
 

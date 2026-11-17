@@ -22,7 +22,8 @@ MAX_TURNS 才停，群里先连蹦十几张图、最后才掉下一条千字大�
 import threading
 import time
 
-from app import qq_api, stickers
+from app.features.qq import stickers
+from app import qq_api
 from app.config import QQ_AGENT_ID
 
 # 两次发表情包的最小间隔（秒）。节流记在发送**之前**：失败也计入，

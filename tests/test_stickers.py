@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 from app import agents as agent_store
-from app import stickers
+from app.features.qq import stickers
 
 
 class _TmpAgentMixin:

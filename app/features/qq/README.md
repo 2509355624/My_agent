@@ -9,6 +9,6 @@
 完整映射见 `docs/project-skeleton.md` 第 4 节。
 
 状态：`bill.py`（原 `qq_bill.py`）、`names.py`（原 `qq_names.py`）、`status.py`
-（原 `qq_status.py`）、`notify.py`（原 `notify.py`，掉线/扫码 PushPlus 推送）已迁入
-并接线；`qq_api.py`、`qq_bot.py` 等仍在根目录。QQ 机器人不是 Flask 进程，不注册
+（原 `qq_status.py`）、`notify.py`（原 `notify.py`，掉线/扫码 PushPlus 推送）、
+`stickers.py`（原 `stickers.py`，群表情收藏/检索）已迁入并接线；`qq_api.py`、`qq_bot.py` 等仍在根目录。QQ 机器人不是 Flask 进程，不注册
 blueprint；事件循环放 `service.py`。

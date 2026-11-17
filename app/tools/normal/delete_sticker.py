@@ -12,7 +12,7 @@
 
 import re
 
-from app import stickers
+from app.features.qq import stickers
 from app.config import QQ_AGENT_ID
 
 # 一次调用最多删几张

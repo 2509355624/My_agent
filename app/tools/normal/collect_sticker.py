@@ -10,7 +10,8 @@ stickers 的「最近图片」缓冲（最新在尾）。模型不传参 = 收�
 「加进来了」——本工具的每个失败分支都给了它一句现成的实话。
 """
 
-from app import qq_api, stickers
+from app.features.qq import stickers
+from app import qq_api
 from app.config import QQ_AGENT_ID
 
 
