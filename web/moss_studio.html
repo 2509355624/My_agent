@@ -17,7 +17,7 @@
     --radius: 12px; --radius-sm: 8px;
   }
   html, body { background: var(--bg); color: var(--text);
-    font-family: "SF Mono", "JetBrains Mono", "Consolas", "Microsoft YaHei", monospace;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
     font-size: 14px; min-height: 100%; }
   .wrap { max-width: 1320px; margin: 0 auto; padding: 20px 20px 60px; }
   .topbar { display: flex; align-items: center; gap: 12px; padding: 12px 0 18px; flex-wrap: wrap; }
@@ -136,14 +136,47 @@
     border-right-color: transparent; border-radius: 50%; animation: sp .7s linear infinite;
     vertical-align: -1px; margin-right: 6px; }
   @keyframes sp { to { transform: rotate(360deg); } }
+
+  /* 2026-11-17：高级项收起；手机上编辑区和画布上下排。 */
+  details.card summary {
+    list-style: none; cursor: pointer; color: var(--text-dim);
+    font-size: 13px; display: flex; align-items: center; gap: 8px;
+  }
+  details.card summary::-webkit-details-marker { display: none; }
+  details.card summary::before {
+    content: "＋"; color: var(--text-mute); font-size: 12px;
+  }
+  details.card[open] summary::before { content: "−"; }
+  details.note { margin-top: 8px; }
+  details.note summary {
+    list-style: none; cursor: pointer; color: var(--text-mute); font-size: 11px;
+  }
+  details.note summary::-webkit-details-marker { display: none; }
+  details.note summary:hover { color: var(--accent); }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 14px 14px 40px; }
+    .topbar h1 { font-size: 16px; }
+    .topbar .pill, .topbar .spacer { display: none; }
+    #hist select { max-width: 128px; }
+    input, textarea, select { font-size: 16px; }
+    .card { padding: 14px; }
+    .headgrid { grid-template-columns: 1fr; }
+    .cast .crow { grid-template-columns: 1fr; }
+    .panel .trow { grid-template-columns: 1fr; }
+    .pb-head { padding: 8px 10px; }
+    .editor, .canvas { padding: 10px; }
+    .canvas { min-height: 180px; }
+  }
+
 </style>
 </head>
 <body>
 <div class="wrap">
 
   <div class="topbar">
-    <h1>moss 漫画台</h1>
-    <span class="pill">MOSS-Image · 30 步 · nai5 风格 · 一页一次生成</span>
+    <h1>moss 漫画</h1>
+    <span class="pill">一页一次生成</span>
     <div class="spacer"></div>
     <div id="hist"><select id="histsel"><option value="">— 最近任务 —</option></select></div>
     <a class="back" href="/" >← 回首页</a>
@@ -179,8 +212,11 @@
       <div class="spacer"></div>
       <button class="btn primary" id="btn-write">让编剧写剧本</button>
     </div>
-    <div class="hint">编剧只写「这一格画什么」，画风串、人物外形由脚本注入 → 格与格不会串味。
-      气泡 / 拟声 / 旁白直接画进图里（中文 ≤10 字，实测 12 字起会漏字乱序）。</div>
+    <details class="note">
+      <summary>说明</summary>
+      <div class="hint">编剧只写「这一格画什么」，画风串、人物外形由脚本注入 → 格与格不会串味。
+        气泡 / 拟声 / 旁白直接画进图里（中文 ≤10 字，实测 12 字起会漏字乱序）。</div>
+    </details>
   </div>
 
   <!-- ── 2. 剧本 ── -->
@@ -209,14 +245,14 @@
   </div>
 
   <!-- ── 2.5 LoRA 槽位 ── -->
-  <div class="card" id="lora-card">
-    <h2>LoRA 槽位 <span style="color:var(--text-mute);font-size:11px;font-weight:400">勾选才会挂上 · 只影响这次出图</span></h2>
+  <details class="card adv" id="lora-card">
+    <summary>LoRA 槽位 <span style="color:var(--text-mute);font-size:11px;font-weight:400">勾选才会挂上 · 只影响这次出图</span></summary>
     <div id="lora-rows"></div>
     <div class="row" style="margin-top:10px">
       <button class="btn" id="btn-lora-save">存为默认</button>
       <span class="hint" style="margin:0">存为默认会写回模板，之后 QQ 侧和另外两个台都按它跑</span>
     </div>
-  </div>
+  </details>
 
   <!-- ── 3. 每页 ── -->
   <div id="pages-wrap"></div>
