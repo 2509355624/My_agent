@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from app import admin_auth
+from app.core import admin_auth
 
 
 class AdminAuthTest(unittest.TestCase):

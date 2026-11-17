@@ -6,7 +6,7 @@ import unittest
 from unittest import mock
 
 import admin_app
-from app import admin_auth
+from app.core import admin_auth
 
 
 class FakeResp:

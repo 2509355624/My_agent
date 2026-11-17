@@ -28,4 +28,6 @@
 `app/persona_rag.py`、`app/rag/`、`app/memory.py`、`app/qq_bot.py`、
 `app/notify.py`、`app/watchdog.py` 与 `app/image_jobs.py`。配置包已显式导出，
 旧 `app/config.py` 只剩兼容门面和自定义渠道启动合并。
+`admin_auth.py`（管理页登录/会话/改密）也已归 `core`；`friend_auth.py` 属 5175
+群友网关，待随 `gateways` 一并搬入。
 迁移顺序见 `docs/project-skeleton.md` 第 9 节。

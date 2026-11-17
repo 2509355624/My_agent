@@ -39,7 +39,7 @@ import requests
 from flask import (Flask, Response, g, jsonify, make_response, redirect, request,
                    stream_with_context)
 
-from app import admin_auth
+from app.core import admin_auth
 from app.core.logsetup import setup as log_setup
 
 log = logging.getLogger("admin_app")
