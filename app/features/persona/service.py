@@ -228,6 +228,10 @@ from app.features.persona.contract import (
 
 from app.features.persona import state_store
 from app.features.persona import history_store
+from app.features.persona.history_view import (
+    _archive_assistant_count, _split_meta, archive_len, cache_rows, history_page,
+    load_archive, trim, turn_total,
+)
 from app.features.persona.lines import (
     SLOT_MAX, _card_key_slot, _persona_key, _slot_suffix,
     card_key, card_slot_of,
@@ -275,6 +279,10 @@ from app.features.persona.persona_shots import (
 from app.features.persona.persona_images import (
     _draw_fail, _session_target, draw,
 )
+from app.features.persona.lines import (
+    _group_redirect, _match_card_in_text, resolve_line, status_brief, switch, switch_line,
+)
+from app.features.persona.opening import opening
 from app.features.persona.notes import (
     NOTE_MAX_ROWS, _bump_turn, _note_convo, _settled_day_facts, compress_note,
 )
@@ -710,97 +718,12 @@ def active_card(session_key):
     return get_card(cid)
 
 
-def resolve_line(session_key):
-    """base 键 → 此刻该用的**线键**（QQ 私聊分线，2026-11-03 方案 B）。
-
-    网页端调用方（persona_api）传进来的已经是线键（带 `__`），原样返回；
-    QQ 端传的是 base（`private_<qq>`），按 base 上记的 `card` 派生出
-    `private_<qq>__<角色>`。这样：
-
-      · 切角色 → 各聊各的线，历史/小记/好感互不污染（和网页一致）
-      · 切回来 → 接着原来那条线聊
-    群聊不分线（已停演），没在演时返回 base 本身。
-    """
-    key = str(session_key or "")
-    if "__" in key or not key.startswith("private_"):
-        return key
-    ent = _entry(key) or {}
-    cid = str(ent.get("card") or "").strip()
-    if not cid:
-        return key
-    # 存档槽（2026-11-08）：base 上记着 slot 就派生出带后缀的线键。
-    # 没有这个字段的老档按 slot 0 走，行为完全不变。
-    try:
-        slot = int(ent.get("slot") or 0)
-    except (TypeError, ValueError):
-        slot = 0
-    return _card_key_slot(key, cid, slot)
 
 
-def status_brief(session_key):
-    """每轮跟在角色回复后面的「此刻」窄条（2026-11-05 用户要求）。
-
-    和手动「状态」的分工：那边是**完整阶梯表**；这边只报箭头 ▶ 指着的那
-    一格，免得每轮都把表格铺一遍。没在演（取不到线）返回 ""，调用方别拼。
-    """
-    try:
-        return affection.panel_brief(resolve_line(session_key))
-    except Exception:                            # noqa: BLE001
-        log.warning("生成「此刻」简报失败 %s", session_key, exc_info=True)
-        return ""
 
 
-def switch_line(base, card, slot=0):
-    """切角色 / 切存档（2026-11-08 加 slot）：**两条都要写**——
-
-      · 线键 `base__<card_id>`：这条角色线的真实状态（历史/小记/好感都挂它）
-      · base：记「此刻在演谁」的副本（`resolve_line` 靠它找线）
-
-    切回一条演过的线时，`switch()` 会保留它的小记/轮次——真正「接着聊」。
-    网页端 switch 端点与本函数是同一套语义（2026-11-03 起共用这里）。
-    """
-    ckey = _card_key_slot(base, card["id"], slot)
-    switch(ckey, card)
-    st = _load_state()
-    st[base] = dict(st.get(ckey) or {})
-    # base 上记「此刻是这张卡的第几个存档」——`_active_key` / `resolve_line`
-    # 靠它派生出线键。slot 0 不写（老档没有这个字段，行为不变）。
-    try:
-        n = int(slot or 0)
-    except (TypeError, ValueError):
-        n = 0
-    if n:
-        st[base]["slot"] = n
-    else:
-        st[base].pop("slot", None)
-    _save_state(st)
-    return ckey
 
 
-def switch(session_key, card):
-    """进扮演态（`session_key` 应传**线键**，见 `switch_line`/`resolve_line`）。
-
-    分线后的语义（2026-11-03 方案 B）：
-      - **新线**（这个角色在这条会话没演过）→ 小记/轮次/心情全空白；
-      - **切回旧线**（条目已存在且 card 相同）→ **原样保留**小记/轮次/心情
-        ——「切回来接着原来那条线聊」，和网页的承诺一致。
-        （旧版这里无条件清零，网页切回来小记也被洗掉，是同一处疏漏。）
-
-    「上一个角色的记忆不该带进来」由**分线本身**保证：每条角色线有自己的
-    小记和历史，换人 = 换线，天然互不污染。
-    """
-    state = _load_state()
-    old = state.get(session_key)
-    if isinstance(old, dict) and str(old.get("card") or "") == card["id"]:
-        log.info("扮演态回到旧线：%s（保留小记 %d 字 / %s 轮）",
-                 session_key, len(str(old.get("note") or "")),
-                 old.get("turns"))
-        return
-    state[session_key] = {"card": card["id"], "note": "", "turns": 0,
-                          "mood": "", "intensity": 0, "state": ""}
-    _save_state(state)
-    log.info("扮演态开启：%s → %s（%s，新线）",
-             session_key, card["name"], card["id"])
 
 
 def leave(session_key):
@@ -865,56 +788,8 @@ _PREFIX_RE = re.compile(
     r"^\s*(?:@[^\s，,、:：]+|" + re.escape(trigger.NAME) + r")\s*[，,、:：]?\s*")
 
 
-def _match_card_in_text(text):
-    """在一段描述里找卡名，返回命中的第一张卡（找不到返回 None）。
-
-    场景：「角色扮演，你是我的白色小兔妹妹，我们相依为命……」——用户没写
-    精确卡名，而是用一段话描述他要谁。这里按**卡名出现位置**找，
-    **长得越长的名字优先**（「妹妹闺蜜」要压过「妹妹」）。
-    """
-    t = str(text or "")
-    if not t:
-        return None
-    hits = []
-    for c in load_cards():
-        name = str(c.get("name") or "").strip()
-        if not name:
-            continue
-        pos = t.find(name)
-        if pos >= 0:
-            hits.append((pos, -len(name), c))
-    if not hits:
-        return None
-    hits.sort(key=lambda x: (x[0], x[1]))
-    return hits[0][2]
 
 
-def _group_redirect(card):
-    """群里不让开演，回一段说明 + 去处。
-
-    2026-11-03 用户反馈「群里其他人能看到别人的聊天内容」——状态隔离没坏，
-    坏的是**群聊内容本来就公开**。所以群里不再实际扮演。
-    """
-    lines = [
-        "这里人多，**不方便演**——我说的话一屋子人都看得到。",
-        "",
-        "想跟她单独聊，两个地方：",
-        "",
-        "1. **私聊我**，发「%s」就能开始" % card["name"],
-    ]
-    try:
-        from app.features.qq import friend_site
-        site = friend_site.url()
-    except Exception:                              # noqa: BLE001
-        site = ""
-    if site:
-        lines.append("2. **网页上玩**（能点按钮出图、看她的状态）：")
-        lines.append("   %s/persona" % site.rstrip("/"))
-    else:
-        lines.append("2. **网页上玩**：找我主人要个地址")
-    lines.append("")
-    lines.append("（群里发「#角色扮演」还是能看到完整规则的。）")
-    return "\n".join(lines)
 
 
 def _command_body(text, addressed=False):
@@ -1000,86 +875,14 @@ def _read_archive_file(session_key):
     """只读归档文件本身；缺失 / 读不了返回 []，不回退窗口。"""
     return history_store.read_rows(_archive_path(session_key))
 
-def load_archive(session_key):
-    """读**完整**归档（`persona_archive_*.jsonl`）。网页回看历史读的是这一份。
-
-    2026-11-04：以前网页读的是 `_load_hist` 的 12 条滑动窗口，所以「超过 6 轮
-    就翻不到更早的」——数据一直在归档里，只是接口没给。这里不加新存储，只把
-    已有的那份读出来。
-
-    没有归档（功能上线前的老线，或归档写失败）就退回窗口原文——那时能看到的
-    只有窗口内的这些，救不回来。**不调用 `trim()`**：回看要全文，截到 900 字
-    加个省略号就不是「回顾」了。
-    """
-    rows = _read_archive_file(session_key)
-    if not rows:
-        rows = [m for m in _load_hist(session_key)
-                if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
-    # 2026-11-06：老归档里的 `【心声】` 标签只在这份**返回副本**上剥掉，
-    # 网页回看和前情提取拿到的都是干净文字；磁盘上的归档原样保留。
-    out = []
-    for r in rows:
-        if isinstance(r, dict) and r.get("role") == "assistant" and r.get("content"):
-            r = dict(r)
-            r["content"] = _strip_monologue_tag(r["content"])
-        out.append(r)
-    return out
 
 
-def archive_len(session_key):
-    """归档一共多少条。给 `chat` 回包算「这一轮是第几条」用。"""
-    return len(load_archive(session_key))
 
 
-def _archive_assistant_count(session_key):
-    """归档里她说过多少条——老线补算「累计轮次」用。"""
-    try:
-        return sum(1 for m in load_archive(session_key)
-                   if isinstance(m, dict) and m.get("role") == "assistant")
-    except Exception:                                    # noqa: BLE001
-        return 0
 
 
-def turn_total(session_key):
-    """这条线累计交流了多少轮（网页「轮次」显示用，2026-11-06 用户要求）。
-
-    和小记压缩的 `turns` 分开：那个每 `NOTE_EVERY_TURNS` 轮被 `compress_note`
-    清零，玩家真正想看的是总量。新线由 `_bump_turn` 维护 `turn_total`；
-    老线没有这个字段时按归档里她的回复条数补算（只读不写盘）。
-    """
-    key = resolve_line(session_key)
-    ent = _entry(key)
-    if not isinstance(ent, dict):
-        return 0
-    if ent.get("turn_total") is not None:
-        try:
-            return max(0, int(ent.get("turn_total") or 0))
-        except (TypeError, ValueError):
-            return 0
-    return _archive_assistant_count(key)
 
 
-def history_page(session_key, before=None, limit=None):
-    """归档里 `[before-limit, before)` 这一段，返回 (start, chunk, total)。
-
-    `before=None` → 最后 limit 条（首屏）；否则往前翻一页。
-    下标就是归档**行号**，也是前端气泡的 id —— 归档只增不删，所以它稳定，
-    不会像「窗口内第几条」那样聊一轮整体前移。
-    """
-    rows = load_archive(session_key)
-    total = len(rows)
-    try:
-        end = total if before is None else int(before)
-    except (TypeError, ValueError):
-        end = total
-    end = max(0, min(total, end))
-    try:
-        lim = int(limit or ARCHIVE_PAGE)
-    except (TypeError, ValueError):
-        lim = ARCHIVE_PAGE
-    lim = max(1, min(200, lim))
-    start = max(0, end - lim)
-    return start, rows[start:end], total
 
 
 def _hist_path(session_key):
@@ -1107,83 +910,10 @@ def _save_hist(session_key, msgs):
     """整份重写滑动窗口（原子写）。"""
     history_store.write_window(_hist_path(session_key), msgs)
 
-def trim(hist, limit=None):
-    """取最近 N 条（默认 HISTORY_LIMIT），单条超 MSG_MAX_CHARS 截断。
-
-    `limit`（2026-11-10）：给前缀缓存的滞回窗口用。传窗口的实际长度时，
-    **只做单条截断、不砍条数**，历史前缀才能逐轮只追加。不传时行为与
-    以前完全一致（编剧 / 打分器 / 回看等内部调用仍只看最近 12 条）。
-
-    裁的是**送进模型的副本**；落盘保留原文（2026-11-05 起，`run_turn` 直接存
-    `_load_hist` 的原始窗口，不再把截断版写回去）——网页回看和归档要的是全貌。
-
-    2026-11-02：assistant 那几条**保留结构化尾巴**。截断只砍正文，最后三行
-    （画面 / 心情 / 状态）原样留着——它们是 few-shot 示范，历史里全是纯对话
-    的话，模型第 2 轮起就会跟着历史把格式丢掉（实测第 1 轮完美、第 2 轮全空）。
-    """
-    msgs = [m for m in (hist or [])
-            if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
-    n = HISTORY_LIMIT if not limit else max(1, int(limit))
-    msgs = msgs[-n:]
-    out = []
-    for m in msgs:
-        c = str(m.get("content") or "").strip()
-        if len(c) > MSG_MAX_CHARS:
-            if m["role"] == "assistant":
-                body, tail = _split_meta(c)
-                room = max(20, MSG_MAX_CHARS - len(tail) - 1)
-                c = body[:room].rstrip() + "…" + tail
-            else:
-                c = c[:MSG_MAX_CHARS] + "…"
-        out.append({"role": m["role"], "content": c})
-        # 分段（2026-11-05）：送到模型前还要再渲染一次，所以 `trim` 不能把
-        # `seg` 丢掉。展示/归档读的是 `content`，不受影响。
-        if m.get("role") == "user" and m.get("seg"):
-            out[-1]["seg"] = m["seg"]
-            out[-1]["addressed"] = m.get("addressed", True)
-    return out
 
 
-def cache_rows(hist):
-    """前缀缓存窗口：逐轮只追加，攒过 HISTORY_CACHE_HIGH 才一次性砍回低水位。
-
-    返回的是**原始行**（带着 `seg` 等字段），既能送模型（外面再 `trim(...
-    , limit=len(win))` 做单条截断），也能原样落盘。两条路径必须走同一个函数：
-    落盘的内容要和上一轮发给模型的历史序列逐字节对得上，下一轮才接得上前缀。
-
-    砍回那一次会断一次缓存，这是滞回的代价；换来的是其余 9 轮都能整段命中，
-    比每轮滑动（每轮都断）划算得多。
-    """
-    rows = [m for m in (hist or [])
-            if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
-    if len(rows) > HISTORY_CACHE_HIGH:
-        rows = rows[-HISTORY_LIMIT:]
-    return rows
 
 
-def _split_meta(text):
-    """把一条 assistant 回复切成「正文」和「结构化的三行」。
-
-    返回 `(正文, "\\n画面：…\\n心情：…\\n状态：…")`；没有结构化行时尾巴为空串。
-    用行首匹配而不是别处出现的词，避免正文里提到「画面」被误切。
-    """
-    lines = str(text or "").split("\n")
-    keep, idx = [], len(lines)
-    # 从尾巴往回找连续的三类元数据行（允许中间夹空行）
-    metas, i = [], len(lines) - 1
-    while i >= 0:
-        ln = lines[i].strip()
-        if not ln or any(rx.match(ln) for rx in (_SCENE_RE, _MOOD_RE, _STATE_RE)):
-            if ln and any(rx.match(ln) for rx in (_SCENE_RE, _MOOD_RE, _STATE_RE)):
-                metas.insert(0, lines[i])
-                idx = i
-            i -= 1
-            continue
-        break
-    if not metas:
-        return str(text or ""), ""
-    keep = lines[:idx]
-    return "\n".join(keep).rstrip() + "\n", "\n" + "\n".join(metas)
 
 
 # ── 框定（2026-11-06 用户要求「把破甲那套用到角色扮演」）──────────
@@ -1734,75 +1464,12 @@ from app.features.persona.text_utils import (
 #
 # 所以它不是她的台词，是给玩家看的**场景说明**：时间、地点、她正在干什么、
 # 你们是什么关系、从哪儿开口。只在没有历史的新线上生成一次，缓存进 state。
-OPENING_MAX = 260
 
 
-_DAYPARTS = ((5, "深夜"), (8, "早上"), (11, "上午"), (13, "中午"),
-             (17, "下午"), (19, "傍晚"), (23, "夜里"), (24, "深夜"))
 
 
-def _daypart():
-    """现在大概是一天里的什么时候（只给个粗粒度，写进导读就够用）。"""
-    h = datetime.datetime.now().hour
-    for edge, name in _DAYPARTS:
-        if h < edge:
-            return name
-    return "深夜"
 
 
-def opening(session_key, force=False):
-    """这条线的开场导读；生成过一次就缓存。
-
-    没有角色时返回空串（网页不画那块灰条）。生成失败也返回空串——开场导读
-    是个锦上添花的东西，不能因为它挂掉整页打不开。
-    """
-    card = active_card(session_key)
-    if card is None:
-        return ""
-    ent = _entry(session_key) or {}
-    cur = str(ent.get("intro") or "").strip()
-    if cur and not force:
-        return cur
-    # 卡级默认开场（2026-11-07）：卡里写了就直接用，**不再调模型**。
-    # 优先级：session 的 `intro` > 卡的 `opening` > 现生成。
-    # 为什么 session 优先：玩家已经聊过的线不该被卡里的开场覆盖——
-    # 那等于把开场白换成另一段，历史还在，两边的场景对不上。
-    card_open = str(card.get("opening") or "").strip()
-    if card_open and not force:
-        return card_open
-
-    rel = ""
-    try:
-        st = affection.status(session_key) or {}          # 顺手建好感记录
-        bits = [str(st.get("levelName") or ""), str(st.get("tierName") or "")]
-        rel = "、".join([b for b in bits if b]) or "还不熟"
-    except Exception:                                     # noqa: BLE001
-        rel = "还不熟"
-
-    who = "，".join([b for b in (
-        char_name(card, "", key=session_key),
-        str(card.get("description") or ""),
-        str(card.get("personality") or "")) if b])
-    sysp = str(card.get("systemPrompt") or "").strip()
-    if sysp:
-        who += "\n" + sysp[:260]
-    prompt = _OPENING_PROMPT % (OPENING_MAX, who, rel, _daypart())
-    try:
-        text = str(_llm_call([{"role": "user", "content": prompt}],
-                             max_tokens=700) or "").strip()
-    except Exception:                                     # noqa: BLE001
-        log.exception("开场导读生成失败 %s", session_key)
-        return ""
-    if not text:
-        return ""
-    text = _cut_sentence(text, OPENING_MAX)
-    state = _load_state()
-    st = state.get(session_key)
-    if isinstance(st, dict):
-        st["intro"] = text
-        _save_state(state)
-    log.info("开场导读已生成 %s（%d 字）", session_key, len(text))
-    return text
 
 
 
