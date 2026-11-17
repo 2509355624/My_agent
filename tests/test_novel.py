@@ -23,7 +23,8 @@ from unittest import mock
 
 import flask
 
-from app import novel, novel_api, persona_rag
+from app import novel, persona_rag
+from app.features.novel import routes as novel_api
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAGE = os.path.join(ROOT, "web", "novel.html")
@@ -1288,7 +1289,7 @@ class WiringTest(unittest.TestCase):
         self.assertIn("/persona", self.html)
 
     def test_main_registers_blueprint_page_and_no_store(self):
-        self.assertIn("from app import novel_api", self.main)
+        self.assertIn("from app.features.novel import routes as novel_api", self.main)
         self.assertIn("app.register_blueprint(novel_api.bp)", self.main)
         self.assertIn('@app.route("/novel")', self.main)
         self.assertIn("def _no_cache_novel", self.main)

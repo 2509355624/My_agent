@@ -6,4 +6,6 @@
 
 迁移起点：`novel.py`、`novel_api.py`、`novel_writing.py`。完整映射见 `docs/project-skeleton.md` 第 4 节。
 
-状态：空包，未接线。先建 `service.py` 的“开书/续写/裁定”用例，再抽 `repository.py` 存章节。
+状态：`routes.py`（原 `novel_api.py` 的小说接口）已迁入并接线；`novel.py` 主逻辑仍在
+根目录，等接口稳定后再按“开书/续写/裁定/世界书”拆 `service.py` 与
+`repository.py`。
