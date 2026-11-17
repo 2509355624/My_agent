@@ -10,4 +10,5 @@
 - feature 可以 import `core`；共享代码只有出现第二个调用方后才抽到这里。
 - 不建万能 `utils/`；路径进 `paths.py`，日志进 `logging.py`，鉴权/限流进 `security.py`。
 
-状态：空包，未接线。迁移顺序见 `docs/project-skeleton.md` 第 9 节。
+状态：`config.py` 已建立 facade（新代码从 `app.core.config` import；实现暂留
+`app/config.py`）。其余模块仍为空包。迁移顺序见 `docs/project-skeleton.md` 第 9 节。
