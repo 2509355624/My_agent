@@ -71,6 +71,13 @@ class GalleryHeaderTest(unittest.TestCase):
         self.assertIn('b.textContent = blocked ? "请进到文件夹" : "扫描这里"', html)
         self.assertIn("不能扫描整块盘，请进到具体文件夹", html)
 
+    def test_scan_dialog_has_native_folder_picker(self):
+        html = _html()
+        self.assertIn('id="scpick"', html)
+        self.assertIn("从电脑中选择文件夹", html)
+        self.assertIn("api(\"pick-folder?initial=", html)
+        self.assertIn('$("scpick").onclick = pickFolder;', html)
+
     def test_original_ids_are_kept(self):
         html = _html()
         for element_id in (

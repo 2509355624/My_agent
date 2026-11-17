@@ -1372,6 +1372,44 @@ class ClearScanApiTest(_Base):
         self.assertEqual(self.works(), [])
 
 
+class PickFolderApiTest(_Base):
+    def setUp(self):
+        super().setUp()
+        from flask import Flask
+        self.app = Flask(__name__)
+        self.app.register_blueprint(gallery_api.bp)
+        self.c = self.app.test_client()
+        self.h = {"X-Friend-Token": "tok"}
+        for target, attr, val in ((friend_auth, "secret", lambda: "tok"),
+                                  (gallery_api, "GALLERY_OWNER_QQ", "10001")):
+            p = mock.patch.object(target, attr, val)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_only_owner_can_open_folder_picker(self):
+        r = self.c.get("/api/gal/pick-folder?qq=20002", headers=self.h)
+        self.assertEqual(r.status_code, 403)
+
+    def test_owner_gets_the_selected_path(self):
+        from app.features.gallery import folder_picker
+        with mock.patch.object(folder_picker, "pick",
+                               return_value={"path": r"D:\Users\gjl\Pictures\new"}):
+            r = self.c.get("/api/gal/pick-folder?qq=10001&initial=D:\\",
+                           headers=self.h)
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["path"], r"D:\Users\gjl\Pictures\new")
+
+    def test_cancel_is_an_error_not_a_crash(self):
+        from app.features.gallery import folder_picker
+        with mock.patch.object(folder_picker, "pick",
+                               return_value={"error": "没有选择文件夹"}):
+            r = self.c.get("/api/gal/pick-folder?qq=10001", headers=self.h)
+        self.assertEqual(r.status_code, 400)
+        self.assertFalse(r.get_json()["ok"])
+
+
 class DeleteItemTest(_Base):
     """删单张：权限、文件、重排序号。
 

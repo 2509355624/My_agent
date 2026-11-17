@@ -243,6 +243,10 @@
   .pick{display:block;border:1px dashed var(--line);border-radius:12px;padding:22px 12px;
     text-align:center;color:var(--dim);font-size:13px;margin-bottom:12px;cursor:pointer}
   .pick.has{color:var(--tx);border-style:solid}
+  .pickdir{display:block;width:100%;border:1px solid var(--line);border-radius:11px;
+    background:var(--card2);color:var(--tx);font:inherit;padding:12px;
+    margin-bottom:10px;cursor:pointer}
+  .pickdir[disabled]{opacity:.55;cursor:default}
   #prev{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
   #prev img{width:56px;height:56px;object-fit:cover;border-radius:8px;background:var(--card2)}
   .row{display:flex;gap:8px}
@@ -386,9 +390,10 @@
 <div id="scanbox">
   <div class="sheet">
     <h3>扫描文件夹</h3>
-    <p>点进具体文件夹，或者直接粘完整路径。只能扫文件夹，不能扫整块盘；
-      每个「直接放着图」的目录算一个作品集。</p>
+    <p>点「从电脑中选择文件夹」，或者直接粘完整路径。只能扫具体文件夹，
+      不能扫整块盘；每个「直接放着图」的目录算一个作品集。</p>
     <div class="nowline" id="scnow"></div>
+    <button class="pickdir" id="scpick" type="button">从电脑中选择文件夹</button>
     <div class="row" style="margin-bottom:10px">
       <input type="text" id="scpath" placeholder="D:\Users\gjl\Pictures\new">
       <button class="up" id="scup" title="上一级">↑</button>
@@ -805,6 +810,23 @@
   }
   function closeScan() { $("scanbox").classList.remove("on"); }
 
+  // 服务端弹出 Windows 原生选文件夹窗口。浏览器本身拿不到本机绝对路径，
+  // 这一步必须由服务端（就是站主这台电脑）来选。
+  function pickFolder() {
+    var b = $("scpick");
+    if (b.disabled) return;
+    b.disabled = true;
+    b.textContent = "正在打开选择窗口…";
+    api("pick-folder?initial=" + encodeURIComponent(SC.path || ""))
+      .then(function (d) {
+        if (d.path) browseTo(d.path);
+      }).catch(function (e) { toast(e.message); })
+      .then(function () {
+        b.disabled = false;
+        b.textContent = "从电脑中选择文件夹";
+      });
+  }
+
   function browseTo(p) {
     api("browse?path=" + encodeURIComponent(p || "")).then(function (d) {
       SC.path = d.path || "";
@@ -880,6 +902,7 @@
 
   $("sccancel").onclick = closeScan;
   $("scanbox").onclick = function (e) { if (e.target === $("scanbox")) closeScan(); };
+  $("scpick").onclick = pickFolder;
   $("scup").onclick = function () { if (SC.path) browseTo(SC.parent); };
   $("scgo").onclick = goScan;
   $("scpath").onkeydown = function (e) {

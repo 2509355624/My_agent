@@ -31,7 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 from flask import Blueprint, jsonify, request, send_file
 
 from app.gateways import friend_auth
-from app.features.gallery import gallery
+from app.features.gallery import folder_picker, gallery
 from app.config import GALLERY_OWNER_QQ
 
 log = logging.getLogger("gallery_api")
@@ -587,6 +587,21 @@ def api_browse():
         return jsonify({"ok": False, "error": out["error"]}), 400
     out["ok"] = True
     return jsonify(out)
+
+
+@bp.route("/pick-folder")
+def api_pick_folder():
+    """站主在网页点「选择文件夹」，服务端弹 Windows 原生窗口。"""
+    bad = _guard()
+    if bad:
+        return bad
+    qq = _qq()
+    if not _is_owner(qq):
+        return jsonify({"ok": False, "error": "只有站主能选文件夹"}), 403
+    out = folder_picker.pick(request.args.get("initial") or "")
+    if out.get("error"):
+        return jsonify({"ok": False, "error": out["error"]}), 400
+    return jsonify({"ok": True, "path": out["path"]})
 
 
 @bp.route("/scan", methods=["POST"])
