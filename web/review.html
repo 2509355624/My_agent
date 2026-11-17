@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>人工二审 · 全局看板</title>
+<title>审核</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%237c5cff'/></svg>">
 <style>
   html, body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
@@ -29,18 +29,9 @@
     min-height: 100%;
     background: var(--bg);
     color: var(--text);
-    font-family: "SF Mono", "JetBrains Mono", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
     font-size: 14px;
     line-height: 1.7;
-  }
-
-  body::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    background: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(124, 92, 255, 0.15), transparent);
-    pointer-events: none;
-    z-index: 0;
   }
 
   .wrap { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; padding: 24px 20px 48px; }
@@ -131,15 +122,26 @@
   .decided.rejected { color: var(--error); }
 
   .empty { text-align: center; color: var(--text-mute); padding: 48px 0; }
+
+  /* 2026-11-17：手机上图占 180px 会把按钮挤出屏幕；改成上下排。 */
+  @media (max-width: 760px) {
+    .wrap { padding: 14px 14px 36px; }
+    .card { flex-direction: column; gap: 10px; }
+    .thumb { width: 100%; max-width: 280px; }
+    .actions { position: sticky; bottom: 0; background: var(--bg-elev);
+      padding: 8px 0 0; }
+    button { font-size: 16px; }
+  }
+
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>人工二审</h1>
-    <span class="sub">全局看板 · 所有 agent / 群 / 私聊被拦的图都在这里</span>
+    <h1>审核</h1>
+    <span class="sub">被拦下的图，过或拒</span>
     <span class="spacer"></span>
-    <a class="back" href="/admin">返回管理页</a>
+    <a class="back" href="/">← 回首页</a>
   </header>
 
   <div class="bar">
