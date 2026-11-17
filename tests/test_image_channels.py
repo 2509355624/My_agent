@@ -630,7 +630,7 @@ class PromptTemplateTest(unittest.TestCase):
     def test_anima_line_default_prefix_is_shared_by_qq_and_gen_pad(self):
         """QQ 与跑图台共用的工作流构建结果必须带完整 anima-line 前缀。"""
         from app.tools.normal import generate_image as gi
-        from app import gen_api
+        from app.features.image import routes as gen_api
 
         prefix = ("tianliang_duohe_fangdongye, (ask $askzy$:0.6), ciloranko, "
                   "(sho_(sho_lwlw):0.8), masterpiece, best quality, ultra-detailed, "
@@ -2581,7 +2581,7 @@ class MossFourStepRetiredTest(unittest.TestCase):
         `ARCHIVED_SKILLS`，跑图台的渠道清单里这四个名字都应该消失。
         （横版 `moss-wide` 与光影 1/2 已于 10-29 下架，见 MossTwoChannelTest。）
         """
-        from app.gen_api import channels
+        from app.features.image.routes import channels
         ids = {c["id"] for c in channels()}
         for gone in ("moss", "moss8", "moss50", "moss_page"):
             with self.subTest(gone=gone):
@@ -2639,7 +2639,7 @@ class MossTwoChannelTest(unittest.TestCase):
     LIGHT_SLOTS = {5: 1.5, 8: 0.8, 10: 0.8, 12: 0.8}
 
     def test_only_two_moss_channels_are_listed(self):
-        from app.gen_api import channels
+        from app.features.image.routes import channels
         ids = {c["id"] for c in channels()}
         self.assertIn("moss-qunyou", ids)
         self.assertIn("moss-light", ids)
@@ -2726,7 +2726,7 @@ class MossTwoChannelTest(unittest.TestCase):
 
     def test_gen_pad_shows_the_chinese_label(self):
         """跑图台渠道列表显示中文名（skill.md 的 `label`），id 仍是 ASCII。"""
-        from app.gen_api import channels
+        from app.features.image.routes import channels
         by_id = {c["id"]: c for c in channels()}
         self.assertEqual(by_id["moss-light"]["label"], "moss光影")
         self.assertEqual(by_id["moss-light"]["steps"], "25")
@@ -2819,7 +2819,7 @@ class JiguangSingleChannelTest(unittest.TestCase):
 
     def test_shows_up_on_gen_pad_with_chinese_label(self):
         """跑图台渠道列表自动带出来（`_allowed_skills` 扫目录 + SKILL.md label）。"""
-        from app.gen_api import channels
+        from app.features.image.routes import channels
         by_id = {c["id"]: c for c in channels()}
         self.assertIn(self.NAME, by_id)
         self.assertEqual(by_id[self.NAME]["label"], "极光单次")

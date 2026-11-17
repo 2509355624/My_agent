@@ -115,7 +115,7 @@ def _ip_ok(ip):
 
 def _channel_rows():
     """官方渠道列表 → 网页卡片 JSON 行（id + 中文名 + 简介 + 封面）。"""
-    from app import gen_api
+    from app.features.image import routes as gen_api
     rows = []
     for c in gen_api.channels():
         cid = c.get("id") or ""

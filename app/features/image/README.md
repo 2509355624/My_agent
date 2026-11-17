@@ -16,6 +16,6 @@
 `comfy_launch.py`（ComfyUI 启动命令）、`comfy_progress.py`（ComfyUI 进度解析）、
 `comfy_out.py`（output 按会话/渠道分目录）、`job_ledger.py`（任务/重抽台账）、
 `random_tags.py`（标签随机）、`gen_params.py`（参数规整）、`char_guard.py`
-（角色提示词内容守卫）已迁入并接线；
+（角色提示词内容守卫）、`routes.py`（原 `gen_api.py`，手动跑图台 Blueprint）已迁入并接线；
 `image_jobs.py` 仍留在根目录，测试直接 patch 它的队列/ComfyUI 内部函数，硬拆前
 要先定测试兼容策略。

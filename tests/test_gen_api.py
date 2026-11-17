@@ -21,7 +21,8 @@ from unittest import mock
 from flask import Response
 
 from app.features.image import gen_params
-from app import comic, gen_api, image_jobs, main
+from app.features.image import routes as gen_api
+from app import comic, image_jobs, main
 from app.skills import load_skill
 
 
