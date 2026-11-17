@@ -192,7 +192,7 @@ def run(job_id: str) -> None:
 | `image` | `image_jobs.py`、`image_audit.py`、`image_log.py`、`image_migrate.py`、`image_out.py`、`image_quota.py`、`image_review.py`、`direct_gen.py`、`gen_api.py`、`gen_params.py`、`gen_steps.py`、`comfy_*.py`、`lora_*.py`、`anima_random.py`、`nai.py`、`outfit_api.py` | 生图、渠道、队列、审核、LoRA |
 | `image` 迁移后 | `features/image/` 的 `log/out/quota/audit/review/migrate/delivery/gen_steps/default_loras/comfy_status/comfy_launch/comfy_progress/comfy_out/job_ledger` 已接线；`image_jobs.py` 暂留根目录 | 编号账本、发图副本、额度、审核、复核、旧图迁移、caption 投递、步数/默认 LoRA、ComfyUI 状态/启动/进度、output 分流、任务台账；队列仍待拆 |
 | `comic` | `comic*.py`、`moss_*.py`、`silver_comic.py` | 漫画、编剧、渲染、额度、作品 |
-| `comic` 迁移后 | `features/comic/quota.py`、`thumb.py`、`prompt_suffix.py`、`delivery.py`、`portrait.py`、`story.py`、`render_opts.py`、`writer.py`、`moss_msgs.py`、`moss_prompt.py`、`moss_series.py` 已接线；漫画主流程暂留根目录 | 漫画额度、缩略图、提示词后缀、交付、头像、故事、渲染参数、编剧、Moss 消息/提示词/连载；分镜/渲染待拆 |
+| `comic` 迁移后 | `features/comic/quota.py`、`thumb.py`、`prompt_suffix.py`、`delivery.py`、`portrait.py`、`story.py`、`render_opts.py`、`writer.py`、`moss_msgs.py`、`moss_prompt.py`、`moss_series.py`、`moss_api.py` 已接线；漫画主流程暂留根目录 | 漫画额度、缩略图、提示词后缀、交付、头像、故事、渲染参数、编剧、Moss 消息/提示词/连载/接口；分镜/渲染待拆 |
 | `persona` | `persona*.py`、`affection*.py`、`galgame.py`、`pregnancy.py`、`achievements.py`、`items.py` | 角色扮演、计费、记忆、查看台 |
 | `persona` 迁移后 | `features/persona/` 已接线 `billing`、`adult`、`rag`、`pregnancy`、`items`、`achievements`、`writing_style`、`galgame`；`persona.py` 仍暂留根目录 | 计费、成人状态、长期记忆、怀孕、道具、成就、写法档位、Galgame；人设/查看台待拆 |
 | `rag` | `rag/`、`rag_lab.py`、`rerank.py` | 文档问答、切片、检索、重排 |

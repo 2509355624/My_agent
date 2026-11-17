@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from flask import Flask                                # noqa: E402
 
-from app import moss_api                               # noqa: E402
+from app.features.comic import moss_api                               # noqa: E402
 
 
 def _spec(layout="2x2", n=9):

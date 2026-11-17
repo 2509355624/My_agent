@@ -27,7 +27,7 @@ from app.features.qq import bill as qq_bill
 # 'function' object has no attribute 'default_prompt'。
 from app import vision as vision_mod
 from app import comic_api
-from app import moss_api
+from app.features.comic import moss_api
 from app import gen_api
 from app import friend_api
 from app import friend_site

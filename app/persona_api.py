@@ -1922,7 +1922,7 @@ def comic_status():
     """
     import json
     import os
-    from app import moss_api
+    from app.features.comic import moss_api
     from app.features.comic import moss_series
     sid = str(request.args.get("sid") or "").strip()
     page = str(request.args.get("page") or "").strip()

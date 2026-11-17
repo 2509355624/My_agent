@@ -15,5 +15,6 @@
 `portrait.py`（原 `comic_portrait.py`）、`story.py`（原 `comic_story.py`）、
 `render_opts.py`（原 `comic_render_opts.py`）、`writer.py`（原 `comic_writer.py`）、
 `moss_msgs.py`（Moss 消息模板）、`moss_prompt.py`（Moss 提示词）、`moss_series.py`（连载
-状态）已迁入并接线；`comic_spec.md` 随编剧模块一起放。漫画主流程仍在根目录，按
-“编剧/分镜/渲染/交付”继续拆，不和生图互相 import 内部文件。
+状态）、`moss_api.py`（Moss 漫画台 Blueprint）已迁入并接线；`comic_spec.md` 随编剧模块
+一起放。漫画主流程仍在根目录，按“编剧/分镜/渲染/交付”继续拆，不和生图互相 import 内部
+文件。

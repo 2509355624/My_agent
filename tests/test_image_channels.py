@@ -2601,7 +2601,7 @@ class MossFourStepRetiredTest(unittest.TestCase):
         所以这里不要求两处相等，但**两边的值都必须写死断言**：任何一边被手滑
         改掉（作者、编辑器、一次 merge），这里立刻红。
         """
-        from app import moss_api
+        from app.features.comic import moss_api
 
         wf = load_skill("moss-qunyou")["workflow"]
         samplers = [n for n in wf.values()
