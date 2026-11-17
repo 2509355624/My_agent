@@ -266,6 +266,7 @@ from app.features.persona.contract import (
 )
 
 from app.features.persona import state_store
+from app.features.persona import history_store
 from app.features.persona.story import (
     STORY_MAX_CHARS, _clip_items, _ledger_section,
     _shares_phrase, story_line,
@@ -1902,82 +1903,16 @@ def handle_command(session_key, text, addressed=False, quoted_ids=None):
 # ─── 一轮 ────────────────────────────────────────────
 
 def _archive_path(session_key):
-    """归档文件：**完整**历史，不受 `HISTORY_LIMIT` 限制。
-
-    2026-11-03 用户报「记录的轮次有问题」——查下来是 `persona_web_xxx.jsonl`
-    正好卡在 12 条（`HISTORY_LIMIT`）。也就是说聊超过 6 轮之后，早先的对话
-    被滑动窗口挤掉了，查看台只能看到最近 6 轮。
-
-    扮演带 12 条是为了省 token，但**查看记录是另一回事**——存档不该被窗口
-    影响。所以现在两条线并行：
-
-        persona_<key>.jsonl          滑动窗口，只给模型看（12 条）
-        persona_archive_<key>.jsonl  只增不删，给查看台看
-
-    代价是归档会一直变长。暂时不清理——先保证记录完整，等真占地方了再加
-    裁剪策略（按天分文件之类）。
-    """
-    p = _hist_path(session_key)
-    if not p:
-        return None
-    d, n = os.path.split(p)
-    return os.path.join(d, "persona_archive_" + session_key + ".jsonl")
-
+    """归档文件：完整历史，不受 HISTORY_LIMIT 限制。"""
+    return history_store.archive_path(_hist_path(session_key), session_key)
 
 def _append_archive(session_key, msgs, seed=None):
-    """往归档里追几条。`seed` 非空时，归档不存在就先把它整份铺进去。
-
-    为什么要 seed：老会话在加这个功能之前就已经被截断了，它们的完整历史
-    早没了。能抢救的只有「当前窗口里这 12 条」——第一次补写时拿它当起点，
-    之后每轮追加，至少从这轮开始不再丢。
-    """
-    p = _archive_path(session_key)
-    # 注意：seed 非空、msgs 为空是**合法**的调用（首次铺底），
-    # 所以判断要把两者一起看。写成 `if not msgs: return` 会把铺底短路掉
-    # （2026-11-03 踩过：补写脚本报「已写入」，实际一个文件都没建）。
-    if not p or (not msgs and not seed):
-        return
-    try:
-        os.makedirs(os.path.dirname(p), exist_ok=True)
-        fresh = not os.path.exists(p)
-        with open(p, "a", encoding="utf-8") as fh:
-            if fresh and seed:
-                for m in seed:
-                    fh.write(json.dumps(m, ensure_ascii=False) + "\n")
-            else:
-                for m in msgs:
-                    fh.write(json.dumps(m, ensure_ascii=False) + "\n")
-    except OSError:
-        log.exception("归档写不进去：%s", p)
-
+    """往归档里追几条；首次补写用当前窗口铺底。"""
+    history_store.append(_archive_path(session_key), msgs, seed)
 
 def _read_archive_file(session_key):
-    """只读归档**文件本身**；缺失 / 读不了返回 []，**不回退窗口**。
-
-    为什么单拎出来：`load_archive` 对空归档会退回窗口副本（给查看台兜底
-    用的），但「回退」拿归档当账本删条目时，删副本再落盘等于拿窗口冒充
-    完整历史——会把窗口里更早的轮也误删掉。回退必须只认文件。
-    """
-    p = _archive_path(session_key)
-    rows = []
-    if not (p and os.path.exists(p)):
-        return rows
-    try:
-        with open(p, "r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    m = json.loads(line)
-                except json.JSONDecodeError:
-                    continue            # 单行坏了不该让整段历史读不出来
-                if isinstance(m, dict) and m.get("role") in ("user", "assistant"):
-                    rows.append(m)
-    except OSError:
-        log.exception("归档读不出来：%s", p)
-    return rows
-
+    """只读归档文件本身；缺失 / 读不了返回 []，不回退窗口。"""
+    return history_store.read_rows(_archive_path(session_key))
 
 def load_archive(session_key):
     """读**完整**归档（`persona_archive_*.jsonl`）。网页回看历史读的是这一份。
@@ -2079,37 +2014,12 @@ def _hist_path(session_key):
 
 
 def _load_hist(session_key):
-    path = _hist_path(session_key)
-    if not path or not os.path.exists(path):
-        return []
-    out = []
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    out.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue            # 单行坏了不该让整段历史读不出来
-    except OSError:
-        return []
-    return out
-
+    """读滑动窗口原文（给模型看的那 12 条）。"""
+    return history_store.read_window(_hist_path(session_key))
 
 def _save_hist(session_key, msgs):
-    path = _hist_path(session_key)
-    if not path:
-        return
-    from app.core.agents import _atomic_write_text
-    parent = os.path.dirname(path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    _atomic_write_text(path,
-                       "".join(json.dumps(m, ensure_ascii=False) + "\n"
-                               for m in msgs))
-
+    """整份重写滑动窗口（原子写）。"""
+    history_store.write_window(_hist_path(session_key), msgs)
 
 def trim(hist, limit=None):
     """取最近 N 条（默认 HISTORY_LIMIT），单条超 MSG_MAX_CHARS 截断。
