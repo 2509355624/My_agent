@@ -20,7 +20,7 @@ from flask import Flask, jsonify
 
 import app.core.agents as agents
 import app.persona as persona
-import app.persona_api as persona_api
+import app.features.persona.routes as persona_api
 from app.features.persona import writing_style
 
 

@@ -142,9 +142,9 @@ app.register_blueprint(comic_api.bp)
 # moss 漫画台 API（独立 Blueprint，见 app/moss_api.py）：一句话 → 编剧写整页 → 一次出图
 app.register_blueprint(moss_api.bp)
 
-# 网页端角色扮演 API（独立 Blueprint，见 app/persona_api.py）：和 QQ 同一套引擎，
+# 网页端角色扮演 API（独立 Blueprint，见 app/features/persona/routes.py）：和 QQ 同一套引擎，
 # 会话键用 `web_<qq>` 与 QQ 的 `private_<qq>` 隔离。2026-11-03 用户要的。
-from app import persona_api                        # noqa: E402
+from app.features.persona import routes as persona_api
 app.register_blueprint(persona_api.bp)
 
 # 公开产品展示页：独立干净素材与会话线，不挂到内部扮演 blueprint 上。

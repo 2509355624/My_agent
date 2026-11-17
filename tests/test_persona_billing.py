@@ -22,7 +22,8 @@ from zoneinfo import ZoneInfo
 import flask
 
 from app.integrations import llm
-from app import (config, persona_api)
+from app.features.persona import routes as persona_api
+from app import (config)
 from app.features.admin import routes as persona_admin_api
 from app.features.persona import billing as bill
 

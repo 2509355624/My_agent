@@ -14,7 +14,8 @@ import flask
 from app.core import agents
 from app.core import agents as agent_store
 from app.integrations import llm
-from app import (persona, persona_api)
+from app.features.persona import routes as persona_api
+from app import (persona)
 
 QQ = "2509355624"
 
@@ -254,8 +255,8 @@ class ComicStatusTest(PersonaApiBase):
             {"n": 1, "task": d},
             {"n": 2, "task": d},
         ]}
-        with mock.patch("app.moss_series.load", return_value=series), \
-             mock.patch("app.moss_series.by_n",
+        with mock.patch("app.features.comic.moss_series.load", return_value=series), \
+             mock.patch("app.features.comic.moss_series.by_n",
                         side_effect=lambda s, n, owner="": (
                             [p for p in series["pages"] if p["n"] == n] or [None])[0]):
             d2 = self.get("/api/persona/comic?sid=SID&page=2")
@@ -266,16 +267,16 @@ class ComicStatusTest(PersonaApiBase):
         """取图地址里的 `n` 必须是任务目录内的 1，不是系列页号。"""
         d = self._make_task("20261103_1600_t")
         series = {"id": "S", "pages": [{"n": 3, "task": d}]}
-        with mock.patch("app.moss_series.load", return_value=series), \
-             mock.patch("app.moss_series.by_n",
+        with mock.patch("app.features.comic.moss_series.load", return_value=series), \
+             mock.patch("app.features.comic.moss_series.by_n",
                         side_effect=lambda s, n, owner="": {"n": 3, "task": d}):
             d2 = self.get("/api/persona/comic?sid=S&page=3")
         self.assertTrue(d2["url"].endswith("n=1"), d2["url"])
 
     def test_missing_state_reports_pending(self):
         series = {"id": "S", "pages": [{"n": 1, "task": ""}]}
-        with mock.patch("app.moss_series.load", return_value=series), \
-             mock.patch("app.moss_series.by_n",
+        with mock.patch("app.features.comic.moss_series.load", return_value=series), \
+             mock.patch("app.features.comic.moss_series.by_n",
                         side_effect=lambda s, n, owner="": {"n": 1, "task": ""}):
             d = self.get("/api/persona/comic?sid=S&page=1")
         self.assertEqual(d["status"], "pending")
@@ -351,8 +352,8 @@ class StuckComicTest(PersonaApiBase):
             json.dump({"pages": {"1": {"status": "running", "error": ""}},
                        "updated": old}, fh)
         series = {"id": "S", "pages": [{"n": 1, "task": d}]}
-        with mock.patch("app.moss_series.load", return_value=series), \
-             mock.patch("app.moss_series.by_n",
+        with mock.patch("app.features.comic.moss_series.load", return_value=series), \
+             mock.patch("app.features.comic.moss_series.by_n",
                         side_effect=lambda s, n, owner="": {"n": 1, "task": d}):
             r = self.get("/api/persona/comic?sid=S&page=1")
         self.assertEqual(r["status"], "failed")
@@ -377,7 +378,7 @@ class ShotTest(PersonaApiBase):
                 fn()
             return real_thread(target=lambda: None)
 
-        return mock.patch("app.persona_api.threading.Thread",
+        return mock.patch("app.features.persona.routes.threading.Thread",
                           side_effect=fake)
 
     def test_shot_records_file_and_status(self):
@@ -390,7 +391,7 @@ class ShotTest(PersonaApiBase):
                  mock.patch("app.persona.draw_shot",
                             return_value=("a.png", "")), \
                  self._inline_thread(), \
-                 mock.patch("app.persona_api._pic_map_path",
+                 mock.patch("app.features.persona.routes._pic_map_path",
                             return_value=os.path.join(td, "m.json")):
                 d = self.post("/api/persona/shot", msgIndex=4)
                 self.assertTrue(d["ok"])
@@ -419,7 +420,7 @@ class ShotTest(PersonaApiBase):
                  mock.patch("app.persona.draw_shot",
                             return_value=(rel, "")), \
                  self._inline_thread(), \
-                 mock.patch("app.persona_api._pic_map_path",
+                 mock.patch("app.features.persona.routes._pic_map_path",
                             return_value=os.path.join(td, "m.json")):
                 self.post("/api/persona/shot", msgIndex=4)
                 pics = self.get("/api/persona/comics")["pics"]
@@ -451,7 +452,7 @@ class ShotTest(PersonaApiBase):
                  mock.patch("app.persona.draw_shot",
                             return_value=("", "排队满")), \
                  self._inline_thread(), \
-                 mock.patch("app.persona_api._pic_map_path",
+                 mock.patch("app.features.persona.routes._pic_map_path",
                             return_value=os.path.join(td, "m.json")):
                 self.post("/api/persona/shot", msgIndex=4)
                 st = self.get("/api/persona/shot_status?n=4")
@@ -630,7 +631,7 @@ class HistoryArchiveApiTest(PersonaApiBase):
         """老的 `ai<窗口序号>` 已经对不上任何消息了，回给前端只会挂错位置。"""
         key = self._line()
         import os as _os
-        with mock.patch("app.persona_api._pic_map_path",
+        with mock.patch("app.features.persona.routes._pic_map_path",
                         return_value=_os.path.join(self.tmp.name, "pic.json")):
             persona_api._pic_map_set(key, "ai3", {"sid": "S", "page": 1})
             persona_api._pic_map_set(key, "n3", {"sid": "S", "page": 2})

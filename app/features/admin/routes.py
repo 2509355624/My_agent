@@ -249,7 +249,7 @@ def api_list():
         ent = st.get(r["key"]) or {}
         if r["source"] == "guest":
             # 游客没有 base 记录，但有一条固定的线键，名字挂在线上（2026-11-09）
-            from app.persona_api import GUEST_CARD_ID
+            from app.features.persona.routes import GUEST_CARD_ID
             gkey = persona.card_key("guest_%s" % r["key"], GUEST_CARD_ID)
             nm = str((st.get(gkey) or {}).get("char_name") or "").strip()
             r["card"] = nm or _card_name(GUEST_CARD_ID)

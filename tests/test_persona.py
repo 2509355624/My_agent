@@ -4064,7 +4064,7 @@ class ModelChooseTest(unittest.TestCase):
         import os
         import re
         path = os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "app", "persona_api.py")
+            os.path.abspath(__file__))), "app", "features", "persona", "routes.py")
         with io.open(path, encoding="utf-8") as fh:
             src = fh.read()
         # 任何一个 def 前面都不许同时出现这两个装饰器
@@ -4079,7 +4079,7 @@ class ModelChooseTest(unittest.TestCase):
         import io
         import os
         path = os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "app", "persona_api.py")
+            os.path.abspath(__file__))), "app", "features", "persona", "routes.py")
         with io.open(path, encoding="utf-8") as fh:
             src = fh.read()
         self.assertIn("/api/persona/models", src)
