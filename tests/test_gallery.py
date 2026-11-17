@@ -19,7 +19,9 @@ from unittest import mock
 
 from PIL import Image
 
-from app import friend_auth, gallery, gallery_api
+from app import friend_auth
+from app.features.gallery import gallery
+from app.features.gallery import routes as gallery_api
 
 # 预热线程在 _Base 里默认被关掉（它会往缓存目录写文件，干扰数目录的用例），
 # 这里先留一份真的，给专门验它的用例用。
