@@ -139,9 +139,12 @@ def _settings():
 # finally 里摘掉。key 不落盘、不进 .env、不进任何会话状态。
 #
 # 2026-11-09 口径翻转：这些模型**不再是「整轮换人」，而是降级链的第二段**。
-# 扮演链路永远是「① 公用中转站 V4 Pro（链头，免费）→ 同一家重试 3 次 →
-# ② 玩家自定义模型（按列表顺序）」。全局 LLM_FALLBACK_CHAIN（第一项就是付费
-# 的官方 DeepSeek）**不接在扮演链路后面**——中转站闭站时不能让站主掏钱。
+# 扮演链路永远是「① 公用中转站 V4 Pro（链头，免费）→ ② 玩家自定义模型
+# （按列表顺序）」。中转站连不上时**不原地重试**，直接降级（2026-11-18
+# 用户要求：连不上重试 3 次纯浪费时间）；只有 5xx / 读超时才在同一家短重试。
+# 全局 LLM_FALLBACK_CHAIN（第一项就是付费的官方 DeepSeek）**不接在扮演链路
+# 后面**——中转站闭站时不能让站主掏钱。玩家没配自定义模型 = 链尾空，全失败
+# 就报错并让前端弹窗引导。
 # 玩家没配自定义模型 = 链尾空，全失败就报错并让前端弹窗引导。
 _PERSONA_CUSTOM_PID = "__persona_custom__"   # 只在 candidates() 里出现的伪 provider
 _custom_ctx = threading.local()
@@ -439,6 +442,9 @@ def call_llm(messages, timeout=None, provider=None, model=None, strict=False,
                 last_err = e
                 wait = _retry_wait(attempt, started, e, settings)
                 if wait is None:
+                    if _is_unreachable(e):
+                        log.warning("[chain] %s / %s 连不上，不重试，直接降级：%s",
+                                    pid, mname, _brief(e, 80))
                     _mark_dead((pid, mname), _brief(e), ttl=_ttl_for(e, settings))
                     break
                 log.warning("[retry] %s / %s 第 %d/%d 次失败：%s；%.1f 秒后再试",
@@ -722,6 +728,30 @@ def _is_transient(err):
     return any(h in text for h in _CONCURRENCY_HINTS + _TRANSIENT_HINTS)
 
 
+def _is_unreachable(err):
+    """连不上：不该在原地重试，直接走下一个候选。
+
+    2026-11-18 用户口径：中转站连不上时重试 3 次纯浪费时间，连不上就走正常
+    降级链路。这里把「连接没建立起来」单独拎出来，与「连上了但读超时 / 5xx」
+    区分开——后者仍然值得在同一家短重试。
+
+    ConnectTimeout / ConnectionError 覆盖：拒绝连接、DNS 解析失败、代理不可达、
+    对端没响应就断开。读超时（ReadTimeout）不在这一类，保持原重试行为。
+    """
+    if isinstance(err, (requests.exceptions.ConnectTimeout,
+                        requests.exceptions.ConnectionError,
+                        ConnectionRefusedError, ConnectionResetError,
+                        ConnectionAbortedError)):
+        return True
+    text = str(err).lower()
+    return any(h in text for h in (
+        "connection refused", "failed to establish a new connection",
+        "connect timeout", "connection timed out",
+        "name or service not known", "nodename nor servname",
+        "getaddrinfo failed", "proxy error",
+    ))
+
+
 def _ttl_for(err, settings=None):
     """这个失败该拉黑多久；settings 由调用方传入，保证同一轮内一致。"""
     settings = settings or _settings()
@@ -738,10 +768,14 @@ def _retry_wait(attempt, started, err, settings=None):
     - `attempt`：**已经失败**的次数（1 起）。达到 retry_times 就停。
     - 只有瞬时/限流故障才重试（见 `_is_transient`）；余额耗尽、key 失效、
       400 这类重试多少次都一样，立刻降级。
+    - **连不上**（见 `_is_unreachable`）不重试，直接降级——用户 2026-11-18
+      要求，中转站连不上时重试 3 次纯浪费时间。
     - retry_budget 是总时长闸：读超时一次就吃掉 request_timeout，再重试三次
       等于让用户干等三分钟，超预算直接降级。
     """
     settings = settings or _settings()
+    if _is_unreachable(err):
+        return None
     if attempt >= settings["retry_times"]:
         return None
     if not _is_transient(err):
@@ -1192,6 +1226,9 @@ def call_llm_stream(messages, timeout=None, provider=None, model=None,
                 last_err = e
                 wait = _retry_wait(attempt, started, e, settings)
                 if wait is None:
+                    if _is_unreachable(e):
+                        log.warning("[chain] %s / %s 连不上，不重试，直接降级：%s",
+                                    pid, mname, _brief(e, 80))
                     _mark_dead((pid, mname), _brief(e), ttl=_ttl_for(e, settings))
                     break
                 log.warning("[retry] %s / %s 第 %d/%d 次失败：%s；%.1f 秒后再试",

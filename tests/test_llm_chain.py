@@ -13,6 +13,8 @@ import time
 import unittest
 from unittest import mock
 
+import requests
+
 import app.config as config
 import app.integrations.llm as llm
 
@@ -87,7 +89,10 @@ class _ChainBase(unittest.TestCase):
         def fake_post(url, **kwargs):
             calls.append({"url": url, "kwargs": kwargs})
             idx = min(len(calls) - 1, len(responses) - 1)
-            return responses[idx]
+            item = responses[idx]
+            if isinstance(item, Exception):
+                raise item
+            return item
 
         p = mock.patch.object(llm._session, "post", fake_post)
         p.start()
@@ -359,6 +364,43 @@ class RetrySameCandidateTest(_ChainBase):
                          "重试成功")
         self.assertEqual(len(calls), 2)
         self.assertEqual(llm._DEAD, {})
+
+    def test_connect_timeout_skips_same_candidate_retry(self):
+        """连不上（ConnectTimeout / ConnectionError）不重试，直接降级。
+
+        2026-11-18 用户要求：中转站连不上时重试 3 次纯浪费时间。
+        这里只失败一次就打备胎，不再等 3 次。
+        """
+        calls = self._patch_post([
+            requests.exceptions.ConnectTimeout("connect timeout"),
+            _Resp(lines=_sse("备胎的回复"))])
+        out = list(llm.call_llm_stream([{"role": "user", "content": "hi"}]))
+        self.assertEqual(out, [("content", "备胎的回复")])
+        self.assertEqual(len(calls), 2)     # 1 次链头 + 1 次备胎，没有重试
+        self.assertEqual(len({c["url"] for c in calls}), 2)
+        self.assertIn(("volc", "a"), llm._DEAD)
+
+    def test_sync_connect_error_skips_same_candidate_retry(self):
+        calls = self._patch_post([
+            requests.exceptions.ConnectionError("connection refused"),
+            _Resp(payload={"choices": [{"message": {"content": "备胎"}}]})])
+        self.assertEqual(llm.call_llm([{"role": "user", "content": "hi"}]), "备胎")
+        self.assertEqual(len(calls), 2)
+
+    def test_read_timeout_still_retries_same_candidate(self):
+        """读超时是连上了但慢，和「连不上」不同，保持原来的短重试。"""
+        calls = self._patch_post([
+            requests.exceptions.ReadTimeout("read timeout"),
+            _Resp(lines=_sse("重试成功"))])
+        out = list(llm.call_llm_stream([{"role": "user", "content": "hi"}]))
+        self.assertEqual(out, [("content", "重试成功")])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len({c["url"] for c in calls}), 1)
+
+    def test_unreachable_never_gets_a_retry_wait(self):
+        self.assertIsNone(llm._retry_wait(
+            1, time.time(), requests.exceptions.ConnectTimeout("x"),
+            {"retry_times": 3, "retry_delay": 0, "retry_budget": 30}))
 
 
 class StreamFallbackTest(_ChainBase):
