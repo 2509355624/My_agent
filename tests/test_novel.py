@@ -1550,7 +1550,7 @@ class UiSevenTest(unittest.TestCase):
 
     def setUp(self):
         self.html = _read(PAGE)
-        self.api = _read(os.path.join(ROOT, "app", "novel_api.py"))
+        self.api = _read(os.path.join(ROOT, "app", "features", "novel", "routes.py"))
 
     def test_restart_has_typed_confirmation(self):
         for needle in ("nvWipeMask", "nvWipeInput", "nvWipeOk", "nvConfirm",
@@ -2207,7 +2207,7 @@ class RollbackTest(NovelBase):
         self.assertEqual(novel.get_world(wid)["player"]["name"], "阿岸")
 
     def test_api_rollback_route_is_wired(self):
-        api = _read(os.path.join(ROOT, "app", "novel_api.py"))
+        api = _read(os.path.join(ROOT, "app", "features", "novel", "routes.py"))
         self.assertIn('@bp.route("/api/novel/rollback", methods=["POST"])', api)
         self.assertIn("novel.rollback(", api)
         html = _read(PAGE)

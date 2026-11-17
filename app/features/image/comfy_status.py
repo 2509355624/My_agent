@@ -81,6 +81,7 @@ def nai_line():
     不说死它就会去猜。注意这是 **agent 侧自己的队列**（image_jobs），不是
     ComfyUI 的状态：NAI 是云端调用，ComfyUI 那边根本看不见。
     """
+    from app.features.image import jobs as image_jobs     # 局部导入：队列较重，按需拉起
     running, pending = image_jobs.nai_depth()
     if running or pending:
         return ("nai: 正在画 %d 张、排队 %d 张（NovelAI 云端，与本机 ComfyUI"

@@ -304,7 +304,7 @@ class ToolDescriptionTest(unittest.TestCase):
     """QQ 看到的工具描述/参数和网页端不一样。"""
 
     def _block(self, agent_id):
-        with mock.patch("app.agent_prompt.agent_store.allows_tool",
+        with mock.patch("app.features.chat.agent_prompt.agent_store.allows_tool",
                         return_value=True):
             return _build_tool_list(agent_id)
 
