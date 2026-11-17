@@ -32,7 +32,7 @@ def _bot_identity():
 
 def link_text():
     """当前独立游客页地址；隧道没开 → ""（不猜旧域名）。"""
-    from app import friend_site
+    from app.features.qq import friend_site
     u = friend_site.url()
     return (u.rstrip("/") + SOLO_PATH) if u else ""
 

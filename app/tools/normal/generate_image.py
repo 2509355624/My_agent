@@ -492,7 +492,8 @@ def receipt_note_default():
 # 看起来像「链接发错了」（2026-11-06 踩过一次，/gallery 和 /comic 都是这样修的）。
 def _receipt_links(target, target_id):
     """回执末尾那三行入口；隧道没开 / 开关关掉 → ""（一个字都不加）。"""
-    from app import friend_auth, friend_site
+    from app.features.qq import friend_site
+    from app import friend_auth
     from app.config import QQ_RECEIPT_LINKS, QQ_RECEIPT_LINK_TTL_HOURS
     if not QQ_RECEIPT_LINKS:
         return ""

@@ -7,7 +7,7 @@
 import unittest
 from unittest import mock
 
-from app import play_bot
+from app.features.qq import play_bot
 
 URL = "https://abc.trycloudflare.com"
 
@@ -25,7 +25,7 @@ class CommandRegexTest(unittest.TestCase):
 class HeadTextTest(unittest.TestCase):
     def test_open_puts_gallery_first(self):
         """画廊链接必须顶在开头。"""
-        with mock.patch("app.friend_site.url", return_value=URL):
+        with mock.patch("app.features.qq.friend_site.url", return_value=URL):
             head = play_bot.head_text()
         self.assertTrue(head.startswith("🎮 玩法"))
         self.assertIn(URL + "/gallery?from=qq", head)
@@ -33,7 +33,7 @@ class HeadTextTest(unittest.TestCase):
         self.assertLess(head.index(URL), head.index("不提渠道"))
 
     def test_closed_explains_without_stale_link(self):
-        with mock.patch("app.friend_site.url", return_value=""):
+        with mock.patch("app.features.qq.friend_site.url", return_value=""):
             head = play_bot.head_text()
         self.assertNotIn("trycloudflare", head)
         self.assertIn("隧道现在没开", head)
@@ -42,7 +42,7 @@ class HeadTextTest(unittest.TestCase):
 class FamilyNodesTest(unittest.TestCase):
     def test_every_family_is_a_node(self):
         """标题节点 + 每个家族一个节点，节点数 = 家族数 + 1。"""
-        with mock.patch("app.friend_site.url", return_value=URL), \
+        with mock.patch("app.features.qq.friend_site.url", return_value=URL), \
              mock.patch.object(play_bot, "_bot_identity",
                                return_value=("大大怪", "10000")):
             nodes = play_bot.build_nodes()
@@ -51,7 +51,7 @@ class FamilyNodesTest(unittest.TestCase):
         self.assertEqual(nodes[0]["data"]["name"], "大大怪")
 
     def test_default_and_qwen_present(self):
-        with mock.patch("app.friend_site.url", return_value=URL), \
+        with mock.patch("app.features.qq.friend_site.url", return_value=URL), \
              mock.patch.object(play_bot, "_bot_identity",
                                return_value=("大大怪", "10000")):
             nodes = play_bot.build_nodes()
@@ -66,7 +66,7 @@ class FamilyNodesTest(unittest.TestCase):
 class PlainTextTest(unittest.TestCase):
     def test_plain_matches_card_grouping(self):
         """纯文本兜底的分组必须和卡片一致。"""
-        with mock.patch("app.friend_site.url", return_value=URL):
+        with mock.patch("app.features.qq.friend_site.url", return_value=URL):
             plain = play_bot.plain_text()
         self.assertIn(URL + "/gallery?from=qq", plain)
         for title, _ in play_bot._FAMILIES:
@@ -75,7 +75,7 @@ class PlainTextTest(unittest.TestCase):
 
 class SendTest(unittest.TestCase):
     def test_group_uses_card(self):
-        with mock.patch("app.friend_site.url", return_value=URL), \
+        with mock.patch("app.features.qq.friend_site.url", return_value=URL), \
              mock.patch.object(play_bot.qq_api, "send_forward") as fw, \
              mock.patch.object(play_bot.qq_api, "send_group") as sg:
             ok = play_bot.send("group", "123")
@@ -84,7 +84,7 @@ class SendTest(unittest.TestCase):
         sg.assert_not_called()
 
     def test_private_card_failure_falls_back_to_text(self):
-        with mock.patch("app.friend_site.url", return_value=URL), \
+        with mock.patch("app.features.qq.friend_site.url", return_value=URL), \
              mock.patch.object(play_bot.qq_api, "send_forward",
                                side_effect=RuntimeError("协议端不支持")), \
              mock.patch.object(play_bot.qq_api, "send_private") as sp:
@@ -94,7 +94,7 @@ class SendTest(unittest.TestCase):
         self.assertIn(URL + "/gallery?from=qq", sp.call_args[0][1])
 
     def test_both_fail_returns_false(self):
-        with mock.patch("app.friend_site.url", return_value=URL), \
+        with mock.patch("app.features.qq.friend_site.url", return_value=URL), \
              mock.patch.object(play_bot.qq_api, "send_forward",
                                side_effect=RuntimeError("x")), \
              mock.patch.object(play_bot.qq_api, "send_private",

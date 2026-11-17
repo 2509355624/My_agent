@@ -4114,7 +4114,7 @@ class PresetWebCmdTest(unittest.TestCase):
             self.assertIsNone(direct_gen._PRESET_WEB_RE.search(t), t)
 
     def test_private_chat_gets_the_url(self):
-        from app import friend_site
+        from app.features.qq import friend_site
         from unittest import mock
         with mock.patch.object(friend_site, "url", return_value=self.URL), \
                 mock.patch.object(direct_gen.qq_api, "current_context",
@@ -4124,7 +4124,7 @@ class PresetWebCmdTest(unittest.TestCase):
         self.assertIn("验证码", text)
 
     def test_group_chat_withholds_the_url(self):
-        from app import friend_site
+        from app.features.qq import friend_site
         from unittest import mock
         with mock.patch.object(friend_site, "url", return_value=self.URL), \
                 mock.patch.object(direct_gen.qq_api, "current_context",
@@ -4134,7 +4134,7 @@ class PresetWebCmdTest(unittest.TestCase):
         self.assertIn("私聊", text)
 
     def test_tunnel_down_says_so(self):
-        from app import friend_site
+        from app.features.qq import friend_site
         from unittest import mock
         with mock.patch.object(friend_site, "url", return_value=""):
             text = direct_gen._preset_web_text()
@@ -4144,7 +4144,7 @@ class PresetWebCmdTest(unittest.TestCase):
     def test_reader_rejects_junk(self):
         """文件被手改坏时不能把垃圾地址发出去——对方只会以为页面挂了。"""
         import os
-        from app import friend_site
+        from app.features.qq import friend_site
         p = friend_site.state_path("friend_url.txt")
         os.makedirs(os.path.dirname(p), exist_ok=True)
         try:
@@ -4180,7 +4180,7 @@ class GalleryCmdTest(unittest.TestCase):
 
     def _text(self, where="private"):
         from unittest import mock
-        from app import friend_site
+        from app.features.qq import friend_site
         with mock.patch.object(friend_site, "url", return_value=self.URL), \
                 mock.patch.object(direct_gen.qq_api, "current_context",
                                   return_value=(where, "2509355624")):
@@ -4215,7 +4215,7 @@ class GalleryCmdTest(unittest.TestCase):
 
     def test_tunnel_down_says_so(self):
         from unittest import mock
-        from app import friend_site
+        from app.features.qq import friend_site
         with mock.patch.object(friend_site, "url", return_value=""):
             text = direct_gen._gallery_text()
         self.assertIn("没开", text)
@@ -4224,7 +4224,7 @@ class GalleryCmdTest(unittest.TestCase):
     def test_group_turn_needs_no_mention(self):
         """群里没 @ 也没喊名字，照样直出——斜杠即命令。"""
         from unittest import mock
-        from app import friend_site
+        from app.features.qq import friend_site
         with mock.patch.object(friend_site, "url", return_value=self.URL), \
                 mock.patch.object(direct_gen.qq_api, "current_context",
                                   return_value=("group", "1103174141")), \
@@ -4270,7 +4270,7 @@ class ComicStudioCmdTest(unittest.TestCase):
 
     def _text(self, where="private"):
         from unittest import mock
-        from app import friend_site
+        from app.features.qq import friend_site
         with mock.patch.object(friend_site, "url", return_value=self.URL), \
                 mock.patch.object(direct_gen.qq_api, "current_context",
                                   return_value=(where, "2509355624")):
@@ -4301,7 +4301,7 @@ class ComicStudioCmdTest(unittest.TestCase):
 
     def test_tunnel_down_says_so(self):
         from unittest import mock
-        from app import friend_site
+        from app.features.qq import friend_site
         with mock.patch.object(friend_site, "url", return_value=""):
             text = direct_gen._comic_studio_text()
         self.assertIn("没开", text)
@@ -4310,7 +4310,7 @@ class ComicStudioCmdTest(unittest.TestCase):
     def test_group_turn_needs_no_mention(self):
         """群里没 @ 也没喊名字，照样直出——斜杠即命令。"""
         from unittest import mock
-        from app import friend_site
+        from app.features.qq import friend_site
         with mock.patch.object(friend_site, "url", return_value=self.URL), \
                 mock.patch.object(direct_gen.qq_api, "current_context",
                                   return_value=("group", "1103174141")), \
@@ -4458,7 +4458,7 @@ class PrivateKeywordEntryTest(unittest.TestCase):
             return direct_gen._private_entry_kw(text, has_image=has_image)
 
     def _decide(self, text):
-        from app import friend_site
+        from app.features.qq import friend_site
         with mock.patch.object(direct_gen.qq_api, "current_context",
                                return_value=("private", "2509355624")), \
                 mock.patch.object(friend_site, "url", return_value=self.URL), \

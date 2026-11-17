@@ -65,8 +65,9 @@ from app.features.persona import rag as persona_rag
 from app.features.persona import items as _items
 from app.features.persona import writing_style
 from app.features.persona import writing_skills
+from app.features.qq import trigger
 from app import (affection,
-                   llm, trigger)
+                   llm)
 from app.config import (BASE_DIR, PERSONA_MODEL, PERSONA_MODEL_DEFAULT,
                         PERSONA_MODELS, PERSONA_PROVIDER,
                         persona_model_of,
@@ -3337,7 +3338,7 @@ def _group_redirect(card):
         "1. **私聊我**，发「%s」就能开始" % card["name"],
     ]
     try:
-        from app import friend_site
+        from app.features.qq import friend_site
         site = friend_site.url()
     except Exception:                              # noqa: BLE001
         site = ""
@@ -3466,7 +3467,7 @@ def handle_command(session_key, text, addressed=False, quoted_ids=None):
         url = ""
         if str(session_key or "").startswith("private"):
             try:
-                from app import friend_site
+                from app.features.qq import friend_site
                 url = friend_site.url()
             except Exception:                      # noqa: BLE001
                 url = ""

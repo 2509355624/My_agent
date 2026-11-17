@@ -7,7 +7,7 @@
 import unittest
 from unittest import mock
 
-from app import solo_bot
+from app.features.qq import solo_bot
 
 URL = "https://abc.trycloudflare.com"
 
@@ -24,17 +24,17 @@ class CommandRegexTest(unittest.TestCase):
 
 class LinkTextTest(unittest.TestCase):
     def test_open(self):
-        with mock.patch("app.friend_site.url", return_value=URL + "/"):
+        with mock.patch("app.features.qq.friend_site.url", return_value=URL + "/"):
             self.assertEqual(solo_bot.link_text(), URL + "/play")
 
     def test_closed_returns_empty(self):
-        with mock.patch("app.friend_site.url", return_value=""):
+        with mock.patch("app.features.qq.friend_site.url", return_value=""):
             self.assertEqual(solo_bot.link_text(), "")
 
 
 class CardTextTest(unittest.TestCase):
     def test_open_has_link_and_rules(self):
-        with mock.patch("app.friend_site.url", return_value=URL), \
+        with mock.patch("app.features.qq.friend_site.url", return_value=URL), \
              mock.patch.object(solo_bot, "_bot_identity",
                                return_value=("大大怪", "10000")):
             parts = solo_bot.card_parts()
@@ -50,7 +50,7 @@ class CardTextTest(unittest.TestCase):
         self.assertIn(URL + "/play", plain)
 
     def test_closed_explains_without_stale_link(self):
-        with mock.patch("app.friend_site.url", return_value=""):
+        with mock.patch("app.features.qq.friend_site.url", return_value=""):
             parts = solo_bot.card_parts()
             plain = solo_bot.plain_text()
         self.assertEqual(len(parts), 2)
@@ -60,7 +60,7 @@ class CardTextTest(unittest.TestCase):
 
     def test_card_is_always_forward_not_bare_text(self):
         """卡片是合并转发节点，链接单独一个节点方便长按复制。"""
-        with mock.patch("app.friend_site.url", return_value=URL), \
+        with mock.patch("app.features.qq.friend_site.url", return_value=URL), \
              mock.patch.object(solo_bot, "_bot_identity",
                                return_value=("大大怪", "10000")):
             nodes = solo_bot.build_nodes()
@@ -70,7 +70,7 @@ class CardTextTest(unittest.TestCase):
 
 class SendTest(unittest.TestCase):
     def test_group_uses_card(self):
-        with mock.patch("app.friend_site.url", return_value=URL), \
+        with mock.patch("app.features.qq.friend_site.url", return_value=URL), \
              mock.patch.object(solo_bot.qq_api, "send_forward") as fw, \
              mock.patch.object(solo_bot.qq_api, "send_group") as sg:
             ok = solo_bot.send("group", "123")
@@ -79,7 +79,7 @@ class SendTest(unittest.TestCase):
         sg.assert_not_called()
 
     def test_private_card_failure_falls_back_to_text(self):
-        with mock.patch("app.friend_site.url", return_value=URL), \
+        with mock.patch("app.features.qq.friend_site.url", return_value=URL), \
              mock.patch.object(solo_bot.qq_api, "send_forward",
                                side_effect=RuntimeError("协议端不支持")), \
              mock.patch.object(solo_bot.qq_api, "send_private") as sp:
@@ -89,7 +89,7 @@ class SendTest(unittest.TestCase):
         self.assertIn(URL + "/play", sp.call_args[0][1])
 
     def test_both_fail_returns_false(self):
-        with mock.patch("app.friend_site.url", return_value=URL), \
+        with mock.patch("app.features.qq.friend_site.url", return_value=URL), \
              mock.patch.object(solo_bot.qq_api, "send_forward",
                                side_effect=RuntimeError("x")), \
              mock.patch.object(solo_bot.qq_api, "send_private",

@@ -54,7 +54,8 @@ import re
 import threading
 import time
 
-from app import llm, trigger
+from app.features.qq import trigger
+from app import llm
 from app.config import BASE_DIR
 
 log = logging.getLogger("galgame")

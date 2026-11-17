@@ -2452,14 +2452,14 @@ class RosterWebLinkTest(PersonaBase):
         self.assertNotIn("网页版", nodes[0])
 
     def test_private_command_includes_link(self):
-        with mock.patch("app.friend_site.url",
+        with mock.patch("app.features.qq.friend_site.url",
                         return_value="https://y.trycloudflare.com"):
             got = persona.handle_command("private_1", "#角色扮演",
                                          addressed=True)
         self.assertIn("https://y.trycloudflare.com/persona", got)
 
     def test_group_command_excludes_link(self):
-        with mock.patch("app.friend_site.url",
+        with mock.patch("app.features.qq.friend_site.url",
                         return_value="https://y.trycloudflare.com"):
             got = persona.handle_command("group_1", "#角色扮演",
                                          addressed=True)
@@ -2467,7 +2467,7 @@ class RosterWebLinkTest(PersonaBase):
 
     def test_tunnel_down_still_returns_roster(self):
         """隧道没开（拿不到地址）时，规则本身不能少。"""
-        with mock.patch("app.friend_site.url", return_value=""):
+        with mock.patch("app.features.qq.friend_site.url", return_value=""):
             got = persona.handle_command("private_1", "#角色扮演",
                                          addressed=True)
         self.assertIn("角色名单", got)

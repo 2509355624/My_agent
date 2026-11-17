@@ -30,7 +30,7 @@ from app.features.comic import routes as comic_api
 from app.features.comic import moss_api
 from app.features.image import routes as gen_api
 from app import friend_api
-from app import friend_site
+from app.features.qq import friend_site
 from app.features.gallery import routes as gallery_api
 from app.features.card import routes as card_api
 from app.features.image import output_api

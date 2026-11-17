@@ -173,7 +173,7 @@ class ReceiptLinksTest(_SubmitHarness):
         self.addCleanup(p.stop)
 
     def _submit_with(self, ctx, url=URL):
-        with mock.patch("app.friend_site.url", return_value=url):
+        with mock.patch("app.features.qq.friend_site.url", return_value=url):
             self._submit(ctx)
         return self.sent[-1][2]
 

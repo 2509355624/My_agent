@@ -13,7 +13,7 @@
 
 import unittest
 
-from app import trigger
+from app.features.qq import trigger
 
 
 class CalledTest(unittest.TestCase):

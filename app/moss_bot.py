@@ -108,7 +108,8 @@ import time
 from app.features.comic import moss_msgs
 from app.features.comic import moss_series as series_mod
 from app.features.comic import moss_api
-from app import (moss_comic, qq_api, trigger)
+from app.features.qq import trigger
+from app import (moss_comic, qq_api)
 from app.config import QQ_AGENT_ID
 from app.features.image import out as image_out
 

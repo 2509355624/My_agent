@@ -51,10 +51,9 @@ from app.features.qq import stickers
 from app.features.chat import confirm_gate
 from app.features.image import lora_bot
 from app.core import usage
+from app.features.qq import play_bot, solo_bot, trigger
 from app import (direct_gen, image_jobs,
-                 play_bot, solo_bot,
-                 moss_bot, persona, qq_api,
-                 trigger)
+                 moss_bot, persona, qq_api)
 from app.features.card import bot as card_bot
 from app.features.image import log as image_log
 from app.features.image import out as image_out
@@ -2353,7 +2352,7 @@ class QQBot:
                     # 私聊才带网页入口，群里不带（外链在群聊容易被风控）。
                     site = ""
                     if target == "private":
-                        from app import friend_site
+                        from app.features.qq import friend_site
                         site = friend_site.url()
                     node_texts = persona.roster_nodes(site_url=site)
                 except Exception:                # noqa: BLE001

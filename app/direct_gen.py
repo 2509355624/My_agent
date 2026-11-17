@@ -78,7 +78,8 @@ import re
 import time
 
 from app.features.image import random_tags
-from app import image_jobs, llm, qq_api, trigger
+from app.features.qq import trigger
+from app import image_jobs, llm, qq_api
 from app.features.image import log as image_log
 from app.config import IMAGE_DEFAULT_SKILL, QQ_GROUP_KEYWORDS
 from app.features.chat.confirm_gate import _ATTRIBUTION_RE
@@ -1367,7 +1368,7 @@ def _preset_web_text():
     `state/friend_url.txt`——隧道重启就换地址，缓存或硬编任何一个旧值都会
     发出一串打不开的链接。
     """
-    from app import friend_site
+    from app.features.qq import friend_site
     url = friend_site.url()
     if not url:
         return ("群友页的隧道现在没开，所以没有地址可发（Quick Tunnel 每次重启"
@@ -1391,7 +1392,7 @@ def _gallery_text():
     地址 = `state/friend_url.txt` 里的隧道地址 + `/gallery`。
     隧道没开就照实说，不猜旧地址（旧域名早就 1033 了）。
     """
-    from app import friend_site
+    from app.features.qq import friend_site
     url = friend_site.url()
     if not url:
         return ("画廊在群友页里，隧道现在没开，所以没有地址可发"
@@ -1419,7 +1420,7 @@ def _comic_studio_text():
     `/comic`；隧道没开照实说，不猜旧地址。`?from=qq` 与 /画廊 同一个作用：
     5175 的 _gate 会先解开 /play 的页面锁再按正常鉴权走（未登录 → 登录页）。
     """
-    from app import friend_site
+    from app.features.qq import friend_site
     url = friend_site.url()
     if not url:
         return ("漫画台在群友页里，隧道现在没开，所以没有地址可发"
@@ -1443,7 +1444,8 @@ def _outfit_text():
     令牌把「结果推回哪个会话」编进链接，所以私聊发的链接回私聊、群发的回群，
     不用登录、不用记账号。6 小时过期（隧道域名会变，旧的发过去也打不开）。
     """
-    from app import friend_auth, friend_site, qq_api
+    from app.features.qq import friend_site
+    from app import friend_auth, qq_api
     url = friend_site.url()
     if not url:
         return ("换装页现在打不开——隧道没开，让群主双击"
@@ -1514,7 +1516,8 @@ def _runbench_text():
     和 `/换装` 完全同款：令牌把「结果推回哪个会话」编进链接，免登录、不记
     账号，分享给别人也能用，结果仍回原会话。6 小时过期。
     """
-    from app import friend_auth, friend_site, qq_api
+    from app.features.qq import friend_site
+    from app import friend_auth, qq_api
     url = friend_site.url()
     if not url:
         return ("跑图台现在打不开——隧道没开，让群主双击"

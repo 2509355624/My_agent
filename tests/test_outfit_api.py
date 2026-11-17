@@ -251,13 +251,15 @@ class WiringTest(unittest.TestCase):
         self.assertIn("/api/outfit/<path:sub>", rules)
 
     def test_outfit_text_without_tunnel(self):
-        from app import direct_gen, friend_site
+        from app.features.qq import friend_site
+        from app import direct_gen
         with mock.patch.object(friend_site, "url", return_value=""):
             txt = direct_gen._outfit_text()
         self.assertIn("隧道没开", txt)
 
     def test_outfit_text_signs_source(self):
-        from app import direct_gen, friend_site, qq_api
+        from app.features.qq import friend_site
+        from app import direct_gen, qq_api
         with mock.patch.object(friend_site, "url", return_value="https://x.trycloudflare.com"), \
              mock.patch.object(qq_api, "current_context", return_value=("private", "1234567890")):
             txt = direct_gen._outfit_text()
