@@ -19,7 +19,8 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import comic, comic_api, comic_prompt_suffix, main
+from app.features.comic import prompt_suffix as comic_prompt_suffix
+from app import comic, comic_api, main
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

@@ -10,6 +10,6 @@
 `moss_comic.py`、`moss_msgs.py`、`moss_prompt.py`、`moss_series.py`、`silver_comic.py`。
 完整映射见 `docs/project-skeleton.md` 第 4 节。
 
-状态：`quota.py`（原 `comic_quota.py`）、`thumb.py`（原 `comic_thumb.py`）已迁入并
-接线；漫画主流程仍在根目录，按“编剧/分镜/渲染/交付”继续拆，不和生图互相 import
-内部文件。
+状态：`quota.py`（原 `comic_quota.py`）、`thumb.py`（原 `comic_thumb.py`）、
+`prompt_suffix.py`（原 `comic_prompt_suffix.py`）已迁入并接线；漫画主流程仍在根目录，
+按“编剧/分镜/渲染/交付”继续拆，不和生图互相 import 内部文件。
