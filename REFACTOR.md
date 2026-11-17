@@ -91,10 +91,11 @@ tools/
 - 新工作树冒烟：84 条手机端测试通过。
 - 记录全量测试红项，后续只对比差异。
 
-**阶段 1：卫生清理（低风险）**
-- 根目录 70 个诊断脚本先分类：仍在用的留在 `tools/`，一次性的进 `tools/archive/`。
-- `tests/` 先不物理搬家，只加分组说明和运行脚本。
-- 清理重复备份 `.bak-*`、`*_before_*`、`web/showcase_*` 样张，确认无引用再处理。
+**阶段 1：卫生清理（已完成第一刀）**
+- 根目录 61 个 `_*.py` 已归档：10 个进 `tools/generators/`，51 个进 `tools/legacy/`。
+- 根目录只剩 9 个入口/运维脚本；`tests/test_repo_layout.py` 3 条守卫通过。
+- 新增 `tools/README.md`、`tests/README.md`、`.editorconfig`，接手的人先看这三份。
+- `tests/` 尚未物理搬家，下一步再按模块分组。
 
 **阶段 2：核心骨架 + 兼容层（中风险）**
 - 先建 `app/core/config.py`，原 `app/config.py` 改成一行 re-export。
