@@ -242,6 +242,21 @@ class CacheWindowTest(unittest.TestCase):
         self.assertEqual(len(persona.trim(self._rows(20))),
                          persona.HISTORY_LIMIT)
 
+    def test_char_budget_keeps_newest_and_starts_on_user(self):
+        """按总字数截历史：从最老的一头丢，保留最近几轮，且开头必须是用户。"""
+        rows = []
+        for i in range(20):
+            rows.append({
+                "role": "user" if i % 2 == 0 else "assistant",
+                "content": ("字" * 1000) if i % 2 else ("问" * 100),
+            })
+        out = persona.trim_chars(rows, 6000, min_rows=6)
+        self.assertEqual(out[-1]["content"], rows[-1]["content"])
+        self.assertEqual(out[0]["role"], "user")
+        self.assertLessEqual(
+            sum(len(m["content"]) for m in out), 6000,
+            "按字数截完仍超预算：老历史会继续按 miss 价计费")
+
 
 class StableNotesTest(PersonaBase):
     """缓存 Phase B：恒定写法说明并进 system 头，末尾那份精确剔除。
@@ -727,6 +742,36 @@ class TurnTest(PersonaBase):
         # 落盘保留长窗口，下一轮才能接着这段前缀继续命中。
         self.assertEqual(len(persona._load_hist(hist_key)),
                          persona.HISTORY_LIMIT + 4)
+
+    def test_actor_history_is_capped_by_char_budget(self):
+        """送写作 AI 的历史按总字数封顶，但落盘仍是完整长窗口。
+
+        2026-11-17 真实账单：system 头 1.5 万 token 已命中，贵的是后面
+        7,000 多 token 的历史。历史再长也不会进前缀缓存，所以只留最近
+        能装进预算的几轮；归档一条不少。
+        """
+        hist_key = self._hist_key()
+        rows = []
+        # 28 条 + 本轮 2 条 = 30，正好到高水位，不会触发「砍回 12 条」；
+        # 这样落盘仍是 30 条，能验证送模型的那份才是被字数封顶的。
+        for i in range(persona.HISTORY_CACHE_HIGH - 2):
+            rows.append({
+                "role": "user" if i % 2 == 0 else "assistant",
+                "content": ("问" * 120) if i % 2 == 0 else ("回" * 1000),
+            })
+        persona._save_hist(hist_key, rows)
+        score = '{"intent": "neutral", "delta": 1, "turn_type": "chat"}'
+        with mock.patch.object(persona.llm, "call_llm",
+                               side_effect=[score, "她没松手。"]) as m:
+            persona.run_turn(self.KEY, "我走了。", "private")
+        actor = m.call_args_list[1][0][0]
+        sent_hist = actor[1:-1]
+        self.assertLessEqual(
+            sum(len(x["content"]) for x in sent_hist),
+            persona.ACTOR_HISTORY_CHARS + 200,
+            "写作 AI 仍收到整段历史：每轮都会按 miss 价重付")
+        self.assertGreater(len(persona._load_hist(hist_key)), len(sent_hist),
+                           "落盘窗口被一起截短了，归档/回看会丢内容")
 
     def test_scene_line_is_split_out_of_the_reply(self):
         """模型顺手写的那行「画面：」要剥出来：正文发回去，标签拿去出图。

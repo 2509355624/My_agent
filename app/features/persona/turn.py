@@ -487,10 +487,14 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     # 12 条。窗口起点逐轮不动，system 头 + 历史才能一整段命中；`svc.trim` 只用来
     # 做单条截断（limit=窗口实际长度），不砍条数。编剧 / 打分器上面用的
     # `hist` 仍是最近 12 条，行为一点没变。
+    #
+    # 2026-11-17 账单修正：历史并没有跟着 system 头命中，整段窗口按 miss 价重付。
+    # 所以渲染完再按总字数封顶，只留最近装得下的几轮；落盘仍是完整窗口。
     win = svc.cache_rows(raw_hist)
     model_hist = svc._render_hist(
         svc.trim(win, limit=len(win)), name=svc.char_name(card, key=key),
         alias=str((card or {}).get("name") or ""))
+    model_hist = svc.trim_chars(model_hist, svc.ACTOR_HISTORY_CHARS)
     msgs = ([{"role": "system", "content": head}] + model_hist
             + [{"role": "user", "content": user_block}])
     try:

@@ -147,6 +147,12 @@ HISTORY_LIMIT = 12
 # 全量原文也一直在 `_append_archive` 里，砍窗口不丢历史。
 HISTORY_CACHE_HIGH = 30
 
+# 2026-11-17 真实账单推翻了这个预期：写作调用平均 hit 14,115（正好 system 头），
+# miss 7,100（历史 + 本轮玩家块）。历史并没有跟着 system 头一起命中，30 条长窗口
+# 只把 miss 越堆越高。送写作 AI 的历史因此再按**总字数**封顶（默认 9,000 字，
+# 约 6~7 轮厚回复）；落盘/归档仍是完整 30 条，回看和小记都不丢。
+ACTOR_HISTORY_CHARS = int(os.getenv("PERSONA_ACTOR_HISTORY_CHARS", "9000"))
+
 # 单条消息的截断上限（2026-11-02：200 → 900 → 2026-11-06：2400
 # → 2026-11-07：2600）。契约把正文目标定到 600~2000 字之后，2400 对
 # 「2000 字正文 + 三行元数据 + 分段标签」只剩不到 300 字余量，写满一轮
@@ -230,7 +236,7 @@ from app.features.persona import state_store
 from app.features.persona import history_store
 from app.features.persona.history_view import (
     _archive_assistant_count, _split_meta, archive_len, cache_rows, history_page,
-    load_archive, trim, turn_total,
+    load_archive, trim, trim_chars, turn_total,
 )
 from app.features.persona.lines import (
     SLOT_MAX, _card_key_slot, _persona_key, _slot_suffix,
