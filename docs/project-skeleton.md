@@ -34,6 +34,10 @@ my_agent_restructure/
 `clean_zombies.py`、`export_presets.py`、`import_presets.py`、`napcat_qr.py`、
 `restart_servers.py` 这些运维脚本，后续进 `tools/ops/`；根目录保留 3 个进程入口即可。
 
+`app/` 根目录当前只剩 4 个文件：`__init__.py`、`config.py`（配置门面）、`main.py`
+（5174 Flask 入口）、`qq_bot.py`（QQ 事件循环入口）。业务实现全部在
+`features/`、`core/`、`integrations/`、`gateways/`、`workers/`、`tools/` 下。
+
 ---
 
 ## 2. `app/` 骨架
