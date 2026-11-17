@@ -21,7 +21,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.features.comic import prompt_suffix as comic_prompt_suffix
 from app.features.comic import routes as comic_api
-from app import comic, main
+from app.features.comic import comic
+from app import (main)
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -188,7 +189,7 @@ class InjectionTest(_Base):
 
     def test_ledger_still_records_the_writer_original(self):
         """账本里的 prompt 只记编剧原文，不跟着后缀变（enqueue 的语义）。"""
-        with open(os.path.join(_ROOT, "app", "comic.py"), encoding="utf-8") as f:
+        with open(os.path.join(_ROOT, "app", "features", "comic", "comic.py"), encoding="utf-8") as f:
             src = f.read()
         self.assertIn("build_t2i_workflow(scene_skill, scene_prompt(p), seed)", src)
         self.assertIn("_submit_nai(scene_prompt(p), scene_skill)", src)

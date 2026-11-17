@@ -23,7 +23,8 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.features.comic import routes as comic_api
-from app import comic, image_jobs, main
+from app.features.comic import comic
+from app import (image_jobs, main)
 
 SCRIPT = ("# 标题：耗时测试\n\n## 01\n画面: 1girl, solo, room\n"
           "气泡: 第一句\n气泡2: 第二句\n标签1: 旁白\n")

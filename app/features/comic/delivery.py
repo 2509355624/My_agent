@@ -64,7 +64,7 @@ def _work_name(task_dir):
     title = (m.group(1) if m else "").strip()
     if not title:
         try:
-            from app import comic
+            from app.features.comic import comic
             meta, _ = comic.parse_script(
                 os.path.join(str(task_dir), "script.md"))
             title = str((meta or {}).get("title") or "").strip()

@@ -92,7 +92,7 @@ parts are **counted**」——**一只手也算一个角色**。于是 `1girl, s
 
 - 《连续剧情提示词生成规范》（`app/comic_spec.md`）只有 `comic_writer` 在读，
   而网页端的编剧早就换成本模块了 —— 于是那份规范只剩旧 CLI
-  （`python -m app.comic write`）在用，Agent 这边一个字都没看到。
+  （`python -m app.features.comic.comic write`）在用，Agent 这边一个字都没看到。
   实跑核对过：`_system_prompt(3)` 里 `'连续剧情' in text` 是 **False**。
 - 现在和 anima-tags 规范一起全文注入（见 `_story_spec_text`）。它的「输出格式」
   一节仍**不执行** —— 本流程的输出是剧本契约（`## NN` / `画面:` / `气泡:`），
@@ -143,7 +143,7 @@ import re
 
 from app.features.comic import writer as comic_writer
 from app.integrations import llm
-from app import (comic)
+from app.features.comic import comic
 from app.features.chat.agent import parse_tool_calls, _strip_tool_blocks
 from app.tools.sandbox import resolve_in_skills
 from app.tools.normal.search_tags import search_tags, _index, DEFAULT_INDEX
@@ -906,7 +906,7 @@ def audit_line(text, pov_mode="pov"):
 
     `pov_mode="free"` 时整组停用——和 `collect_issues` 同一个口径。
     """
-    import app.comic as _comic
+    from app.features.comic import comic as _comic
     raw = str(text or "")
     parts = [x.strip() for x in raw.split(",") if x.strip()]
     keys = [_db_key(_norm_tag(x)) for x in parts]

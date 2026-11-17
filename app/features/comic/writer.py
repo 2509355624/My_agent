@@ -12,8 +12,8 @@
 
 命令行入口在 comic.py：
 
-    python -m app.comic write "<设定>" --panels 3 --out comics/C20261007-04/script.md
-    python -m app.comic new   "<设定>" --panels 3 --scene-skill nai
+    python -m app.features.comic.comic write "<设定>" --panels 3 --out comics/C20261007-04/script.md
+    python -m app.features.comic.comic new   "<设定>" --panels 3 --scene-skill nai
 """
 
 import logging
@@ -21,7 +21,7 @@ import os
 import re
 
 from app.integrations import llm
-from app import (comic)
+from app.features.comic import comic
 
 log = logging.getLogger("comic.writer")
 

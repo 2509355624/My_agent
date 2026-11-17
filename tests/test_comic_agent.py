@@ -23,7 +23,8 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import comic, comic_agent
+from app.features.comic import comic
+from app.features.comic import agent as comic_agent
 
 
 class NormTagTest(unittest.TestCase):

@@ -15,7 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.features.comic import routes as comic_api
 from app.features.comic import portrait as comic_portrait
-from app import comic, main
+from app.features.comic import comic
+from app import (main)
 
 
 def _touch(path, data=b"x"):

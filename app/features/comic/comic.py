@@ -12,13 +12,13 @@
   或某张失败，重跑时自动跳过已完成的格，接着往下跑。
 
 用法：
-    python -m app.comic new "<一句话设定>" --panels 3   # 编剧层写剧本 + 直接开跑
-    python -m app.comic write "<设定>" --out comics/Cxxx/script.md  # 只写剧本
-    python -m app.comic run comics/C20261007-01/script.md
-    python -m app.comic run <script> --only 01,02      # 只跑指定格
-    python -m app.comic run <script> --silver-only     # 只跑阶段一（场景图）
-    python -m app.comic run <script> --scene-skill nai # 阶段一改走 NAI 云端（快）
-    python -m app.comic status <script>                # 看进度
+    python -m app.features.comic.comic new "<一句话设定>" --panels 3   # 编剧层写剧本 + 直接开跑
+    python -m app.features.comic.comic write "<设定>" --out comics/Cxxx/script.md  # 只写剧本
+    python -m app.features.comic.comic run comics/C20261007-01/script.md
+    python -m app.features.comic.comic run <script> --only 01,02      # 只跑指定格
+    python -m app.features.comic.comic run <script> --silver-only     # 只跑阶段一（场景图）
+    python -m app.features.comic.comic run <script> --scene-skill nai # 阶段一改走 NAI 云端（快）
+    python -m app.features.comic.comic status <script>                # 看进度
 
 渲染参数覆盖（LoRA 槽 / 两段采样 / 分辨率）按任务存在任务目录的 render.json，
 网页端的「⚙ 渲染参数」卡维护它；run / render_scene 开跑时自动读，CLI 同样享受。
@@ -1695,7 +1695,7 @@ def _report(task):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        prog="python -m app.comic", description="漫画工作流调度器")
+        prog="python -m app.features.comic.comic", description="漫画工作流调度器")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("run", help="跑一个剧本")

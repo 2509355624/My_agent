@@ -696,7 +696,7 @@ class PovTagAuditTest(unittest.TestCase):
     """
 
     def setUp(self):
-        from app import comic_agent
+        from app.features.comic import agent as comic_agent
         self.ca = comic_agent
 
     def _kinds(self, line):

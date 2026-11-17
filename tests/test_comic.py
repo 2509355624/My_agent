@@ -21,7 +21,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.features.comic import writer as comic_writer
-from app import comic
+from app.features.comic import comic
 from app.core import skills
 
 

@@ -14,7 +14,7 @@ import os
 import re
 
 from app.integrations import llm
-from app import (comic)
+from app.features.comic import comic
 
 log = logging.getLogger("comic.silver")
 

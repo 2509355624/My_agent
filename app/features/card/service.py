@@ -610,7 +610,7 @@ def render_cover(cid, card, skill=COVER_SKILL, seed=None):
     这里不更新卡片记录——出图是慢操作，状态由接口层管（先写 rendering、
     成功后写 cover），免得线程和请求两边抢着写同一个 json。
     """
-    from app import comic      # 延迟导入：纯文案路径不该拖上生图依赖
+    from app.features.comic import comic  # 延迟导入：纯文案路径不该拖上生图依赖
 
     comic._require_comfy()
     prompt = cover_prompt(card)

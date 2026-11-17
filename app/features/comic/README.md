@@ -17,6 +17,8 @@
 `moss_msgs.py`（Moss 消息模板）、`moss_prompt.py`（Moss 提示词）、`moss_series.py`（连载
 状态）、`moss_api.py`（Moss 漫画台 Blueprint）、`silver_comic.py`（Silver 编剧/解析）、
 `soda_letter.py`（Soda 程序排字）、`moss_comic.py`（Moss 漫画核心）、
-`moss_bot.py`（Moss 机器人入口）、`routes.py`（原 `comic_api.py`，漫画工作台 Blueprint）
+`moss_bot.py`（Moss 机器人入口）、`comic.py`（原 `app/comic.py`，分镜调度/
+阶段渲染/CLI）、`agent.py`（原 `app/comic_agent.py`，漫画 Agent 循环）、
+`routes.py`（原 `comic_api.py`，漫画工作台 Blueprint）
 已迁入并接线；`comic_spec.md` 随编剧模块一起放。漫画主流程仍在根目录，按
 “编剧/分镜/渲染/交付”继续拆，不和生图互相 import 内部文件。

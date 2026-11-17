@@ -29,7 +29,8 @@ from app.features.comic import thumb as comic_thumb
 from app.features.comic import routes as comic_api
 from app.features.comic import render_opts as comic_render_opts
 from app.gateways import friend_auth
-from app import (comic, main)
+from app.features.comic import comic
+from app import (main)
 
 SECRET = "unit-test-friend-secret"
 QQ = "123456"
@@ -534,7 +535,7 @@ class TestFriendApi(_TempMixin, unittest.TestCase):
         self.assertIn("还没有任何图", r.get_json()["error"])
 
     def test_修订助手不落实不扣次数(self):
-        from app import comic_agent
+        from app.features.comic import agent as comic_agent
         d = self.mk_task(name="A1")
         script = os.path.join(d, "script.md")
         # 中转站挂了要走官方代充，得先有次数（默认额度 0）。
