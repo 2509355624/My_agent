@@ -18,7 +18,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-import app.agent as agent
+import app.features.chat.agent as agent
 import app.core.agents as agents
 from app.features.image import comfy_status
 import app.features.chat.longterm as longterm

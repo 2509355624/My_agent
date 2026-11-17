@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-import app.agent as agent
+import app.features.chat.agent as agent
 import app.core.agents as agent_store
 from app.features.image import comfy_status
 import app.config as config

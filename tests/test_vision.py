@@ -15,10 +15,10 @@ import tempfile
 import unittest
 from unittest import mock
 
-import app.agent as agent
+import app.features.chat.agent as agent
 import app.config as config
 import app.integrations.vision as vision
-from app.agent import _error_reply
+from app.features.chat.agent import _error_reply
 
 try:
     from PIL import Image

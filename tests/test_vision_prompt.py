@@ -116,7 +116,7 @@ class AgentUsesCustomPromptTest(unittest.TestCase):
         return out, seen, vp
 
     def _call(self, images=None, agent_id="qq"):
-        from app import agent
+        from app.features.chat import agent  
         return agent._with_vision("看看这图", images or ["data:1"],
                                   ["温知澄"], agent_id)
 
@@ -142,7 +142,7 @@ class AgentUsesCustomPromptTest(unittest.TestCase):
         with mock.patch("app.integrations.vision.describe",
                         lambda data_url, timeout=None, prompt=None:
                         seen.append(prompt) or "一只猫"):
-            from app import agent
+            from app.features.chat import agent  
             agent._with_vision("看看这图", ["data:1"], ["温知澄"])
         self.assertIn("原样提取其中的所有文字", seen[0])
 

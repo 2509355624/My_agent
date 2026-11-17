@@ -13,7 +13,7 @@
 import unittest
 from unittest import mock
 
-import app.agent as agent
+import app.features.chat.agent as agent
 from app.features.image import comfy_status
 import app.config as config
 from app import image_jobs

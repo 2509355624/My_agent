@@ -54,7 +54,7 @@ from app.core.skills import list_skills, load_skill
 from app.core import model_catalog
 from app.features.chat.agent_prompt import build_stable_prompt, sync_session_system
 from app.features.chat.memory import load_history, save_history, estimate_messages
-from app.agent import run_agent_stream, parse_tool_calls, _strip_tool_blocks
+from app.features.chat.agent import run_agent_stream, parse_tool_calls, _strip_tool_blocks
 from app.tools import execute_tool
 from app.tools.normal.documents import list_documents, file_info, read_document, search_document
 

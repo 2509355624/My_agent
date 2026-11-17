@@ -18,7 +18,7 @@
 
 import unittest
 
-from app.agent import (parse_tool_calls, _strip_tool_blocks, _history_for_llm,
+from app.features.chat.agent import (parse_tool_calls, _strip_tool_blocks, _history_for_llm,
                        _iter_tool_tags)
 
 

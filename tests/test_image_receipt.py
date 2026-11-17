@@ -21,7 +21,7 @@ import json
 import unittest
 from unittest import mock
 
-from app import agent as agent_mod
+from app.features.chat import agent as agent_mod  
 from app.core import agents
 from app.core import agents as agent_store
 from app import image_jobs, qq_api, qq_bot

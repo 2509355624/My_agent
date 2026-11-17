@@ -143,7 +143,7 @@ import re
 
 from app.features.comic import writer as comic_writer
 from app import comic, llm
-from app.agent import parse_tool_calls, _strip_tool_blocks
+from app.features.chat.agent import parse_tool_calls, _strip_tool_blocks
 from app.tools.sandbox import resolve_in_skills
 from app.tools.normal.search_tags import search_tags, _index, DEFAULT_INDEX
 from app.tools.normal.web_search import tool as _web_search_tool

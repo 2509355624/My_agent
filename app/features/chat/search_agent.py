@@ -59,7 +59,7 @@ import logging
 import re
 
 from app import llm
-from app.agent import parse_tool_calls, _strip_tool_blocks
+from app.features.chat.agent import parse_tool_calls, _strip_tool_blocks
 from app.tools.normal.search_tags import search_tags
 from app.tools.normal.web_search import tool as _web_search_tool
 
