@@ -132,19 +132,78 @@
     display: inline-block; font-size: 12px; color: var(--text-mute);
     background: var(--bg-input); border-radius: 6px; padding: 2px 8px; margin-right: 6px;
   }
+
+  /* 2026-11-17：手机改单列；左栏收成横向角色条，右侧表单分四页签。
+     字段说明默认收起，点顶栏「说明」再展开。 */
+  .howto {
+    padding: 8px 22px; background: var(--bg-elev);
+    border-bottom: 1px solid var(--border);
+    color: var(--text-mute); font-size: 12px; line-height: 1.7;
+  }
+  .howto summary { cursor: pointer; color: var(--text-dim); }
+  .howto > div { margin-top: 8px; }
+
+  .pane-tabs {
+    display: flex; gap: 4px; position: sticky; top: 0; z-index: 2;
+    background: var(--bg); padding: 0 0 12px; margin-bottom: 16px;
+    border-bottom: 1px solid var(--border-soft);
+    overflow-x: auto; scrollbar-width: none;
+  }
+  .pane-tabs::-webkit-scrollbar { display: none; }
+  .pane-tabs button {
+    flex: none; border: 0; background: transparent; color: var(--text-mute);
+    padding: 7px 12px; border-radius: 8px;
+  }
+  .pane-tabs button.on {
+    background: var(--bg-input); color: var(--text);
+  }
+
+  #pane [data-csec] { display: none; }
+  #pane .field[data-csec].on { display: block; }
+  #pane .row[data-csec].on { display: flex; }
+
+  .wrap:not(.show-tips) .field .tip { display: none; }
+
+  @media (max-width: 760px) {
+    .wrap { height: 100vh; height: 100dvh; }
+    header { padding: 10px 14px; gap: 8px; }
+    header h1 { flex: 1 1 auto; }
+    .howto { padding: 8px 14px; }
+    .bg-global { flex-wrap: wrap; padding: 10px 14px; gap: 10px; }
+    .bg-global .bg-thumb { width: 96px; height: 56px; }
+    .body { flex-direction: column; }
+    aside {
+      width: 100%; max-height: 96px; display: flex; gap: 8px;
+      overflow-x: auto; overflow-y: hidden; border-right: 0;
+      border-bottom: 1px solid var(--border); padding: 8px 12px;
+    }
+    aside .card-item {
+      flex: 0 0 auto; min-width: 132px; margin: 0; padding: 8px 10px;
+    }
+    aside .card-item .ds { display: none; }
+    main { padding: 14px; overflow-y: auto; }
+    .row { flex-direction: column; gap: 10px; }
+    .bg-edit { flex-direction: column; }
+    .bg-edit .bg-thumb { width: 100%; height: 120px; }
+  }
+
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>角色扮演管理</h1>
-    <div class="hint">
-      角色卡的详情文案、默认背景都在这里管理。群里发「<b>#角色扮演</b>」看清单，发「<b>#角色名</b>」让它演那个角色，发「<b>#出戏</b>」变回生图机器人。
-    </div>
+    <h1>角色卡</h1>
     <button id="btnNew">＋ 新建</button>
     <button id="btnSave" class="primary">保存</button>
+    <button id="btnTips" type="button" title="显示或隐藏字段说明">说明</button>
     <span id="status"></span>
   </header>
+  <details class="howto">
+    <summary>怎么用</summary>
+    <div>
+      角色卡的详情文案、默认背景都在这里管理。群里发「<b>#角色扮演</b>」看清单，发「<b>#角色名</b>」让它演那个角色，发「<b>#出戏</b>」变回生图机器人。
+    </div>
+  </details>
 
   <div class="bg-global">
     <div class="bg-thumb" id="bgDefaultThumb">默认</div>
@@ -318,7 +377,13 @@ function renderPane() {
     ? "正在用这张卡的背景"
     : (c.id ? "这张卡没有单独背景，会用上面的全局默认" : "新卡先保存，拿到 id 后才能传背景");
   pane.innerHTML = `
-    <div class="row">
+    <div class="pane-tabs" id="charTabs">
+      <button type="button" class="on" data-ctab="basic" onclick="pickCharTab('basic')">基本</button>
+      <button type="button" data-ctab="look" onclick="pickCharTab('look')">外观</button>
+      <button type="button" data-ctab="state" onclick="pickCharTab('state')">状态</button>
+      <button type="button" data-ctab="other" onclick="pickCharTab('other')">其他</button>
+    </div>
+    <div class="row" data-csec="basic">
       <div class="field">
         <label>名字（群里就发 #这个名字）</label>
         <input type="text" id="f_name" value="${esc(c.name)}">
@@ -328,44 +393,44 @@ function renderPane() {
         <input type="text" id="f_avatar" value="${esc(c.avatar)}">
       </div>
     </div>
-    <div class="field">
+    <div class="field" data-csec="basic">
       <label>她真正的名字（正文里用这个名字；留空就用上面的卡名）</label>
       <input type="text" id="f_charName" maxlength="20"
              value="${esc(c.charName || "")}">
       <div class="tip">卡名是「青梅竹马」这种关系称谓、想让正文写成「苏暖说……」时填这里。
         角色列表和 <b>#这个名字</b> 命令仍然用上面的卡名，只有叙述里怎么叫她换成这个名字。</div>
     </div>
-    <div class="field">
+    <div class="field" data-csec="basic">
       <label>一句话说明（列清单时给它配这行）</label>
       <input type="text" id="f_desc" value="${esc(c.description)}">
     </div>
-    <div class="field">
+    <div class="field" data-csec="basic">
       <label>性格标签（只是给卡池页看的，不参与对话）</label>
       <input type="text" id="f_personality" value="${esc(c.personality)}">
     </div>
-    <div class="field">
+    <div class="field" data-csec="basic">
       <label>人设正文</label>
       <textarea class="big" id="f_system">${esc(c.systemPrompt)}</textarea>
       <div class="tip">这一段就是它的身份、性格和说话方式——扮演态的系统提示词里只有这个，没有别的规矩。</div>
     </div>
-    <div class="field">
+    <div class="field" data-csec="look">
       <label>外观固定块（英文自然语言，一句）</label>
       <textarea class="mid" id="f_appearance">${esc(c.appearancePrompt)}</textarea>
       <div class="tip">发色 / 发型 / 瞳色 / 体型这类不变的特征，写成**一句连贯英文**，以 <code>an adult woman with …</code> 开头。<br>
         例：<code>an adult woman with waist-length silver hair in twin tails, clear blue eyes, pale skin and a slim adult build</code><br>
         不要写标签串（<code>1girl, solo, silver hair</code>）、质量词（<code>masterpiece, best quality</code>）、<code>sfw</code> 或权重语法（<code>(tag:1.2)</code>）——漫画编剧读的是自然语言，标签串会被原样塞进画面描述，出来的是「the masterpiece, best quality, 1girl …」这种句子。动作 / 场景 / 表情由角色按剧情写，这里只写不变的特征。</div>
     </div>
-    <div class="field">
+    <div class="field" data-csec="look">
       <label>服饰（英文自然语言，可留空）</label>
       <textarea class="mid" id="f_outfit">${esc(c.outfitPrompt)}</textarea>
       <div class="tip">常服装扮，同样用自然语言写（<code>a loose white shirt and grey shorts</code>）。跟外观固定块一起拼进画面；留空就只按外观固定块画。</div>
     </div>
-    <div class="field">
+    <div class="field" data-csec="look">
       <label>房间与私物（可留空，中文）</label>
       <textarea class="mid" id="f_room">${esc(c.room || "")}</textarea>
       <div class="tip">她房间里有什么、藏了什么。只在**你离开她视线、进她房间**时当素材用（比如：书桌、没关严的抽屉、衣柜里没拆标的泳衣、压在枕头下的速写本）。留空就由她按人设临场编，只是每次可能不一样。</div>
     </div>
-    <div class="field">
+    <div class="field" data-csec="state">
       <label>状态下的她（四段自由文本，可留空）</label>
       <div class="tip" style="margin-bottom:6px">给编剧 AI 看的：数值高了之后她会怎么变。**不是阈值**，不要写「到 80 就怎样」，写她的表现。留空就让编剧按性格临场推。</div>
       <div style="display:grid;gap:6px">
@@ -375,7 +440,7 @@ function renderPane() {
         <textarea class="mid" id="f_sb_suspicion" placeholder="戒备高时：笑着套话，回答很圆，不把真话放表面……">${esc((c.stateBehavior || {}).suspicion || "")}</textarea>
       </div>
     </div>
-    <div class="field">
+    <div class="field" data-csec="state">
       <label>攻略起点（可留空）</label>
       <div style="display:flex;gap:10px;align-items:center">
         <select id="f_start_level" style="flex:1">
@@ -389,31 +454,31 @@ function renderPane() {
       </div>
       <div class="tip">她一开始就在哪一步。留空就是陌生人从第 0 级开始。无血缘妹妹这类可以选第 2 级、初始好感 12——一上来就是「熟」，不用从陌生人重新爬。初始好感留空就卡在这一级的门槛上。</div>
     </div>
-    <div class="field">
+    <div class="field" data-csec="state">
       <label>六级的叫法（可留空，逗号分隔）</label>
       <input type="text" id="f_level_names"
              placeholder="妹妹,依赖你的妹妹,会跟你撒娇的妹妹,只对你这样的妹妹"
              value="${esc((c.level_names || []).join(","))}">
       <div class="tip">覆盖默认的「${LEVEL_NAMES.join(" / ")}」。填几个算几个，没填的用默认名。骨科、青梅、同事这类关系直接在这里改叫法。</div>
     </div>
-    <div class="field">
+    <div class="field" data-csec="other">
       <label>参考图（可留空）</label>
       <input type="text" id="f_ref" value="${esc(c.referenceImage)}">
     </div>
-    <div class="field">
+    <div class="field" data-csec="other">
       <label style="display:flex;gap:8px;align-items:center;cursor:pointer">
         <input type="checkbox" id="f_hidden" ${(c.hidden ? "checked" : "")} style="width:16px;height:16px">
         <span>暂下架（不在选人列表和 QQ 名单出现；卡和数据都保留，取消勾选即恢复）</span>
       </label>
     </div>
-    <div class="field">
+    <div class="field" data-csec="state">
       <label style="display:flex;gap:8px;align-items:center;cursor:pointer">
         <input type="checkbox" id="f_preg" ${(c.pregnancyEnabled === false ? "" : "checked")} style="width:16px;height:16px">
         <span>启用怀孕玩法（仅成年角色）</span>
       </label>
       <div class="tip">默认开启。关掉后这条线不会记录内射，也不会有怀孕/孩子状态；新增非成年角色或不想玩这条线的卡，取消勾选。</div>
     </div>
-    <div class="field">
+    <div class="field" data-csec="look">
       <label>这张卡的默认聊天背景（留空就用上面的全局默认）</label>
       <div class="bg-edit">
         <div class="bg-thumb">${bgThumb}</div>
@@ -434,6 +499,23 @@ function renderPane() {
       <span class="spacer"></span>
       <button class="danger" onclick="del()">删除这张卡</button>
     </div>`;
+  pickCharTab("basic");
+}
+
+function pickCharTab(name) {
+  document.querySelectorAll("#pane [data-csec]").forEach(function (el) {
+    el.classList.toggle("on", el.dataset.csec === name);
+  });
+  document.querySelectorAll("#charTabs button").forEach(function (b) {
+    b.classList.toggle("on", b.dataset.ctab === name);
+  });
+}
+
+function toggleTips() {
+  var wrap = document.querySelector(".wrap");
+  wrap.classList.toggle("show-tips");
+  var b = $("btnTips");
+  if (b) b.textContent = wrap.classList.contains("show-tips") ? "收起说明" : "说明";
 }
 
 function collect() {
@@ -574,6 +656,7 @@ async function save() {
 
 $("btnNew").onclick = add;
 $("btnSave").onclick = save;
+$("btnTips").onclick = toggleTips;
 $("btnBgDefault").onclick = () => $("fileBgDefault").click();
 $("btnBgDefaultReset").onclick = resetDefaultBg;
 document.addEventListener("keydown", (e) => {
