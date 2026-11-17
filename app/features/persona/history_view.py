@@ -137,14 +137,13 @@ def trim(hist, limit=None):
 
 
 def cache_rows(hist):
-    """前缀缓存窗口：逐轮只追加，攒过 svc.HISTORY_CACHE_HIGH 才一次性砍回低水位。
+    """磁盘窗口：逐轮只追加，攒过 svc.HISTORY_CACHE_HIGH 才一次性砍回低水位。
 
-    返回的是**原始行**（带着 `seg` 等字段），既能送模型（外面再 `trim(...
-    , limit=len(win))` 做单条截断），也能原样落盘。两条路径必须走同一个函数：
-    落盘的内容要和上一轮发给模型的历史序列逐字节对得上，下一轮才接得上前缀。
+    2026-11-17 起它**不再参与模型请求**：写作 AI 固定只取最近 6 轮（12 条），
+    由 `turn.py` 里的 `trim(raw_hist)` 裁。这里保留 30 条只是给网页回看/小记
+    多留一点原文缓冲；真正全量的历史在归档里。
 
-    砍回那一次会断一次缓存，这是滞回的代价；换来的是其余 9 轮都能整段命中，
-    比每轮滑动（每轮都断）划算得多。
+    返回原始行（带 `seg`），落盘/回看用；模型只拿 `trim` 后的副本。
     """
     from app.features.persona import service as svc
 
@@ -153,37 +152,6 @@ def cache_rows(hist):
     if len(rows) > svc.HISTORY_CACHE_HIGH:
         rows = rows[-svc.HISTORY_LIMIT:]
     return rows
-
-
-def trim_chars(msgs, budget, min_rows=6):
-    """按总字数从最老的一头丢历史，保留最近几轮，且让开头落在用户消息上。
-
-    为什么按字数而不是条数：扮演回复长短差很大，一条 1,400 字的回复和
-    一条 60 字的「嗯」占的 token 完全不同。按条数截会让「6 轮」变成
-    8,000~9,000 token 的盲盒；按字数截才是真正的预算。
-
-    `min_rows` 是保底：预算再小也至少留最近 6 条（3 轮），避免刚聊两句
-    就只剩一句话。若最后一条自己就超预算，仍然保留它——空历史更糟。
-
-    只用于**送模型**的副本；落盘/归档仍走 `cache_rows`，一条不少。
-    """
-    rows = list(msgs or [])
-    if not rows or budget <= 0:
-        return rows
-    keep = max(0, min(len(rows), int(min_rows or 0)))
-    idx = len(rows) - keep
-    total = sum(len(str(m.get("content") or "")) for m in rows[idx:])
-    while idx > 0:
-        n = len(str(rows[idx - 1].get("content") or ""))
-        if total + n > budget:
-            break
-        idx -= 1
-        total += n
-    # 截出来的第一条如果是 assistant，说明它对应的用户消息被丢了；
-    # 从用户消息开始，模型看到的才是一组完整的「问 → 答」。
-    while idx < len(rows) and rows[idx].get("role") != "user":
-        idx += 1
-    return rows[idx:] or rows[-max(1, keep):]
 
 
 def _split_meta(text):

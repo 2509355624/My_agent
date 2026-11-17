@@ -483,18 +483,19 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     # 恒定块已在 system 头里，这里去掉重复的一份：它们本来每轮都按 miss 付。
     # tail 仍是最后一句，原话仍在最前，动态块的相对顺序一点没动。
     user_block = svc._strip_stable_notes(user_block)
-    # 前缀缓存滞回窗口（2026-11-10）：送模型的是**整段窗口**，不是 svc.trim 的
-    # 12 条。窗口起点逐轮不动，system 头 + 历史才能一整段命中；`svc.trim` 只用来
-    # 做单条截断（limit=窗口实际长度），不砍条数。编剧 / 打分器上面用的
-    # `hist` 仍是最近 12 条，行为一点没变。
+    # 写作 AI 固定最近 6 轮（12 条）——2026-11-17 用户拍板。
     #
-    # 2026-11-17 账单修正：历史并没有跟着 system 头命中，整段窗口按 miss 价重付。
-    # 所以渲染完再按总字数封顶，只留最近装得下的几轮；落盘仍是完整窗口。
-    win = svc.cache_rows(raw_hist)
+    # 为什么不保留 30 条滞回：真实账单里写作调用命中一直卡在 14,115 token
+    # （正好 system 头），历史 7,100 token 每轮按 miss 重付；历史并没有跟着
+    # 头一起进缓存。30 条只把 miss 越堆越高，没有换来缓存收益。
+    # 为什么不按 9000 字滑窗：按字数每轮重算，窗口起点会滑，反而更难解释、
+    # 更容易丢整轮。固定 12 条 + 每 5 轮小记，刚好覆盖 6 轮，不出现空档。
+    #
+    # 落盘/归档仍是长窗口（`cache_rows`），回看和小记一条不少；这里只裁
+    # **送模型**的副本。编剧 / 打分器上面用的 `hist` 也仍是最近 12 条。
     model_hist = svc._render_hist(
-        svc.trim(win, limit=len(win)), name=svc.char_name(card, key=key),
+        svc.trim(raw_hist), name=svc.char_name(card, key=key),
         alias=str((card or {}).get("name") or ""))
-    model_hist = svc.trim_chars(model_hist, svc.ACTOR_HISTORY_CHARS)
     msgs = ([{"role": "system", "content": head}] + model_hist
             + [{"role": "user", "content": user_block}])
     try:

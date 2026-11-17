@@ -242,21 +242,6 @@ class CacheWindowTest(unittest.TestCase):
         self.assertEqual(len(persona.trim(self._rows(20))),
                          persona.HISTORY_LIMIT)
 
-    def test_char_budget_keeps_newest_and_starts_on_user(self):
-        """按总字数截历史：从最老的一头丢，保留最近几轮，且开头必须是用户。"""
-        rows = []
-        for i in range(20):
-            rows.append({
-                "role": "user" if i % 2 == 0 else "assistant",
-                "content": ("字" * 1000) if i % 2 else ("问" * 100),
-            })
-        out = persona.trim_chars(rows, 6000, min_rows=6)
-        self.assertEqual(out[-1]["content"], rows[-1]["content"])
-        self.assertEqual(out[0]["role"], "user")
-        self.assertLessEqual(
-            sum(len(m["content"]) for m in out), 6000,
-            "按字数截完仍超预算：老历史会继续按 miss 价计费")
-
 
 class StableNotesTest(PersonaBase):
     """缓存 Phase B：恒定写法说明并进 system 头，末尾那份精确剔除。
@@ -713,13 +698,12 @@ class TurnTest(PersonaBase):
         last2 = m.call_args_list[3][0][0][-1]["content"]
         self.assertNotEqual(last1, last2, "两轮动态内容应不同")
 
-    def test_history_prefix_is_stable_across_turns(self):
-        """滞回窗口：上一轮的「system + 历史」必须原样出现在下一轮开头。
+    def test_actor_history_keeps_only_last_six_rounds(self):
+        """写作 AI 固定最近 6 轮（12 条）；落盘仍继续长窗口。
 
-        光有稳定的 system 头不够。历史每轮取 `[-12:]` 时，聊过 6 轮后最老
-        一条被踢掉、整段历史错位一位，前缀从那里起全 miss —— 账单里 hit
-        常年卡死在 15,104（正好是 system 头长度）就是这个原因。这里先垫满
-        12 条历史再连跑两轮，锁死「只追加、不滑动」。
+        2026-11-17 用户拍板：30 条/9000 字滑窗都退掉。真实账单里历史
+        7,100 token 每轮按 miss 重付，而命中只有 system 头；6 轮足够接住
+        当前场景，远端事实交给小记。
         """
         hist_key = self._hist_key()
         persona._save_hist(hist_key, [
@@ -732,46 +716,44 @@ class TurnTest(PersonaBase):
                                             score, "她退了半步。"]) as m:
             persona.run_turn(self.KEY, "我走了。", "private")
             persona.run_turn(self.KEY, "你别碰我。", "private")
-        # 每轮两次调用（[0] 编剧 / [1] 主回复），两轮共四次。
-        first = m.call_args_list[1][0][0][:-1]     # 去掉本轮那条动态玩家消息
-        second = m.call_args_list[3][0][0][:-1]
-        self.assertEqual(second[:len(first)], first,
-                         "历史窗口滑动了：上一轮的前缀被打散，缓存全 miss")
-        self.assertEqual(len(second), len(first) + 2,
-                         "两轮之间应只在尾巴追加一对 user/assistant")
-        # 落盘保留长窗口，下一轮才能接着这段前缀继续命中。
+        first = m.call_args_list[1][0][0][1:-1]    # 去掉 system 和本轮玩家消息
+        second = m.call_args_list[3][0][0][1:-1]
+        self.assertEqual(len(first), persona.HISTORY_LIMIT,
+                         "第一轮就多送了历史：6 轮窗口应是 12 条")
+        self.assertEqual(len(second), persona.HISTORY_LIMIT,
+                         "第二轮历史膨胀了：窗口没固定在 12 条")
+        self.assertEqual(second[0]["content"], "早轮2",
+                         "第二轮应从上一轮的第 3 条开始（整轮滑出，不切半条）")
+        self.assertIn("纱雾没松手", second[-1]["content"],
+                      "上一轮的回复应留在窗口里")
+        # 落盘仍按长窗口累积，回看/小记不依赖这 12 条。
         self.assertEqual(len(persona._load_hist(hist_key)),
                          persona.HISTORY_LIMIT + 4)
 
-    def test_actor_history_is_capped_by_char_budget(self):
-        """送写作 AI 的历史按总字数封顶，但落盘仍是完整长窗口。
-
-        2026-11-17 真实账单：system 头 1.5 万 token 已命中，贵的是后面
-        7,000 多 token 的历史。历史再长也不会进前缀缓存，所以只留最近
-        能装进预算的几轮；归档一条不少。
-        """
+    def test_actor_history_keeps_last_six_rounds_of_long_disk_window(self):
+        """磁盘有 30 条时，写作 AI 仍只拿最后 12 条，且从 user 开头。"""
         hist_key = self._hist_key()
         rows = []
-        # 28 条 + 本轮 2 条 = 30，正好到高水位，不会触发「砍回 12 条」；
-        # 这样落盘仍是 30 条，能验证送模型的那份才是被字数封顶的。
         for i in range(persona.HISTORY_CACHE_HIGH - 2):
             rows.append({
                 "role": "user" if i % 2 == 0 else "assistant",
-                "content": ("问" * 120) if i % 2 == 0 else ("回" * 1000),
+                "content": ("问%d" % i) if i % 2 == 0 else ("回%d" % i),
             })
         persona._save_hist(hist_key, rows)
         score = '{"intent": "neutral", "delta": 1, "turn_type": "chat"}'
         with mock.patch.object(persona.llm, "call_llm",
                                side_effect=[score, "她没松手。"]) as m:
             persona.run_turn(self.KEY, "我走了。", "private")
-        actor = m.call_args_list[1][0][0]
-        sent_hist = actor[1:-1]
-        self.assertLessEqual(
-            sum(len(x["content"]) for x in sent_hist),
-            persona.ACTOR_HISTORY_CHARS + 200,
-            "写作 AI 仍收到整段历史：每轮都会按 miss 价重付")
-        self.assertGreater(len(persona._load_hist(hist_key)), len(sent_hist),
-                           "落盘窗口被一起截短了，归档/回看会丢内容")
+        sent_hist = m.call_args_list[1][0][0][1:-1]
+        self.assertEqual(len(sent_hist), persona.HISTORY_LIMIT,
+                         "30 条磁盘窗口没有被裁到 6 轮")
+        self.assertEqual(sent_hist[0]["role"], "user",
+                         "窗口开头必须是用户消息，不能从 assistant 半轮开始")
+        self.assertEqual(sent_hist[-1]["content"], "回27",
+                         "最后一条应是上一轮回复")
+        # 28 条 + 本轮 2 条 = 正好 30，落盘不砍，回看一条不少。
+        self.assertEqual(len(persona._load_hist(hist_key)),
+                         persona.HISTORY_CACHE_HIGH)
 
     def test_scene_line_is_split_out_of_the_reply(self):
         """模型顺手写的那行「画面：」要剥出来：正文发回去，标签拿去出图。
