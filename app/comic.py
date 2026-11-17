@@ -1099,7 +1099,7 @@ def discard_numbered_images(task_dir, no, kinds=("raw", "final")):
     删不掉只警告、不拦住重跑；返回删掉的相对路径列表，给日志用。
     """
     no = str(no).strip().zfill(2)
-    from app import comic_thumb          # 函数内 import，避开加载期循环
+    from app.features.comic import thumb as comic_thumb          # 函数内 import，避开加载期循环
     paths = []
     for kind in kinds:
         if kind == "raw":

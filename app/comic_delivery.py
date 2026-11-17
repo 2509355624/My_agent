@@ -300,7 +300,7 @@ def spawn_notify(task_dir, qq, kind="comic"):
     """后台线程做完成通知 + 预热缩略图（用户马上要回网页逐张检查）。"""
     def _run():
         try:
-            from app import comic_thumb
+            from app.features.comic import thumb as comic_thumb
             comic_thumb.ensure_all(task_dir)
         except Exception:
             pass
@@ -320,7 +320,7 @@ def spawn_auto(task_dir, qq):
     """
     def _run():
         try:
-            from app import comic_thumb
+            from app.features.comic import thumb as comic_thumb
             comic_thumb.ensure_all(task_dir)
         except Exception:
             pass

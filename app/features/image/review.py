@@ -74,7 +74,7 @@ def thumb_for(name):
     thumb_dir = os.path.join(REVIEW_DIR, THUMB_SUBDIR)
     dst = os.path.join(thumb_dir, os.path.splitext(safe)[0] + ".webp")
     try:
-        from app import comic_thumb
+        from app.features.comic import thumb as comic_thumb
         made = comic_thumb.ensure_file(src, dst, edge=THUMB_EDGE)
         return made or ""
     except Exception as exc:
