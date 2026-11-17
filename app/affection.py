@@ -2825,7 +2825,7 @@ def settle(line_key, score, game_day=None):
 
     # 成就（2026-11-04）：只认确定性事实，判定在 `achievements` 里。
     # 放在最后——升级、结局、越界次数这一刻才都定下来了。
-    from app import achievements
+    from app.features.persona import achievements
     fresh = achievements.check(rec, res, cfg, _card_of(line_key))
     if fresh:
         achievements.mark(rec, fresh)
@@ -3669,7 +3669,7 @@ def detail_nodes(line_key):
     # 每次都写「成就 0/12」等于提醒玩家「你还没解锁」，是负担不是奖励。
     got = [a for a in (rec.get("ach") or []) if isinstance(a, dict)]
     if got:
-        from app import achievements
+        from app.features.persona import achievements
         rows += ["", "🏅 成就 %d 个（发「成就」看全部）" % len(got)]
         for a in got[-3:]:
             # 名字要跟着这张卡的叫法走——同名成就换张卡就不一样了
@@ -3692,7 +3692,7 @@ def achievement_nodes(line_key):
     rec = record_of(_entry(line_key))
     if not rec:
         return None
-    from app import achievements
+    from app.features.persona import achievements
     return [achievements.nodes(rec, load_config(), _card_of(line_key))]
 
 
