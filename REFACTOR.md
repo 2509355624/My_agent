@@ -57,7 +57,16 @@
 
 更现实的总量：**分阶段重构约 2–4 个月（按每天能投入的时长浮动）**，不是一两周能“清爽”的工程。先把边界和兼容层做出来，收益最快。
 
-## 四、推荐方案：绞杀者式重构，不推倒重写
+## 四、框架决策（2026-11-17）
+
+**继续用 Flask，做模块化单体；现在不换 Django。**
+
+- 现状主体是常驻 Agent + 后台生图/漫画任务 + QQ 机器人 + 两个网关，不是 CRUD 网站。Django 的 ORM/admin 有 value，但不会自动解决 God 模块和进程拓扑。
+- 参考 `dj-tianqi` 只借分层：settings 分环境、views 只做 HTTP、services 放业务、repositories 管存储；不借“换框架”。
+- 以后要数据库，用 SQLAlchemy 2.0 + Alembic 渐进接入；要做复杂后台，可以另起一个 Django 管理面服务共享数据库，不替换运行时。
+- 完整目标目录、依赖规则、部署形态、迁移顺序见 [`docs/architecture.md`](docs/architecture.md)。
+
+## 五、推荐方案：绞杀者式重构，不推倒重写
 
 原则：
 
@@ -66,22 +75,27 @@
 3. 每个模块单独提交，提交前跑同一组测试并对比红项清单。
 4. 不在重构分支里顺手改业务逻辑。
 
-目标结构（先骨架，后搬家）：
+目标结构（先骨架，后搬家；完整版见 `docs/architecture.md`）：
 
 ```text
 app/
-  core/          # config、logsetup、cancel、usage、路径
-  infra/         # comfy、llm、qq_api、image_jobs、存储
-  domain/        # persona、comic、novel、gallery、card
-  features/      # 各功能的 service / api
-  main.py        # 只做装配，不写业务
+  bootstrap.py   # create_app(profile)
+  core/          # config、路径、日志、安全、错误
+  features/      # chat / image / comic / persona / rag / novel / card / qq / admin
+  gateways/      # 5175 群友网关、5176 管理网关
+  integrations/  # comfy / llm / qq / volc
+  persistence/   # json_store / job_ledger / db / migrations
+  workers/       # 生图、漫画、看门狗
+  web/           # 页面路由与静态挂载
 tests/
   unit/
   integration/
-  web/
-  legacy/        # 暂时保留旧测试，跑通后再迁
+  contract/
+  e2e/
 tools/
-  archive/       # 根目录诊断脚本、一次性 probe
+  legacy/
+  generators/
+  ops/
 ```
 
 ### 阶段
@@ -102,23 +116,30 @@ tools/
 - 同样处理 `logsetup`、`cancel`、`usage`。
 - 83 个 import `config` 的模块一个都不改，先让兼容层生效。
 
-**阶段 3：拆基础设施（高风险）**
-- 顺序：`llm` → `qq_api` → `image_jobs` → `tools/skills`。
-- 每个模块先抽接口，再搬家，旧模块保留薄壳。
-- 每步跑对应测试 + 一组跨模块冒烟（生成、对话、漫画、画廊）。
+**阶段 3：入口与网关（中风险）**
+- `admin_app.py` 主体移到 `app/gateways/admin_gateway.py`，根文件只留 `run()`。
+- `friend_app.py` 同理。
+- 两个网关补 contract test：登录、转发、CF 头剔除、限流。
 
-**阶段 4：拆入口与业务大模块**
-- `main.py` 按路由/功能拆 blueprint 或子应用，`main` 只装配。
-- `qq_bot` 按消息类型拆 handler。
-- `direct_gen`、`persona` 按“生成/记忆/计费/出图”拆服务。
+**阶段 4：拆 `main.py`（高风险）**
+- `main.py` 现在 89 条路由，按前缀拆 blueprint：chat、image、persona、comic、页面。
+- 每拆一组，旧 URL 和返回结构不变；`main.py` 最终只做装配。
 - 这一步才动业务文件，前面阶段不要提前做。
 
-**阶段 5：测试与清理**
-- 旧测试保持可运行，新增测试按模块放。
-- 兼容层没有调用者后删除。
-- 最后再统一命名、目录和文档。
+**阶段 5：God 模块变包**
+- `persona.py`、`direct_gen.py`、`affection.py`、`comic_agent.py`、`image_jobs.py`、`qq_bot.py` 先变成同名包，`__init__.py` 原样 re-export，调用方不用改。
+- 再按会话/计费/记忆/提示词/出图拆内部文件。
 
-## 五、运行注意事项
+**阶段 6：测试分组与 CI**
+- 旧测试保持可运行，新增测试按 `unit/integration/contract/e2e` 放。
+- 加 CI：结构守卫 + 入口编译 + 手机端冒烟 + 新增单测。
+- 兼容层没有调用者后删除。
+
+**阶段 7：数据库**
+- SQLAlchemy 2.0 + Alembic，先接 `job_ledger` / `usage`，再评估图片与漫画。
+- repository 双读写，对账后再切读，不一次性搬完所有 JSON 状态。
+
+## 六、运行注意事项
 
 新工作树不含被 `.gitignore` 忽略的运行数据。需要联调时，从旧目录复制这些**本机私有**内容，但不要提交：
 
@@ -130,15 +151,16 @@ tools/
 - `config/` 里被忽略的私有配置
 - `models/`（体积大，按需软链接或复制）
 
-## 六、对应 Skill
+## 七、对应 Skill
 
 - 代码重构流程用 `coding-playbook`：走“重构 → TDD → verification”这条，不靠即兴改。
 - 架构分析用 `coding-playbook/references/repo-qa-evidence.md`，本次数据就是按它的证据口径统计的。
 - 目前没有专门的“Python 单体架构重构”Skill；`impeccable` / `unslop` / `modern-web-guidance` 都只管前端视觉，不管后端架构。若以后要固化本项目重构规范，可用 `skill-creator-for-work` 写一个仓库专用 Skill。
 
-## 七、下一步（建议按顺序）
+## 八、下一步（建议按顺序）
 
 1. 在新分支跑一次全量测试，保存红项清单作为基线。
-2. 只做阶段 1：根目录脚本分类，不动 `app/`。
-3. 建 `app/core` 和 `config` 兼容层，先验证 83 个调用点不受影响。
-4. 再决定是否继续拆 `llm` / `image_jobs`。
+2. 建 `app/core` 和 `config` 兼容层，先验证 83 个调用点不受影响。
+3. 再拆两个网关和 `main.py` 路由。
+4. `persona` / `direct_gen` / `image_jobs` 变包后再拆内部。
+5. 最后接 SQLAlchemy + Alembic。

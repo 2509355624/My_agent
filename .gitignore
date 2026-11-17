@@ -64,8 +64,7 @@ logs/
 # 排查问题时的本地残留：诊断脚本、diff 转储、临时抓的 stdout/stderr。
 # 都带 `_` 前缀或固定名，跑完就该删；万一忘了也不该被顺手提交进来。
 _local*
-_test*
-# qwen 分辨率×步数对照的本地harness（脚本 + 几十 MB 出图，属本机临时件）
+_test*# qwen 分辨率×步数对照的本地harness（脚本 + 几十 MB 出图，属本机临时件）
 _qwen*
 # 本地识图模型的探针与它生成的测试图（属本机临时件）
 _vision*
@@ -108,3 +107,6 @@ dist/
 
 # 本地重排模型权重（~1GB，不进仓库；从 ModelScope 下载）
 models/
+
+# 第三方前端规范仓库（clone 下来查阅，不参与运行；避免作为嵌入式仓库提交）
+tools/modern-web-guidance/

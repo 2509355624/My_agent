@@ -21,6 +21,23 @@
 | `napcat_qr.py` | 运维：QQ 协议端登录 |
 | `restart_servers.py` | 运维：手动重启 |
 
+## 前端规范（Modern Web Guidance）
+
+`tools/modern-web-guidance/` 是 Google Chrome 团队的规范仓库，clone 下来只用于查资料和跑 CLI，不参与运行，也不进 git。
+
+```powershell
+# 首次拉取
+git clone --depth 1 https://github.com/GoogleChrome/modern-web-guidance.git tools/modern-web-guidance
+
+# 查某个 UI 能力
+npx -y modern-web-guidance@latest search "responsive navigation drawer" --skill-version 2026_11_10-47b4c80e
+
+# 取完整指南
+npx -y modern-web-guidance@latest retrieve "navigation-drawer"
+```
+
+改 HTML/CSS/客户端 JS 前先查，不要凭训练记忆写上一代写法。
+
 ## 约定
 
 1. 新增一次性脚本放 `tools/legacy/`，文件名仍可用 `_` 前缀。

@@ -1,5 +1,7 @@
 # 个人 Agent（agent_my_test）
 
+> 重构分支的目标架构、目录边界与迁移顺序：见 [`docs/architecture.md`](docs/architecture.md)。
+
 跑在本机的个人 AI 助手平台：**Flask Web UI + 自研文本工具协议 + 多模型路由 +
 本地向量知识库 + Skill 体系 + ComfyUI 生图 + 漫画工作台 + QQ 机器人**。
 
