@@ -1765,12 +1765,42 @@ function openShowcase() {
   });
 }
 
-// 画廊在 5175 网关（本页是 5174），端口写死在这里：
-// 用当前访问的主机名，手机连局域网时也能点开，不会被 127.0.0.1 锁死。
+// 画廊在 5175 网关（本页是 5174）。隧道重启会换随机域名，
+// 所以和公开展示页一样，每次点击都先问后端要当前地址，别写死上一次的域名。
+// 后端没地址或拿到的不是 https 时，再退回本机 5175。
 function openFriendPage(path) {
-  const host = location.hostname || '127.0.0.1';
-  const proto = location.protocol === 'https:' ? 'https:' : 'http:';
-  window.open(proto + '//' + host + ':5175' + path, '_blank');
+  function localUrl() {
+    const host = location.hostname || '127.0.0.1';
+    const proto = location.protocol === 'https:' ? 'https:' : 'http:';
+    return proto + '//' + host + ':5175' + path;
+  }
+  const win = window.open('about:blank', '_blank');
+  if (!win) {
+    window.location.href = localUrl();
+    return;
+  }
+  function go(url) {
+    try { win.location.replace(url); }
+    catch (e) { window.location.href = url; }
+  }
+  function localFallback() {
+    go(localUrl());
+  }
+  fetch('/api/friend_url', {
+    cache: 'no-store',
+    headers: { 'Accept': 'application/json' }
+  }).then(function(r) {
+    return r.ok ? r.json() : null;
+  }).then(function(d) {
+    let target = null;
+    if (d && d.ok && typeof d.url === 'string') {
+      try {
+        const u = new URL(d.url);
+        if (u.protocol === 'https:') target = u.origin + path;
+      } catch (e) {}
+    }
+    target ? go(target) : localFallback();
+  }).catch(localFallback);
 }
 
 function toggleSidebar() {
