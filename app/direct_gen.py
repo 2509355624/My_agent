@@ -2486,7 +2486,7 @@ def _prefetch_search(text):
         return ""
 
     try:
-        from app import search_agent
+        from app.features.chat import search_agent
         out = search_agent.search(text) or ""
     except Exception:
         log.exception("[direct] 前置搜索失败，按无资料继续")

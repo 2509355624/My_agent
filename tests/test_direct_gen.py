@@ -3745,7 +3745,7 @@ class SearchHookTest(unittest.TestCase):
 
         ⚠️ `search_agent.search` 必须 mock —— 它走 LLM，用例里绝不出网。
         """
-        from app import search_agent
+        from app.features.chat import search_agent
 
         def fake(need):
             if boom:
@@ -3814,7 +3814,7 @@ class SearchHookTest(unittest.TestCase):
 
     def test_disabled_flag_skips_search_entirely(self):
         with mock.patch.object(direct_gen, "SEARCH_ENABLED", False):
-            from app import search_agent
+            from app.features.chat import search_agent
             with mock.patch.object(search_agent, "search") as m_search:
                 out = direct_gen._prefetch_search("画个胡桃")
         m_search.assert_not_called()
@@ -3856,7 +3856,7 @@ class DocSingleSourceTest(unittest.TestCase):
         self.addCleanup(p.stop)
 
     def test_extract_output_never_reaches_the_doc(self):
-        from app import search_agent
+        from app.features.chat import search_agent
         from app.tools.normal import search_tags
 
         with mock.patch.object(
@@ -3870,12 +3870,12 @@ class DocSingleSourceTest(unittest.TestCase):
         self.assertNotIn("连衣裙", out)
 
     def test_empty_agent_answer_gives_empty_doc(self):
-        from app import search_agent
+        from app.features.chat import search_agent
         with mock.patch.object(search_agent, "search", return_value=""):
             self.assertEqual(direct_gen._prefetch_search("画个胡桃"), "")
 
     def test_total_length_is_capped(self):
-        from app import search_agent
+        from app.features.chat import search_agent
         with mock.patch.object(search_agent, "search",
                                return_value="乙" * 5000):
             out = direct_gen._prefetch_search("画个胡桃")

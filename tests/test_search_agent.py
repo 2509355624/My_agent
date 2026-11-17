@@ -17,7 +17,7 @@
 import unittest
 from unittest import mock
 
-from app import search_agent as sa
+from app.features.chat import search_agent as sa
 
 
 class _Base(unittest.TestCase):
