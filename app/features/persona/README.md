@@ -11,5 +11,6 @@
 状态：`billing.py`（原 `persona_billing.py`）、`adult.py`（原
 `affection_v2_adult.py`）、`rag.py`（原 `persona_rag.py`）、`pregnancy.py`（原
 `pregnancy.py`）、`items.py`（原 `items.py`）、`achievements.py`（原
-`achievements.py`）、`writing_style.py`（原 `writing_style.py`）已迁入并接线；
-`persona.py` 仍是 441 KB God 文件，冻结增长，按“人设/记忆/计费/查看台”拆，不整文件搬。
+`achievements.py`）、`writing_style.py`（原 `writing_style.py`）、`galgame.py`（原
+`galgame.py`）已迁入并接线；`persona.py` 仍是 441 KB God 文件，冻结增长，按
+“人设/记忆/计费/查看台”拆，不整文件搬。

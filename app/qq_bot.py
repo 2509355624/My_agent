@@ -42,7 +42,8 @@ except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
 from app.features.qq import status as qq_status
-from app import (confirm_gate, direct_gen, galgame, image_jobs,
+from app.features.persona import galgame
+from app import (confirm_gate, direct_gen, image_jobs,
                  lora_bot, play_bot, solo_bot,
                  interject,
                  logsetup,

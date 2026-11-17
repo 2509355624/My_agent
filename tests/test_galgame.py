@@ -17,7 +17,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from app import galgame
+from app.features.persona import galgame
 
 
 def _reply(say="她把素描本抱得更紧了一点。「……嗯。」", facts=None, aff=0,
