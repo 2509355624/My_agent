@@ -5,6 +5,7 @@
 """
 
 import unittest
+from pathlib import Path
 
 from app.features.control.panel import create_app
 from app.features.control.specs import default_specs, status_color, status_label
@@ -117,6 +118,15 @@ class SpecsTest(unittest.TestCase):
         self.assertTrue(specs["agent"].autostart)
         self.assertFalse(specs["watchdog"].autostart)
         self.assertFalse(specs["comfyui"].autostart)
+
+    def test_launcher_does_not_depend_on_system32_in_path(self):
+        bat = (Path(__file__).resolve().parents[1] / "启动控制台.bat").read_text(
+            encoding="utf-8")
+        self.assertIn("%SYS32%\\netstat.exe", bat)
+        self.assertIn("%SYS32%\\findstr.exe", bat)
+        self.assertIn("PING.EXE", bat)
+        self.assertNotIn("timeout /t", bat.lower())
+        self.assertNotIn("netstat -ano 2>nul | findstr", bat)
 
     def test_status_colors_are_three_state(self):
         self.assertEqual("green", status_color("running"))

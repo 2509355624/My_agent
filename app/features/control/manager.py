@@ -22,16 +22,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 try:
-  import psutil
+    import psutil
 except ImportError:  # pragma: no cover - 项目环境已装，缺了也能降级跑
-  psutil = None
+    psutil = None
 
 from app.features.control.specs import ROOT, ServiceSpec, default_specs, status_color, status_label
 
 log = logging.getLogger("control")
 
 QQ_EXE = Path(r"D:\APP\qq\QQ.exe")
+_SYS32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _sys_tool(name: str) -> str:
+    """系统命令走全路径，别依赖 PATH（有些 cmd 环境里 System32 不在 PATH）。"""
+    path = _SYS32 / name
+    return str(path) if path.is_file() else name
 
 
 @dataclass
@@ -77,6 +84,11 @@ class ServiceManager:
     def start(self, sid: str) -> dict:
         spec = self._need(sid)
         with self._lock:
+            # 先刷新一次：外部刚起来的服务可能端口已通，但状态还停在 stopped；
+            # 不刷新就直接 start 会多起一个实例。
+            self._refresh_locked()
+            if self._busy(sid):
+                return {"ok": True, "status": self._states[sid].status, "busy": True}
             if self._states[sid].status in ("running", "waiting", "starting", "restarting"):
                 return {"ok": True, "status": self._states[sid].status, "noop": True}
             self._states[sid].status = "starting"
@@ -88,6 +100,8 @@ class ServiceManager:
         """重启：先停旧进程树，再起新的；接口立刻返回，黄灯由 worker 推进。"""
         spec = self._need(sid)
         with self._lock:
+            if self._busy(sid):
+                return {"ok": True, "status": self._states[sid].status, "busy": True}
             self._states[sid].status = "restarting"
             self._states[sid].detail = "重启中"
             self._states[sid].restarts += 1
@@ -97,6 +111,8 @@ class ServiceManager:
     def stop(self, sid: str) -> dict:
         spec = self._need(sid)
         with self._lock:
+            if self._busy(sid):
+                return {"ok": True, "status": self._states[sid].status, "busy": True}
             if self._states[sid].status in ("stopped", "stopping"):
                 return {"ok": True, "status": "stopped", "noop": True}
             self._states[sid].status = "stopping"
@@ -108,6 +124,8 @@ class ServiceManager:
         """全部重启：按依赖顺序逐个发起，前端统一看黄灯。"""
         with self._lock:
             for spec in self._order:
+                if self._busy(spec.id):
+                    continue
                 self._states[spec.id].status = "restarting"
                 self._states[spec.id].detail = "重启中"
                 self._states[spec.id].restarts += 1
@@ -117,51 +135,11 @@ class ServiceManager:
     # ── worker ─────────────────────────────────────────
 
     def _start_worker(self, spec: ServiceSpec):
-        try:
-            if spec.ensure_qq:
-                self._ensure_qq()
-            proc, handles = self._spawn(spec)
-            with self._lock:
-                self._procs[spec.id] = proc
-                self._logs[spec.id] = handles
-                self._states[spec.id].pid = proc.pid
-                self._states[spec.id].started_at = time.time()
-                self._states[spec.id].status = "starting"
-                self._states[spec.id].detail = "启动中"
-                self._write_control_pid(spec, proc.pid)
-            status, detail = self._wait_ready(spec, proc)
-            with self._lock:
-                self._states[spec.id].status = status
-                self._states[spec.id].detail = detail
-                self._states[spec.id].pid = proc.pid if proc.poll() is None else None
-        except Exception as e:                              # noqa: BLE001
-            with self._lock:
-                st = self._states[spec.id]
-                st.status = "error"
-                st.detail = "启动失败"
-                st.last_error = "%s: %s" % (type(e).__name__, e)
-                st.pid = None
-            log.warning("启动 %s 失败：%s", spec.id, e)
+        self._launch(spec, "启动失败")
 
     def _restart_worker(self, spec: ServiceSpec):
         try:
             self._stop_sync(spec)
-            if spec.ensure_qq:
-                self._ensure_qq()
-            proc, handles = self._spawn(spec)
-            with self._lock:
-                self._procs[spec.id] = proc
-                self._logs[spec.id] = handles
-                self._states[spec.id].pid = proc.pid
-                self._states[spec.id].started_at = time.time()
-                self._states[spec.id].status = "starting"
-                self._states[spec.id].detail = "启动中"
-                self._write_control_pid(spec, proc.pid)
-            status, detail = self._wait_ready(spec, proc)
-            with self._lock:
-                self._states[spec.id].status = status
-                self._states[spec.id].detail = detail
-                self._states[spec.id].pid = proc.pid if proc.poll() is None else None
         except Exception as e:                              # noqa: BLE001
             with self._lock:
                 st = self._states[spec.id]
@@ -169,7 +147,37 @@ class ServiceManager:
                 st.detail = "重启失败"
                 st.last_error = "%s: %s" % (type(e).__name__, e)
                 st.pid = None
-            log.warning("重启 %s 失败：%s", spec.id, e)
+            log.warning("停止 %s 失败，未重启：%s", spec.id, e)
+            return
+        self._launch(spec, "重启失败")
+
+    def _launch(self, spec: ServiceSpec, fail_label: str):
+        """起进程并等就绪；启动和重启共用，避免两份几乎一样的代码。"""
+        try:
+            if spec.ensure_qq:
+                self._ensure_qq()
+            proc, handles = self._spawn(spec)
+            with self._lock:
+                self._procs[spec.id] = proc
+                self._logs[spec.id] = handles
+                self._states[spec.id].pid = proc.pid
+                self._states[spec.id].started_at = time.time()
+                self._states[spec.id].status = "starting"
+                self._states[spec.id].detail = "启动中"
+                self._write_control_pid(spec, proc.pid)
+            status, detail = self._wait_ready(spec, proc)
+            with self._lock:
+                self._states[spec.id].status = status
+                self._states[spec.id].detail = detail
+                self._states[spec.id].pid = proc.pid if proc.poll() is None else None
+        except Exception as e:                              # noqa: BLE001
+            with self._lock:
+                st = self._states[spec.id]
+                st.status = "error"
+                st.detail = fail_label
+                st.last_error = "%s: %s" % (type(e).__name__, e)
+                st.pid = None
+            log.warning("%s %s：%s", fail_label, spec.id, e)
 
     def _stop_worker(self, spec: ServiceSpec):
         try:
@@ -279,7 +287,7 @@ class ServiceManager:
 
     @staticmethod
     def _taskkill(pid: int, tree: bool):
-        cmd = ["taskkill", "/PID", str(pid), "/F"]
+        cmd = [_sys_tool("taskkill.exe"), "/PID", str(pid), "/F"]
         if tree:
             cmd.insert(3, "/T")
         try:
@@ -497,7 +505,7 @@ class ServiceManager:
             except Exception:                                # noqa: BLE001
                 pass
         try:
-            out = subprocess.run(["netstat", "-ano"], capture_output=True,
+            out = subprocess.run([_sys_tool("netstat.exe"), "-ano"], capture_output=True,
                                  text=True, timeout=15, encoding="utf-8",
                                  errors="replace").stdout
         except Exception:                                    # noqa: BLE001
@@ -546,6 +554,10 @@ class ServiceManager:
         t = threading.Thread(target=self._run_thread, args=(sid, fn), daemon=True)
         self._threads[sid] = t
         t.start()
+
+    def _busy(self, sid: str) -> bool:
+        old = self._threads.get(sid)
+        return old is not None and old.is_alive()
 
     def _run_thread(self, sid: str, fn):
         try:

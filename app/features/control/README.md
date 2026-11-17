@@ -38,6 +38,10 @@
 启动控制台.bat
 ```
 
+入口脚本里的 `netstat`、`findstr`、`ping` 都走 `%SystemRoot%\System32` 全路径，
+不用 PATH；有些 cmd 环境没有 System32，裸命令会让批处理直接以 255 闪退。
+等待用 `ping` 而不是 `timeout`：`timeout` 在无控制台/重定向输入时会直接报错退出。
+
 或：
 
 ```bat
