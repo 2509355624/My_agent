@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 
 from app import agents as agent_store
-from app import interject
+from app.features.chat import interject
 from app import qq_bot
 from app.features.qq import names as qq_names
 
