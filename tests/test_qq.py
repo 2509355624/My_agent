@@ -1498,6 +1498,46 @@ class DeliverTest(unittest.TestCase):
         rec.assert_not_called()
 
 
+class EmptyTurnFallbackTest(unittest.TestCase):
+    """2026-11-15：整轮一个字都没说时必须补一句。
+
+    用户原话「大大怪必须有回应的，不然我觉得出 bug 了怎么不回复」。
+    触发源是主模型连续返回 200 空正文——`agent.py` 的 `[llm-empty]` 原地重试
+    两次后 break，本轮没有任何正文，而 `_deliver` 见 reply 为空就什么都不发。
+    """
+
+    def test_silent_turn_gets_a_fallback(self):
+        self.assertTrue(qq_bot._needs_empty_fallback("", False, "", [], False))
+
+    def test_whitespace_only_counts_as_silent(self):
+        self.assertTrue(
+            qq_bot._needs_empty_fallback("  \n\t ", False, "", [], False))
+
+    def test_real_reply_is_left_alone(self):
+        self.assertFalse(
+            qq_bot._needs_empty_fallback("画好了", False, "", [], False))
+
+    def test_tool_speech_is_not_overwritten(self):
+        self.assertFalse(qq_bot._needs_empty_fallback("", True, "", [], False))
+
+    def test_receipt_speech_is_not_overwritten(self):
+        self.assertFalse(
+            qq_bot._needs_empty_fallback("", False, "图在跑了", [], False))
+
+    def test_images_are_a_reply_by_themselves(self):
+        self.assertFalse(
+            qq_bot._needs_empty_fallback("", False, "", ["a.png"], False))
+
+    def test_voluntary_turn_stays_silent(self):
+        """主动接话轮没话说就是不说，别去刷存在感。"""
+        self.assertFalse(qq_bot._needs_empty_fallback("", False, "", [], True))
+
+    def test_fallback_text_is_short_and_not_empty(self):
+        text = qq_bot._EMPTY_TURN_REPLY.strip()
+        self.assertTrue(text)
+        self.assertLessEqual(len(text), 20)
+
+
 # ─── 主动发送工具 ───────────────────────────────────
 
 class SendQqMessageToolTest(unittest.TestCase):
