@@ -27,8 +27,9 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.features.comic import portrait as comic_portrait
+from app.features.comic import render_opts as comic_render_opts
 from app import (comic, comic_agent, comic_api,
-                 comic_render_opts, image_jobs, main)
+                 image_jobs, main)
 
 GOOD_SCRIPT = "# 标题：测试\n\n## 01\n画面: 1girl, solo, pov\n气泡: 一\n标签1: 她站在门口\n"
 
@@ -153,7 +154,7 @@ class ComicScriptApiTest(unittest.TestCase):
 
     def test_free_uses_silver_once_without_fix(self):
         """free 走 silver 一次 API，不能再调用旧编剧或补正。"""
-        with mock.patch("app.silver_comic.write_script_detail",
+        with mock.patch("app.features.comic.silver_comic.write_script_detail",
                         return_value=SILVER_DETAIL) as s, \
                 mock.patch.object(comic_agent, "write_script") as w, \
                 mock.patch.object(comic_agent, "fix_script") as f:
@@ -171,7 +172,7 @@ class ComicScriptApiTest(unittest.TestCase):
 
     def test_third_is_same_silver_route(self):
         """third 只是旧名称，实际与 free 共用 silver 路线。"""
-        with mock.patch("app.silver_comic.write_script_detail",
+        with mock.patch("app.features.comic.silver_comic.write_script_detail",
                         return_value=SILVER_DETAIL) as s, \
                 mock.patch.object(comic_agent, "fix_script") as f:
             d = self._post(panels=1, pov_mode="third")
@@ -186,7 +187,7 @@ class ComicScriptApiTest(unittest.TestCase):
         这里原来写死 `min(30, panels)`，界面填 50 也会被悄悄截成 30 格剧本——
         格数对不上，后面每一格都会跟剧本错位。
         """
-        with mock.patch("app.silver_comic.write_script_detail",
+        with mock.patch("app.features.comic.silver_comic.write_script_detail",
                         return_value=SILVER_DETAIL) as s:
             d = self._post(panels=50, pov_mode="free")
             self._wait(d["job"])
@@ -223,7 +224,7 @@ class ComicScriptApiTest(unittest.TestCase):
 
     def test_third_mode_is_persisted(self):
         """third 使用 silver 后仍要把模式落盘，供后续任务 UI 识别。"""
-        with mock.patch("app.silver_comic.write_script_detail",
+        with mock.patch("app.features.comic.silver_comic.write_script_detail",
                         return_value=SILVER_DETAIL):
             d = self._post(panels=1, pov_mode="third")
             self._wait(d["job"])

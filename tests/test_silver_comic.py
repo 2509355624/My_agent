@@ -8,7 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import silver_comic
+from app.features.comic import silver_comic
 
 
 class SilverParseTest(unittest.TestCase):
