@@ -2412,7 +2412,7 @@ def _enqueue_comic(comic, text):
     剧本、整批后台渲染、回执直发都在里面），不在这儿重写一遍。
     """
     from app.tools.normal import generate_comic as gc
-    from app import comic_story
+    from app.features.comic import story as comic_story
     brief = (comic.get("brief") or "").strip()
     if not brief:
         return "漫画这条我没看清要画什么故事，把剧情再说一次。"

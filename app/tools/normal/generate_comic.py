@@ -17,7 +17,8 @@ style 由 `direct_gen` 从原话判定后透传（QQ 侧），工具路径默认
 
 import logging
 
-from app import comic_story, image_jobs
+from app.features.comic import story as comic_story
+from app import image_jobs
 from app.tools.normal import generate_image as gi
 
 log = logging.getLogger("tool.comic")

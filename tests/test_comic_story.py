@@ -1,4 +1,4 @@
-"""连续小漫画（app/comic_story.py + tools/normal/generate_comic.py）的契约测试。
+"""连续小漫画（app/features/comic/story.py + tools/normal/generate_comic.py）的契约测试。
 
 覆盖：解析（固定块 + `---` 动态块）、组装、格数收敛、编剧校验/回炉、
 后台**整批**渲染的提交形态、漫画渠道的内部性、工具参数形态。LLM 与队列
@@ -12,7 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from app import comic_story
+from app.features.comic import story as comic_story
 
 
 VALID = """hatsune_miku, blue_hair, twintails, aqua_eyes, hair_ribbon
