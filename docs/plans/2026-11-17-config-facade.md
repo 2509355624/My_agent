@@ -1,5 +1,8 @@
 # 2026-11-17 config 兼容层
 
+> 状态：**已被 `2026-11-17-config-split.md` 取代**。本文记录第一步 facade 的决策与回滚点；
+> `paths` / `env` 已从旧 `app/config.py` 拆出，后续按域继续拆。
+
 ## 目标
 
 建立 `app/core/config.py` 作为新的公开入口；旧 `app/config.py` 继续作为实现，

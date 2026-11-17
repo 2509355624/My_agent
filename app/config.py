@@ -4,75 +4,19 @@
 """
 
 import os
-import sys
-import tempfile
 
-from dotenv import load_dotenv
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ROOT_DIR = BASE_DIR
-
-# ─── state/ 路径与测试隔离 ───────────────────────────
-# state/ 下都是**运行期真实数据**（生图账本、群名缓存…），测试跑一遍不能往里
-# 写假数据。原先靠各测试文件自己 patch 模块里的 PATH，但总有人忘：2026-10-03
-# 实测跑一次全量测试就把 state/qq_names.json 又覆盖成夹具内容、往
-# state/image_log.jsonl 灌了一行 "a cat" 假记录（累计已 80 行）。
-#
-# 测试隔离：原先与 app/usage.py 一样靠 sys.modules 判定，2026-11-06 起改成
-# 只认进程入口（见 _is_test_process）。测试里**显式** patch 模块的 PATH 仍然
-# 优先——调用点读的始终是模块属性，不经过这里。
-_TEST_STATE_DIR = None
-
-
-def _is_test_process():
-    """是不是「测试 runner 拉起来」的进程。
-
-    2026-11-06 修：原判据直接看 `sys.modules` 里有没有 unittest / pytest，
-    看着省事，生产进程却会中招——实测 `import matplotlib` 就会把 unittest
-    带进 sys.modules。QQ 机器人运行途中一旦加载了这类库，之后**懒加载**的
-    模块（image_review 的 PATH / REVIEW_DIR 是模块 import 那一刻算的）就把
-    state 写进临时目录，网页端读的却是 <BASE_DIR>/state —— 两边对不上，
-    人工二审列表凭空少了当晚所有被拦的图，图本身还在临时目录里。
-
-    改成只认**进程入口**：由 unittest / pytest 驱动时才隔离；运行时谁顺手
-    import 了 unittest 都不影响。临时脚本要强制隔离，显式设
-    AGENT_STATE_TEST=1。
-    """
-    if os.environ.get("AGENT_STATE_TEST") == "1":
-        return True
-    if not ("unittest" in sys.modules or "pytest" in sys.modules):
-        return False
-    main = sys.modules.get("__main__")
-    main_file = (getattr(main, "__file__", "") or "").replace("\\", "/").lower()
-    argv0 = (sys.argv[0] if sys.argv else "").replace("\\", "/").lower()
-    # 只看「-m 后面那个模块名」，别把整条命令行拼进来：业务参数、甚至 -c
-    # 脚本正文里出现 unittest 字样都不代表这是测试进程。
-    orig = list(getattr(sys, "orig_argv", None) or [])
-    m_module = ""
-    for i, arg in enumerate(orig[:-1]):
-        if arg == "-m":
-            m_module = orig[i + 1]
-            break
-    hay = " ".join((main_file, argv0, m_module)).lower()
-    return "unittest" in hay or "pytest" in hay
-
-
-def state_path(filename):
-    """state/ 下某个文件的路径。
-
-    测试 runner 进程一律导向临时目录（同一个进程内固定不变，好让多个测试共享
-    一份）；生产进程恒为 <BASE_DIR>/state/<filename>。
-    """
-    global _TEST_STATE_DIR
-    if _is_test_process():
-        if _TEST_STATE_DIR is None:
-            _TEST_STATE_DIR = tempfile.mkdtemp(prefix="agent_state_test_")
-        return os.path.join(_TEST_STATE_DIR, filename)
-    return os.path.join(BASE_DIR, "state", filename)
-
-_env_path = os.path.join(BASE_DIR, ".env")
-if os.path.exists(_env_path):
-    load_dotenv(_env_path)
+from app.core.config.env import _env_bool, _env_list
+from app.core.config.paths import (
+    AGENTS_DIR,
+    BASE_DIR,
+    DATA_DIR,
+    DOCUMENTS_DIR,
+    ROOT_DIR,
+    SKILLS_DIR,
+    VECTOR_STORE_DIR,
+    WEB_DIR,
+    state_path,
+)
 
 # ─── LLM Provider ────────────────────────────────────
 
@@ -827,12 +771,7 @@ ADMIN_ALLOW_REMOTE = _ADMIN_REMOTE_RAW not in ("0", "false", "no", "")
 ADMIN_ALLOW_REMOTE_LAN = _ADMIN_REMOTE_RAW == "lan"
 
 # ─── 路径 ───────────────────────────────────────────
-
-SKILLS_DIR = os.path.join(BASE_DIR, "skills")
-WEB_DIR = os.path.join(BASE_DIR, "web")
-DATA_DIR = os.path.join(BASE_DIR, "data")
-DOCUMENTS_DIR = os.path.join(BASE_DIR, "documents")
-VECTOR_STORE_DIR = os.path.join(BASE_DIR, "vector_store", "chroma")
+# 已搬到 app/core/config/paths.py；这里只保留引用。
 
 # ─── 角色扮演的长期记忆 RAG（2026-11-05）─────────────────
 #
@@ -949,24 +888,11 @@ WORKSHOP_HTML = os.getenv("WORKSHOP_HTML", "").strip()
 # 多 agent：每个 agent 一个自包含目录（agents/<id>/ 里放 agent.json 配置、
 # prompt.md 人设、session.jsonl 会话）。会话文件路径由 app/agents.py 解析，
 # 不再有「全局单会话文件」这种东西。
-AGENTS_DIR = os.path.join(BASE_DIR, "agents")
 DEFAULT_AGENT_ID = os.getenv("DEFAULT_AGENT_ID", "main")
 
 # ─── QQ 接入（NapCat / OneBot 11）─────────────────────
 # 适配层是独立进程（app/qq_bot.py），本段配置只在它里面用到；网页端进程
 # 仅用到 QQ_ENABLE（决定是否注册 send_qq_message 工具）。
-def _env_bool(name, default=False):
-    val = os.getenv(name)
-    if val is None:
-        return default
-    return val.strip().lower() not in ("0", "false", "no", "")
-
-
-def _env_list(name):
-    """逗号分隔的字符串列表，去空项。"""
-    raw = os.getenv(name, "")
-    return [x.strip() for x in raw.split(",") if x.strip()]
-
 
 QQ_ENABLE = _env_bool("QQ_ENABLE", False)
 

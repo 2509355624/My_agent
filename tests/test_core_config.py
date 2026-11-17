@@ -13,7 +13,10 @@ class CoreConfigCompatTest(unittest.TestCase):
             "ROOT_DIR",
             "WEB_DIR",
             "DATA_DIR",
+            "DOCUMENTS_DIR",
+            "VECTOR_STORE_DIR",
             "SKILLS_DIR",
+            "AGENTS_DIR",
         ):
             self.assertEqual(getattr(core, name), getattr(legacy, name), name)
 

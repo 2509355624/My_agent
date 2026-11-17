@@ -24,7 +24,7 @@ Django 仍然保留为后手：如果以后真的要做多用户 SaaS、复杂�
 
 | 它的做法 | 我们采用的方式 |
 |---|---|
-| `tianqi_project/settings/{base,development,production}.py` 按环境拆配置 | `app/core/config.py` + `APP_PROFILE`，测试/开发/生产分开 |
+| `tianqi_project/settings/{base,development,production}.py` 按环境拆配置 | `app/core/config/{paths,env,llm,image,rag,web}.py` + `APP_PROFILE`，测试/开发/生产分开 |
 | `views/` 只做请求解析和返回 | 每个 feature 的 `routes.py` 只做 HTTP |
 | `services/` 放业务编排 | 每个 feature 的 `service.py` 放用例 |
 | `repositories/` 管数据访问 | 每个 feature 的 `repository.py` 管 JSON/SQL |

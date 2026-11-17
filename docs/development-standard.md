@@ -134,11 +134,23 @@
 - **ARCH-07**：feature 之间不直接 import 内部文件；跨 feature 只走对方 `service.py` 的公开函数。
 - **ARCH-08**：共享代码只有在**第二个调用方出现后**才抽到 `core/`；不要为“以后可能用”提前抽象。
 - **ARCH-09**：不建万能 `utils/`。路径、日志、安全、错误放 `core/`；业务工具放对应 feature。
-- **ARCH-10**：不新增 God 文件。新文件达到 600 行就要开始拆；超过 1,000 行直接 blocker（生成代码/迁移文件除外）。
-- **ARCH-10.1**：拆文件按“一个职责/一个用例”拆，不按行数机械切。比如 `image/service.py` 超限，拆成 `image/service_generate.py`、`image/service_audit.py`，不拆成 `part1.py`、`part2.py`。
+- **ARCH-10**：不新增 God 文件。新文件 600 行开始规划拆分；1,000 行是**硬警戒线**，不是切菜线；1,000–1,200 行只有单一职责且已有拆分计划时允许；1,500 行是硬 blocker（生成代码/迁移文件除外）。
+- **ARCH-10.1**：拆文件按“一个职责/一个用例”拆，不按行数机械切。比如 `image/service.py` 超限，拆成 `image/service_generate.py`、`image/service_audit.py`，不拆成 `part1.py`、`part2.py`；更不允许为了 78 行拆出 `config2.py`。
 - **ARCH-10.2**：老 God 文件（`persona.py`、`main.py` 等）冻结增长：新职责一律放新 feature；下一次修改必须至少抽出一块，不能只加不减。
+- **ARCH-10.3**：文件行数只是信号，不是目标。一个 1,100 行但只做“配置”的文件，仍然要按配置域拆；一个 500 行但混了 HTTP、业务、存储的文件，也必须拆。
 - **ARCH-11**：老文件（`persona.py`、`main.py` 等）不要求一次拆完；但**不允许继续往里面加新职责**。新职责放新 feature。
 - **ARCH-12**：模块变包是首选兼容手段：`app/persona.py` → `app/features/persona/__init__.py`，先原样 re-export，调用方不用改。
+- **ARCH-13**：配置按职能拆，不做一个万能 `config.py`。目标形态是 `app/core/config/` 包：
+  `paths.py`（路径）、`env.py`（环境变量解析）、`llm.py`（模型/provider/降级链）、
+  `image.py`（ComfyUI/渠道/额度）、`rag.py`（RAG/向量库）、`web.py`（端口/页面/画廊）、
+  `qq.py`（QQ）、`persona.py`（角色扮演模型）、`runtime.py`（上下文/看门狗/通知）。
+  每个模块只放自己域内的常量与函数，跨域引用走 `paths` 或 `env`。
+- **ARCH-14**：提示词统一放 `app/prompts/` 主文件夹，按“feature + 用例”分子目录和文件，
+  不做一个 `prompts.py` 大字符串。例：`prompts/comic/story.py`（编剧）、
+  `prompts/comic/panel.py`（分镜）、`prompts/comic/character.py`（角色一致性）；
+  `prompts/image/generate.py`、`prompts/image/audit.py`；
+  `prompts/persona/roleplay.py`、`prompts/persona/memory.py`、`prompts/persona/opening.py`。
+  一个文件只负责一个场景，改漫画编剧不会碰到生图审核。
 
 ---
 
@@ -287,7 +299,8 @@
 
 1. **框架**：确认继续 Flask + 模块化单体；Django 暂不接，未来只考虑独立管理面。
 2. **硬闸门**：确认跨层 import、无测试的新行为、新增红项、secret、破坏旧 URL 都是 blocker。
-3. **代码上限**：确认函数 50 行、嵌套 4 层、新文件 600 行软限/1000 行硬限。
+3. **代码上限**：确认函数 50 行、嵌套 4 层、新文件 600 行开始规划拆分；
+   1,000 行硬警戒、1,000–1,200 行可容忍、1,500 行硬 blocker；按职能拆，不按行数切。
 4. **循环规则**：确认不按“3 个 for”做硬指标，改为“嵌套 ≤ 2 层、圈复杂度 ≤ 10”。
 5. **覆盖率**：确认新增/修改行 ≥ 80%，不追求全仓覆盖率。
 6. **diff 预算**：确认单次审查 ≤ 300 行；超过 500 行必须拆分或说明。

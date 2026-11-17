@@ -45,8 +45,17 @@ app/
 ├── main.py                   # 兼容 shim：app = create_app("main")
 ├── core/
 │   ├── __init__.py
-│   ├── config.py             # 原 app/config.py 的新家
-│   ├── paths.py              # BASE_DIR / WEB_DIR / STATE_DIR
+│   ├── config/               # 配置按职能拆，不做一个万能 config.py
+│   │   ├── __init__.py       # 公开入口；最终只做显式 re-export
+│   │   ├── paths.py          # BASE_DIR / WEB_DIR / DATA_DIR / state_path
+│   │   ├── env.py            # .env 加载、_env_bool / _env_list
+│   │   ├── llm.py            # provider / 模型 / 降级链 / 超时 / 预算
+│   │   ├── image.py          # ComfyUI / 渠道 / 额度 / NAI / LoRA
+│   │   ├── rag.py            # RAG 开关 / 向量库 / 重排
+│   │   ├── web.py            # 端口 / 页面 / 画廊 / 管理远端
+│   │   ├── qq.py             # QQ_* / 通知
+│   │   ├── persona.py        # 角色扮演模型白名单
+│   │   └── runtime.py        # 上下文 / 记忆 / 看门狗
 │   ├── logging.py            # 原 logsetup.py
 │   ├── security.py           # 令牌、HMAC、来源闸、限流
 │   ├── errors.py             # 统一错误类型与响应
@@ -60,6 +69,16 @@ app/
 │   ├── novel/
 │   ├── card/
 │   ├── qq/
+│   └── admin/
+├── prompts/                  # 提示词主文件夹，按 feature + 用例分文件
+│   ├── README.md
+│   ├── chat/
+│   ├── image/
+│   ├── comic/
+│   ├── persona/
+│   ├── rag/
+│   ├── novel/
+│   ├── card/
 │   └── admin/
 ├── gateways/
 │   ├── __init__.py
@@ -111,6 +130,8 @@ app/features/image/
 ├── models.py         # dataclass / DTO（需要时）
 └── README.md         # 边界、状态文件、外部依赖、怎么测
 ```
+
+提示词不放在 feature 内部，统一放 `app/prompts/` 主文件夹（见第 2 节目录树）。
 
 不是每个 feature 都要建全。规则：
 
@@ -272,11 +293,12 @@ tests/
 - 每个包只放 `__init__.py` 和该目录的 `README.md`，不 import 现有代码。
 - 跑 `test_repo_layout` + 84 条手机端冒烟，确认零影响。
 
-### 第二步：`app/core/config.py` 兼容层
+### 第二步：`app/core/config/` 按域拆
 
-- 搬 `config.py` → `app/core/config.py`；`app/config.py` 留 shim。
-- 测试锁住 `BASE_DIR`、`WEB_DIR`、`STATE_DIR` 与旧值一致。
-- 不改 83 个 import。
+- 先搬 `paths.py`（绝对路径、`state_path`）和 `env.py`（`.env`、`_env_bool`）。
+- `app/config.py` 从新模块 import，旧名字继续可用；不一次改 106 个调用方。
+- 测试锁 `BASE_DIR`、`ROOT_DIR`、`WEB_DIR`、`DATA_DIR`、`state_path()`。
+- 后续按 `llm` → `image` → `rag` → `web` → `qq/runtime` → `persona` 顺序搬。
 
 ### 第三步：`bootstrap.py` + 入口
 

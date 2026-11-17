@@ -24,6 +24,7 @@ FEATURES = (
 REQUIRED_PACKAGES = (
     APP / "core",
     APP / "features",
+    APP / "prompts",
     APP / "gateways",
     APP / "integrations",
     APP / "persistence",
@@ -39,6 +40,7 @@ REQUIRED_PACKAGES = (
 REQUIRED_READMES = (
     APP / "core" / "README.md",
     APP / "features" / "README.md",
+    APP / "prompts" / "README.md",
     APP / "gateways" / "README.md",
     APP / "integrations" / "README.md",
     APP / "persistence" / "README.md",
