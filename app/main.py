@@ -841,7 +841,7 @@ def _receipt_note_default():
 
 
 def _caption_note_default():
-    from app.image_jobs import caption_note_default
+    from app.features.image.delivery import caption_note_default
     return caption_note_default()
 
 
