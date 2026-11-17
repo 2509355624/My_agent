@@ -23,7 +23,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from flask import Flask
 
-from app import (comic, comic_api, comic_delivery, comic_quota,
+from app.features.comic import quota as comic_quota
+from app import (comic, comic_api, comic_delivery,
                  comic_render_opts, comic_thumb, friend_auth, main)
 
 SECRET = "unit-test-friend-secret"

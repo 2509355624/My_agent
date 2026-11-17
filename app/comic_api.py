@@ -60,8 +60,9 @@ from flask import (Blueprint, Response, g, jsonify, request, send_file,
                    send_from_directory)
 
 from app import (comic, comic_agent, comic_delivery, comic_portrait,
-                 comic_prompt_suffix, comic_quota, comic_render_opts,
+                 comic_prompt_suffix, comic_render_opts,
                  comic_thumb, image_jobs, silver_comic)
+from app.features.comic import quota as comic_quota
 from app import config as _cfg
 from app.config import BASE_DIR
 

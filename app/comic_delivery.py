@@ -239,7 +239,7 @@ def deliver(task_dir, qq, force=False, auto=False):
             _save_state(task_dir, st)
         except OSError:
             pass
-        from app import comic_quota
+        from app.features.comic import quota as comic_quota
         comic_quota.note_delivery(
             qq, os.path.basename(task_dir),
             "sent" if st["state"] == "sent" else "failed",

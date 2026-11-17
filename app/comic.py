@@ -911,7 +911,7 @@ def _out_dir_for(task):
     落到 `web/生图页`，别把跑图台的图也塞进漫画目录。
     """
     try:
-        from app import comic_quota
+        from app.features.comic import quota as comic_quota
         friend = comic_quota.output_base(getattr(task, "dir", "") or "")
     except Exception:
         friend = ""                            # 归属层异常不该拖垮出图
