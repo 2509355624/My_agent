@@ -1116,6 +1116,53 @@
     /* `.log` 是纵向排列，间距走 margin-top */
     .log > * + * { margin-top: 12px; }
   }
+
+/* ============================================================
+   2026-11-17 角色页收口：
+   ① 手机顶栏三个明确入口：角色 / 聊天 / 状态
+   ② 右栏拆成「状态 / 设置」两页，不再一柱子滑到底
+   ============================================================ */
+.top .chat-btn { display: none; }
+.top .drawer-btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+@media (max-width: 1000px) {
+  .top .chat-btn { display: inline-block; }
+}
+
+.side2Tabs {
+  display: flex;
+  gap: 6px;
+  padding: 5px;
+  margin-bottom: 12px;
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+.side2Tabs button {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.side2Tabs button:hover { color: var(--text); }
+.side2Tabs button.on {
+  color: var(--accent);
+  background: var(--bg-input);
+  border-color: var(--accent-dim);
+}
+#side2Tabs[data-s2-tab="status"] ~ [data-s2="settings"] { display: none !important; }
+#side2Tabs[data-s2-tab="settings"] ~ [data-s2="status"] { display: none !important; }
+
 </style>
 </head>
 <body>
@@ -1136,7 +1183,7 @@
 
   <main class="mid" id="mid">
     <div class="top">
-      <button class="btn sm burger" id="btnBurger">☰</button>
+      <button class="btn sm burger drawer-btn" id="btnBurger" title="打开角色列表">角色</button>
       <a class="btn sm back" id="btnGallery" href="/gallery"
          title="回到画廊">← 画廊</a>
       <!-- 「清空存档」不再放顶栏（2026-11-05 用户要求）：手机端塞在 ☰ 和
@@ -1148,15 +1195,17 @@
            两格宽度换给四个按钮，窄屏才不挤。 -->
       <span class="sp"></span>
       <button class="btn sm mode" id="btnMode" style="display:none">自由模式</button>
+      <!-- 2026-11-17：窄屏把「☰ / 状态」两个暗号改成「角色 / 聊天 / 状态」
+           三个明确入口；桌面端这几个按钮仍然隐藏，三栏照旧常驻。 -->
+      <button class="btn sm chat-btn drawer-btn on" id="btnChat"
+              title="回到聊天">聊天</button>
+      <button class="btn sm stats-btn drawer-btn" id="btnStats"
+              title="看她现在到哪一步了">状态</button>
       <!-- 小说模式（2026-11-11 建，2026-11-12 上架 5175）：跟攻略/自由模式
            并列的第三套，状态、引擎、prompt、页面全独立，这里只放一个入口。
            5174 和 5175 各自都有 /novel，相对地址两边都指当前这一站。 -->
       <a class="btn sm" id="btnNovel" href="/novel"
          title="小说模式：世界书 + 编剧裁定 + 第三人称正文，第一版玩法是丧尸末日">小说模式</a>
-      <!-- 「状态」：窄屏专用，点开右侧抽屉看面板（2026-11-04 深夜）。
-           宽屏有这个按钮也不显示——右栏本来就一直开着。 -->
-      <button class="btn sm stats-btn" id="btnStats"
-              title="看她现在到哪一步了">状态</button>
       <a class="btn sm" id="btnLogin" style="display:none;text-decoration:none"
          href="/" title="登录后可以无限对话、还能出图">登录</a>
       <span class="quota" id="quota" style="display:none"></span>
@@ -1239,10 +1288,14 @@
   </main>
 
   <aside class="side2" id="side2">
+    <nav class="side2Tabs" id="side2Tabs" data-s2-tab="status" aria-label="状态与设置">
+      <button type="button" data-s2="status" class="on">状态</button>
+      <button type="button" data-s2="settings">设置</button>
+    </nav>
     <!-- 心情 / 状态 / 轮次压成一块，**放最上面**（2026-11-05 用户拍板）：
          心情条是最直观的进程，打开侧栏第一眼就该看到它。
          以前这里是攻略数值面板在最上面，现在把数值面板挪到它下面。 -->
-    <div class="st" id="nowBox">
+    <div class="st" id="nowBox" data-s2="status">
       <!-- 高潮/内射这一拍的发光标识（2026-11-05）：只在这一轮出现，下一轮消失。 -->
       <div class="climaxBadge" id="climaxBadge" style="display:none"></div>
       <div class="nowrow"><span class="k">心情</span>
@@ -1257,7 +1310,7 @@
     </div>
     <!-- 怀孕 / 孩子（2026-11-05）：常驻显示「未孕」，让玩家知道这条线有这回事；
          点旁边 ? 看周期、概率和跨天规则。卡上关了怀孕玩法时整块隐藏。 -->
-    <div class="st" id="pregBox" style="display:none">
+    <div class="st" id="pregBox" style="display:none" data-s2="status">
       <div class="nowrow"><span class="k">身体</span>
         <span class="v" id="sPreg">—</span>
         <button class="helpDot" id="btnPregHelp" type="button"
@@ -1266,7 +1319,7 @@
            style="font-size:11px;color:var(--text-mute);margin-top:3px"></div>
     </div>
     <!-- 角色详情（2026-11-05）：看「她最初是什么人」，不跟剧情状态混在一起。 -->
-    <div class="st" id="cardBox">
+    <div class="st" id="cardBox" data-s2="status">
       <!-- 她在这一档里叫什么（2026-11-09 用户要求）：点名字就地改，
            只影响当前存档，不动角色卡；换一条存档各叫各的。 -->
       <div class="nowrow">
@@ -1282,7 +1335,7 @@
          换浏览器 / 清缓存后消失是已知且接受的（用户拍板）。优先级：
          本地图 > 本地「关闭」标记 > 这张卡 > 全局默认 > 内置图。
          站主那两层必须留服务端，它们要给所有用户共享。 -->
-    <div class="st" id="bgBox" style="display:none">
+    <div class="st" id="bgBox" style="display:none" data-s2="settings">
       <div class="nowrow"><span class="k">背景</span>
         <span class="v" id="sBgName">—</span></div>
       <div class="bgPrev" id="bgPrev">默认</div>
@@ -1301,7 +1354,7 @@
     </div>
     <!-- 攻略数值面板放第二（2026-11-05）：先看「她此刻什么心情」，
          再看「好感/冲动到哪了」。游客模式下整块隐藏（见 renderAff）。 -->
-    <div class="st panel" id="panelBox" style="display:none">
+    <div class="st panel" id="panelBox" style="display:none" data-s2="status">
       <div class="k" id="panelK">状态</div>
       <div class="pstats" id="panelStats" style="display:none"></div>
       <div id="panelBody"></div>
@@ -1309,7 +1362,7 @@
     </div>
     <!-- 回忆改成可折叠（2026-11-04 深夜）：小记能长到上千字，展开就把面板
          挤出屏幕。默认收起，点标题展开；记一下展开状态，同一局里不用反复点。 -->
-    <div class="st fold" id="noteBox">
+    <div class="st fold" id="noteBox" data-s2="status">
       <div class="foldhead" id="noteHead" role="button" tabindex="0">
         <span class="k">回忆</span>
         <span class="foldmark" id="noteMark">▸</span>
@@ -1317,26 +1370,26 @@
       <div class="v foldbody" id="sNote">—</div>
     </div>
     <!-- 「清空存档」留最后：它是低频动作，不该占着最显眼的位置。 -->
-    <div class="st" id="affBox" style="display:none">
+    <div class="st" id="affBox" style="display:none" data-s2="settings">
       <button class="btn sm danger" id="btnAffRestart">❗ 清空存档</button>
     </div>
     <!-- 自定义模型（2026-11-05）放最底：自带 OpenAI 兼容接口。游客也能
          用——体验版之外「自带钥匙来玩」的口子。配置只存浏览器本地。 -->
-    <div class="st" id="customBox">
+    <div class="st" id="customBox" data-s2="settings">
       <button class="btn sm" id="btnCustom">模型选择（自定义）</button>
       <div class="cmNow" id="cmNow" style="display:none"></div>
     </div>
     <!-- 「查看」（2026-11-10）：放右栏最下面，跟「自定义模型」挨着——都是
          「这一轮用的是谁的钱」那一类入口。没登记过代充的人点开只有全零账本，
          不会误导他去充值。 -->
-    <div class="st" id="billEntry">
+    <div class="st" id="billEntry" data-s2="settings">
       <button class="btn sm" id="btnBill" type="button">查看 · 用量 / 余额</button>
       <div class="cmNow" id="billNow" style="display:none"></div>
     </div>
     <!-- 模型切换（2026-11-14 从聊天区底部挪到右栏最底）：不再显示「当前用的
          是哪个模型」，用户只要从这里选要用的模型即可。选项由后端白名单给，
          默认 V4.1 Flash，切过记浏览器本地。 -->
-    <div class="st" id="modelBox">
+    <div class="st" id="modelBox" data-s2="settings">
       <div class="nowrow"><span class="k">模型</span>
         <select id="modelPick" class="modelSel" aria-label="切换模型"
                 title="用哪个模型写这一轮的回复">
@@ -4982,26 +5035,39 @@ async function loadPics() {
 // 左边：角色列表（.side）。右边：状态面板（.side2，窄屏专用）。
 // 两个共用同一张遮罩——它们不会同时开：开一个就先关另一个，
 // 否则手机上两层抽屉叠着，点哪里都关不掉。
+function syncDrawerTab() {
+  var stats = $("side2") && $("side2").classList.contains("open");
+  var roles = $("side") && $("side").classList.contains("open");
+  [["btnBurger", roles], ["btnStats", stats], ["btnChat", !stats && !roles]]
+    .forEach(function (pair) {
+      var el = $(pair[0]);
+      if (el) el.classList.toggle("on", !!pair[1]);
+    });
+}
 function openDrawer() {
   closeStats();                       // 左右互斥
   $("side").classList.add("open");
   $("mask").classList.add("on");
+  syncDrawerTab();
 }
 function closeDrawer() {
   $("side").classList.remove("open");
   // 左边关了才收遮罩——右边可能还开着（见 openStats 的互斥处理）
   if (!$("side2").classList.contains("open")) $("mask").classList.remove("on");
+  syncDrawerTab();
 }
 function openStats() {
   closeDrawer();
   $("side2").classList.add("open");
   $("mask").classList.add("on");
+  syncDrawerTab();
   // 打开时刷一次：抽屉关着的时候面板不渲染，数据可能是旧的
   refreshPanel();
 }
 function closeStats() {
   $("side2").classList.remove("open");
   if (!$("side").classList.contains("open")) $("mask").classList.remove("on");
+  syncDrawerTab();
 }
 
 // ── 攻略模式：开关与重开（2026-11-03）──────────────────
@@ -5066,6 +5132,7 @@ $("wipeOk").onclick = async () => {
 };
 $("btnAffRestart").addEventListener("click", openWipe);
 $("btnBurger").onclick = openDrawer;
+$("btnChat").onclick = function () { closeDrawer(); closeStats(); syncDrawerTab(); };
 
 // ── 自定义模型（2026-11-09 改成「多条有序降级链」）──────
 // 公用 V4 Pro 永远是链头；连续三次连不上，才按这里的顺序依次上场。
@@ -5442,7 +5509,7 @@ loadBalance();              // 拉一次余额：底部「本轮用 X」的付�
 
 // 遮罩两边都要能关：哪个开着就关哪个（同一次点击里可能两个都判一下，
 // 但 openDrawer / openStats 已经保证了不会同时开）。
-$("mask").onclick = function () { closeDrawer(); closeStats(); };
+$("mask").onclick = function () { closeDrawer(); closeStats(); syncDrawerTab(); };
 $("btnStats").onclick = openStats;
 
 // ── 绑定 ──────────────────────────────────────────────
@@ -6066,5 +6133,25 @@ $("billMask").addEventListener("click", e => {
 
 loadSession();
 </script>
+
+<script>
+(function () {
+  var side = document.getElementById("side2");
+  var nav = document.getElementById("side2Tabs");
+  if (!side || !nav) return;
+  function pickSide2Tab(name) {
+    nav.setAttribute("data-s2-tab", name);
+    nav.querySelectorAll("button[data-s2]").forEach(function (btn) {
+      btn.classList.toggle("on", btn.getAttribute("data-s2") === name);
+    });
+  }
+  nav.addEventListener("click", function (e) {
+    var btn = e.target.closest("button[data-s2]");
+    if (btn) pickSide2Tab(btn.getAttribute("data-s2"));
+  });
+  pickSide2Tab(nav.getAttribute("data-s2-tab") || "status");
+})();
+</script>
+
 </body>
 </html>
