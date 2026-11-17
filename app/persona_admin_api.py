@@ -30,8 +30,9 @@ import os
 
 from flask import Blueprint, Response, jsonify, request
 
-from app import (chat_bg, friend_auth, guest, persona, persona_billing,
+from app import (friend_auth, guest, persona, persona_billing,
                  persona_rag)
+from app.features.chat import background as chat_bg
 from app.config import BASE_DIR
 
 log = logging.getLogger("persona_admin")

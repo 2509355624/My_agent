@@ -23,7 +23,7 @@ Local Storage 有配额（通常 5~10MB），塞不下十几张缩略图；换�
 不需要在 comic.py 的多个落盘点各插一刀。整本跑完 QQ 发送的后台线程里再
 `ensure_all()` 预热一次，群友第一次打开槽位墙不用等缩略图逐张生成。
 
-参数沿用 `app/chat_bg.py` 那套已验证的 PIL 写法（LANCZOS + WEBP），
+参数沿用 `app/features/chat/background.py` 那套已验证的 PIL 写法（LANCZOS + WEBP），
 Pillow 本来就在 requirements.txt 里，零新依赖。
 """
 

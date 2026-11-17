@@ -5,7 +5,8 @@
 不负责：5174/5175/5176 网关、静态页、生图落盘、QQ 协议细节。
 
 迁移起点：`agent.py`、`agent_prompt.py`、`memory.py`、`longterm.py`、`llm.py`、
-`vision.py`、`search_agent.py`、`interject.py`、`chat_bg.py`、`confirm_gate.py`、`cancel.py`。
+`vision.py`、`search_agent.py`、`interject.py`、`background.py`、`confirm_gate.py`、`cancel.py`。
 完整映射见 `docs/project-skeleton.md` 第 4 节。
 
-状态：空包，未接线。迁移时先建 `routes.py` + `service.py`，需要落盘再抽 `repository.py`。
+状态：`background.py` 已从 `chat_bg.py` 迁入并接线；对话主循环仍暂留根目录，
+下一步再按 `routes.py` + `service.py` 拆 `agent.py` / `memory.py`。

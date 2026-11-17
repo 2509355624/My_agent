@@ -1123,7 +1123,8 @@ def api_get_characters():
     """读卡库。卡库是**整表**读写的：卡的数量是几张、几十张的量级，
     整表替换比逐张 diff 简单得多，也不会出现半张卡存进去的状态。
     """
-    from app import chat_bg, persona
+    from app import persona
+    from app.features.chat import background as chat_bg
     cards = persona.load_cards()
     for c in cards:
         c["background"] = chat_bg.info("card", str(c.get("id") or ""))
@@ -1143,7 +1144,8 @@ def api_put_characters():
     `SaveCardsRejected`，这里把它变成 409 回给前端。想真删一批要带
     `{"force": true}`——故意多一个词，让「删掉一大片」变成一个有意识的动作。
     """
-    from app import chat_bg, persona
+    from app import persona
+    from app.features.chat import background as chat_bg
     data = request.get_json(silent=True) or {}
     cards = data.get("cards")
     if not isinstance(cards, list):
