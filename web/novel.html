@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>小说模式 · 丧尸末日</title>
+<title>小说</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23f472b6'/></svg>">
 <style>
 /* 皮肤与 web/persona.html 同一套（2026-11-11）：变量、三栏宽度、.btn /
@@ -381,11 +381,11 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
          原来「← 角色扮演」挂在右上角，和用户习惯点「状态」的位置重叠，
          一滑就跳走，已经移到左上。 -->
     <div class="top">
-      <button class="btn sm nv-burger" id="nvBurger" type="button">☰</button>
-      <a class="btn sm nv-back" href="/persona" title="返回角色扮演">← 角色扮演</a>
+      <button class="btn sm nv-burger" id="nvBurger" type="button">玩法</button>
+      <a class="btn sm nv-back" href="/" title="回到首页">← 回首页</a>
       <span class="nm" id="nvTitle">小说</span>
       <span class="sp"></span>
-      <button class="btn sm" id="nvBookBtn" type="button">世界书</button>
+      <button class="btn sm" id="nvBookBtn" type="button">设定</button>
       <button class="btn sm nv-stats" id="nvStatsBtn" type="button">状态</button>
     </div>
     <div id="nvErr"></div>
@@ -405,7 +405,7 @@ html, body { background: var(--bg); color: var(--text); height: 100%;
       </div>
       <button class="btn pri" id="nvOpenBtn" style="width:100%">开场</button>
     </div>
-    <div class="log" id="nvLog"><div class="nv-empty">左边选一个玩法，填好主角名字和身份，点下面的按钮开一本。</div></div>
+    <div class="log" id="nvLog"><div class="nv-empty">点「玩法」选一个开局。</div></div>
     <!-- 底部照角色扮演的排法（2026-11-12 用户要求）：
          一行 = 输入框 + 发送按钮，右边不许再堆东西。
          三个动作选项只在有内容时才占一行；模型 / 额度全折进 ☰ 菜单，
