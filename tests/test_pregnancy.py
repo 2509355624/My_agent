@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""怀孕 / 生产 / 周期（app/pregnancy.py）+ persona 接入。
+"""怀孕 / 生产 / 周期（app/features/persona/pregnancy.py）+ persona 接入。
 
 用户 2026-11-05 定的口径：
 - 从认识第 1 天起按 28 天排周期，安全期/易孕期/排卵期由代码判断；
@@ -15,7 +15,7 @@ from unittest import mock
 
 import app.agents as agents
 import app.persona as persona
-import app.pregnancy as pregnancy
+from app.features.persona import pregnancy
 
 
 CFG = dict(pregnancy._DEFAULTS)                     # noqa: SLF001
