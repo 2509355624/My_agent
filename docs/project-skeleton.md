@@ -217,6 +217,7 @@ def run(job_id: str) -> None:
 | `integrations` 迁移后 | `integrations/vision.py` 已接线（原 `app/vision.py`）；`comfy_*`、`llm.py`、`nai.py`、`qq_api.py` 仍待迁 | 识图/图片描述适配已归位，其余外部适配待拆 |
 | `persistence` | `agents.py`、`memory.py`、`longterm.py`、`job_ledger.py`、`recent.py`、`image_log.py` | JSON/SQL 存储 |
 | `workers` | `image_jobs.py`、`comic_delivery.py`、`watchdog.py` | 后台任务、看门狗 |
+| `workers` 迁移后 | `workers/watchdog.py` 已接线；`image_jobs.py`、`comic_delivery.py` 待迁 | 常驻守护已归位，启动命令改为 `python -m app.workers.watchdog` |
 
 注意：
 

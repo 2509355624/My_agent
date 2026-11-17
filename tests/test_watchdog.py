@@ -10,7 +10,7 @@
 from unittest import TestCase, mock
 from unittest.case import skipIf
 
-from app import watchdog as wd
+from app.workers import watchdog as wd
 
 
 class ProbeStateTest(TestCase):
@@ -687,7 +687,7 @@ class ComfyuiRestartCommandTest(TestCase):
         fake.run.return_value = mock.Mock(returncode=0, stdout=b"")
         fake.Popen.return_value = mock.Mock()
         with mock.patch.object(wd, "subprocess", fake), \
-             mock.patch("app.watchdog.os.path.isfile", return_value=True), \
+             mock.patch("app.workers.watchdog.os.path.isfile", return_value=True), \
              mock.patch.object(wd, "_comfy_pid_by_port", return_value=1234), \
              mock.patch.object(wd, "COMFYUI_PYTHON", "D:/AI/confyui_env/Scripts/python.exe"), \
              mock.patch.object(wd, "COMFYUI_ROOT", "D:/AI/ComfyUI_v037"):

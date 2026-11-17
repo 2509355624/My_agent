@@ -170,7 +170,7 @@ QQ_WEBUI_PORT=5099                 # SnowLuma 的 WebUI 端口
 
 ```bash
 python -m app.qq_bot    # QQ 适配层，独立进程
-python -m app.watchdog  # 看门狗，独立进程（可选但建议）
+python -m app.workers.watchdog  # 看门狗，独立进程（可选但建议）
 ```
 
 浏览器打开 `http://127.0.0.1:5099` 扫码登录。协议端只做「发现 `QQ.exe` → 注入」，

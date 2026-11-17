@@ -54,7 +54,7 @@ PORT_SERVICES = {
 # `重启QQ机器人.bat` 只动这一个进程）。它有 `.qq_bot.pid` 记着当前两个 PID，
 # 但那是 bat 自己的账本，别依赖它：进程意外退出时账本会过期。
 NO_PORT_SERVICES = {
-    "-m app.watchdog": "watchdog（看门狗）",
+    "-m app.workers.watchdog": "watchdog（看门狗）",
     "-m app.qq_bot": "qq_bot（QQ 适配层）",
     "friend_tunnel.py": "friend_tunnel（群友隧道）",
     "napcat": "NapCat（协议端）",

@@ -15,4 +15,6 @@ watchdog.py       常驻进程守护
 - 不 import Flask；需要业务用例时调用对应 `service.py`。
 - AI 不重启常驻进程、不点 `.bat`、不 `taskkill`；重启由站主手动做。
 
-状态：空包，未接线。
+状态：`watchdog.py`（原 `app/watchdog.py`，NapCat/ComfyUI 常驻守护）已迁入；
+启动命令改为 `python -m app.workers.watchdog`。`image_worker.py`、`comic_worker.py`
+仍是后续拆分目标。
