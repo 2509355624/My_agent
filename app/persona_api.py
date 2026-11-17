@@ -1462,7 +1462,7 @@ def skip_day_api():
         # 道具状态行（2026-11-08）：AI 回复下方显示「生效中 · 还剩 N 轮」，
         # 刚失效那一轮带 `fade`（前端画删除线）。数据从存档读，不重算。
         try:
-            from app import items as _items
+            from app.features.persona import items as _items
             _rec = (persona._load_state() or {}).get(key) or {}
             out["act"] = _items.active_names(
                 _items.normalize_active(_rec.get("active_item")))
@@ -1679,7 +1679,7 @@ def items_api():
     目录来自 `config/items.json`，前端只负责显示（改配置就改面板，
     不用动前端）。信物从当前这条线的存档里取——只有她会记得你带着什么。
     """
-    from app import items
+    from app.features.persona import items
     keepsakes = []
     try:
         key = _active_key(_key(_who()[1]))

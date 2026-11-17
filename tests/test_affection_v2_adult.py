@@ -812,7 +812,7 @@ class ItemSystemTest(unittest.TestCase):
     """道具系统（2026-11-08）：道具是「一段写法」，不是数值。"""
 
     def setUp(self):
-        from app import items
+        from app.features.persona import items
         self.it = items
 
     def test_catalog_has_ten(self):
@@ -907,7 +907,7 @@ class ItemLifecycleTest(unittest.TestCase):
     """道具生效与失效（2026-11-08）：一次只一个，代码倒计时，配置给时长。"""
 
     def setUp(self):
-        from app import items
+        from app.features.persona import items
         self.it = items
 
     def test_every_item_has_turns_and_fade(self):

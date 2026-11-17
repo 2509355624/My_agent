@@ -62,7 +62,8 @@ import time
 from app.features.persona import adult as adult_state
 from app.features.persona import pregnancy
 from app.features.persona import rag as persona_rag
-from app import (affection, items as _items,
+from app.features.persona import items as _items
+from app import (affection,
                    llm, trigger,
                  writing_skills, writing_style)
 from app.config import (BASE_DIR, PERSONA_MODEL, PERSONA_MODEL_DEFAULT,
@@ -4124,7 +4125,7 @@ def _stable_note_blocks():
     末尾那份由 `_strip_stable_notes` 剔除，所以文字总量不变。
     """
     try:
-        from app import items as _items
+        from app.features.persona import items as _items
         listing = _items.list_block()
     except Exception:                                        # noqa: BLE001
         listing = ""
@@ -4775,7 +4776,7 @@ def _item_keys_text():
     用到那一条时注入——这样十几样道具都进清单也只占一行。
     """
     try:
-        from app import items as _items
+        from app.features.persona import items as _items
         rows = []
         for key, it in (_items.all_items() or {}).items():
             if isinstance(it, dict):
