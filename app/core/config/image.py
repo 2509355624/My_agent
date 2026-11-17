@@ -284,4 +284,5 @@ IMAGE_AUDIT_TIMEOUT = float(os.getenv("IMAGE_AUDIT_TIMEOUT", "30"))
 IMAGE_AUDIT_PROMPT_MAX = int(os.getenv("IMAGE_AUDIT_PROMPT_MAX", "3000"))
 
 
-__all__ = [name for name in globals() if name.isupper()]
+__all__ = [name for name in globals()
+           if name.isupper() and not name.startswith("_")]

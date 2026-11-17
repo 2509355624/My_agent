@@ -48,4 +48,5 @@ VISION_MAX_EDGE = int(os.getenv("VISION_MAX_EDGE", "1024"))
 VISION_PROMPT_MAX = int(os.getenv("VISION_PROMPT_MAX", "2000"))
 
 
-__all__ = [name for name in globals() if name.isupper()]
+__all__ = [name for name in globals()
+           if name.isupper() and not name.startswith("_")]

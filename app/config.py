@@ -23,6 +23,9 @@ from app.core.config.llm import *  # noqa: F401,F403
 from app.core.config.image import *  # noqa: F401,F403
 from app.core.config.vision import *  # noqa: F401,F403
 from app.core.config.rag import *  # noqa: F401,F403
+from app.core.config.web import *  # noqa: F401,F403
+from app.core.config.web import _parse_gallery_roots  # noqa: F401
+from app.core.config.card import *  # noqa: F401,F403
 
 # ─── Web 搜索（豆包搜索）─────────────────────────────
 # 豆包搜索（原 联网搜索/融合信息搜索）专用 API Key，在火山「联网搜索控制台」创建：
@@ -35,7 +38,6 @@ DOUBAO_SEARCH_ENDPOINT = os.getenv("DOUBAO_SEARCH_ENDPOINT",
 
 # ─── Agent ──────────────────────────────────────────
 
-AGENT_PORT = int(os.getenv("AGENT_PORT", "5174"))
 MAX_TURNS = int(os.getenv("MAX_TURNS", "10"))
 
 # 上下文预算：**单次请求允许携带的 prompt token 上限**。
@@ -116,81 +118,15 @@ MEMORY_TURN_DIGEST_CHARS = int(os.getenv("MEMORY_TURN_DIGEST_CHARS", "150"))
 # 重发这几千 token。截断只影响「查资料的详尽程度」，不影响聊天。
 WEB_SEARCH_MAX_CHARS = int(os.getenv("WEB_SEARCH_MAX_CHARS", "800"))
 
-# 后台管理接口是否允许非本机访问。三档（大小写不敏感）：
-#   "" / "0" / "false"  → 只允许回环地址（默认）
-#   "lan"               → 回环 + 内网地址（手机/平板从同一个路由器进来）
-#   "1" / "true"        → 任何来源
-# 服务监听 0.0.0.0 且**没有任何鉴权**，一个能改 agent 配置的口子不该顺带
-# 暴露到整个网络，所以默认收得最紧。「lan」是给「手机要能改配置」这种常见
-# 诉求留的中间档：比 true 少暴露一层，端口转发/公网直连进来的请求会被挡掉
-# （判定在 app/main.py 的 `_is_lan_addr`）。
-_ADMIN_REMOTE_RAW = os.getenv("ADMIN_ALLOW_REMOTE", "false").strip().lower()
-ADMIN_ALLOW_REMOTE = _ADMIN_REMOTE_RAW not in ("0", "false", "no", "")
-ADMIN_ALLOW_REMOTE_LAN = _ADMIN_REMOTE_RAW == "lan"
-
 # ─── 路径 ───────────────────────────────────────────
 # 已搬到 app/core/config/paths.py；这里只保留引用。
 
-
-# ─── 画廊 ───────────────────────────────────────────
-#
-# 站主磁盘上的图片根目录。**只登记路径，不复制文件**：那 60G 本来就在盘上，
-# 画廊是「把磁盘挂出来看」，不是「再存一份」。
-#
-# 格式：多个用分号隔开，每项 `显示名|绝对路径`（显示名可省，则取目录名）。
-# 不用冒号分隔，因为 Windows 盘符本身就带冒号。
-def _parse_gallery_roots(raw):
-    out = []
-    for part in str(raw or "").split(";"):
-        part = part.strip()
-        if not part:
-            continue
-        name, _, path = part.partition("|")
-        path = (path or name).strip()
-        if not path:
-            continue
-        name = (name if _ else "").strip() or os.path.basename(path.rstrip("\\/")) or path
-        out.append((name, path))
-    return tuple(out)
-
-
-GALLERY_ROOTS = _parse_gallery_roots(os.getenv("GALLERY_ROOTS", ""))
-
-# 站主的 QQ：只有它登录能看到「扫描文件夹」「全部作品」这些管理动作。
-# 留空 = 管理功能整体关闭（宁可关掉也不猜，猜错了等于把删除权限给了别人）。
-GALLERY_OWNER_QQ = os.getenv("GALLERY_OWNER_QQ", "").strip()
-
-# ─── 内置角色卡（2026-11-03 用户要求「创建角色不能动我的默认角色」）──────
-#
-# 这些 id 对应的卡是随项目一起长出来的（改过人设、定过年龄），用户明确说
-# 不能改、不能删。
-#
-# 两个卡库都要认这份名单：
-#   · `persona`（扮演态）→ `agents/qq/characters.json`
-#   · `card_maker`（造卡页）→ `state/xingyun_cards.json`
-#
-# 除了这份名单，卡上带 `"builtin": true` 也算内置——以后想保护新卡，
-# 改 json 就行，不用改代码。等全部卡都补上那个字段，这份名单就可以删。
-BUILTIN_CARD_IDS = frozenset({
-    "izumi_sagiri", "rem", "asuna", "1787749573788", "sister",
-    "sister_friend", "childhood_friend", "junior", "senior",
-    "big_sister", "mature_woman",
-})
-
-
-# ─── 提示词工坊 ─────────────────────────────────────────
-#
-# 一个完全自包含的单文件 HTML（别人的工具，原样发出去，一个字都不改）。
-# **不复制进 `web/`**：4.6MB 进 git 没意义，而且它按版本号换目录
-# （1.3.5 → 1.3.6），配置一行比复制一份好维护。
-#
-# 留空 = 这个入口整个不存在（返回 404），不会在页面上留一个点不开的链接。
-WORKSHOP_HTML = os.getenv("WORKSHOP_HTML", "").strip()
 
 # 多 agent：每个 agent 一个自包含目录（agents/<id>/ 里放 agent.json 配置、
 # prompt.md 人设、session.jsonl 会话）。会话文件路径由 app/agents.py 解析，
 # 不再有「全局单会话文件」这种东西。
 DEFAULT_AGENT_ID = os.getenv("DEFAULT_AGENT_ID", "main")
+
 
 # ─── QQ 接入（NapCat / OneBot 11）─────────────────────
 # 适配层是独立进程（app/qq_bot.py），本段配置只在它里面用到；网页端进程

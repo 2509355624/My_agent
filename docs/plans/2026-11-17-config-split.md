@@ -38,8 +38,9 @@ app/core/config/
 | `image.py` | `ENABLE_IMAGE_GEN`、`COMFYUI_*`、`IMAGE_*`（含 `IMAGE_AUDIT_*`）、`COMFY_*`、`QWEN_COOLDOWN`、`DISABLED_IMAGE_SKILLS`、`NAI_*` |
 | `vision.py` | `VISION_PROVIDER`、`VISION_MODEL`、`OLLAMA_VISION_*`、`VISION_TIMEOUT`、`VISION_MAX_EDGE`、`VISION_PROMPT_MAX` |
 | `rag.py` | `rag_enabled`、`PERSONA_RAG*`、`PERSONA_LORE_*` |
-| `web.py` | `AGENT_PORT`、`WEBUI_PORT`、`ADMIN_ALLOW_REMOTE*`、`_parse_gallery_roots`、`GALLERY_*`、`BUILTIN_CARD_IDS`、`WORKSHOP_HTML` |
-| `qq.py` | `QQ_*`、`NOTIFY_*` |
+| `web.py` | `AGENT_PORT`、`ADMIN_ALLOW_REMOTE*`、`_parse_gallery_roots`、`GALLERY_*`、`WORKSHOP_HTML` |
+| `card.py` | `BUILTIN_CARD_IDS` |
+| `qq.py` | `QQ_*`、`NOTIFY_*`、`WEBUI_PORT` |
 | `persona.py` | 角色扮演模型白名单与 `persona_model_ids` / `persona_model_of` |
 | `runtime.py` | `MAX_TURNS`、`CONTEXT_BUDGET`、`CONTEXT_MAX_TURNS`、`MEMORY_*`、`WEB_SEARCH_MAX_CHARS`、`WATCHDOG_*` |
 
@@ -52,7 +53,7 @@ app/core/config/
 3. `image.py`。
 4. `vision.py`（通用识图；生图审核仍归 image）。
 5. `rag.py`。
-6. `web.py`。
+6. `web.py` + `card.py`。
 7. `qq.py` + `runtime.py`。
 8. `persona.py`。
 8. `__init__.py` 改成显式导出；`app/config.py` 最后变成 shim。

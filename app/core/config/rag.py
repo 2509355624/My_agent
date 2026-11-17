@@ -88,4 +88,7 @@ PERSONA_LORE_TOKENS = max(0, int(os.getenv("PERSONA_LORE_TOKENS", "1200") or 120
 PERSONA_LORE_RAG = os.getenv("PERSONA_LORE_RAG", "1").strip().lower() not in (
     "0", "false", "no", "off")
 
-__all__ = ["rag_enabled"] + [name for name in globals() if name.isupper()]
+__all__ = ["rag_enabled"] + [
+    name for name in globals()
+    if name.isupper() and not name.startswith("_")
+]

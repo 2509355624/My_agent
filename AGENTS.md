@@ -51,6 +51,9 @@ tools/              # legacy / generators / ops
 docs/               # 规范、架构、ADR、plan、测试基线
 ```
 
+所有测试只放 `tests/`，不把 `test_*.py` 放到根目录或 `app/`；配置域测试按
+`test_core_config_<domain>.py` 命名，和 `app/core/config/<domain>.py` 对应。
+
 一个 feature 的默认文件：`routes.py`（HTTP）、`service.py`（业务）、
 `repository.py`（存储）、`jobs.py`（后台任务）、`models.py`（DTO）、`README.md`。
 不是每个都要建；先有 routes + service，需要再抽。
