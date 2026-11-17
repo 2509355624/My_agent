@@ -12,7 +12,7 @@ from unittest import mock
 sys.path.insert(0, ".")
 
 from app.features.card import bot as cb
-from app import direct_gen
+from app.features.image import direct_gen
 
 
 def _card(**kw):

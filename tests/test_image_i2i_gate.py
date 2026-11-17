@@ -33,7 +33,8 @@ import os
 import unittest
 from unittest import mock
 
-from app import direct_gen, qq_api
+from app.features.image import direct_gen
+from app import (qq_api)
 from app.tools.normal import generate_image as gi
 
 
@@ -136,7 +137,7 @@ class CapabilityRefusalTest(unittest.TestCase):
                                   fail if boom else (lambda raw: "i2isrc_x.png")), \
                 mock.patch.object(gi.image_jobs, "_ensure_worker", lambda: None), \
                 mock.patch.object(gi, "_send_receipt", lambda *a, **k: False), \
-                mock.patch("app.confirm_gate.intercept", lambda *a, **k: None), \
+                mock.patch("app.features.chat.confirm_gate.intercept", lambda *a, **k: None), \
                 mock.patch.object(gi.image_jobs, "comfy_alive", lambda: False):
             qq_api.bind_context("group_9", "group", "9", user_text="这张真好看")
             return gi._generate_image(prompt="change her coat to red", **kw)
@@ -204,7 +205,7 @@ class CapabilityRefusalTest(unittest.TestCase):
                                   lambda raw: "i2isrc_x.png"), \
                 mock.patch.object(gi.image_jobs, "_ensure_worker", lambda: None), \
                 mock.patch.object(gi, "_send_receipt", lambda *a, **k: False), \
-                mock.patch("app.confirm_gate.intercept", lambda *a, **k: None), \
+                mock.patch("app.features.chat.confirm_gate.intercept", lambda *a, **k: None), \
                 mock.patch.object(gi.image_jobs, "comfy_alive", lambda: False):
             qq_api.bind_context("group_9", "group", "9", user_text="这张真好看")
             out = gi._generate_image(prompt="change her coat to red",

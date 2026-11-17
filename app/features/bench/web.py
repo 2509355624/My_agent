@@ -331,7 +331,7 @@ def _run_channel(prompt, skill, image=""):
     image 非空（用户上传了图）= 先 `_recall_tags` 反推出英文提示词，跟用户写的
     需求拼一起再转译。这是「看图说话」，**不是图生图垫图**（用户拍板）。
     """
-    from app import direct_gen as dg
+    from app.features.image import direct_gen as dg
     if image:
         try:
             # 反推：图 → 英文混合式提示词（标签打底 + 短语补关系）。失败不

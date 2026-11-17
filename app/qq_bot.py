@@ -52,8 +52,9 @@ from app.features.chat import confirm_gate
 from app.features.image import lora_bot
 from app.core import usage
 from app.features.qq import play_bot, solo_bot, trigger
-from app import (direct_gen, image_jobs,
-                 moss_bot, persona, qq_api)
+from app.features.image import direct_gen
+from app.features.comic import moss_bot
+from app import (image_jobs, persona, qq_api)
 from app.features.card import bot as card_bot
 from app.features.image import log as image_log
 from app.features.image import out as image_out

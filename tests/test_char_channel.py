@@ -16,7 +16,7 @@ import unittest
 from unittest import mock
 
 from app.features.image import lora_lib
-from app import direct_gen
+from app.features.image import direct_gen
 
 _SDXL = {"key": "fushun", "name": "抚顺", "trigger": "fushun",
          "identity": "blue hair", "channels": ["miao", "cunny", "jank", "nffa"]}

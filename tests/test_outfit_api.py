@@ -234,7 +234,8 @@ class WiringTest(unittest.TestCase):
             self.assertIn(p, rules)
 
     def test_qq_command_regex(self):
-        from app import direct_gen, qq_bot
+        from app.features.image import direct_gen
+        from app import (qq_bot)
         for t in ("/换装", "／换装", "  /换装", "/换装 帮我把衣服换过去"):
             self.assertTrue(direct_gen._OUTFIT_RE.match(t), t)
             self.assertTrue(qq_bot._OUTFIT_RE.match(t), t)
@@ -242,7 +243,8 @@ class WiringTest(unittest.TestCase):
             self.assertFalse(direct_gen._OUTFIT_RE.match(t), t)
 
     def test_regexes_in_sync(self):
-        from app import direct_gen, qq_bot
+        from app.features.image import direct_gen
+        from app import (qq_bot)
         self.assertEqual(direct_gen._OUTFIT_RE.pattern, qq_bot._OUTFIT_RE.pattern)
 
     def test_friend_app_page_and_proxy(self):
@@ -253,14 +255,15 @@ class WiringTest(unittest.TestCase):
 
     def test_outfit_text_without_tunnel(self):
         from app.features.qq import friend_site
-        from app import direct_gen
+        from app.features.image import direct_gen
         with mock.patch.object(friend_site, "url", return_value=""):
             txt = direct_gen._outfit_text()
         self.assertIn("隧道没开", txt)
 
     def test_outfit_text_signs_source(self):
         from app.features.qq import friend_site
-        from app import direct_gen, qq_api
+        from app.features.image import direct_gen
+        from app import (qq_api)
         with mock.patch.object(friend_site, "url", return_value="https://x.trycloudflare.com"), \
              mock.patch.object(qq_api, "current_context", return_value=("private", "1234567890")):
             txt = direct_gen._outfit_text()

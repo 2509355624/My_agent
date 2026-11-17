@@ -29,7 +29,8 @@ import re
 import threading
 import time
 
-from app import direct_gen, image_jobs, qq_api
+from app.features.image import direct_gen
+from app import (image_jobs, qq_api)
 from app.features.card import service as card_maker
 from app.config import QQ_AGENT_ID, state_path
 

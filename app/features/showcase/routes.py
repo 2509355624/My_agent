@@ -955,7 +955,7 @@ def image_submit():
         try:
             # 局部导入避免启动期加载大模块；按访客选的渠道扩写，让提示词符合
             # 该渠道的写法（krea2 要质量词开头的完整英文串）。
-            from app import direct_gen
+            from app.features.image import direct_gen
             translated = direct_gen._translate(brief, [], skill=skill)
         except Exception:
             log.exception("展示页 AI 扩写调用失败")

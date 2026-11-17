@@ -300,7 +300,7 @@ class ShowcaseTest(unittest.TestCase):
 
     def test_ai_expand_uses_the_selected_channel(self):
         """AI 扩写按访客选的渠道扩（krea2 要质量词开头的完整英文串）。"""
-        with mock.patch("app.direct_gen._translate",
+        with mock.patch("app.features.image.direct_gen._translate",
                         return_value={"prompt": "a cat, masterpiece"}) as translate, \
                 mock.patch.object(showcase_api, "build_t2i_workflow",
                                   return_value={"1": {"class_type": "SaveImage"}}) as build, \
@@ -345,7 +345,7 @@ class ShowcaseTest(unittest.TestCase):
         job = _FakeJob()
         expanded = ("a rainy old bookshop, warm amber light, wet stone "
                     "pavement, no people")
-        with mock.patch("app.direct_gen._translate",
+        with mock.patch("app.features.image.direct_gen._translate",
                         return_value={"skill": "silver", "prompt": expanded}) as translate, \
                 mock.patch.object(showcase_api, "build_t2i_workflow",
                                   return_value={"1": {"class_type": "SaveImage"}}) as build, \
@@ -365,7 +365,7 @@ class ShowcaseTest(unittest.TestCase):
 
     def test_ai_mode_rejects_when_ai_does_not_produce_prompt(self):
         """AI 判成聊天 / 返回空 → 友好提示重来，绝不拿空 prompt 入队。"""
-        with mock.patch("app.direct_gen._translate",
+        with mock.patch("app.features.image.direct_gen._translate",
                         return_value={"reply": "这个我不会画"}), \
                 mock.patch.object(showcase_api.image_jobs, "enqueue") as enqueue:
             response = self.client.post(
@@ -376,7 +376,7 @@ class ShowcaseTest(unittest.TestCase):
         enqueue.assert_not_called()
 
     def test_ai_mode_degrades_when_llm_fails(self):
-        with mock.patch("app.direct_gen._translate",
+        with mock.patch("app.features.image.direct_gen._translate",
                         side_effect=RuntimeError("llm down")):
             response = self.client.post(
                 "/api/showcase/image/submit", headers=self.headers,

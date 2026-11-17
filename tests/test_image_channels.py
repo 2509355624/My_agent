@@ -1415,7 +1415,7 @@ class Krea2ChannelTest(unittest.TestCase):
 
     def test_chinese_aliases_are_all_routed(self):
         """13 个中文点名别名都要进 `_FIXED_CHAN_MAP` + 正则，夹空格也认。"""
-        from app.direct_gen import _FIXED_CHAN_MAP, _FIXED_CHAN_RE, _parse_channel
+        from app.features.image.direct_gen import _FIXED_CHAN_MAP, _FIXED_CHAN_RE, _parse_channel
         for alias, cid in KREA2_ALIASES:
             with self.subTest(alias=alias):
                 self.assertEqual(_FIXED_CHAN_MAP.get(alias), cid)
@@ -1445,7 +1445,7 @@ class Krea2ChannelTest(unittest.TestCase):
         它不走 `_MASTER_TEMPLATE`，渠道清单得自己写一份——两处漏一处，
         那条管道就认不出新渠道（用户引用一张图 + 点名 krea2奶油 → 静默走默认档）。
         """
-        from app.direct_gen import _REVISE_TEMPLATE
+        from app.features.image.direct_gen import _REVISE_TEMPLATE
         for name in KREA2_CHANNELS:
             self.assertIn(name, _REVISE_TEMPLATE, "_REVISE_TEMPLATE 缺 %s" % name)
 
@@ -2165,7 +2165,7 @@ class CustomChannelTest(unittest.TestCase):
 
     def test_master_template_lists_custom_channels(self):
         """QQ 直达路径的 AI 提示词必须列出这些渠道名。"""
-        from app.direct_gen import _MASTER_TEMPLATE
+        from app.features.image.direct_gen import _MASTER_TEMPLATE
         for name in ("silver", "silver-hd", "jank"):
             with self.subTest(name=name):
                 self.assertIn(name, _MASTER_TEMPLATE)
@@ -2179,7 +2179,7 @@ class CustomChannelTest(unittest.TestCase):
 
     def test_custom_channels_are_allowed_skills(self):
         """模型传 skill=silver / silver-hd / jank 时，不能被 `_allowed_skills` 拒掉。"""
-        from app.direct_gen import _allowed_skills
+        from app.features.image.direct_gen import _allowed_skills
         allowed = _allowed_skills()
         for name in ("silver", "silver-hd", "jank"):
             with self.subTest(name=name):
@@ -2202,7 +2202,7 @@ class CustomChannelTest(unittest.TestCase):
         （见同文件那处改动），而不是写死在任何代码名单里。这条锁保证以后有人
         图省事把它们加进硬路由 / 硬名单时立刻报错——用户明确不要这种硬编码。
         """
-        from app.direct_gen import _FIXED_CHAN_MAP, _FIXED_CHAN_RE, _FIXED_SKILLS
+        from app.features.image.direct_gen import _FIXED_CHAN_MAP, _FIXED_CHAN_RE, _FIXED_SKILLS
         for name in ("silver", "silver-hd", "jank"):
             with self.subTest(name=name):
                 self.assertNotIn(name, _FIXED_CHAN_MAP)
@@ -2262,7 +2262,7 @@ class AnimaLoraChannelTest(unittest.TestCase):
         """
         from app.core import agents
         from app.core import agents as agent_store
-        from app.direct_gen import _allowed_skills
+        from app.features.image.direct_gen import _allowed_skills
         allowed = _allowed_skills()
         for name in self.NAMES:
             with self.subTest(name=name):
@@ -2302,7 +2302,7 @@ class AnimaLoraChannelTest(unittest.TestCase):
             self.assertEqual(_raw(name).count("__SEED__"), 2, name)
 
     def test_named_forms_resolve_to_the_new_channels(self):
-        from app.direct_gen import _parse_channel
+        from app.features.image.direct_gen import _parse_channel
         for text, want in (("anima线条", "anima-line"),
                            ("anima 线条", "anima-line"),
                            ("anima-line 少女", "anima-line"),
@@ -2320,7 +2320,7 @@ class AnimaLoraChannelTest(unittest.TestCase):
         「anima」只是三档。旧点名词**没留别名**，所以「anima柔和」现在也是它。
         谁哪天把「anima柔和」又加回 `_FIXED_CHAN_MAP`，这里立刻红。
         """
-        from app.direct_gen import _parse_channel
+        from app.features.image.direct_gen import _parse_channel
         for text in ("柔和 少女", "anima soft", "三档 柔和",
                      "anima柔和", "anima 柔和"):
             with self.subTest(text=text):
@@ -2332,7 +2332,7 @@ class AnimaLoraChannelTest(unittest.TestCase):
         这正是选它当点名词的原因：换成它之后，群里「线条干净点」这种日常说法
         不会误锁渠道（`_STYLE_ALIASES` / `_FIXED_CHAN_MAP` 里都没有它）。
         """
-        from app.direct_gen import _parse_channel, _FIXED_CHAN_MAP, _STYLE_ALIASES
+        from app.features.image.direct_gen import _parse_channel, _FIXED_CHAN_MAP, _STYLE_ALIASES
         self.assertNotIn("线条", _FIXED_CHAN_MAP)
         self.assertNotIn("线条", _STYLE_ALIASES)
         for text in ("线条", "线条 少女", "线条干净点"):
@@ -2429,7 +2429,7 @@ class Anima2sChannelTest(unittest.TestCase):
         self.assertEqual(_raw(self.NAME).count("__SEED__"), 2)
 
     def test_named_forms_resolve(self):
-        from app.direct_gen import _parse_channel, _strip_own_names
+        from app.features.image.direct_gen import _parse_channel, _strip_own_names
         for text, want in (("anima 2s 少女", "anima-2s"),
                            ("anima2s 少女", "anima-2s"),
                            ("anima-2s 少女", "anima-2s"),
@@ -2446,7 +2446,7 @@ class Anima2sChannelTest(unittest.TestCase):
         from app.core import agents
         from app.core import agents as agent_store
         from app import (persona)
-        from app.direct_gen import _allowed_skills
+        from app.features.image.direct_gen import _allowed_skills
         self.assertTrue(agents.allows_skill("qq", self.NAME))
         self.assertIn(self.NAME, _allowed_skills())
         # 角色 LoRA 要能挂到 2.9B 上（同架构），否则 IP 角色这张图就白挂。
@@ -2483,7 +2483,7 @@ class AnimaGuizhencaoTest(unittest.TestCase):
     def test_qq_can_see_and_use_it(self):
         from app.core import agents
         from app.core import agents as agent_store
-        from app.direct_gen import _allowed_skills
+        from app.features.image.direct_gen import _allowed_skills
         self.assertTrue(agents.allows_skill("qq", self.NAME), self.NAME)
         self.assertIn(self.NAME, _allowed_skills())
 
@@ -2532,7 +2532,7 @@ class AnimaGuizhencaoTest(unittest.TestCase):
         self.assertEqual(_raw(self.NAME).count("__SEED__"), 1, self.NAME)
 
     def test_named_forms_resolve_to_it(self):
-        from app.direct_gen import _parse_channel
+        from app.features.image.direct_gen import _parse_channel
         for text, want in (("anima鬼针草", self.NAME),
                            ("anima 鬼针草", self.NAME),
                            ("anima-guizhencao 少女", self.NAME),
@@ -2546,7 +2546,7 @@ class AnimaGuizhencaoTest(unittest.TestCase):
         旧口径（已推翻）：两边同名，光说「鬼针草」谁也别抢、不触发。
         用户拍板：无前缀时落 krea2；要 anima 那条的打全名「anima鬼针草」。
         """
-        from app.direct_gen import _parse_channel
+        from app.features.image.direct_gen import _parse_channel
         self.assertEqual(_parse_channel("krea2鬼针草 少女")[0], "krea2-guizhencao")
         self.assertEqual(_parse_channel("anima鬼针草 少女")[0], "anima-guizhencao")
         for text in ("鬼针草", "鬼针草 少女"):
@@ -2702,7 +2702,7 @@ class MossTwoChannelTest(unittest.TestCase):
         self.assertEqual(lora_slots.nai5_prefix("moss-light"), "")
 
     def test_aliases(self):
-        from app import direct_gen
+        from app.features.image import direct_gen
         for text, want in (("moss 一只猫", "moss-qunyou"),
                            ("moss光影 一只猫", "moss-light"),
                            ("moss 光影 少女", "moss-light"),
