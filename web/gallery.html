@@ -20,7 +20,7 @@
   /* ── 顶栏 ── */
   header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:10px;
     padding:12px 14px calc(12px + env(safe-area-inset-top,0)) 14px;
-    background:rgba(13,13,16,.86);backdrop-filter:blur(14px);
+    background:var(--bg);
     border-bottom:1px solid var(--line)}
   .brand{font-size:17px;font-weight:700;letter-spacing:.5px}
   .brand i{color:var(--pink);font-style:normal}
@@ -30,22 +30,35 @@
     font-size:13px;padding:6px 14px;border-radius:8px;cursor:pointer}
   .tabs button.on{background:var(--card2);color:var(--tx);font-weight:600}
   .go{font-size:13px;color:var(--dim);padding:6px 10px;border:1px solid var(--line);
-    border-radius:9px;white-space:nowrap;flex:0 0 auto}
-  /* 顶栏三样（标题/两个 tab/入口）在 360px 上装不下整句，窄屏只留两个字的 */
-  .go .g2{display:none}
+    border-radius:9px;white-space:nowrap;flex:0 0 auto;background:transparent;
+    cursor:pointer;font-family:inherit}
+  .go:hover{color:var(--tx);border-color:var(--pink)}
+  .more-menu{display:none;position:absolute;right:12px;top:calc(100% + 8px);
+    z-index:30;width:210px;padding:8px;background:var(--card);
+    border:1px solid var(--line);border-radius:12px;
+    box-shadow:0 14px 40px rgba(0,0,0,.45)}
+  header.more-open .more-menu{display:grid;gap:2px}
+  .menu-item{display:block;padding:10px 12px;border-radius:8px;
+    color:var(--dim);font-size:13px}
+  .menu-item:hover{background:var(--card2);color:var(--tx)}
   @media(max-width:430px){
     header{gap:8px;padding-left:12px;padding-right:12px}
     .brand{font-size:16px}
     .tabs button{padding:6px 10px;font-size:12.5px}
-    /* 窄屏顶栏要装下「画廊 + 三个 tab + 预设 + 工坊」，两个入口各瘦一点，
-       320px 的旧机型才不会把 tab 挤扁 */
     .go{padding:6px 8px;font-size:12px}
-    .go .g1{display:none}
-    .go .g2{display:inline}
+    .more-menu{left:12px;right:12px;width:auto;
+      grid-template-columns:1fr 1fr}
   }
 
   /* ── 工具条 ── */
-  .tools{display:flex;gap:8px;flex-wrap:wrap;padding:12px 14px 4px}
+  .tools{display:flex;gap:8px;flex-wrap:wrap;padding:12px 14px 4px;
+    position:relative}
+  .tools .tool-more{display:none;position:absolute;left:14px;top:calc(100% + 2px);
+    z-index:25;min-width:132px;padding:6px;background:var(--card);
+    border:1px solid var(--line);border-radius:10px;
+    box-shadow:0 10px 28px rgba(0,0,0,.4);flex-direction:column;gap:4px}
+  .tools .tool-more.on{display:flex}
+  .tools .tool-more button{text-align:left}
   .tools button{border:1px solid var(--line);background:var(--card);color:var(--tx);
     font:inherit;font-size:13px;padding:7px 13px;border-radius:10px;cursor:pointer}
   .tools button:active{background:var(--card2)}
@@ -272,22 +285,23 @@
 </head>
 <body>
 
-<header>
-  <div class="brand">画<i>廊</i></div>
+<header id="galHeader">
+  <div class="brand">画廊</div>
   <div class="tabs">
     <button data-tab="owner" class="on">站长</button>
     <button data-tab="pub">公开</button>
     <button data-tab="mine" id="tabMine">我的</button>
   </div>
-  <a class="go" href="/preset" id="presetLink"><span class="g1">自定义预设</span><span class="g2">预设</span></a>
-  <!-- 游客用「登录」占住预设那个位置：点了回到登录页，登完再进画廊 -->
-  <a class="go" href="/preset" id="guestLogin" style="display:none"><span class="g1">登录</span><span class="g2">登录</span></a>
-  <a class="go" href="/workshop"><span class="g1">提示词工坊</span><span class="g2">工坊</span></a>
-  <!-- 角色扮演（2026-11-03）：登录后从这里进。未登录时的入口在 friend.html -->
-  <a class="go" href="/persona"><span class="g1">角色扮演</span><span class="g2">扮演</span></a>
-  <!-- 漫画工作台（2026-11-10）：必须登录，按账号限额。没登录点进去会先到登录页，
-       验证完 reload 回 /comic，不用记第二套地址。 -->
-  <a class="go" href="/comic"><span class="g1">漫画工作台</span><span class="g2">漫画</span></a>
+  <button class="go more-btn" id="moreBtn" type="button"
+          aria-haspopup="true" aria-expanded="false">更多 ▾</button>
+  <div class="more-menu" id="moreMenu">
+    <a class="menu-item" href="/preset" id="presetLink">自定义预设</a>
+    <!-- 游客用「登录」占住预设那个位置：点了回到登录页，登完再进画廊 -->
+    <a class="menu-item" href="/preset" id="guestLogin" style="display:none">登录</a>
+    <a class="menu-item" href="/workshop">提示词工坊</a>
+    <a class="menu-item" href="/persona">角色扮演</a>
+    <a class="menu-item" href="/comic">漫画工作台</a>
+  </div>
 </header>
 
 <!-- 「我的」下面再分三格：作品 / 收藏 / 点赞。只在「我的」时出现 -->
@@ -690,9 +704,17 @@
     // 扫描是站主的事，放「站长」tab —— 它扫的就是这一批目录，
     // 放在这里按钮和内容对得上，也不用挤在「我的」里。
     if (S.owner && S.tab === "owner") {
-      t.appendChild(btn("⟳ 扫描文件夹", "primary", openScan));
-      t.appendChild(btn("↻ 全部重扫", "", scanAll));
-      t.appendChild(btn("⌫ 清理失效", "", clean));
+      t.appendChild(btn("＋ 扫描文件夹", "primary", openScan));
+      t.appendChild(btn("更多 ▾", "tool-more-btn", function () {
+        var m = $("toolMore");
+        if (m) m.classList.toggle("on");
+      }));
+      var more = document.createElement("div");
+      more.className = "tool-more";
+      more.id = "toolMore";
+      more.appendChild(btn("↻ 全部重扫", "", scanAll));
+      more.appendChild(btn("⌫ 清理失效", "", clean));
+      t.appendChild(more);
     }
   }
 
@@ -1702,5 +1724,43 @@
   setTimeout(fromHash, 600);
 })();
 </script>
+
+<script>
+(function () {
+  var head = document.getElementById("galHeader");
+  var btn = document.getElementById("moreBtn");
+  var menu = document.getElementById("moreMenu");
+  if (!head || !btn || !menu) return;
+  function close() {
+    head.classList.remove("more-open");
+    btn.setAttribute("aria-expanded", "false");
+  }
+  btn.addEventListener("click", function (e) {
+    e.stopPropagation();
+    var open = head.classList.toggle("more-open");
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  menu.addEventListener("click", function (e) {
+    if (e.target.closest("a")) close();
+  });
+  head.addEventListener("click", function (e) {
+    if (e.target.closest("#moreBtn") || e.target.closest("#moreMenu")) return;
+    close();
+  });
+  document.addEventListener("click", function (e) {
+    if (!head.contains(e.target)) close();
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") close();
+  });
+  document.addEventListener("click", function (e) {
+    var m = document.getElementById("toolMore");
+    if (!m) return;
+    if (e.target.closest(".tool-more")) { m.classList.remove("on"); return; }
+    if (!e.target.closest(".tools")) m.classList.remove("on");
+  });
+})();
+</script>
+
 </body>
 </html>
