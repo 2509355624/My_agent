@@ -20,7 +20,8 @@ from unittest import mock
 
 from flask import Response
 
-from app import comic, gen_api, gen_params, image_jobs, main
+from app.features.image import gen_params
+from app import comic, gen_api, image_jobs, main
 from app.skills import load_skill
 
 

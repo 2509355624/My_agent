@@ -19,7 +19,8 @@ import json
 import os
 import random
 
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))))
 _TSV = os.path.join(_ROOT, "skills", "anima-tags", "data", "tags.tsv")
 WAIFU_POOL_PATH = os.path.join(_ROOT, "agents", "qq", "waifu_pool.json")
 

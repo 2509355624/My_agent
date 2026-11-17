@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from app import random_tags
+from app.features.image import random_tags
 
 
 class PoolValidateTest(unittest.TestCase):

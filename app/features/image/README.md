@@ -14,6 +14,7 @@
 `migrate.py`（旧图目录迁移）、`delivery.py`（caption 与投递）、`gen_steps.py`（步数/采样器
 档位）、`default_loras.py`（默认 LoRA 表）、`comfy_status.py`（ComfyUI 在线状态探测）、
 `comfy_launch.py`（ComfyUI 启动命令）、`comfy_progress.py`（ComfyUI 进度解析）、
-`comfy_out.py`（output 按会话/渠道分目录）、`job_ledger.py`（任务/重抽台账）已迁入并
-接线；`image_jobs.py` 仍留在根目录，测试直接 patch 它的队列/ComfyUI 内部函数，硬拆前
+`comfy_out.py`（output 按会话/渠道分目录）、`job_ledger.py`（任务/重抽台账）、
+`random_tags.py`（标签随机）、`gen_params.py`（参数规整）已迁入并接线；
+`image_jobs.py` 仍留在根目录，测试直接 patch 它的队列/ComfyUI 内部函数，硬拆前
 要先定测试兼容策略。
