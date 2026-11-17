@@ -24,8 +24,9 @@ import time
 from flask import Blueprint, Response, jsonify, request, send_file
 
 from app.features.persona import billing as persona_billing
+from app.features.persona import writing_style
 from app import (config, friend_auth, llm, persona,
-                 usage, writing_style)
+                 usage)
 from app.features.chat import background as chat_bg
 
 log = logging.getLogger("persona_api")

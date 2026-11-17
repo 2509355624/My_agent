@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""酒馆分层写法（app/writing_style.py）与接入链路的回归测试。
+"""酒馆分层写法（app/features/persona/writing_style.py）与接入链路的回归测试。
 
 覆盖四件事：
 1. 纯函数档位归一化 / 卡面速写 / 示例分块 / 贴脸尾注；
@@ -21,7 +21,7 @@ from flask import Flask, jsonify
 import app.agents as agents
 import app.persona as persona
 import app.persona_api as persona_api
-from app import writing_style
+from app.features.persona import writing_style
 
 
 def _card(**kw):

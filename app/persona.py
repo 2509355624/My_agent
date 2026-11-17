@@ -63,9 +63,10 @@ from app.features.persona import adult as adult_state
 from app.features.persona import pregnancy
 from app.features.persona import rag as persona_rag
 from app.features.persona import items as _items
+from app.features.persona import writing_style
 from app import (affection,
                    llm, trigger,
-                 writing_skills, writing_style)
+                 writing_skills)
 from app.config import (BASE_DIR, PERSONA_MODEL, PERSONA_MODEL_DEFAULT,
                         PERSONA_MODELS, PERSONA_PROVIDER,
                         persona_model_of,

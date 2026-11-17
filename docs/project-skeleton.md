@@ -194,7 +194,7 @@ def run(job_id: str) -> None:
 | `comic` | `comic*.py`、`moss_*.py`、`silver_comic.py` | 漫画、编剧、渲染、额度、作品 |
 | `comic` 迁移后 | `features/comic/quota.py`、`thumb.py`、`prompt_suffix.py`、`delivery.py`、`portrait.py`、`story.py`、`render_opts.py`、`writer.py` 已接线；漫画主流程暂留根目录 | 漫画额度、缩略图、提示词后缀、交付、头像、故事、渲染参数、编剧；分镜/渲染待拆 |
 | `persona` | `persona*.py`、`affection*.py`、`galgame.py`、`pregnancy.py`、`achievements.py`、`items.py` | 角色扮演、计费、记忆、查看台 |
-| `persona` 迁移后 | `features/persona/billing.py`、`adult.py`、`rag.py`、`pregnancy.py`、`items.py`、`achievements.py` 已接线；`persona.py` 仍暂留根目录 | 角色计费、成人状态、长期记忆、怀孕、道具、成就；人设/查看台待拆 |
+| `persona` 迁移后 | `features/persona/` 已接线 `billing`、`adult`、`rag`、`pregnancy`、`items`、`achievements`、`writing_style`；`persona.py` 仍暂留根目录 | 角色计费、成人状态、长期记忆、怀孕、道具、成就、写法档位；人设/查看台待拆 |
 | `rag` | `rag/`、`rag_lab.py`、`rerank.py` | 文档问答、切片、检索、重排 |
 | `rag` 迁移后 | `features/rag/lab.py`、`rag_client.py`、`rag_daemon.py`、`vector_store.py`、`rerank.py` | 已接线，URL 不变 |
 | `novel` | `novel.py`、`novel_api.py`、`novel_writing.py` | 小说模式、世界书、裁定链 |
