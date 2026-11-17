@@ -45,7 +45,8 @@ from flask import Blueprint, g, jsonify, request
 
 from app.features.comic import quota as comic_quota
 from app.integrations import llm
-from app import (config as _cfg, novel)
+from app.features.novel import novel
+from app import config as _cfg
 from app.config import PERSONA_MODEL, PERSONA_PROVIDER
 
 log = logging.getLogger("novel_api")

@@ -23,7 +23,7 @@ from unittest import mock
 
 import flask
 
-from app import novel
+from app.features.novel import novel
 from app.features.persona import rag as persona_rag
 from app.features.novel import routes as novel_api
 
@@ -31,7 +31,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAGE = os.path.join(ROOT, "web", "novel.html")
 MAIN = os.path.join(ROOT, "app", "main.py")
 INDEX = os.path.join(ROOT, "web", "index.html")
-NOVEL_SRC = os.path.join(ROOT, "app", "novel.py")
+NOVEL_SRC = os.path.join(ROOT, "app", "features", "novel", "novel.py")
 
 OPENING_TEXT = "林岸睁开眼，宿舍里只剩灰白的天光。"
 
@@ -2008,7 +2008,7 @@ class ExpansionContractTest(unittest.TestCase):
     三条事实、写作照事实写结果，过程整段被砍。这里锁住「扩写」口径。"""
 
     def setUp(self):
-        self.src = _read(os.path.join(ROOT, "app", "novel.py"))
+        self.src = _read(os.path.join(ROOT, "app", "features", "novel", "novel.py"))
         self.writer = novel._NOVEL_CONTRACT
         self.director = novel._DIRECTOR_PROMPT
 
@@ -2508,7 +2508,7 @@ class NovelWritingSkillTest(NovelBase):
     def test_writer_head_carries_it_director_does_not(self):
         """编剧只出裁定、不写正文，拿不到笔法规范。"""
         import tempfile
-        from app import novel
+        from app.features.novel import novel
         w = {"player": {"name": "林决", "identity": "实习医生",
                         "identity_desc": "刚来三个月"},
              "rules": ["不能离岗"]}
@@ -2520,7 +2520,7 @@ class NovelWritingSkillTest(NovelBase):
 
     def test_head_is_stable_across_calls(self):
         """放 head 就是为了吃前缀缓存：同样输入必须逐字节一样。"""
-        from app import novel
+        from app.features.novel import novel
         w = {"player": {"name": "林决", "identity": "实习医生",
                         "identity_desc": "刚来三个月"},
              "rules": ["不能离岗"]}
@@ -2573,7 +2573,7 @@ class NovelUiFixTest(NovelBase):
 
     def test_usage_accumulates_across_turns(self):
         """`llm.current_usage()` 只记当前一轮，面板要的是累计。"""
-        from app import novel
+        from app.features.novel import novel
         snap = novel.usage_snapshot()
         self.assertIn("tokens", snap)
         self.assertIn("calls", snap)
@@ -2648,7 +2648,7 @@ class UndoBusyAndPickTest(NovelBase):
         self.assertIn("var NV_GET_TIMEOUT = 60000", h)
         self.assertIn("没有回音", h, "超时要说人话，不能只抛 AbortError")
         self.assertIn("不会重复算一轮", h, "要告诉用户重发同一句能接上")
-        from app import novel      # noqa: F401  —— 只为确认后端没被牵连
+        from app.features.novel import novel      # noqa: F401  —— 只为确认后端没被牵连
         self.assertTrue(True)
 
     def test_pick_popup_only_on_opening_a_book(self):
