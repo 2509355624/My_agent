@@ -88,6 +88,22 @@ class DevCurveTest(unittest.TestCase):
         self.assertEqual(affection.body_dev(_full(100)), 100)
         self.assertEqual(affection.body_dev({}), 0)
 
+    def test_current_overshoot_is_clamped_not_migrated_as_old_scale(self):
+        """新标尺的单处值偶尔写到 107：应夹到 100，不能按旧 500 标尺除以 5。"""
+        rec = {"dev": {"mouth": 107, "nipple": 55, "pussy": 55,
+                       "anus": 10, "skin": 100}}
+        out = affection._migrate(rec)
+        self.assertEqual(out["dev"]["mouth"], 100)
+        self.assertEqual(out["dev"]["skin"], 100)
+
+    def test_legacy_body_key_still_uses_five_to_one(self):
+        """真·旧档（有 `body` 键）仍按 500 → 100 的 5:1 换算。"""
+        rec = {"dev": {"body": 500, "mouth": 107, "nipple": 0,
+                       "pussy": 0, "anus": 0}}
+        out = affection._migrate(rec)
+        self.assertEqual(out["dev"]["skin"], 100)
+        self.assertEqual(out["dev"]["mouth"], 21)
+
     def test_pushing_one_spot_past_max_does_not_raise_body(self):
         """用户点名的那条：某处满了继续刷它，体质不该再涨。"""
         a = {"pussy": 100, "mouth": 0, "nipple": 0, "anus": 0, "skin": 0}

@@ -1365,6 +1365,16 @@ class ExciteTest(AffBase):
         self.assertTrue(res["in_scene"])
         self.assertGreater(res["excite"], 0)
 
+    def test_dev_never_exceeds_100(self):
+        """开发度已经满 100 再被开发，也只能停在 100，不能写出 107。"""
+        key = self._raid()
+        ent, rec = affection._ensure(key)
+        rec["dev"] = {k: affection.DEV_MAX for k in affection.DEV_KEYS}
+        affection._save_entry(key, ent)
+        res = self._settle(key, in_scene=True, act="intense",
+                           spot="pussy", dev={"pussy": 20})
+        self.assertEqual(res["dev"]["pussy"], affection.DEV_MAX)
+
     def test_tail_line_only_shows_it_in_scene(self):
         """没在场景里不该多一行「高潮 0」——那会让人以为她冷了。"""
         res = {"active": True, "level": 2, "levelName": "能抱了",

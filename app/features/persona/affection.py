@@ -1496,6 +1496,9 @@ def _migrate(rec):
     # `None`，`record_of` 把它当成「没有好感记录」，于是每次读都新建一份
     # 空白记录：好感、开发度全被清零。踩过一次，别再缩进。
     dev = rec.get("dev") if isinstance(rec.get("dev"), dict) else {}
+    # 2026-11-18：`body` 键代表真·旧标尺（500 满分），才按 5:1 收。
+    # 新标尺偶尔会把某处写到 107，不能也除以 5——那会从 107 直接掉到 21。
+    had_old_dev_body = "body" in dev
     if "skin" not in dev and "body" in dev:
         dev["skin"] = dev.pop("body")
     for _k in DEV_KEYS:
@@ -1506,8 +1509,8 @@ def _migrate(rec):
                 _v = int(dev[_k] or 0)
             except (TypeError, ValueError):
                 _v = 0
-            if _v > DEV_MAX:                     # 只收一次，之后原位
-                _v = int(round(_v / 5.0))
+            if _v > DEV_MAX:
+                _v = int(round(_v / 5.0)) if had_old_dev_body else DEV_MAX
             dev[_k] = max(0, min(DEV_MAX, _v))
     # 旧键不留在存档里，免得两边各读一份。
     for _old in ("body",):
@@ -2517,8 +2520,10 @@ def settle(line_key, score, game_day=None):
             if dv:
                 dv = int(round(dv * mult))
             if dv:
-                dev_prev[k] = int(dev_prev.get(k) or 0) + dv
-                dev_gain += dv
+                before = int(dev_prev.get(k) or 0)
+                after = min(dc["max"], before + dv)
+                dev_prev[k] = after
+                dev_gain += after - before          # 只记真正落进去的量
         rec["dev"] = dev_prev
 
     # 勾子（2026-11-05）：编剧给的那一句「身体先失控」。**不消费数值**，
