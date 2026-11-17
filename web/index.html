@@ -1371,6 +1371,62 @@
       right: -300px;
     }
   }
+
+/* ============================================================
+   2026-11-17 首页顶栏收口：4 个常驻入口 + 「更多」菜单
+   17 个按钮不再一直铺在顶栏；菜单里的按钮仍是原来的 DOM。
+   ============================================================ */
+.header-actions {
+  position: relative;
+  flex-wrap: nowrap;
+  z-index: 50;
+}
+.header-actions .more-toggle {
+  display: inline-flex;
+  align-items: center;
+}
+
+.more-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 80;
+  width: min(520px, calc(100vw - 32px));
+  padding: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+.header-actions.more-open .more-menu { display: grid; }
+.more-menu .btn {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+@media (max-width: 768px) {
+  .header-actions {
+    position: static;
+    flex-wrap: wrap;
+  }
+  .more-menu {
+    position: fixed;
+    top: 78px;
+    left: 12px;
+    right: 12px;
+    width: auto;
+    max-height: 66vh;
+    overflow-y: auto;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 </style>
 </head>
 <body>
@@ -1387,28 +1443,26 @@
       <span class="model-badge" id="modelBadge">加载中...</span>
     </div>
     <div class="header-actions">
-      <!-- keep-mobile = 手机端折叠后仍固定显示的四个入口（用户 2026-11-16 拍板） -->
-      <button class="btn keep-mobile" onclick="window.open('/admin','_blank')" title="Agent 管理：在线编辑人设与默认模型（新标签打开）">🛠 管理</button>
-      <button class="btn keep-mobile" onclick="window.open('/status','_blank')" title="状态监控：谁在排队（哪个群/私聊在等并发槽）、生图队列、ComfyUI、NapCat 在线状态（新标签打开）">📊 状态</button>
-      <button class="btn" onclick="window.open('/migrate','_blank')" title="图片迁移：一次一批横向看过去，觉得好的点一下就复制到你的文件夹（只复制，原图不动；新标签打开）">🖼 迁移</button>
-      <button class="btn" onclick="window.open('/comic','_blank')" title="漫画工作台：输入需求 → 编剧出剧本 → 逐格渲染换种子 → qwen 加气泡（新标签打开）">🎬 漫画</button>
-      <button class="btn" onclick="window.open('/moss','_blank')" title="moss 漫画台：一句话剧情 → 编剧写整页分镜 → moss 一次出图，四格小漫画一步到位（新标签打开）">🀄 moss 漫画</button>
-      <button class="btn" onclick="window.open('/gen','_blank')" title="跑图台：无 AI 裸跑图 —— 左边选渠道、下面写提示词、点生成直接出图（新标签打开）">🎨 跑图台</button>
-      <!-- 画廊（2026-11-04）：在 5175 网关那台，端口不同，按当前访问的主机名拼地址 -->
-      <button class="btn" onclick="openFriendPage('/gallery')" title="画廊：群友的作品墙 —— 打开 5175 那台（首次进要填 QQ 收验证码，也可以选游客只读逛）">🖼 画廊</button>
-      <button class="btn showcase-go keep-mobile" onclick="openShowcase()" title="公开展示页：读取当前隧道地址并打开 /showcase；隧道没开或地址未就绪时退回本机展示页">🌐 公开展示页</button>
-      <button class="btn" onclick="window.open('/characters','_blank')" title="人设卡池：QQ 角色扮演用的人设卡 —— 外观固定块由代码原样拼在每张画面最前面，保证第 100 张还是同一个人（新标签打开）">🎭 角色</button>
-      <button class="btn keep-mobile" onclick="window.open('/persona','_blank')" title="角色扮演：网页端选一张卡直接开聊，和 QQ 用同一套剧情引擎（新标签打开）">💬 角色扮演</button>
-      <button class="btn persona-go" onclick="window.open('/persona_admin','_blank')" title="角色扮演查看台：谁玩过、聊了什么 —— 左边列出所有会话（QQ私聊/群聊/网页/游客），点开看完整对话（新标签打开）">💬 扮演记录</button>
-      <button class="btn" onclick="window.open('/novel','_blank')" title="小说模式：和一对一角色扮演相互隔离的第三套 —— 世界书 + 编剧裁定 + 第三人称正文，第一版玩法是丧尸末日生存模拟（新标签打开）">小说模式</button>
-      <button class="btn" onclick="window.open('/novel_admin','_blank')" title="小说记录：谁写了什么小说 —— 按 QQ 列出所有世界书，点开看主角、第几章、多少轮和整本正文（只读，新标签打开）">📖 小说记录</button>
-      <button class="btn" onclick="window.open('/output','_blank')" title="图片管理台：ComfyUI output 目录的网页资源管理器 —— 左边目录树点开就看，右边缩略图网格，勾选即删，整目录一键删（新标签打开）">🗂 图片管理</button>
-      <button class="btn" onclick="window.open('/card','_blank')" title="造卡台：一句话描述 → 星陨AI 创建表单要的那五段文案 + 864×1536 竖版封面，逐框复制粘贴（新标签打开）">📇 造卡</button>
-      <button class="btn toggle-read" id="readModeBtn" onclick="toggleReadMode()">📖 阅读</button>
-      <button class="btn danger" onclick="clearChat()">清空会话</button>
-      <!-- 手机端折叠入口：只切 class，不搬 DOM、不克隆按钮——克隆会产生重复 id
-           （如 #readModeBtn），展开后点到的就不是原按钮了。桌面端始终隐藏。 -->
-      <button class="btn keep-mobile more-toggle" onclick="var p=this.parentNode,o=p.classList.toggle('more-open');this.textContent=o?'▲ 收起':'⋯ 更多';" title="展开其余功能入口（手机端）">⋯ 更多</button>
+      <button class="btn keep-mobile" onclick="window.open('/admin','_blank')" title="Agent 管理：在线编辑人设与默认模型（新标签打开）">管理</button>
+      <button class="btn keep-mobile" onclick="window.open('/status','_blank')" title="状态监控：谁在排队（哪个群/私聊在等并发槽）、生图队列、ComfyUI、NapCat 在线状态（新标签打开）">状态</button>
+      <button class="btn showcase-go keep-mobile" onclick="openShowcase()" title="公开展示页：读取当前隧道地址并打开 /showcase；隧道没开或地址未就绪时退回本机展示页">公开展示页</button>
+      <button class="btn keep-mobile" onclick="window.open('/persona','_blank')" title="角色扮演：网页端选一张卡直接开聊，和 QQ 用同一套剧情引擎（新标签打开）">角色扮演</button>
+      <button class="btn keep-mobile more-toggle" onclick="this.parentNode.classList.toggle('more-open');var o=this.parentNode.classList.contains('more-open');this.textContent=o?'收起':'更多';" title="展开其余功能入口">更多</button>
+      <div class="more-menu" id="moreMenu">
+        <button class="btn" onclick="window.open('/migrate','_blank')" title="图片迁移：一次一批横向看过去，觉得好的点一下就复制到你的文件夹（只复制，原图不动；新标签打开）">迁移</button>
+        <button class="btn" onclick="window.open('/comic','_blank')" title="漫画工作台：输入需求 → 编剧出剧本 → 逐格渲染换种子 → qwen 加气泡（新标签打开）">漫画</button>
+        <button class="btn" onclick="window.open('/moss','_blank')" title="moss 漫画台：一句话剧情 → 编剧写整页分镜 → moss 一次出图，四格小漫画一步到位（新标签打开）">moss 漫画</button>
+        <button class="btn" onclick="window.open('/gen','_blank')" title="跑图台：无 AI 裸跑图 —— 左边选渠道、下面写提示词、点生成直接出图（新标签打开）">跑图台</button>
+        <button class="btn" onclick="openFriendPage('/gallery')" title="画廊：群友的作品墙 —— 打开 5175 那台（首次进要填 QQ 收验证码，也可以选游客只读逛）">画廊</button>
+        <button class="btn" onclick="window.open('/characters','_blank')" title="人设卡池：QQ 角色扮演用的人设卡 —— 外观固定块由代码原样拼在每张画面最前面，保证第 100 张还是同一个人（新标签打开）">角色</button>
+        <button class="btn persona-go" onclick="window.open('/persona_admin','_blank')" title="角色扮演查看台：谁玩过、聊了什么 —— 左边列出所有会话（QQ私聊/群聊/网页/游客），点开看完整对话（新标签打开）">扮演记录</button>
+        <button class="btn" onclick="window.open('/novel','_blank')" title="小说模式：和一对一角色扮演相互隔离的第三套 —— 世界书 + 编剧裁定 + 第三人称正文，第一版玩法是丧尸末日生存模拟（新标签打开）">小说模式</button>
+        <button class="btn" onclick="window.open('/novel_admin','_blank')" title="小说记录：谁写了什么小说 —— 按 QQ 列出所有世界书，点开看主角、第几章、多少轮和整本正文（只读，新标签打开）">小说记录</button>
+        <button class="btn" onclick="window.open('/output','_blank')" title="图片管理台：ComfyUI output 目录的网页资源管理器 —— 左边目录树点开就看，右边缩略图网格，勾选即删，整目录一键删（新标签打开）">图片管理</button>
+        <button class="btn" onclick="window.open('/card','_blank')" title="造卡台：一句话描述 → 星陨AI 创建表单要的那五段文案 + 864×1536 竖版封面，逐框复制粘贴（新标签打开）">造卡</button>
+        <button class="btn toggle-read" id="readModeBtn" onclick="toggleReadMode()">阅读</button>
+        <button class="btn danger" onclick="clearChat()">清空会话</button>
+      </div>
     </div>
   </div>
 
@@ -1438,7 +1492,7 @@
         <button class="icon-btn-sm" onclick="toggleModelPanel()">✕</button>
       </div>
       <div class="side-form">
-        <div class="side-hint">选择对话使用的模型提供商，切换后立即生效。</div>
+        <div class="side-hint">切换模型，立即生效。</div>
 
         <div class="form-group">
           <label>AI Provider</label>
@@ -1459,13 +1513,8 @@
       <div class="messages" id="messages">
         <div class="empty" id="emptyState">
           <div class="empty-icon">⚡</div>
-          <div class="empty-text">开始对话吧</div>
-          <div class="empty-hint">多行内容直接粘贴，Ctrl+Enter 发送</div>
-          <div class="tool-list">
-            <div class="tool-chip"><span class="dot"></span>generate_image</div>
-            <div class="tool-chip"><span class="dot"></span>web_search</div>
-            <div class="tool-chip"><span class="dot"></span>read_document</div>
-          </div>
+          <div class="empty-text">开始对话</div>
+          <div class="empty-hint">输入一句话，或点相机发图</div>
         </div>
       </div>
 
@@ -1479,7 +1528,7 @@
         <div class="input-wrapper">
           <textarea
             id="inputBox"
-            placeholder="输入消息，可直接 Ctrl+V 粘贴图片..."
+            placeholder="输入消息，可直接粘贴图片"
             rows="1"
           ></textarea>
           <div class="input-actions">
@@ -1505,7 +1554,7 @@ const readModeBtn = document.getElementById('readModeBtn');
 function setReadMode(on) {
   document.body.classList.toggle('novel-mode', on);
   localStorage.setItem('novelMode', on ? '1' : '0');
-  readModeBtn.textContent = on ? '💬 气泡' : '📖 阅读';
+  readModeBtn.textContent = on ? '气泡' : '阅读';
   readModeBtn.classList.toggle('active', on);
 }
 function toggleReadMode() {
@@ -3150,5 +3199,30 @@ async function clearChat() {
   }
 }
 </script>
+
+<script>
+(function () {
+  var actions = document.querySelector(".header-actions");
+  var toggle = document.querySelector(".more-toggle");
+  if (!actions || !toggle) return;
+
+  function closeMore() {
+    actions.classList.remove("more-open");
+    toggle.textContent = "更多";
+  }
+
+  document.addEventListener("click", function (e) {
+    if (e.target.closest(".more-toggle")) return;
+    if (e.target.closest(".more-menu") || !actions.contains(e.target)
+        || e.target.closest(".header-actions .btn")) {
+      closeMore();
+    }
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") closeMore();
+  });
+})();
+</script>
+
 </body>
 </html>

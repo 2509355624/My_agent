@@ -51,12 +51,13 @@ class IndexMobileHeaderTest(unittest.TestCase):
         for forbidden in ("cloneNode", "appendChild", "innerHTML", "removeChild"):
             self.assertNotIn(forbidden, src)
 
-    def test_css_folds_non_pinned_buttons(self):
+    def test_more_menu_folds_secondary_buttons(self):
         html = _html()
-        self.assertIn(".header-actions > .btn:not(.keep-mobile) { display: none; }",
+        self.assertIn(".more-menu {", html)
+        self.assertIn("display: none;", html)
+        self.assertIn(".header-actions.more-open .more-menu { display: grid; }",
                       html)
-        self.assertIn(".header-actions.more-open > .btn:not(.keep-mobile) "
-                      "{ display: inline-flex; }", html)
+        self.assertIn('id="moreMenu"', html)
 
     def test_mobile_header_stacks_in_two_rows(self):
         html = _html()
@@ -65,11 +66,10 @@ class IndexMobileHeaderTest(unittest.TestCase):
         self.assertIn(".header-actions .more-toggle { display: inline-flex; }",
                       block)
 
-    def test_desktop_hides_toggle_outside_media_query(self):
+    def test_more_toggle_is_always_available(self):
         html = _html()
-        before_media = html[:html.index("@media (max-width: 768px)")]
-        self.assertIn(".header-actions .more-toggle { display: none; }",
-                      before_media)
+        self.assertIn(".header-actions .more-toggle { display: inline-flex; }",
+                      html)
 
 
 if __name__ == "__main__":
