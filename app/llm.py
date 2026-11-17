@@ -550,7 +550,7 @@ def _record_usage(usage, elapsed=None, provider="", model="", kind="llm"):
     mark = ""
     tag = "-"
     try:
-        from app import usage as usage_stats
+        from app.core import usage as usage_stats
         # 会话归属 + 实际模型都打进这一行（2026-10-03）。原来只有百分比，
         # 出了冷调用根本查不出是「哪个会话 / 哪家模型」——日志是多会话并发
         # 交错的，光靠上下文猜不准。这两个字段是后面做归因分析的唯一抓手。
@@ -581,7 +581,7 @@ def _record_usage(usage, elapsed=None, provider="", model="", kind="llm"):
              hit, total, rate * 100, miss, out, think, tail, mark)
 
     try:
-        from app import usage as usage_stats
+        from app.core import usage as usage_stats
         usage_stats.record(hit or 0, miss or 0, output=out,
                            provider=provider, model=model,
                            elapsed=elapsed, kind=kind)
@@ -776,7 +776,7 @@ def _mark_dead(key, reason, ttl=None):
     # 失败也落一行流水（2026-10-03 补）：账单按「请求数」算，失败同样占一次
     # 调用。只打日志不进账本的话，「账单 N 次 vs 日志 M 次」这种缺口永远查不出来。
     try:
-        from app import usage as usage_stats
+        from app.core import usage as usage_stats
         usage_stats.log_fail(key[0], key[1], reason)
     except Exception:                # 统计挂了不能影响主链路
         pass

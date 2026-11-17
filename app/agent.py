@@ -1025,7 +1025,7 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
             # 行里打出来（`尾巴≈N`）。它是每轮必 miss 的部分，等于命中率的
             # 天花板——不记下来，「这轮为什么这么贵」在日志里看不出来。
             try:
-                from app import usage as _usage_stats
+                from app.core import usage as _usage_stats
                 _usage_stats.set_tail(tail_tokens(history, extra_context))
             except Exception:        # 纯展示，绝不能影响主链路
                 pass
@@ -1116,7 +1116,7 @@ def run_agent_stream(user_input, history, provider=None, model=None, pre_tool_re
             # 但「这一轮到底调没调工具、输出多长」只有这里知道。写进流水后，
             # 对账脚本不必去 grep 会轮转的日志，就能算出「生图指令的成功率」。
             try:
-                from app import usage as _usage
+                from app.core import usage as _usage
                 _usage.log_call({
                     "kind": "turn", "n": turn_count,
                     "in_msgs": len(llm_history),

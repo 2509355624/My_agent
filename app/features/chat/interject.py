@@ -66,7 +66,7 @@ import time
 
 from app import agents as agent_store
 from app.features.chat import recent
-from app import usage
+from app.core import usage
 from app.config import (
     QQ_INTERJECT_CONTEXT_MAX_CHARS, QQ_INTERJECT_CONTEXT_MESSAGES,
     QQ_INTERJECT_GROUPS,

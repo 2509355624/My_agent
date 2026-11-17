@@ -10,7 +10,8 @@ import shutil
 import tempfile
 import unittest
 
-from app import config, main, provider_store as ps
+from app.core import provider_store as ps
+from app import config, main
 
 
 class StoreTest(unittest.TestCase):

@@ -299,7 +299,7 @@ def _bill_dir():
     if BILL_DIR:
         return BILL_DIR
     # 复用 usage 的目录决议：测试进程自动导向临时目录，不会往真实 usage/ 灌假账
-    from app import usage as usage_stats
+    from app.core import usage as usage_stats
     return os.path.dirname(usage_stats.calls_path())
 
 

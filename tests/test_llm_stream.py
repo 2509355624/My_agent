@@ -19,7 +19,7 @@ import unittest
 from unittest import mock
 
 import app.llm as llm
-from app import usage as usage_stats
+from app.core import usage as usage_stats
 
 
 def setUpModule():

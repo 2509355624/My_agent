@@ -34,7 +34,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app.features.persona import billing as persona_billing
-from app import usage as usage_stats
+from app.core import usage as usage_stats
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _KEYS = ("calls", "hit", "miss", "out", "cost")

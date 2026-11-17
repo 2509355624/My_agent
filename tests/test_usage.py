@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from app import usage
+from app.core import usage
 
 
 class UsageBase(unittest.TestCase):

@@ -601,7 +601,7 @@ def trim_window(history, agent_id=None, session_key=None, max_turns=None,
     # 私聊压缩于是成了仅存的前缀重写源。
     # 真实命中率从 usage.last_hit_rate 取（跨线程按会话 tag 存，见那里的说明）；
     # 取不到才退回 0.0 = 老行为。压缩本身很贵，宁可不压。
-    from app import usage as usage_stats
+    from app.core import usage as usage_stats
     hit_rate = usage_stats.last_hit_rate(session_key)
     result = trim_history(history, agent_id,
                           usage={"total_tokens": est,

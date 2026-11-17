@@ -413,7 +413,7 @@ def load_custom_providers(path=None):
     这个函数在模块末尾调用一次；网页上增删改之后由 `app/main.py` 再调，
     所以不重启进程也能让新渠道立刻可用。path 默认用本模块的配置路径。
     """
-    from app import provider_store
+    from app.core import provider_store
 
     for pid in [k for k, v in PROVIDERS.items() if (v or {}).get("custom")]:
         PROVIDERS.pop(pid, None)

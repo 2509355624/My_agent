@@ -725,7 +725,7 @@ def _record_usage(hit, miss, output, pid, model):
     if (hit or 0) + (miss or 0) <= 0:
         return
     try:
-        from app import usage as usage_stats
+        from app.core import usage as usage_stats
         with usage_stats.scope("vision"):
             usage_stats.record(hit or 0, miss or 0, output=output,
                                provider=pid, model=model, kind="vision")

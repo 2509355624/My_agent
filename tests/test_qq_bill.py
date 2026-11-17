@@ -15,7 +15,7 @@ from unittest import mock
 from app import config
 from app.features.persona import billing as persona_billing
 from app.features.qq import bill as qq_bill
-from app import usage as usage_stats
+from app.core import usage as usage_stats
 
 DAY = "2026-11-10"          # 周二，10:00 属高峰、03:00 属闲时
 

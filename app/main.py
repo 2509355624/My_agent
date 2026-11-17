@@ -19,7 +19,7 @@ from app.features.image import comfy_out
 from app.features.image import audit as image_audit
 from app.features.image import migrate as image_migrate
 from app.core import logsetup
-from app import usage as usage_stats
+from app.core import usage as usage_stats
 from app.features.qq import bill as qq_bill
 # 别名 `vision_mod` 是**必须**的：本文件里已有一个叫 `vision` 的路由函数
 # （POST /api/vision，网页端「让 AI 看图」），模块名直接被它盖掉，
@@ -48,9 +48,9 @@ from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
 from app.core.config.llm import get_llm_settings, update_llm_settings
 from app.core.config import llm as llm_config
 from app.core.config.runtime import runtime_path
-from app import provider_store
+from app.core import provider_store
 from app.skills import list_skills, load_skill
-from app import model_catalog
+from app.core import model_catalog
 from app.features.chat.agent_prompt import build_stable_prompt, sync_session_system
 from app.features.chat.memory import load_history, save_history, estimate_messages
 from app.agent import run_agent_stream, parse_tool_calls, _strip_tool_blocks

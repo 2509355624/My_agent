@@ -10,7 +10,7 @@ import unittest
 from unittest import mock
 
 import app.main as main
-import app.model_catalog as mc
+import app.core.model_catalog as mc
 
 
 class ParseTest(unittest.TestCase):
