@@ -1175,14 +1175,15 @@ def get_status():
     """状态后台的数据源。
 
     QQ bot 是**独立进程**，它的内存状态（哪个群在排队、生图队列）本进程
-    读不到，所以走 app/qq_status.py 落盘的 JSON 文件。那个文件停更就说明
+    读不到，所以走 app/features/qq/status.py 落盘的 JSON 文件。那个文件停更就说明
     bot 卡死或没起 —— 用 stale 标出来让前端标红，这正是「任务卡死时看不
     到后台」最需要的信号。
 
     ComfyUI 是本进程能直接探的（127.0.0.1 的 HTTP 服务），不必绕 bot 的
     快照，在这里查更实时。
     """
-    from app import qq_status, comfy_status
+    from app.features.qq import status as qq_status
+    from app import comfy_status
 
     snap, stale = qq_status.read()
     snap = snap or {}

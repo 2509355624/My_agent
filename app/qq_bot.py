@@ -41,11 +41,12 @@ try:
 except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
+from app.features.qq import status as qq_status
 from app import (confirm_gate, direct_gen, galgame, image_jobs,
                  lora_bot, play_bot, solo_bot,
                  interject,
                  logsetup,
-                 longterm, moss_bot, notify, persona, qq_api, qq_status, recent,
+                 longterm, moss_bot, notify, persona, qq_api, recent,
                  stickers, trigger, usage)
 from app.features.card import bot as card_bot
 from app.features.image import log as image_log

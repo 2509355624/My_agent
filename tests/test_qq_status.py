@@ -1,4 +1,4 @@
-"""状态后台测试（app/qq_status.py + image_jobs.snapshot）。
+"""状态后台测试（app/features/qq/status.py + image_jobs.snapshot）。
 
 原则同 test_image_jobs：零网络、零显卡、零真实线程。
 - image_jobs 的 worker 一律挡掉（_ensure_worker 成空操作），绝不让它真去
@@ -14,7 +14,7 @@ import unittest
 from unittest import mock
 
 from app import image_jobs
-from app import qq_status
+from app.features.qq import status as qq_status
 
 
 class _FakeRunner:

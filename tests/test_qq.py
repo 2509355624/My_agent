@@ -26,7 +26,7 @@ from app.features.image import out as image_out
 import app.notify as notify
 import app.qq_api as qq_api
 import app.qq_bot as qq_bot
-import app.qq_status as qq_status
+from app.features.qq import status as qq_status
 from app.tools.normal import send_qq_message
 
 # 模块级隔离：本文件里有几处用例会走到真实的「落盘」代码路径
