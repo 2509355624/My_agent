@@ -42,7 +42,7 @@ import time
 from flask import Blueprint, jsonify, request, send_file
 
 from app.config import BASE_DIR, COMFYUI_OUTPUT_DIR
-from app import runbench_api
+from app.features.bench import api as runbench_api
 
 bp = Blueprint("output_api", __name__)
 

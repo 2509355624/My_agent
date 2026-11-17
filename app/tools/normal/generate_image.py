@@ -1231,7 +1231,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     anima_draw = None
     if skill == "_anima_random":
         from app.features.image import anima_random
-        from app import runbench_api
+        from app.features.bench import api as runbench_api
         # 复用预设（2026-11-13）：原话里点名了预设名（如「随心配 可爱画风」），
         # 直接读存好的配方出图，**不随机抽卡**。配方是「代码登记的事实」，
         # 直接喂，不经过 AI 判断。

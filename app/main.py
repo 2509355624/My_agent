@@ -232,7 +232,7 @@ app.register_blueprint(novel_api.bp)
 
 # 跑图台（2026-11-13）：随心配预设面板，点卡片用预设 recipe 出图、结果推回 QQ。
 # 免登录（令牌即凭证），公网入口在 5175 的 /runbench + /api/runbench/* 反代。
-from app import runbench_web                      # noqa: E402
+from app.features.bench import web as runbench_web                      # noqa: E402
 app.register_blueprint(runbench_web.bp)
 
 @app.route("/")

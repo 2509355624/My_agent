@@ -1472,7 +1472,7 @@ def _save_preset_text(raw_name):
     不用图片管理页手动存）。
     """
     from app.features.image import anima_random
-    from app import runbench_api
+    from app.features.bench import api as runbench_api
     last = anima_random.load_last()
     if not last:
         return ("还没存到随心配配方——先玩一次「随心配」出图，"
@@ -1500,7 +1500,7 @@ def _save_preset_text(raw_name):
 
 def _list_preset_text():
     """`/预设列表`：列出所有已存的随心配预设名（2026-11-13）。零 LLM。"""
-    from app import runbench_api
+    from app.features.bench import api as runbench_api
     names = runbench_api.list_names()
     if not names:
         return ("还没有存过预设。玩「随心配」出图后，发 /存预设 名字 就能存下来。")
@@ -2313,7 +2313,7 @@ def _enqueue(skill, prompt, text, source_image=False, seed=None,
     # 带了某个预设名（如「随心配 可爱画风」），就把预设名传给下游按配方出图，
     # 不随机抽卡。只做「库里有没有这个名字」的事实匹配，不猜近似。
     if skill == "_anima_random" and text:
-        from app import runbench_api
+        from app.features.bench import api as runbench_api
         for _pn in runbench_api.list_names():
             if _pn in text:
                 extra["anima_preset"] = _pn

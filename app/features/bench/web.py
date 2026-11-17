@@ -45,7 +45,8 @@ import time
 
 from flask import Blueprint, jsonify, request, send_file
 
-from app import friend_auth, qq_api, runbench_api
+from app import friend_auth, qq_api
+from app.features.bench import api as runbench_api
 from app.config import state_path
 
 log = logging.getLogger("runbench_web")
