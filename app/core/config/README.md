@@ -16,6 +16,7 @@ import，未搬完的配置域暂时由 `__init__.py` 的惰性 `__getattr__` �
 | `watchdog.py` | 静默判据、静默重启节奏、ComfyUI 看门狗分支总闸 |
 | `llm.py` | provider/模型表、降级链、请求超时、重试、TTL、`get_llm_settings`、`validate_llm_patch`、`update_llm_settings`（角色模型默认值委托给 `persona.py`） |
 | `persona.py` | 角色扮演默认 provider/模型、玩家可选模型白名单、`persona_model_ids()`、`persona_model_of()` |
+| `context.py` | `MAX_TURNS`、`CONTEXT_BUDGET`、物理上下文窗口封顶、`CONTEXT_MAX_TURNS`、摘要字数、`physical_budget()` |
 | `runtime.py` | 非密钥运行期设置 JSON；`AGENT_RUNTIME_SETTINGS` 可覆盖路径；mtime 缓存、原子写 |
 | `__init__.py` | 显式导出已拆域；未搬完的名字惰性回落旧 `app.config` |
 
@@ -27,6 +28,7 @@ import，未搬完的配置域暂时由 `__init__.py` 的惰性 `__getattr__` �
 - `qq.py` 只读 `QQ_TOKEN` / `PUSHPLUS_TOKEN` 的环境变量，不写入任何令牌值。
 - `watchdog.py` 只服务 `app/watchdog.py`，不混入 QQ 接入配置。
 - `persona.py` 只放角色扮演的模型默认值与白名单；通用 provider 表仍在 `llm.py`。
+- `context.py` 只放预算和本地估算阈值；真正的裁剪/压缩逻辑在 `app/memory.py`。
 - 新增配置先判断属于哪个域，不要继续往旧 `app/config.py` 堆。
 - 管理页通过 `GET/PUT /api/llm/settings` 读写 LLM 运行期设置，落盘后下一次
   请求即生效，不需要重启进程。

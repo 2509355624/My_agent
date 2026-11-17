@@ -43,7 +43,8 @@ app/core/config/
 | `qq.py` | `QQ_*`、`NOTIFY_*`、`WEBUI_PORT` |
 | `watchdog.py` | `WATCHDOG_SILENCE_*`、`WATCHDOG_COMFY_ENABLED` |
 | `persona.py` | 角色扮演模型白名单与 `persona_model_ids` / `persona_model_of` |
-| `runtime.py` | `MAX_TURNS`、`CONTEXT_BUDGET`、`CONTEXT_MAX_TURNS`、`MEMORY_*`、`WEB_SEARCH_MAX_CHARS` |
+| `context.py` | `MAX_TURNS`、`CONTEXT_BUDGET`、`_PROVIDER_CONTEXT_WINDOW`、`physical_budget`、`CONTEXT_MAX_TURNS`、`MEMORY_TURN_DIGEST_CHARS` |
+| `runtime.py` | 非密钥运行期 JSON 设置（管理页读写）；不再承担轮次/预算常量 |
 
 `DEFAULT_AGENT_ID` 归 `runtime.py` 或 `paths.py`，按调用方复核。
 
@@ -58,8 +59,9 @@ app/core/config/
 7. `qq.py`（`WEBUI_PORT`、`NOTIFY_*` 一并归入；`runtime.py` 已提前完成）。
 8. `watchdog.py`。
 9. `persona.py`（角色模型默认值与白名单）。
-10. 上下文/压缩配置与 `DEFAULT_AGENT_ID`。
-11. `__init__.py` 改成显式导出；`app/config.py` 最后变成 shim。
+10. `context.py`（轮次/预算/物理窗口）。
+11. `search.py`、`agent.py`、自定义中转站归入 `llm.py`。
+12. `__init__.py` 改成显式导出；`app/config.py` 最后变成 shim。
 
 每一步：旧 `app/config.py` 只减不增；新模块成为该域的唯一实现；跑
 `test_core_config.py` + 相关 feature 测试；不允许两边各留一份同名常量。
