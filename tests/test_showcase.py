@@ -244,6 +244,75 @@ class ShowcaseTest(unittest.TestCase):
         self.assertIn("自定义", body["trace"]["prompt_contract"])
         self.assertTrue(body["trace"]["prompt"])
 
+    def test_config_exposes_the_two_image_channels(self):
+        """渠道白名单公开给页面：两个 id、默认 silver、场景只带后缀。
+
+        `channel_suffix` 是给前端重拼文案用的（切渠道后卡片底部那行要变）；
+        `channel` 给的是默认档文案，首屏直接可用。
+        """
+        data = self.client.get("/api/showcase/config", headers=self.headers).get_json()
+        self.assertEqual([s["id"] for s in data["image_skills"]],
+                         ["silver", "krea2-jiguang-1x"])
+        self.assertEqual(data["default_image_skill"], "silver")
+        self.assertEqual(data["image_scenes"][0]["channel"], "Silver · 现场生成")
+        self.assertEqual(data["image_scenes"][0]["channel_suffix"], "现场生成")
+
+    def test_channel_switch_drives_the_workflow(self):
+        """访客切到 krea2：工作流渠道、入队 skill、链路文案三处都要跟着换。"""
+        job = _FakeJob()
+        with mock.patch.object(showcase_api, "build_t2i_workflow",
+                               return_value={"1": {"class_type": "SaveImage"}}) as build, \
+                mock.patch.object(showcase_api.image_jobs, "enqueue",
+                                  return_value=(job, None)) as enqueue:
+            response = self.client.post(
+                "/api/showcase/image/submit", headers=self.headers,
+                json={"scene_id": "rainy_bookstore", "skill": "krea2-jiguang-1x"})
+        self.assertEqual(response.status_code, 202)
+        body = response.get_json()["job"]
+        self.assertEqual(build.call_args.args[0], "krea2-jiguang-1x")
+        self.assertEqual(enqueue.call_args.kwargs["skill"], "krea2-jiguang-1x")
+        self.assertEqual(body["scene"]["skill"], "krea2-jiguang-1x")
+        self.assertIn("krea2 极光单次", body["scene"]["channel"])
+
+    def test_unknown_channel_falls_back_to_silver(self):
+        """请求体里的 skill 只能取白名单，别的值一律回落默认档。
+
+        展示页是公网、没有登录——不能让人靠改请求体点名完整版极光、moss
+        或任何内部渠道。回落而不是报错：页面文案变了、渠道没跟着变，也不能
+        把访客卡在 400 上。
+        """
+        for bogus in ("krea2-jiguang", "moss", "", "   ", None, "../../etc/passwd"):
+            with self.subTest(skill=bogus):
+                with showcase_api._LOCK:
+                    showcase_api._SESSIONS.clear()
+                    showcase_api._JOBS.clear()
+                job = _FakeJob()
+                with mock.patch.object(showcase_api, "build_t2i_workflow",
+                                       return_value={"1": {"class_type": "SaveImage"}}) as build, \
+                        mock.patch.object(showcase_api.image_jobs, "enqueue",
+                                          return_value=(job, None)):
+                    response = self.client.post(
+                        "/api/showcase/image/submit", headers=self.headers,
+                        json={"mode": "custom", "prompt": "a cat", "skill": bogus})
+                self.assertEqual(response.status_code, 202)
+                self.assertEqual(build.call_args.args[0], "silver")
+
+    def test_ai_expand_uses_the_selected_channel(self):
+        """AI 扩写按访客选的渠道扩（krea2 要质量词开头的完整英文串）。"""
+        with mock.patch("app.direct_gen._translate",
+                        return_value={"prompt": "a cat, masterpiece"}) as translate, \
+                mock.patch.object(showcase_api, "build_t2i_workflow",
+                                  return_value={"1": {"class_type": "SaveImage"}}) as build, \
+                mock.patch.object(showcase_api.image_jobs, "enqueue",
+                                  return_value=(_FakeJob(), None)):
+            response = self.client.post(
+                "/api/showcase/image/submit", headers=self.headers,
+                json={"mode": "ai", "prompt": "画只猫",
+                      "skill": "krea2-jiguang-1x"})
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(translate.call_args.kwargs.get("skill"), "krea2-jiguang-1x")
+        self.assertEqual(build.call_args.args[0], "krea2-jiguang-1x")
+
     def test_custom_prompt_requires_text_and_respects_length_cap(self):
         empty = self.client.post(
             "/api/showcase/image/submit", headers=self.headers,

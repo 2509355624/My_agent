@@ -69,15 +69,60 @@ def roleplay_system(mode="guide"):
     return _ROLE_RULES + "\n" + _MODE_PROMPTS[mode]
 
 
+# 生图渠道白名单（2026-11-17 用户拍板）。
+#
+# 展示页加了一组「生图渠道」按钮：默认 silver，访客可以切到 krea2 的极光
+# 单次档。**切换粒度是整页**——五张卡（三个预置场景 / 自定义提示词 / AI
+# 扩写）都跟着走，不按场景各配一套。
+#
+# ⚠️ 这张表是唯一入口：请求体里的 `skill` 只能取这里的 key，其他任何值
+# （空、内部渠道 id、别的重渠道）一律回落 `DEFAULT_IMAGE_SKILL`。展示页是
+# 公网、没有登录，不能让人靠改请求体点名任意工作流。
+#
+# ⚠️ 只放 `krea2-jiguang-1x`（单次采样、1024×1536、约 25~40 秒），**不要**
+# 换成完整版 `krea2-jiguang`：那条要跑两段采样 + 2x 超分，90~210 秒，
+# 访客等不起，显存也吃得更满。
+IMAGE_SKILLS = [
+    {
+        "id": "silver",
+        "label": "Silver",
+        "note": "轻渠道 · 秒级",
+        "channel": "Silver",
+    },
+    {
+        "id": "krea2-jiguang-1x",
+        "label": "krea2 极光",
+        "note": "分辨率更高 · 慢一些",
+        "channel": "krea2 极光单次",
+    },
+]
+DEFAULT_IMAGE_SKILL = "silver"
+_IMAGE_SKILL_MAP = {item["id"]: item for item in IMAGE_SKILLS}
+
+
+def image_skill(skill=None):
+    """把请求里的渠道收进白名单；认不出的一律回落默认档。"""
+    key = str(skill or "").strip()
+    return key if key in _IMAGE_SKILL_MAP else DEFAULT_IMAGE_SKILL
+
+
+def image_channel(skill=None, suffix="现场生成"):
+    """渠道展示文案：`Silver · 现场生成` / `krea2 极光单次 · 现场生成`。"""
+    item = _IMAGE_SKILL_MAP[image_skill(skill)]
+    return "%s · %s" % (item["channel"], suffix)
+
+
 # 所有场景都是不包含人物的原创环境图，减少预置工作流召回角色 LoRA 的机会。
 # prompt 是最终提交给现有工作流的英文提示词；访客只能传 scene_id。
+#
+# 渠道不再写死在场景里（2026-11-17）：场景只记 `channel_suffix`，实际用哪条
+# 渠道由 `image_scene()` 按访客选的 `skill` 拼进返回的副本。
 IMAGE_SCENES = [
     {
         "id": "rainy_bookstore",
         "title": "雨天书店",
         "brief": "阵雨中的街角书店，暖色灯光映在湿润石板路上。",
-        "skill": "silver",
-        "channel": "Silver · 现场生成",
+        "channel_suffix": "现场生成",
         "prompt": (
             "a cozy corner bookstore on a rainy evening, warm amber light through large windows, "
             "wet stone pavement reflecting soft lights, shelves full of books visible inside, "
@@ -89,8 +134,7 @@ IMAGE_SCENES = [
         "id": "rooftop_garden",
         "title": "屋顶花园",
         "brief": "清晨的屋顶小花园，远处是刚醒来的海滨城市。",
-        "skill": "silver",
-        "channel": "Silver · 现场生成",
+        "channel_suffix": "现场生成",
         "prompt": (
             "a small rooftop garden at sunrise above a coastal city, wooden planters with herbs "
             "and white flowers, a round table with two empty chairs and a teapot, distant sea "
@@ -102,8 +146,7 @@ IMAGE_SCENES = [
         "id": "night_tram",
         "title": "夜间电车",
         "brief": "空旷的夜间电车站，蓝紫色海面与暖黄车厢灯相映。",
-        "skill": "silver",
-        "channel": "Silver · 现场生成",
+        "channel_suffix": "现场生成",
         "prompt": (
             "an empty seaside tram stop at night, a vintage tram with warm yellow interior lights, "
             "dark blue ocean beyond the platform, moonlit clouds, reflections on clean metal rails, "
@@ -188,43 +231,59 @@ COMIC_REPLAY = {
 CUSTOM_PROMPT_MAX = 2000
 
 
-def custom_image_scene(prompt):
-    """用户自写提示词的场景：固定 silver 渠道、固定竖屏，其余链路同预置场景。"""
+def custom_image_scene(prompt, skill=None):
+    """用户自写提示词的场景：固定竖屏，渠道由访客选（默认 silver）。"""
     text = str(prompt or "").strip()
     if not text or len(text) > CUSTOM_PROMPT_MAX:
         return None
+    sk = image_skill(skill)
     return {
         "id": "custom",
         "title": "自定义提示词",
         "brief": "你自己的提示词，原文送进工作流。",
-        "skill": "silver",
-        "channel": "Silver · 自定义提示词",
+        "skill": sk,
+        "channel": image_channel(sk, "自定义提示词"),
         "prompt": text,
         "custom": True,
     }
 
 
-def ai_image_scene(prompt):
-    """AI 扩写模式的场景：DeepSeek 补好的英文提示词，固定 silver / 竖屏。"""
+def ai_image_scene(prompt, skill=None):
+    """AI 扩写模式的场景：DeepSeek 补好的英文提示词，固定竖屏。
+
+    扩写只产出文字，真正出图仍按访客选的渠道走——所以文案里把「DeepSeek
+    →」和渠道名分开写。
+    """
     text = str(prompt or "").strip()
     if not text or len(text) > CUSTOM_PROMPT_MAX * 2:
         return None
+    sk = image_skill(skill)
     return {
         "id": "ai",
         "title": "AI 扩写",
         "brief": "你的需求经 DeepSeek 补充后的画面。",
-        "skill": "silver",
-        "channel": "DeepSeek → Silver · 固定竖屏",
+        "skill": sk,
+        "channel": "DeepSeek → %s · 固定竖屏" % _IMAGE_SKILL_MAP[sk]["channel"],
         "prompt": text,
         "ai": True,
     }
 
 
-def image_scene(scene_id):
-    """按白名单取场景；返回副本，调用方改不到契约本体。"""
+def image_scene(scene_id, skill=None):
+    """按白名单取场景；返回副本，调用方改不到契约本体。
+
+    渠道是**运行时注入**的：场景定义里只有 `channel_suffix`，这里按访客选的
+    `skill`（白名单外回落默认）填上 `skill` / `channel`，并把内部字段
+    `channel_suffix` 从返回值里去掉——前端只需要拼好的展示文案。
+    """
     for scene in IMAGE_SCENES:
         if scene["id"] == scene_id:
-            return copy.deepcopy(scene)
+            out = copy.deepcopy(scene)
+            sk = image_skill(skill)
+            suffix = out.pop("channel_suffix", "现场生成")
+            out["skill"] = sk
+            out["channel"] = image_channel(sk, suffix)
+            return out
     return None
 
 
@@ -235,9 +294,19 @@ def public_config():
         "role_card": copy.deepcopy(ROLE_CARD),
         "play_modes": copy.deepcopy(PLAY_MODES),
         "image_scenes": [
-            {k: copy.deepcopy(v) for k, v in scene.items() if k != "prompt"}
+            dict(
+                {k: copy.deepcopy(v) for k, v in scene.items()
+                 if k not in ("prompt", "channel_suffix")},
+                # 默认档的展示文案：首屏渲染直接可用；切换渠道时前端按
+                # `image_skills` 里的 `channel` 自己重拼。
+                channel=image_channel(DEFAULT_IMAGE_SKILL,
+                                      scene.get("channel_suffix", "现场生成")),
+                channel_suffix=copy.deepcopy(scene.get("channel_suffix", "现场生成")),
+            )
             for scene in IMAGE_SCENES
         ],
+        "image_skills": copy.deepcopy(IMAGE_SKILLS),
+        "default_image_skill": DEFAULT_IMAGE_SKILL,
         "comic": copy.deepcopy(COMIC_REPLAY),
         "limits": {"chat_message_chars": 500, "history_messages": 12},
     }

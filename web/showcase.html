@@ -595,6 +595,56 @@ button { cursor: pointer; }
   font-size: 0.88rem;
   font-weight: 700;
 }
+/* 生图渠道切换（2026-11-17）：两个按钮，选中态实心 amber、未选描边。
+   位置放在 legend 和场景列表之间——访客一进生图区就先看到「用哪个渠道」。 */
+.channel-switch {
+  margin-block-start: 0.6rem;
+  padding: 0.6rem 0.65rem;
+  border: 1px solid var(--line-strong);
+  background: rgba(6, 16, 25, 0.72);
+}
+.channel-switch-title {
+  display: block;
+  margin-block-end: 0.45rem;
+  color: var(--paper-soft);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.channel-switch-btns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+.channel-switch-hint { color: var(--muted); font-size: 0.75rem; }
+.channel-btn {
+  display: block;
+  inline-size: 100%;
+  padding: 0.5rem 0.55rem;
+  border: 1px solid var(--line-strong);
+  background: rgba(10, 26, 38, 0.9);
+  color: var(--paper-soft);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.channel-btn:hover { border-color: var(--amber); }
+.channel-btn:focus-visible { outline: 2px solid var(--sea); outline-offset: 2px; }
+.channel-btn[aria-pressed="true"] {
+  border-color: var(--amber);
+  background: var(--amber);
+  color: #1a1205;
+}
+.channel-btn:disabled { cursor: not-allowed; opacity: 0.55; }
+.channel-btn-label { display: block; font-size: 0.86rem; font-weight: 700; }
+.channel-btn-note {
+  display: block;
+  margin-block-start: 0.12rem;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  opacity: 0.78;
+}
+.channel-btn[aria-pressed="true"] .channel-btn-note { opacity: 0.82; }
 .scene-list { display: grid; gap: 0.5rem; margin-block-start: 0.65rem; }
 .scene-option {
   display: grid;
@@ -1605,7 +1655,7 @@ html.js .scroll-cue[hidden] { display: none !important; }
       <div class="feature-intro">
         <p class="feature-kicker">生图 / 真实 GPU 队列</p>
         <h2 id="image-title">选预置场景，或自己写提示词，现场生成一张图</h2>
-        <p class="feature-desc">三个无人物环境场景固定走 <code>silver</code>（轻渠道，切换免重启 ComfyUI）。想自己定画面：选「自定义提示词」写英文，或选「AI 扩写」只写一句中文需求——后者会交给 DeepSeek（大大怪同款）补成完整提示词，再一起固定 silver、固定竖屏出图。生成完成后经过一次图片审核，未过审的图片不会显示。排队位置、耗时、种子和审核状态都在“查看链路”里，AI 扩写还能对照你的原话和它补出的提示词。</p>
+        <p class="feature-desc">先选生图渠道：<code>Silver</code> 是轻渠道（秒级、切换免重启 ComfyUI），<code>krea2 极光</code> 是 1024×1536 的精细档（会慢一些）。渠道对下面五张卡全部生效——三个无人物环境场景 / 自定义提示词 / AI 扩写，写完就能出图。想自己定画面：选「自定义提示词」写英文，或选「AI 扩写」只写一句中文需求——后者会交给 DeepSeek（大大怪同款）补成完整提示词，再按当前渠道、固定竖屏出图。生成完成后经过一次图片审核，未过审的图片不会显示。排队位置、耗时、种子和审核状态都在“查看链路”里，AI 扩写还能对照你的原话和它补出的提示词。</p>
       </div>
       <div class="feature-tools">
         <button class="btn btn--small" type="button" id="imageChain" disabled><svg class="icon" aria-hidden="true"><use href="#i-chain" xlink:href="#i-chain"/></svg>查看链路</button>
@@ -1615,6 +1665,14 @@ html.js .scroll-cue[hidden] { display: none !important; }
     <div class="image-workbench">
       <fieldset class="scene-picker" id="sceneFieldset">
         <legend>选择场景或自己写提示词</legend>
+        <!-- 生图渠道（2026-11-17）：默认 Silver，可切 krea2 极光单次。
+             切换粒度是整页——下面五张卡全跟着走。 -->
+        <div class="channel-switch" id="channelSwitch" role="group" aria-label="选择生图渠道">
+          <span class="channel-switch-title">生图渠道</span>
+          <div class="channel-switch-btns" id="channelButtons">
+            <span class="channel-switch-hint" id="channelHint">正在读取…</span>
+          </div>
+        </div>
         <div class="scene-list" id="sceneList" aria-describedby="sceneHint">
           <p class="memory-hint" id="sceneHint">正在读取场景配置…</p>
         </div>
@@ -1633,7 +1691,7 @@ html.js .scroll-cue[hidden] { display: none !important; }
           <span id="imageStageChannel">固定渠道 · 预置提示词</span>
         </div>
         <div class="custom-prompt-box" id="customPromptBox" hidden>
-          <label for="customPromptText" id="customPromptLabel">你的提示词（英文更稳 · 固定 silver 竖屏）</label>
+          <label for="customPromptText" id="customPromptLabel">你的提示词（英文更稳 · 当前渠道出图）</label>
           <textarea id="customPromptText" rows="5" maxlength="2000" placeholder="例如：a quiet bookshop on a rainy evening, warm amber light, no people"></textarea>
           <p class="custom-prompt-hint"><span id="customPromptCount">0 / 2000</span> 字 · <span id="customPromptNote">与预置场景一样经过出图审核，链路里可查看原文</span></p>
         </div>
@@ -2038,6 +2096,9 @@ html.js .scroll-cue[hidden] { display: none !important; }
 
     sceneList: $("#sceneList"),
     sceneHint: $("#sceneHint"),
+    channelSwitch: $("#channelSwitch"),
+    channelButtons: $("#channelButtons"),
+    channelHint: $("#channelHint"),
     customPromptBox: $("#customPromptBox"),
     customPromptText: $("#customPromptText"),
     customPromptCount: $("#customPromptCount"),
@@ -2162,7 +2223,8 @@ html.js .scroll-cue[hidden] { display: none !important; }
       timer: null,
       error: "",
       errorChecks: 0,
-      restored: false
+      restored: false,
+      skill: null            // 当前选中的生图渠道（2026-11-17，null = 用配置里的默认档）
     }
   };
 
@@ -2686,6 +2748,81 @@ html.js .scroll-cue[hidden] { display: none !important; }
     });
   }
 
+  // ── 生图渠道（2026-11-17）──────────────────────────────────
+  // 配置里的 `image_skills` 是白名单（id / label / note / channel），默认档由
+  // `default_image_skill` 给。切换粒度是**整页**：下面五张卡（三个预置场景 /
+  // 自定义提示词 / AI 扩写）一起跟着走，卡片底部那行渠道文案也跟着重拼。
+  // 服务端会再收口一次（`showcase_prompts.image_skill`），前端传什么都只认
+  // 白名单里的 id。
+  function imageSkills() {
+    const cfg = state.config || {};
+    return Array.isArray(cfg.image_skills) ? cfg.image_skills : [];
+  }
+
+  function currentImageSkill() {
+    const list = imageSkills();
+    if (state.image.skill && list.some((item) => item && item.id === state.image.skill)) {
+      return state.image.skill;
+    }
+    const cfg = state.config || {};
+    const preferred = cfg.default_image_skill || (list[0] && list[0].id) || "silver";
+    state.image.skill = preferred;
+    return preferred;
+  }
+
+  function imageChannelPrefix() {
+    const active = currentImageSkill();
+    const hit = imageSkills().find((item) => item && item.id === active);
+    return (hit && hit.channel) || "Silver";
+  }
+
+  function imageChannelLabel(suffix) {
+    return imageChannelPrefix() + " · " + suffix;
+  }
+
+  function renderChannels() {
+    if (!ui.channelButtons) return;
+    ui.channelButtons.replaceChildren();
+    const list = imageSkills();
+    if (!list.length) {
+      ui.channelButtons.append(node("span", "channel-switch-hint", "渠道配置未读取，按默认渠道出图。"));
+      return;
+    }
+    const active = currentImageSkill();
+    list.forEach((item) => {
+      if (!item || !item.id) return;
+      const btn = node("button", "channel-btn");
+      btn.type = "button";
+      btn.dataset.skill = item.id;
+      btn.setAttribute("aria-pressed", item.id === active ? "true" : "false");
+      btn.append(node("span", "channel-btn-label", item.label || item.id));
+      if (item.note) btn.append(node("span", "channel-btn-note", item.note));
+      btn.addEventListener("click", () => selectImageSkill(item.id));
+      ui.channelButtons.append(btn);
+    });
+    syncChannelButtons();
+  }
+
+  function syncChannelButtons() {
+    if (!ui.channelButtons) return;
+    const active = currentImageSkill();
+    const busy = Boolean(state.image.busy || isActiveImageJob(state.image.job));
+    $$(".channel-btn", ui.channelButtons).forEach((btn) => {
+      const on = btn.dataset.skill === active;
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+      btn.disabled = busy;
+    });
+  }
+
+  function selectImageSkill(skill) {
+    if (!skill || state.image.busy || skill === currentImageSkill()) return;
+    state.image.skill = skill;
+    renderChannels();
+    // 卡片底部那行渠道文案要跟着换，所以整组重绘（radio 选中项保持不变）
+    renderScenes(state.config && state.config.image_scenes);
+    renderImagePanel();
+  }
+
   function renderScenes(scenes) {
     ui.sceneList.replaceChildren();
     const items = Array.isArray(scenes) ? scenes : [];
@@ -2694,7 +2831,11 @@ html.js .scroll-cue[hidden] { display: none !important; }
       ui.sceneList.append(node("p", "memory-hint", "当前没有可用的预置场景。"));
       return;
     }
-    if (!items.some((item) => item && item.id === state.selectedSceneId)) {
+    // 切换渠道会重绘整组卡：`custom` / `ai` 不在预置清单里，不能因为
+    // 「找不到就回落第一个」把访客正在写的输入框选项冲掉。
+    const keepable = state.selectedSceneId === "custom" || state.selectedSceneId === "ai"
+      || items.some((item) => item && item.id === state.selectedSceneId);
+    if (!keepable) {
       state.selectedSceneId = items[0].id;
     }
     items.forEach((scene) => {
@@ -2708,7 +2849,10 @@ html.js .scroll-cue[hidden] { display: none !important; }
       const copy = node("div");
       copy.append(node("span", "scene-option-title", scene.title || scene.id));
       copy.append(node("span", "scene-option-brief", scene.brief || ""));
-      if (scene.channel) copy.append(node("span", "scene-option-channel", scene.channel));
+      // 渠道文案按当前选中的渠道重拼（后端给的是默认档的文案 + 后缀）
+      const suffix = scene.channel_suffix;
+      const channelText = suffix ? imageChannelLabel(suffix) : scene.channel;
+      if (channelText) copy.append(node("span", "scene-option-channel", channelText));
       label.append(input, copy);
       ui.sceneList.append(label);
     });
@@ -2722,7 +2866,7 @@ html.js .scroll-cue[hidden] { display: none !important; }
     const customCopy = node("div");
     customCopy.append(node("span", "scene-option-title", "自定义提示词"));
     customCopy.append(node("span", "scene-option-brief", "自己写画面，原文送进工作流。"));
-    customCopy.append(node("span", "scene-option-channel", "Silver · 固定竖屏"));
+    customCopy.append(node("span", "scene-option-channel", imageChannelLabel("自定义提示词")));
     customLabel.append(customInput, customCopy);
     ui.sceneList.append(customLabel);
     // AI 扩写：写一句需求，DeepSeek 补成完整提示词（大大怪同款 _translate）
@@ -2735,7 +2879,7 @@ html.js .scroll-cue[hidden] { display: none !important; }
     const aiCopy = node("div");
     aiCopy.append(node("span", "scene-option-title", "AI 扩写提示词"));
     aiCopy.append(node("span", "scene-option-brief", "写一句需求，DeepSeek 补成完整英文画面。"));
-    aiCopy.append(node("span", "scene-option-channel", "DeepSeek → Silver · 固定竖屏"));
+    aiCopy.append(node("span", "scene-option-channel", "DeepSeek → " + imageChannelLabel("固定竖屏")));
     aiLabel.append(aiInput, aiCopy);
     ui.sceneList.append(aiLabel);
     syncCustomPromptBox();
@@ -2754,7 +2898,7 @@ html.js .scroll-cue[hidden] { display: none !important; }
     if (ui.customPromptLabel) {
       ui.customPromptLabel.textContent = isAi
         ? "你的需求（中文也行 · DeepSeek 补成提示词）"
-        : "你的提示词（英文更稳 · 固定 silver 竖屏）";
+        : "你的提示词（英文更稳 · " + imageChannelPrefix() + " 出图）";
     }
     if (ui.customPromptNote) {
       ui.customPromptNote.textContent = isAi
@@ -2773,6 +2917,8 @@ html.js .scroll-cue[hidden] { display: none !important; }
     applyRoleCard(config.role_card);
     state.selectedMode = "daily";
     renderModes(config.play_modes);
+    // 渠道按钮必须先于场景列表渲染：卡片底部那行文案要按当前渠道拼。
+    renderChannels();
     renderScenes(config.image_scenes);
 
     const limit = Number(config.limits && config.limits.chat_message_chars) || 500;
@@ -2838,7 +2984,10 @@ html.js .scroll-cue[hidden] { display: none !important; }
       return {
         id: state.selectedSceneId,
         title: isAi ? "AI 扩写" : "自定义提示词",
-        channel: isAi ? "DeepSeek → Silver · 固定竖屏" : "Silver · 自定义提示词",
+        channel: isAi
+          ? "DeepSeek → " + imageChannelLabel("固定竖屏")
+          : imageChannelLabel("自定义提示词"),
+        skill: currentImageSkill(),
         prompt: prompt, custom: !isAi, ai: isAi
       };
     }
@@ -2870,7 +3019,17 @@ html.js .scroll-cue[hidden] { display: none !important; }
     ui.imageElapsed.textContent = trace.elapsed_seconds == null ? "—" : formatSeconds(trace.elapsed_seconds);
 
     ui.imageStageTitle.textContent = scene && scene.title ? scene.title : "尚未提交任务";
-    ui.imageStageChannel.textContent = scene && scene.channel ? scene.channel : "固定渠道 · 预置提示词";
+    // 有任务就用后端记下的渠道（那是这个任务真实跑的档）；没任务按当前选的
+    // 渠道重拼——预置场景从配置带下来的 `channel` 是默认档文案，会跟选择不符。
+    let stageChannel = "固定渠道 · 预置提示词";
+    if (job && job.scene && job.scene.channel) {
+      stageChannel = job.scene.channel;
+    } else if (scene && scene.channel_suffix) {
+      stageChannel = imageChannelLabel(scene.channel_suffix);
+    } else if (scene && scene.channel) {
+      stageChannel = scene.channel;
+    }
+    ui.imageStageChannel.textContent = stageChannel;
 
     const canShow = status === "ready" && safeShowcaseImageUrl(job.image_url);
     if (canShow) {
@@ -2914,6 +3073,7 @@ html.js .scroll-cue[hidden] { display: none !important; }
     $$('input[name="scene_id"]', ui.sceneList).forEach((input) => {
       input.disabled = Boolean(buttonsBusy || active);
     });
+    syncChannelButtons();
   }
 
   function adoptImageJob(job) {
@@ -3019,7 +3179,8 @@ html.js .scroll-cue[hidden] { display: none !important; }
     state.image.error = "";
     renderImagePanel();
     try {
-      const payload = { scene_id: scene.id };
+      // 渠道跟着整页走（2026-11-17）：服务端只认白名单，传别的会被回落默认。
+      const payload = { scene_id: scene.id, skill: currentImageSkill() };
       if (scene.custom || scene.ai) {
         payload.mode = scene.ai ? "ai" : "custom";
         payload.prompt = scene.prompt;

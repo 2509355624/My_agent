@@ -844,6 +844,14 @@ def _job_view(record):
     except Exception:
         depth = None
     now = time.time()
+    # 提示词契约文案里的渠道要跟着实际走的渠道（2026-11-17 起不止 silver）。
+    scene_skill = (record.get("scene") or {}).get("skill") or "silver"
+    if record.get("ai"):
+        contract = "DeepSeek 扩写（你的原话 → 英文提示词）"
+    elif record.get("custom"):
+        contract = "自定义提示词（原文直送 %s 工作流）" % scene_skill
+    else:
+        contract = "预置干净场景；请求体不接受自定义提示词"
     result = {
         "tag": record["tag"],
         "session_id": record["owner"],
@@ -851,11 +859,7 @@ def _job_view(record):
         "scene": copy.deepcopy(record["scene"]),
         "trace": {
             "prompt": record["prompt"],
-            "prompt_contract": (
-                "DeepSeek 扩写（你的原话 → 英文提示词）" if record.get("ai")
-                else "自定义提示词（原文直送 silver 工作流）" if record.get("custom")
-                else "预置干净场景；请求体不接受自定义提示词"
-            ),
+            "prompt_contract": contract,
             "original": record.get("original") or "",
             "prompt_review": "passed",
             "seed": record["seed"],
@@ -930,6 +934,11 @@ def image_submit():
     # mode=custom 原文直送；mode=ai 走 DeepSeek 扩写（大大怪同款 _translate）。
     # 不传 mode 时仍按老规矩只认 scene_id 白名单、忽略 prompt，原安全边界不变。
     mode = str(data.get("mode") or "").strip()
+    # 生图渠道（2026-11-17）：访客在页面上二选一，默认 silver。
+    # ⚠️ 只认 `showcase_prompts.IMAGE_SKILLS` 里的 key，其他任何值（空串、
+    # 内部渠道 id、别的重渠道）都回落默认档——公网无登录，不能靠改请求体
+    # 点名任意工作流。
+    skill = showcase_prompts.image_skill(data.get("skill"))
     original = ""
     if mode == "ai":
         brief = str(data.get("prompt") or "").strip()
@@ -939,9 +948,10 @@ def image_submit():
             return jsonify({"error": "需求太长了（上限 %d 字）"
                             % showcase_prompts.CUSTOM_PROMPT_MAX}), 400
         try:
-            # 局部导入避免启动期加载大模块；点名 silver，走大大的默认回落档。
+            # 局部导入避免启动期加载大模块；按访客选的渠道扩写，让提示词符合
+            # 该渠道的写法（krea2 要质量词开头的完整英文串）。
             from app import direct_gen
-            translated = direct_gen._translate(brief, [], skill="silver")
+            translated = direct_gen._translate(brief, [], skill=skill)
         except Exception:
             log.exception("展示页 AI 扩写调用失败")
             return jsonify({"error": "AI 扩写暂时不可用，请稍后重试"}), 503
@@ -951,7 +961,7 @@ def image_submit():
         if not expanded:
             return jsonify({"error": "AI 没能把这句变成画面，写具体一点再试"
                             "（比如「雨天的旧书店，暖光，没有人」）"}), 400
-        scene = showcase_prompts.ai_image_scene(expanded)
+        scene = showcase_prompts.ai_image_scene(expanded, skill=skill)
         original = brief
     elif mode == "custom":
         prompt = str(data.get("prompt") or "").strip()
@@ -960,9 +970,10 @@ def image_submit():
         if len(prompt) > showcase_prompts.CUSTOM_PROMPT_MAX:
             return jsonify({"error": "提示词太长了（上限 %d 字）"
                             % showcase_prompts.CUSTOM_PROMPT_MAX}), 400
-        scene = showcase_prompts.custom_image_scene(prompt)
+        scene = showcase_prompts.custom_image_scene(prompt, skill=skill)
     else:
-        scene = showcase_prompts.image_scene(str(data.get("scene_id") or ""))
+        scene = showcase_prompts.image_scene(str(data.get("scene_id") or ""),
+                                            skill=skill)
     if scene is None:
         return jsonify({"error": "请选择预置展示场景"}), 400
     try:
