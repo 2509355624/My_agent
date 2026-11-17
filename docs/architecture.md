@@ -219,3 +219,5 @@ routes.py  →  service.py  →  repository.py / integrations/
 
 **Django 可以作为未来的独立管理面，不适合作为现在的替换目标。**  
 现在最值钱的动作是：把 `config`、入口、`main.py`、几个 God 模块按 feature 拆开，让代码边界先清楚；数据库用 SQLAlchemy/Alembic 渐进接入。等边界清楚了，换不换 Django 都只是“换一层 HTTP 适配”，而不是“重写整个系统”。
+
+具体到根目录、`app/` 每个包、每个 feature 内部文件的职责，见 [`docs/project-skeleton.md`](project-skeleton.md)。

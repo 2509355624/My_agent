@@ -1,6 +1,7 @@
-# 开发规范（讨论稿 v0.1）
+# 开发规范 v1.0
 
-> 状态：**讨论中，未生效**。确认后升为 v1.0，并由根目录 `AGENTS.md` 引用。
+> 状态：**已确认，生效**（2026-11-17）。
+> 已确认：Flask + 模块化单体；Django 暂不接；硬闸门启用；函数/文件行数上限启用。
 > 目的不是“多写一份文档”，而是让 AI 和人都按同一套可检查的规则开发，避免再次出现 God 文件、文字墙页面和互相 import 的乱麻。
 
 ---
@@ -36,7 +37,7 @@
 
 ---
 
-## 2. 六条工程原则
+## 2. 七条工程原则
 
 1. **方案先行**：没写清目标、边界、影响面、验证方式，不写代码。
 2. **最小改动**：只碰任务需要的文件；不顺手重构、不改无关格式。
@@ -44,6 +45,7 @@
 4. **测试先行**：新行为先写失败测试；修 bug 先写复现测试。
 5. **证据交付**：没跑过的命令不说通过；没验证的页面不说完成。
 6. **根因修复**：不静默吞异常、不造假成功路径、不用 `try/except: pass` 掩盖。
+7. **简单可读优先**：能 3 行说清不要写 30 行；不提前抽象、不堆设计模式；命名直白，嵌套浅，一个函数一个目的。代码首先是给人看的，其次才是给机器跑的。
 
 ---
 
@@ -132,7 +134,9 @@
 - **ARCH-07**：feature 之间不直接 import 内部文件；跨 feature 只走对方 `service.py` 的公开函数。
 - **ARCH-08**：共享代码只有在**第二个调用方出现后**才抽到 `core/`；不要为“以后可能用”提前抽象。
 - **ARCH-09**：不建万能 `utils/`。路径、日志、安全、错误放 `core/`；业务工具放对应 feature。
-- **ARCH-10**：不新增 God 文件。新文件超过 600 行要说明理由；超过 1,000 行直接 blocker（生成代码/迁移文件除外）。
+- **ARCH-10**：不新增 God 文件。新文件达到 600 行就要开始拆；超过 1,000 行直接 blocker（生成代码/迁移文件除外）。
+- **ARCH-10.1**：拆文件按“一个职责/一个用例”拆，不按行数机械切。比如 `image/service.py` 超限，拆成 `image/service_generate.py`、`image/service_audit.py`，不拆成 `part1.py`、`part2.py`。
+- **ARCH-10.2**：老 God 文件（`persona.py`、`main.py` 等）冻结增长：新职责一律放新 feature；下一次修改必须至少抽出一块，不能只加不减。
 - **ARCH-11**：老文件（`persona.py`、`main.py` 等）不要求一次拆完；但**不允许继续往里面加新职责**。新职责放新 feature。
 - **ARCH-12**：模块变包是首选兼容手段：`app/persona.py` → `app/features/persona/__init__.py`，先原样 re-export，调用方不用改。
 
@@ -154,6 +158,7 @@
 - **PY-12**：请求线程里不 `time.sleep` 等长任务；生图/漫画/抓取放 worker 或后台线程。
 - **PY-13**：新依赖先问。标准库能解决的不加包；一个包只为一个函数加的，不批准。
 - **PY-14**：命名：文件/函数 `snake_case`，类 `PascalCase`，常量 `UPPER_SNAKE`；测试名写行为，不写 `test1`。
+- **PY-15**：简单可读优先。能用早返回就少套 `else`；能用 1 个函数就不建 3 层基类；一个抽象只有一个调用方时，先不抽。
 
 ---
 
@@ -278,17 +283,32 @@
 
 ---
 
-## 15. 待你确认的 8 个点
+## 15. 已确认的决策（2026-11-17）
 
-下面这些会直接决定 v1.0 的强度，建议逐条拍板：
+1. **框架**：确认继续 Flask + 模块化单体；Django 暂不接，未来只考虑独立管理面。
+2. **硬闸门**：确认跨层 import、无测试的新行为、新增红项、secret、破坏旧 URL 都是 blocker。
+3. **代码上限**：确认函数 50 行、嵌套 4 层、新文件 600 行软限/1000 行硬限。
+4. **循环规则**：确认不按“3 个 for”做硬指标，改为“嵌套 ≤ 2 层、圈复杂度 ≤ 10”。
+5. **覆盖率**：确认新增/修改行 ≥ 80%，不追求全仓覆盖率。
+6. **diff 预算**：确认单次审查 ≤ 300 行；超过 500 行必须拆分或说明。
+7. **文档形态**：确认 `AGENTS.md`（短）+ `docs/development-standard.md`（全）+ `docs/adr/`（决策）。
+8. **验收方式**：确认 AI 只做静态/自动验证，页面最终由用户在手机上点一遍；AI 不代替真机验收。
 
-1. **框架**：接受“继续 Flask + 模块化单体，Django 暂不换”？
-2. **硬闸门**：跨层 import、无测试的新行为、新增红项、secret、破坏旧 URL，是否都设为 blocker？
-3. **代码上限**：函数 50 行、嵌套 4 层、新文件 600 行软限/1000 行硬限，是否合适？
-4. **循环规则**：不采用“3 个 for 就禁止”，改成“嵌套 ≤ 2 层、复杂度 ≤ 10”，是否接受？
-5. **覆盖率**：新增/修改行 ≥ 80%，不追求全仓覆盖率，是否接受？
-6. **diff 预算**：单次审查 ≤ 300 行、超过 500 行必须拆分，是否接受？
-7. **文档形态**：根 `AGENTS.md`（短）+ `docs/development-standard.md`（全）+ `docs/adr/`（决策），是否采用？
-8. **验收方式**：AI 只做静态/自动验证，页面最终由你在手机上点一遍确认；不接受“AI 说完成”，是否确认？
+后续规则变更走 ADR 或在本文件追加“变更记录”，不静默降低闸门。
 
-确认后我把本文升为 v1.0，并生成根 `AGENTS.md` 和第一份 ADR（Flask vs Django）。
+---
+
+## 16. 参考来源
+
+这些是规则来源，不是运行依赖；不把整仓 clone 进项目，只把适用条款内化到本文件和 `AGENTS.md`。
+
+- GitHub Blog, *How to write a great AGENTS.md*：边界、命令、Never/Ask/Always 三层
+  <https://github.blog/ai-and-ml/github-copilot/how-to-write-a-great-agents-md-lessons-from-over-2500-repositories/>
+- GitHub `awesome-copilot`：通用 code review checklist（安全/测试/性能/架构）
+  <https://github.com/github/awesome-copilot>
+- Microsoft `skills`：`AGENTS.md` 生成规范（build/test/structure/boundaries）
+  <https://github.com/microsoft/skills>
+- `cskwork/coding-agent-rules`：函数 ≤50 行、嵌套 ≤4、按 feature 拆、外科手术式改动
+  <https://github.com/cskwork/coding-agent-rules>
+- Google Chrome `modern-web-guidance`：前端平台能力与 fallback
+  <https://github.com/GoogleChrome/modern-web-guidance>
