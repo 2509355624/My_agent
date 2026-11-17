@@ -44,7 +44,8 @@ from flask import Blueprint, jsonify, request, send_file
 
 from app.features.comic import soda_letter
 from app.features.image import lora_slots
-from app import image_jobs, moss_comic
+from app.features.comic import moss_comic
+from app import image_jobs
 from app.config import BASE_DIR, COMFYUI_OUTPUT_DIR
 from app.core.skills import load_workflow
 from app.tools.normal.generate_image import apply_prompt_placeholders

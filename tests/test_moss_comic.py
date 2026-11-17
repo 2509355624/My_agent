@@ -11,7 +11,7 @@
 import json
 import unittest
 
-from app import moss_comic
+from app.features.comic import moss_comic
 
 
 def _area(box):

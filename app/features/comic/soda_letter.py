@@ -25,7 +25,7 @@ schema 对照 soda-storyboard 0.5.0：
 import json
 import os
 
-from app import moss_comic
+from app.features.comic import moss_comic
 
 # 环境开关：**默认关**（2026-11-12 用户拍板恢复「模型自己画气泡」的老链路——
 # Soda 程序排字会出几个大气泡糊脸）。MOSS_SODA_LETTER=1 显式开回程序排字，

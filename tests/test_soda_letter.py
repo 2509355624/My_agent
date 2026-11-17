@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 from app.features.comic import soda_letter
-from app import moss_comic
+from app.features.comic import moss_comic
 
 SPEC = {
     "title": "测试",

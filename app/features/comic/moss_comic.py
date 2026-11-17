@@ -29,7 +29,7 @@ import os
 import re
 
 from app.integrations import llm
-from .config import BASE_DIR
+from app.config import BASE_DIR
 
 log = logging.getLogger("moss_comic")
 
