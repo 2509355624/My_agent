@@ -9,13 +9,15 @@ import threading
 import time
 import requests
 from app.cancel import is_cancelled
-from app.config import (API_URL, API_KEY, MODEL, LLM_PROVIDER,
-                        PERSONA_PROVIDER, PERSONA_MODEL,
-                        PROVIDERS, OLLAMA_BASE_URL, CONTEXT_BUDGET,
-                        LLM_FALLBACK_CHAIN, LLM_REQUEST_TIMEOUT,
-                        LLM_FALLBACK_TTL, LLM_RATE_LIMIT_TTL,
-                        LLM_CONCURRENCY_TTL, provider_vision,
-                        LLM_RETRY_TIMES, LLM_RETRY_DELAY, LLM_RETRY_BUDGET)
+from app.core.config.llm import (API_URL, API_KEY, MODEL, LLM_PROVIDER,
+                                 PERSONA_PROVIDER, PERSONA_MODEL,
+                                 PROVIDERS, OLLAMA_BASE_URL,
+                                 LLM_FALLBACK_CHAIN, LLM_REQUEST_TIMEOUT,
+                                 LLM_JUDGE_TIMEOUT,
+                                 LLM_FALLBACK_TTL, LLM_RATE_LIMIT_TTL,
+                                 LLM_CONCURRENCY_TTL, provider_vision,
+                                 LLM_RETRY_TIMES, LLM_RETRY_DELAY, LLM_RETRY_BUDGET,
+                                 get_llm_settings)
 
 # 诊断行一律走 logging，不走 print——原因见 app/logsetup.py 的模块说明：
 # print 落 stdout，被重定向/管道接管后是块缓冲，日志会「看起来丢了」。
@@ -84,6 +86,49 @@ LAST_USAGE = _usage()
 
 # 当前生效的 provider（web 端切换后更新）。默认取 .env 的 LLM_PROVIDER
 CURRENT_PROVIDER = LLM_PROVIDER
+
+
+def _settings():
+    """每次请求读一次生效设置；管理页改 runtime_settings.json 后热生效。
+
+    模块级常量仍保留为默认值，既兼容旧测试的 mock，也保证 runtime 文件坏掉
+    时不会把请求打挂。runtime 里有同名键时以 runtime 为准。
+    """
+    try:
+        settings = get_llm_settings()
+        from app.core.config import runtime
+        patch = runtime.load()
+    except Exception:                       # pragma: no cover - 配置层兜底
+        patch = {}
+        settings = {
+            "provider": LLM_PROVIDER,
+            "fallback_chain": LLM_FALLBACK_CHAIN,
+            "request_timeout": LLM_REQUEST_TIMEOUT,
+            "judge_timeout": LLM_JUDGE_TIMEOUT,
+            "fallback_ttl": LLM_FALLBACK_TTL,
+            "rate_limit_ttl": LLM_RATE_LIMIT_TTL,
+            "concurrency_ttl": LLM_CONCURRENCY_TTL,
+            "retry_times": LLM_RETRY_TIMES,
+            "retry_delay": LLM_RETRY_DELAY,
+            "retry_budget": LLM_RETRY_BUDGET,
+        }
+
+    # 旧测试/旧代码会直接 mock 本模块常量；runtime 没写的项就认这些默认值。
+    for key, field, default in (
+        ("LLM_PROVIDER", "provider", LLM_PROVIDER),
+        ("LLM_FALLBACK_CHAIN", "fallback_chain", LLM_FALLBACK_CHAIN),
+        ("LLM_REQUEST_TIMEOUT", "request_timeout", LLM_REQUEST_TIMEOUT),
+        ("LLM_JUDGE_TIMEOUT", "judge_timeout", LLM_JUDGE_TIMEOUT),
+        ("LLM_FALLBACK_TTL", "fallback_ttl", LLM_FALLBACK_TTL),
+        ("LLM_RATE_LIMIT_TTL", "rate_limit_ttl", LLM_RATE_LIMIT_TTL),
+        ("LLM_CONCURRENCY_TTL", "concurrency_ttl", LLM_CONCURRENCY_TTL),
+        ("LLM_RETRY_TIMES", "retry_times", LLM_RETRY_TIMES),
+        ("LLM_RETRY_DELAY", "retry_delay", LLM_RETRY_DELAY),
+        ("LLM_RETRY_BUDGET", "retry_budget", LLM_RETRY_BUDGET),
+    ):
+        if key not in patch:
+            settings[field] = default
+    return settings
 
 
 # ─── 请求级自定义模型（2026-11-05 建 / 11-09 改成降级链）──────
@@ -313,9 +358,10 @@ def get_effective_config(provider=None, model=None):
             return {"provider": "custom", "base_url": c["base_url"],
                     "model": c["model"], "api_key": c["api_key"],
                     "reasoning_effort": ""}
-    provider = (provider or CURRENT_PROVIDER or LLM_PROVIDER).lower()
+    default_pid = _settings()["provider"]
+    provider = (provider or CURRENT_PROVIDER or default_pid).lower()
     if provider not in PROVIDERS:
-        provider = LLM_PROVIDER
+        provider = default_pid if default_pid in PROVIDERS else LLM_PROVIDER
     cfg = PROVIDERS[provider]
     return {
         "provider": provider,
@@ -347,7 +393,7 @@ def call_llm(messages, timeout=None, provider=None, model=None, strict=False,
 
     - provider: 'volc' / 'doubao' / 'deepseek' / 'scnet' / 'scnet2' / 'mimo' / 'ollama'
     - model: 覆盖该 provider 的默认模型
-    - timeout: 单次尝试的超时；不传用 LLM_REQUEST_TIMEOUT
+    - timeout: 单次尝试的超时；不传用当前生效的 request_timeout
     - strict: True 只打指定的那一个，失败不再顺链换家（见 candidates）
     - max_tokens: 输出上限。不传就不带这个字段（服务端默认）。长输出（比如 50 格
       漫画一次出完）必须显式给，否则会被服务端默认上限截在半句话上（2026-10-22）。
@@ -356,7 +402,8 @@ def call_llm(messages, timeout=None, provider=None, model=None, strict=False,
       见 `persona.run_turn`。
     兼容旧调用 call_llm(messages)：用当前生效配置。
     """
-    timeout = timeout or LLM_REQUEST_TIMEOUT
+    settings = _settings()
+    timeout = timeout or settings["request_timeout"]
     # 2026-11-09：不再有「自定义模型整轮换人」的短路分支。链头永远是调用方
     # 点名的那个模型（扮演 = 公用中转站 V4 Pro），玩家的自定义模型排在后面，
     # 由 candidates() 统一装配，三次重试 / 拉黑 / 记流水都走同一套循环。
@@ -372,20 +419,20 @@ def call_llm(messages, timeout=None, provider=None, model=None, strict=False,
             body["temperature"] = float(temperature)
         body.update(_reasoning_field(eff))
         started = time.time()
-        for attempt in range(1, LLM_RETRY_TIMES + 1):
+        for attempt in range(1, settings["retry_times"] + 1):
             try:
                 out = _call_provider(eff, body, timeout)
                 _note_persona_used(pid, eff)
                 return out
             except Exception as e:
                 last_err = e
-                wait = _retry_wait(attempt, started, e)
+                wait = _retry_wait(attempt, started, e, settings)
                 if wait is None:
-                    _mark_dead((pid, mname), _brief(e), ttl=_ttl_for(e))
+                    _mark_dead((pid, mname), _brief(e), ttl=_ttl_for(e, settings))
                     break
                 log.warning("[retry] %s / %s 第 %d/%d 次失败：%s；%.1f 秒后再试",
-                            pid, mname, attempt, LLM_RETRY_TIMES, _brief(e, 80),
-                            wait)
+                            pid, mname, attempt, settings["retry_times"],
+                            _brief(e, 80), wait)
                 time.sleep(wait)
     if persona_chain_active():
         raise PersonaChainExhausted(
@@ -664,47 +711,35 @@ def _is_transient(err):
     return any(h in text for h in _CONCURRENCY_HINTS + _TRANSIENT_HINTS)
 
 
-def _ttl_for(err):
-    """这个失败该拉黑多久。
-
-    两档（2026-11-09 用户重定：「重试 3 次，失败就 30 秒拉黑，之后再尝试」）：
-      - **瞬时/限流**（502/503/504、读超时、连接被掐、concurrency、too many
-        requests）→ `LLM_CONCURRENCY_TTL`（30 秒）。等几十秒、在飞的请求返回
-        就能再用。
-      - **429 里非限流的其余**（余额/额度耗尽为主）→ `LLM_RATE_LIMIT_TTL`
-        （也 30 秒——从前是 86400，害得角色扮演整天走付费官方，见上面
-        `_CONCURRENCY_HINTS` 的实战记录。真到顶了，30 秒白撞一次也不费钱）。
-      - **其余**（模型退役、key 失效、网络硬故障）→ `LLM_FALLBACK_TTL`
-        （.env 里 3600 秒：这些重试再快也好不了，黑一小时再回头试）。
-
-    ⚠️ 顺序不能反：并发冲突和临时不可用的响应**也可能是 429**，先按 429 判
-    就会被算成额度到顶那一档。
-    """
+def _ttl_for(err, settings=None):
+    """这个失败该拉黑多久；settings 由调用方传入，保证同一轮内一致。"""
+    settings = settings or _settings()
     if _is_transient(err):
-        return LLM_CONCURRENCY_TTL
+        return settings["concurrency_ttl"]
     if "429" in str(err).lower():
-        return LLM_RATE_LIMIT_TTL
-    return LLM_FALLBACK_TTL
+        return settings["rate_limit_ttl"]
+    return settings["fallback_ttl"]
 
 
-def _retry_wait(attempt, started, err):
+def _retry_wait(attempt, started, err, settings=None):
     """同一候选失败后要不要再试一次 → 需要等待的秒数；不重试返回 None。
 
-    - `attempt`：**已经失败**的次数（1 起）。达到 `LLM_RETRY_TIMES` 就停。
+    - `attempt`：**已经失败**的次数（1 起）。达到 retry_times 就停。
     - 只有瞬时/限流故障才重试（见 `_is_transient`）；余额耗尽、key 失效、
       400 这类重试多少次都一样，立刻降级。
-    - `LLM_RETRY_BUDGET` 是总时长闸：读超时一次就吃掉 60 秒，再重试三次等于
-      让用户干等三分钟，超预算直接降级。
+    - retry_budget 是总时长闸：读超时一次就吃掉 request_timeout，再重试三次
+      等于让用户干等三分钟，超预算直接降级。
     """
-    if attempt >= LLM_RETRY_TIMES:
+    settings = settings or _settings()
+    if attempt >= settings["retry_times"]:
         return None
     if not _is_transient(err):
         return None
     elapsed = time.time() - started
-    if elapsed >= LLM_RETRY_BUDGET:
+    if elapsed >= settings["retry_budget"]:
         return None
-    wait = LLM_RETRY_DELAY * attempt
-    if elapsed + wait > LLM_RETRY_BUDGET:
+    wait = settings["retry_delay"] * attempt
+    if elapsed + wait > settings["retry_budget"]:
         return None
     return wait
 
@@ -723,7 +758,7 @@ def _sleep_with_cancel(seconds, cancel_event=None):
 
 def _mark_dead(key, reason, ttl=None):
     """把这个候选拉黑一段时间。失败是常态（额度用完、模型退役），只记日志。"""
-    ttl = LLM_FALLBACK_TTL if ttl is None else ttl
+    ttl = _settings()["fallback_ttl"] if ttl is None else ttl
     with _DEAD_LOCK:
         _DEAD[key] = time.time() + ttl
     log.info("[chain] %s / %s 拉黑 %.0fs（%s）", key[0], key[1], ttl, reason)
@@ -795,7 +830,7 @@ def candidates(provider=None, model=None, require_vision=False, strict=False):
             log.warning("[persona] 计费闸门读取失败，跳过付费段", exc_info=True)
         tail = customs + paid if getattr(_custom_ctx, "paid_after", False) else paid + customs
     else:
-        tail = parse_chain(LLM_FALLBACK_CHAIN)
+        tail = parse_chain(_settings()["fallback_chain"])
     chain = ([head] if head else []) + tail
     # 本轮强制模型（前端「本轮用 X」）：提到链头，其余作兜底——失败仍回落，不丢轮。
     forced = _resolve_force_candidate()
@@ -1118,7 +1153,8 @@ def call_llm_stream(messages, timeout=None, provider=None, model=None,
     注意换模型的边界（"已吐过 content 就不换"）在严格模式下已经用不上——压根
     没有下一家可换，异常直接抛给调用方。
     """
-    timeout = timeout or LLM_REQUEST_TIMEOUT
+    settings = _settings()
+    timeout = timeout or settings["request_timeout"]
     # 元信息按「一次 call_llm_stream」清零：降级链换模型重试后，读到的是
     # 最后一次（也就是最终成功那次）的数字，正是诊断想要的口径。
     _stream_meta().update(finish_reason=None, reasoning_chars=0, content_chars=0)
@@ -1130,7 +1166,7 @@ def call_llm_stream(messages, timeout=None, provider=None, model=None,
         eff = get_effective_config(pid, mname)
         _log_effective(eff, stream=True, attempt=(i + 1, len(targets)))
         started = time.time()
-        for attempt in range(1, LLM_RETRY_TIMES + 1):
+        for attempt in range(1, settings["retry_times"] + 1):
             spoke = False
             try:
                 for kind, text in _stream_once(eff, messages, timeout, cancel_event):
@@ -1143,13 +1179,13 @@ def call_llm_stream(messages, timeout=None, provider=None, model=None,
                 if spoke:
                     raise
                 last_err = e
-                wait = _retry_wait(attempt, started, e)
+                wait = _retry_wait(attempt, started, e, settings)
                 if wait is None:
-                    _mark_dead((pid, mname), _brief(e), ttl=_ttl_for(e))
+                    _mark_dead((pid, mname), _brief(e), ttl=_ttl_for(e, settings))
                     break
                 log.warning("[retry] %s / %s 第 %d/%d 次失败：%s；%.1f 秒后再试",
-                            pid, mname, attempt, LLM_RETRY_TIMES, _brief(e, 80),
-                            wait)
+                            pid, mname, attempt, settings["retry_times"],
+                            _brief(e, 80), wait)
                 if not _sleep_with_cancel(wait, cancel_event):
                     return
     if persona_chain_active():

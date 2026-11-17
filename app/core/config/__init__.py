@@ -14,6 +14,7 @@ from .paths import (
     SKILLS_DIR,
     VECTOR_STORE_DIR,
     WEB_DIR,
+    _is_test_process,
     state_path,
 )
 
