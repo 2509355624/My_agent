@@ -329,7 +329,7 @@ def _fetch_result(rel):
 
     不猜「最新一张」：名字来自 history 的 output_images，取不到就如实失败。
     """
-    from app import comfy_out
+    from app.features.image import comfy_out
     import requests
     p = comfy_out.local_output_file(rel)
     if p:

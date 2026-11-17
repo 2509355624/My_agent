@@ -20,7 +20,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from unittest import mock
 
-from app import comic, comfy_out, gen_api, image_jobs, main
+from app.features.image import comfy_out
+from app import comic, gen_api, image_jobs, main
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
 

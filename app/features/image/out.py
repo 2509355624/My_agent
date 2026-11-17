@@ -38,7 +38,7 @@ from urllib.parse import quote
 
 import requests
 
-from app import comfy_out
+from app.features.image import comfy_out
 from app.config import COMFYUI_OUTPUT_DIR, COMFYUI_URL
 
 log = logging.getLogger("image_out")

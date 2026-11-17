@@ -12,7 +12,7 @@
 import os
 import unittest
 
-from app import comfy_out
+from app.features.image import comfy_out
 
 
 class SplitRelTest(unittest.TestCase):

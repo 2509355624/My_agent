@@ -1485,7 +1485,7 @@ def _save_preset_text(raw_name):
     cover_note = ""
     image_rel = last.get("image_rel") or ""
     if image_rel:
-        from app import comfy_out
+        from app.features.image import comfy_out
         src = comfy_out.local_output_file(image_rel)
         if src and os.path.isfile(src):
             ok_cov, _err = runbench_api.save_cover(name, src)

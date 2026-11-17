@@ -174,7 +174,8 @@ import requests
 
 from app.features.image import comfy_launch
 from app.features.image import comfy_progress
-from app import comfy_gate, comfy_out
+from app.features.image import comfy_out
+from app import comfy_gate
 from app.features.image import log as image_log
 from app.features.image.delivery import (
     _caption, _caption_note_text, _send_image, caption_note_default)

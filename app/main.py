@@ -15,7 +15,7 @@ from flask import (Flask, request, jsonify, send_from_directory, send_file,
                    Response, stream_with_context)
 from app import agents as agent_store
 from app import cancel as cancel_mod
-from app import comfy_out
+from app.features.image import comfy_out
 from app.features.image import audit as image_audit
 from app.features.image import migrate as image_migrate
 from app import logsetup

@@ -175,7 +175,7 @@ def output_base(task_dir):
     qq = owner_of(task_dir)
     if not qq:
         return ""
-    from app import comfy_out
+    from app.features.image import comfy_out
     name = os.path.basename(str(task_dir).rstrip("\\/")) or "作品"
     return comfy_out._join("群友漫画台", qq, name)
 

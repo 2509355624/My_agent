@@ -30,7 +30,8 @@ from app.config import (
     state_path,
 )
 from app.features.persona import rag as persona_rag
-from app import comfy_out, friend_auth, image_jobs, llm
+from app.features.image import comfy_out
+from app import friend_auth, image_jobs, llm
 from app.features.image import audit as image_audit
 from app import showcase_prompts
 from app.tools.normal.generate_image import build_t2i_workflow
