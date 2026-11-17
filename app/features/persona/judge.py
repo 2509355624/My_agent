@@ -8,7 +8,7 @@ from app.features.persona.game_text import _plan_fact
 from app.features.persona.game_time import _day_of
 from app.features.persona.json_utils import _parse_json_loose
 from app.features.persona.judge_fields import (
-    _director_fields, _item_keys_text, _judge_ledger, _norm_finish,
+    _director_fields, _item_keys_text, _judge_ledger, _norm_finish, _norm_rag,
 )
 from app.features.persona.prompt_facts import _FACTS_GUIDE
 from app.features.persona.prompts import (
@@ -60,13 +60,20 @@ def judge_intent(card, said, state="", history=None, note="",
     intent = str(d.get("intent") or "").strip().lower()
     if intent not in INTENTS:
         log.info("意图判断给了不认识的类别 %r，走原流程", intent)
-        # 类别不认识不影响事实字段：只要它交了 facts / secret，照样能用。
+        # 类别不认识不影响事实字段：只要它交了 facts / secret / rag，照样能用。
         extra = _director_fields(d)
-        if not (extra["facts"] or extra["secret"]):
+        if "rag" in d:
+            extra["rag"] = _norm_rag(d.get("rag"))
+        if not (extra["facts"] or extra["secret"] or "rag" in extra):
             extra = {}
         return None, "", extra
     note = str(d.get("note") or "").strip()[:30]
-    return intent, note, _director_fields(d)
+    extra = _director_fields(d)
+    # RAG 路由（2026-11-18）：只有模型真的交了 rag 字段才透传。
+    # 老提示词/老 mock 没这个字段时保持旧行为，由 turn.py 兜底。
+    if "rag" in d:
+        extra["rag"] = _norm_rag(d.get("rag"))
+    return intent, note, extra
 
 
 def judge_intent_scored(card, said, state="", line_key="", gameday=None,
@@ -177,7 +184,10 @@ def judge_intent_scored(card, said, state="", line_key="", gameday=None,
              # run_turn 从同一个 dict 里取，落进会话的 gameday。
              "time": d.get("time"),
              "phase": d.get("phase"),
-             "plan": d.get("plan")}
+             "plan": d.get("plan"),
+             # RAG 路由（2026-11-18）：编剧顺手判这句话要不要翻旧账。
+             # 不进 settle，只给 run_turn 决定是否调用长期记忆。
+             "rag": _norm_rag(d.get("rag"))}
     # 导演条（2026-11-05）：分段 + 潜台词，第二段演员要拿它。
     # 放在 score 里一起返回，不另开接口——`settle` 不认识这些键，会原样忽略。
     score.update(_director_fields(d))
@@ -285,6 +295,8 @@ def judge_v2(card, said, state="", line_key="", gameday=None,
         "delta", "turn_type", "reason", "contact", "confess", "finish",
         "yandere", "proposal", "accept", "refused_confession", "facts",
         "addressed", "secret", "time", "phase", "plan", "place")}
+    # RAG 路由（2026-11-18）：不进 settle，只给 run_turn 决定要不要翻旧账。
+    score["rag"] = _norm_rag(d.get("rag"))
     # adult（2026-11-08）：身体这条线。**原样透传，不在这里净化**——
     # 结算器 affection_v2_adult.apply 负责 clamp/闸门/回落/去重，
     # 这里多改一处就多一个离线口径。

@@ -4,6 +4,7 @@ _INTENT_PROMPT = """判断下面这句话**在干什么**。只输出一个 JSON
 
 {
   "intent": "intimate | joke | literal | insult | neutral",
+  "rag": "none | summary | detail",
   "finish": "inside | outside | none | unknown",
   "note": "用不超过 15 个字说明他到底在干什么",
   "addressed": true,
@@ -25,6 +26,12 @@ _INTENT_PROMPT = """判断下面这句话**在干什么**。只输出一个 JSON
 - 「抱抱」「亲一下」「过来」这种直接的亲近要求，判 intimate。
 - 「帮我倒水」「今天几号」这种正常的事项，判 literal。
 - 拿不准时判 neutral。
+
+rag（这一句需不需要翻旧账）：
+- none —— 只说眼前、继续演、闲聊、情绪、动作，没有指向过去
+- summary —— 提到过去，但只需要大致经过
+- detail —— 明确问第一次、当时原话、具体地点/时间/细节
+拿不准给 summary；只是眼前的事不要给 none 以外的值。
 
 finish（这一轮有没有「射在里面」）：只有明确发生/要求内射才 inside；
 戴套、体外、射在外面 outside；没进入或没发生 none；看不出来 unknown。

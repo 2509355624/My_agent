@@ -3,6 +3,7 @@
 import logging
 
 from app.features.persona import state_inject
+from app.features.persona.judge_fields import resolve_rag
 
 log = logging.getLogger("persona")
 
@@ -97,6 +98,9 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     man = svc._manual_norm(manual)
     man_segs = svc._manual_segments(man)
     man_block = svc._manual_block(man)
+    # RAG 只看玩家**看得见**的话：心里话不参与检索/路由，免得她提前知道。
+    visible = svc._visible_user_text(
+        man_segs, "" if man.get("thought") else text)
     judge_said = text
     if man_block:
         judge_said = man_block + (
@@ -123,6 +127,15 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         intent, inote, extras = svc._judge_intent(
             card, judge_said, prev_state, history=hist, note=note)
         extras = extras if isinstance(extras, dict) else {}
+    # RAG 路由（2026-11-18）：编剧第一段顺手判这句话要不要翻旧账。
+    # 编剧给了合法值就以它为准；漏了/判挂了才用正则兜底。
+    # 显式过去问法只能把档位往上抬，不能把编剧已经判的 detail 降下来。
+    # 兼容：老 mock/老提示词压根没有 rag 字段时，保留原来的“每轮都查”行为，
+    # 不让没升级的链路突然失忆；等提示词全量上线后再收紧。
+    if "rag" in extras:
+        rag_mode = resolve_rag(extras.get("rag"), visible)
+    else:
+        rag_mode = "detail"
     # 精确输入（2026-11-09）：玩家亲手填的三栏是他本人的意图，照旧按块发；
     # 编剧那边已经不拆段了（它只记数值和事实），所以这里只剩 man_segs 一个来源。
     # 有心理活动就锁 secret——内容给写作层，但不许她"听见"。
@@ -180,15 +193,16 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     # 最后一条玩家消息里——system 头是前缀，动态内容插进去会把前缀缓存
     # 打散（实测命中 59~70%，一轮两万 token 时这一步很贵），放末尾既保住
     # 缓存，又离生成点更近。
-    visible = svc._visible_user_text(
-        man_segs, "" if man.get("thought") else text)
     rblock = ""
-    if rag_on:
+    if rag_on and rag_mode != "none":
         try:
             rblock = svc.persona_rag.build_block(
                 key, visible, day=day_before, context=svc._rag_context(hist))
         except Exception:                                # noqa: BLE001
             svc.log.exception("回忆注入失败 %s", key)
+    if rag_on:
+        svc.log.info("[回忆路由] %s rag=%s block=%d字",
+                     key, rag_mode, len(rblock))
     # 攻略模式结算（2026-11-03）：分数落账 → 按档位往主提示词里注入关系块。
     # 没打出分（score 为 None）也照走 settle——按 +0 记账，档位注入照常。
     preg_event = None

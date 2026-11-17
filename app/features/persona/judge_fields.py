@@ -1,8 +1,60 @@
 """评分与意图判断里的纯字段处理。"""
 
+import re
+
 from app.features.persona.prompt_facts import _parse_facts
 
 NOTE_MAX_CHARS = 1000
+
+_RAG_DETAIL_RE = re.compile(
+    r"第一次|初次|初夜|初吻|初口|初后|破处|原话|"
+    r"当时.{0,8}(?:说|讲)|具体.{0,6}(?:哪|什么|怎么|几)|"
+    r"在哪|什么时候|几点|哪天")
+_RAG_PAST_RE = re.compile(
+    r"上次|上回|之前|以前|当时|那时候|那天|昨天|前天|"
+    r"还记得|记得|你说过|我说过|我们说过|约好|答应过|曾经|那次")
+
+
+def _norm_rag(value):
+    """编剧给的 RAG 路由；不认识的值当作没给。"""
+    v = str(value or "").strip().lower()
+    return v if v in ("none", "summary", "detail") else None
+
+
+def rag_fallback(text):
+    """编剧没给/解析失败时的保底路由；只认明确的过去指向。
+
+    这是**只保底、不抢编剧判断**：编剧给了合法值就以编剧为准，
+    这里只负责把漏掉的显式过去问法补回来。
+    """
+    t = str(text or "").strip()
+    if not t:
+        return None
+    if _RAG_DETAIL_RE.search(t):
+        return "detail"
+    if _RAG_PAST_RE.search(t):
+        return "summary"
+    return None
+
+
+def resolve_rag(value, text):
+    """合并编剧判断与正则兜底，返回最终档位。
+
+    规则（2026-11-18）：
+      · 编剧给合法值 → 以编剧为准；
+      · 编剧漏了/判挂了 → 用正则兜底，没过去指向就 none；
+      · 显式过去问法只能把档位往上抬（none→summary / →detail），
+        不能把编剧已经判的 detail 降下来。
+    """
+    mode = _norm_rag(value)
+    fb = rag_fallback(text)
+    if mode not in ("none", "summary", "detail"):
+        return fb or "none"
+    if fb == "detail" and mode != "detail":
+        return "detail"
+    if fb == "summary" and mode == "none":
+        return "summary"
+    return mode
 
 
 def _director_fields(d):

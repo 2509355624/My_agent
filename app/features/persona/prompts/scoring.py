@@ -7,6 +7,7 @@ _SCORE_PROMPT = """判断下面这句话**在干什么**，并给这句话对你
 
 {
   "intent": "intimate | joke | literal | insult | neutral",
+  "rag": "none | summary | detail",
   "delta": 0,
   "turn_type": "chat | action",
   "in_scene": false,
@@ -38,6 +39,12 @@ intent（这句话在干什么）：
 - literal —— 字面请求：真的要求做某件事、问某个问题
 - insult —— 冒犯：贬低、辱骂、羞辱对方
 - neutral —— 普通对话：闲聊、叙述、没有明确指向
+
+rag（这句话需不需要翻旧账）：
+- none —— 只说眼前、继续演、闲聊、情绪、动作，没有指向过去
+- summary —— 提到过去，但只需要大致经过
+- detail —— 明确问第一次、当时原话、具体地点/时间/细节
+拿不准给 summary；只是眼前的事不要给 none 以外的值。
 
 **先认人，再判分。同一个做法对不同的人值多少分不一样，按下面「她是谁」里她的
 性格判，不要按通用的礼貌标准判：**
@@ -296,6 +303,7 @@ _SCORE_PROMPT_V2 = """你在给一段校园/日常恋爱角色扮演做「编剧
 ## 要填的字段
 {
   "intent": "intimate | joke | literal | insult | neutral",
+  "rag": "none | summary | detail",
   "delta": 0,
   "turn_type": "chat | action",
   "contact": {"degree": 0, "cause": "", "who": "", "place": "", "excerpt": ""},
@@ -335,6 +343,11 @@ _SCORE_PROMPT_V2 = """你在给一段校园/日常恋爱角色扮演做「编剧
 }
 
 ## 各字段怎么判
+rag：这句话需不需要翻旧账。
+  none = 只说眼前、继续演、闲聊、情绪、动作，没有指向过去；
+  summary = 提到过去，但只需要大致经过；
+  detail = 明确问第一次、当时原话、具体地点/时间/细节。
+  拿不准给 summary；只是眼前的事不要给 none 以外的值。
 delta：她对他的好感这轮变化多少，单轮 -15~+15。**给的是她的感受，不是他做得对不对**。
   普通闲聊 -2~+3；真诚关心、记得她说过的话 +3~+6；主动推进场景（约她、递东西、兑现小事）+3~+6；
   照料/解围 +6~+12；冒犯或让她不适 -3~-8。
