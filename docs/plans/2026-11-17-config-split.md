@@ -21,12 +21,16 @@ app/core/config/
 行数口径：600 行开始规划，1,000 行硬警戒，1,200 行内可容忍，1,500 行硬 blocker。
 不为了凑行数拆 `config2.py`；拆的是职责。
 
-## 当前事实
+## 当前事实（2026-11-17 收尾）
 
-- `app/config.py` 顶层定义到第 1,208 行（AST），约 106 处 import 语句。
-- 它不是“一个配置”，是 9 个域混在一起：路径、环境变量、LLM、视觉、图像、
-  RAG、Web、QQ、角色扮演、看门狗。
-- `BASE_DIR` 用 `__file__` 算，直接复制文件会把所有路径算错。
+- 拆分前 `app/config.py` 顶层定义约 1,208 行；现在 45 行，只剩兼容门面。
+- 原来混在一起的 11 个域已全部拆出：路径、环境变量、LLM、角色扮演、上下文
+  预算、联网搜索、默认 agent、图像、视觉、RAG、Web、角色卡、QQ、看门狗、
+  运行期设置。
+- `app/core/config/__init__.py` 已显式导出所有域，不再惰性回落。
+- `CUSTOM_PROVIDERS_FILE` / `load_custom_providers` 在 `llm.py`；旧
+  `app/config.py` 保留一个兼容包装，测试改路径仍然有效。
+- `app/config.py` 末尾仍调用一次 `load_custom_providers()`，保持原启动时序。
 
 ## 归位表
 
@@ -34,7 +38,7 @@ app/core/config/
 |---|---|
 | `paths.py` | `BASE_DIR`、`ROOT_DIR`、`_TEST_STATE_DIR`、`_is_test_process`、`state_path`、`SKILLS_DIR`、`WEB_DIR`、`DATA_DIR`、`DOCUMENTS_DIR`、`VECTOR_STORE_DIR`、`AGENTS_DIR` |
 | `env.py` | `.env` 加载、`_env_path`、`_env_bool`、`_env_list` |
-| `llm.py` | `LLM_PROVIDER`、`PERSONA_*`、`VOLC_*`、`DEEPSEEK_*`、`SCNET*`、`MIMO_*`、`LLM_FALLBACK_CHAIN`、超时/重试、`OLLAMA_*`、`LLAMA_*`、`PROVIDERS`、`provider_vision`、`SEARCH_*`、`physical_budget`、`CUSTOM_PROVIDERS_FILE`、`load_custom_providers` |
+| `llm.py` | `LLM_PROVIDER`、`VOLC_*`、`DEEPSEEK_*`、`SCNET*`、`MIMO_*`、`LLM_FALLBACK_CHAIN`、超时/重试、`OLLAMA_*`、`LLAMA_*`、`PROVIDERS`、`provider_vision`、`CUSTOM_PROVIDERS_FILE`、`load_custom_providers` |
 | `image.py` | `ENABLE_IMAGE_GEN`、`COMFYUI_*`、`IMAGE_*`（含 `IMAGE_AUDIT_*`）、`COMFY_*`、`QWEN_COOLDOWN`、`DISABLED_IMAGE_SKILLS`、`NAI_*` |
 | `vision.py` | `VISION_PROVIDER`、`VISION_MODEL`、`OLLAMA_VISION_*`、`VISION_TIMEOUT`、`VISION_MAX_EDGE`、`VISION_PROMPT_MAX` |
 | `rag.py` | `rag_enabled`、`PERSONA_RAG*`、`PERSONA_LORE_*` |
@@ -44,9 +48,9 @@ app/core/config/
 | `watchdog.py` | `WATCHDOG_SILENCE_*`、`WATCHDOG_COMFY_ENABLED` |
 | `persona.py` | 角色扮演模型白名单与 `persona_model_ids` / `persona_model_of` |
 | `context.py` | `MAX_TURNS`、`CONTEXT_BUDGET`、`_PROVIDER_CONTEXT_WINDOW`、`physical_budget`、`CONTEXT_MAX_TURNS`、`MEMORY_TURN_DIGEST_CHARS` |
+| `search.py` | `SEARCH_API_KEY`、`DOUBAO_SEARCH_ENDPOINT`、`WEB_SEARCH_MAX_CHARS` |
+| `agent.py` | `DEFAULT_AGENT_ID` |
 | `runtime.py` | 非密钥运行期 JSON 设置（管理页读写）；不再承担轮次/预算常量 |
-
-`DEFAULT_AGENT_ID` 归 `runtime.py` 或 `paths.py`，按调用方复核。
 
 ## 迁移顺序
 

@@ -11,16 +11,18 @@
 - 不建万能 `utils/`；路径进 `paths.py`，日志进 `logging.py`，鉴权/限流进 `security.py`。
 
 状态：`config/` 包已建立，`paths.py`、`env.py`、`llm.py`、`persona.py`、
-`context.py`、`image.py`、`vision.py`、`rag.py`、`web.py`、`card.py`、`qq.py`、
-`watchdog.py`、`runtime.py` 已从旧 `app/config.py` 拆出；`runtime.py` 提供
-管理页可热更新的非密钥设置，`llm.py` 提供统一 LLM 降级链/超时/重试/预算的
-默认值与校验，`persona.py` 管角色扮演默认模型和玩家白名单，`context.py` 管
-轮次、token 预算和物理窗口封顶，`image.py` 管生图渠道、ComfyUI 水位和生图
-审核阈值，`vision.py` 管通用识图参数，`rag.py` 管知识库开关、角色记忆向量库
-和世界书预算，`web.py` 管端口/管理访问/画廊/工坊入口，`card.py` 管内置卡保护
-名单，`qq.py` 管 QQ 接入、回复策略、主动接话、长期记忆与掉线通知，
-`watchdog.py` 管静默判据和 ComfyUI 看门狗分支；调用逻辑仍在 `app/vision.py`、
-`app/image_audit.py`、`app/persona_rag.py`、`app/rag/`、`app/memory.py`、
-`app/qq_bot.py`、`app/notify.py`、`app/watchdog.py` 与 `app/image_jobs.py`。
-搜索、默认 agent、自定义中转站仍暂留旧文件。
+`context.py`、`search.py`、`agent.py`、`image.py`、`vision.py`、`rag.py`、
+`web.py`、`card.py`、`qq.py`、`watchdog.py`、`runtime.py` 已从旧
+`app/config.py` 拆出；`runtime.py` 提供管理页可热更新的非密钥设置，
+`llm.py` 提供统一 LLM 降级链/超时/重试/预算的默认值、校验与自定义中转站合并，
+`persona.py` 管角色扮演默认模型和玩家白名单，`context.py` 管轮次、token 预算
+和物理窗口封顶，`search.py` 管联网搜索，`agent.py` 管默认 agent ID，
+`image.py` 管生图渠道、ComfyUI 水位和生图审核阈值，`vision.py` 管通用识图
+参数，`rag.py` 管知识库开关、角色记忆向量库和世界书预算，`web.py` 管端口/
+管理访问/画廊/工坊入口，`card.py` 管内置卡保护名单，`qq.py` 管 QQ 接入、
+回复策略、主动接话、长期记忆与掉线通知，`watchdog.py` 管静默判据和 ComfyUI
+看门狗分支；调用逻辑仍在 `app/vision.py`、`app/image_audit.py`、
+`app/persona_rag.py`、`app/rag/`、`app/memory.py`、`app/qq_bot.py`、
+`app/notify.py`、`app/watchdog.py` 与 `app/image_jobs.py`。配置包已显式导出，
+旧 `app/config.py` 只剩兼容门面和自定义渠道启动合并。
 迁移顺序见 `docs/project-skeleton.md` 第 9 节。

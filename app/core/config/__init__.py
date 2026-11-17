@@ -1,7 +1,7 @@
 """配置公开入口。
 
-迁移期：路径与环境变量已经搬到本包；其余域仍由 ``app/config.py`` 实现。
 新代码从本包或域模块 import；旧代码继续使用 ``app.config``。
+本包不再惰性回落到旧文件，所有域都已显式导出。
 """
 
 from .env import _env_bool, _env_list
@@ -18,9 +18,17 @@ from .paths import (
     state_path,
 )
 
-
-def __getattr__(name):
-    """迁移期：未搬完的配置名回落到旧实现。"""
-    from app import config as _legacy
-
-    return getattr(_legacy, name)
+from .agent import *  # noqa: F401,F403
+from .card import *  # noqa: F401,F403
+from .context import *  # noqa: F401,F403
+from .image import *  # noqa: F401,F403
+from .persona import *  # noqa: F401,F403
+from .llm import *  # noqa: F401,F403
+from .qq import *  # noqa: F401,F403
+from .rag import *  # noqa: F401,F403
+from .runtime import *  # noqa: F401,F403
+from .search import *  # noqa: F401,F403
+from .vision import *  # noqa: F401,F403
+from .watchdog import *  # noqa: F401,F403
+from .web import *  # noqa: F401,F403
+from .web import _parse_gallery_roots  # noqa: F401

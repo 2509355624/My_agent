@@ -17,8 +17,10 @@ import，未搬完的配置域暂时由 `__init__.py` 的惰性 `__getattr__` �
 | `llm.py` | provider/模型表、降级链、请求超时、重试、TTL、`get_llm_settings`、`validate_llm_patch`、`update_llm_settings`（角色模型默认值委托给 `persona.py`） |
 | `persona.py` | 角色扮演默认 provider/模型、玩家可选模型白名单、`persona_model_ids()`、`persona_model_of()` |
 | `context.py` | `MAX_TURNS`、`CONTEXT_BUDGET`、物理上下文窗口封顶、`CONTEXT_MAX_TURNS`、摘要字数、`physical_budget()` |
+| `search.py` | `SEARCH_API_KEY`、`DOUBAO_SEARCH_ENDPOINT`、`WEB_SEARCH_MAX_CHARS` |
+| `agent.py` | `DEFAULT_AGENT_ID` |
 | `runtime.py` | 非密钥运行期设置 JSON；`AGENT_RUNTIME_SETTINGS` 可覆盖路径；mtime 缓存、原子写 |
-| `__init__.py` | 显式导出已拆域；未搬完的名字惰性回落旧 `app.config` |
+| `__init__.py` | 显式导出所有已拆域；不再惰性回落旧 `app.config` |
 
 边界：
 
@@ -29,6 +31,9 @@ import，未搬完的配置域暂时由 `__init__.py` 的惰性 `__getattr__` �
 - `watchdog.py` 只服务 `app/watchdog.py`，不混入 QQ 接入配置。
 - `persona.py` 只放角色扮演的模型默认值与白名单；通用 provider 表仍在 `llm.py`。
 - `context.py` 只放预算和本地估算阈值；真正的裁剪/压缩逻辑在 `app/memory.py`。
+- `search.py` 的 `SEARCH_API_KEY` 只从环境读取；未配置时搜索自动回退。
+- `agent.py` 只管默认 agent 的 ID，不负责会话文件布局（那在 `paths.py`）。
+- 自定义 LLM 中转站的路径与合并函数在 `llm.py`；旧 `app/config.py` 只保留兼容包装。
 - 新增配置先判断属于哪个域，不要继续往旧 `app/config.py` 堆。
 - 管理页通过 `GET/PUT /api/llm/settings` 读写 LLM 运行期设置，落盘后下一次
   请求即生效，不需要重启进程。

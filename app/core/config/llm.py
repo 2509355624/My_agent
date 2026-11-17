@@ -9,6 +9,7 @@
 
 import os
 
+from app.core.config.paths import DATA_DIR
 from app.core.config.persona import (
     PERSONA_MODEL, PERSONA_MODEL_DEFAULT, PERSONA_MODELS,
     PERSONA_PROVIDER, persona_model_ids, persona_model_of,
@@ -392,9 +393,44 @@ def update_llm_settings(patch):
     return get_llm_settings(), None
 
 
+# ─── 自定义 LLM 中转站（2026-10-22）─────────────────────────
+# 用户在漫画台自己加的中转站（第一家是 relaycore 的 grok-4.5），存在
+# `data/custom_providers.json`，启动时合并进 PROVIDERS。
+#
+# **为什么合并进 PROVIDERS 而不是另开一张表**：`llm.get_effective_config`、
+# `model_catalog._fetch`、`/api/providers`、漫画台的两级下拉全都在读这张
+# dict。合并进去，这些地方一行都不用改；另开一张表就得在每一处加分支。
+#
+# 合并是**幂等**的：先摘掉上一次合并进去的那几个（靠 cfg["custom"] 认），
+# 再按文件重新加。否则改完一个渠道调一次 reload，PROVIDERS 里就会堆同名旧值，
+# 删掉的渠道也永远留在下拉里。
+CUSTOM_PROVIDERS_FILE = os.path.join(DATA_DIR, "custom_providers.json")
+
+
+def load_custom_providers(path=None):
+    """把自定义渠道合并进 PROVIDERS，返回合并了几个。
+
+    这个函数在模块末尾调用一次；网页上增删改之后由 `app/main.py` 再调，
+    所以不重启进程也能让新渠道立刻可用。path 默认用本模块的配置路径。
+    """
+    from app import provider_store
+
+    for pid in [k for k, v in PROVIDERS.items() if (v or {}).get("custom")]:
+        PROVIDERS.pop(pid, None)
+
+    items = provider_store.load(path or CUSTOM_PROVIDERS_FILE)
+    n = 0
+    for pid, cfg in items.items():
+        if pid in PROVIDERS:      # 内置 id 优先，绝不覆盖
+            continue
+        PROVIDERS[pid] = cfg
+        n += 1
+    return n
+
+
 __all__ = [
     name for name in globals()
     if name.isupper() or name in ("provider_vision", "persona_model_of",
-                                  "persona_model_ids", "get_llm_settings",
+                                  "persona_model_ids", "load_custom_providers", "get_llm_settings",
                                   "validate_llm_patch", "update_llm_settings")
 ]
