@@ -26,7 +26,8 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import (comic, comic_agent, comic_api, comic_portrait,
+from app.features.comic import portrait as comic_portrait
+from app import (comic, comic_agent, comic_api,
                  comic_render_opts, image_jobs, main)
 
 GOOD_SCRIPT = "# 标题：测试\n\n## 01\n画面: 1girl, solo, pov\n气泡: 一\n标签1: 她站在门口\n"

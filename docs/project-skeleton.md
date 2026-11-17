@@ -192,7 +192,7 @@ def run(job_id: str) -> None:
 | `image` | `image_jobs.py`、`image_audit.py`、`image_log.py`、`image_migrate.py`、`image_out.py`、`image_quota.py`、`image_review.py`、`direct_gen.py`、`gen_api.py`、`gen_params.py`、`gen_steps.py`、`comfy_*.py`、`lora_*.py`、`anima_random.py`、`nai.py`、`outfit_api.py` | 生图、渠道、队列、审核、LoRA |
 | `image` 迁移后 | `features/image/log.py`、`out.py`、`quota.py`、`audit.py`、`review.py`、`migrate.py`、`delivery.py` 已接线；`image_jobs.py` 暂留根目录 | 编号账本、发图副本、私聊额度、审核、复核、旧图迁移、caption 投递；队列仍待拆 |
 | `comic` | `comic*.py`、`moss_*.py`、`silver_comic.py` | 漫画、编剧、渲染、额度、作品 |
-| `comic` 迁移后 | `features/comic/quota.py`、`thumb.py`、`prompt_suffix.py`、`delivery.py` 已接线；漫画主流程暂留根目录 | 漫画额度、缩略图、提示词后缀、交付；编剧/分镜/渲染待拆 |
+| `comic` 迁移后 | `features/comic/quota.py`、`thumb.py`、`prompt_suffix.py`、`delivery.py`、`portrait.py` 已接线；漫画主流程暂留根目录 | 漫画额度、缩略图、提示词后缀、交付、头像；编剧/分镜/渲染待拆 |
 | `persona` | `persona*.py`、`affection*.py`、`galgame.py`、`pregnancy.py`、`achievements.py`、`items.py` | 角色扮演、计费、记忆、查看台 |
 | `rag` | `rag/`、`rag_lab.py`、`rerank.py` | 文档问答、切片、检索、重排 |
 | `rag` 迁移后 | `features/rag/lab.py`、`rag_client.py`、`rag_daemon.py`、`vector_store.py`、`rerank.py` | 已接线，URL 不变 |
