@@ -446,6 +446,144 @@ loadModels = async function () {};
 """
 
 
+def simplify_friend(s):
+    """群友页收口：少字、少按钮、手机友好。
+
+    母本仍保留全部功能与 id；这里只把首屏压干净：大段说明点开才看，
+    设定区只留三行 + 生成剧本，接上一集 / 视角 / 查库收进「更多设置」。
+    """
+    s = s.replace(
+        'font-family: "SF Mono", "JetBrains Mono", "Consolas", "Microsoft YaHei", monospace;',
+        'font-family: -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;',
+        1)
+    s = s.replace('<h1>🎬 漫画工作台</h1>', '<h1>漫画</h1>', 1)
+
+    old_note = """  <div class="card" id="friendNote">
+    <div class="friend-note">
+      <b>怎么用：</b>顶上选「跑漫画」或「跑写真」，两个是分开的界面。跑漫画就是
+      写三行设定 → 生成剧本 → 确认开跑 → 给格子加台词气泡。<br>
+      <b>关于次数：</b>写剧本 / 修订走站主的公用中转站，<b>中转站正常就免费随便用</b>；
+      中转站偶尔出问题时才扣次数（找站长要次数，用站主的额度跑）。换种子重跑、
+      改画面词、加气泡这些只吃显卡，不扣次数。<br>
+      <b>发送规则：</b>底图 / 写真跑完<b>先在 QQ 通知你</b>，去网页逐张检查；
+      有瑕疵可以换种子重跑。确认后漫画点「<b>一键加气泡</b>」、写真点
+      「<b>一键发送 zip</b>」，高清包才发到 QQ，<b>正常排队</b>。<br>
+      <b>包的名字：</b>「作品名 无气泡」是底图，「作品名 有气泡」是加完台词的成品；
+      网页里只有缩略图。
+    </div>
+  </div>"""
+    new_note = """  <details class="card note" id="friendNote">
+    <summary>怎么用</summary>
+    <div class="friend-note">
+      <b>怎么用：</b>顶上选「跑漫画」或「跑写真」，两个是分开的界面。跑漫画就是
+      写三行设定 → 生成剧本 → 确认开跑 → 给格子加台词气泡。<br>
+      <b>关于次数：</b>写剧本 / 修订走站主的公用中转站，<b>中转站正常就免费随便用</b>；
+      中转站偶尔出问题时才扣次数（找站长要次数，用站主的额度跑）。换种子重跑、
+      改画面词、加气泡这些只吃显卡，不扣次数。<br>
+      <b>发送规则：</b>底图 / 写真跑完<b>先在 QQ 通知你</b>，去网页逐张检查；
+      有瑕疵可以换种子重跑。确认后漫画点「<b>一键加气泡</b>」、写真点
+      「<b>一键发送 zip</b>」，高清包才发到 QQ，<b>正常排队</b>。<br>
+      <b>包的名字：</b>「作品名 无气泡」是底图，「作品名 有气泡」是加完台词的成品；
+      网页里只有缩略图。
+    </div>
+  </details>"""
+    if old_note not in s:
+        raise SystemExit("simplify: friendNote block not found")
+    s = s.replace(old_note, new_note, 1)
+
+    s = s.replace('<span>📖 跑漫画</span><small>写剧本 → 逐格出图 → 加台词气泡</small>',
+                  '<span>📖 跑漫画</span><small>写设定 → 出图 → 加台词</small>', 1)
+    s = s.replace('<span>📷 跑写真</span><small>单人写真集，一次多张，无视角无剧情</small>',
+                  '<span>📷 跑写真</span><small>一次多张</small>', 1)
+
+    start = s.find('    <div class="row" style="margin-bottom:10px">\n      <div id="briefRows"')
+    end = s.find('    <textarea id="script" style="display:none" spellcheck="false"></textarea>')
+    if start < 0 or end < 0 or end < start:
+        raise SystemExit("simplify: 设定区没找到")
+    block = """    <div class="row" style="margin-bottom:10px">
+      <div id="briefRows" style="flex:1;min-width:220px">
+        <input id="bfView" placeholder="① 谁的视角？（例：哥哥 / 我）" style="margin-bottom:6px">
+        <input id="bfHero" placeholder="② 主角是谁？（例：妹妹，长直黑发、校服）" style="margin-bottom:6px">
+        <textarea id="bfPlot" rows="2" placeholder="③ 剧情是什么？（例：下雨天兄妹在公交站躲雨……）"></textarea>
+      </div>
+      <textarea id="brief" style="display:none"></textarea>
+      <input id="heroine" style="display:none;width:220px" placeholder="女主设定：长直黑发、校服、气质文静……（填一次，这批写真每张都自动带上）">
+      <input id="character" style="width:130px" placeholder="角色名（可选）">
+      <input id="panels" type="hidden" value="10">
+      <span id="panelsHint" class="friend-note"></span>
+    </div>
+
+    <div class="row" style="margin-bottom:10px">
+      <button class="btn primary" id="btnScript" onclick="genScript()">生成剧本</button>
+    </div>
+
+    <details class="adv">
+      <summary>更多设置</summary>
+      <div class="row" style="margin-bottom:10px">
+        <span class="hidden-by-friend" style="color:var(--text-dim);font-size:12px">编剧模型</span>
+        <select id="prov" class="hidden-by-friend" style="width:140px" onchange="loadModels();syncProvBtn()" title="用哪家模型写剧本"></select>
+        <select id="model" class="hidden-by-friend" style="width:200px" onchange="rememberLlm()" title="写剧本用的具体模型（留空 = 该家默认）"></select>
+        <button class="btn small hidden-by-friend" id="btnAddProv" onclick="onAddProvClick()"
+                title="添加自定义中转站">＋ 中转站</button>
+        <span id="prevLabel" style="color:var(--text-dim);font-size:12px;margin-left:6px">接上一集</span>
+        <select id="prevTask" style="width:230px;max-width:40vw"
+                title="选了就把那一集的气泡和旁白当前情，本集接着往下写">
+          <option value="">不接——全新一集</option>
+        </select>
+        <label id="carryOutfitWrap" style="font-size:12px;white-space:nowrap;color:var(--text-dim)"
+               title="同一场戏跨集时，把上一集最后一格的服饰带过来">
+          <input type="checkbox" id="carryOutfit"> 沿用服装
+        </label>
+        <span class="spacer" style="flex:1"></span>
+        <label id="povModeWrap" style="font-size:12px;white-space:nowrap;color:var(--text-dim)"
+               title="POV：画面里只有女主。自由视角：机位由编剧挑。第三人称：双人同框。">
+          <select id="povMode" style="width:auto" onchange="rememberPovMode()">
+            <option value="pov">POV 第一人称</option>
+            <option value="free">自由视角（自选机位）</option>
+            <option value="third">第三人称（双人同框）</option>
+          </select>
+        </label>
+        <label id="skipSearchWrap" style="font-size:12px;white-space:nowrap;color:var(--text-dim)"
+               title="勾上就不查标签库，一次写完整剧本">
+          <input type="checkbox" id="skipSearch" checked onchange="rememberSkipSearch()"> 跳过查库
+        </label>
+        <label id="silverModeWrap" style="display:none;font-size:12px;white-space:nowrap;color:var(--text-dim)"
+               title="自由视角使用 silver 连续漫画路线">
+          <select id="silverMode" style="width:auto" onchange="rememberSilverMode()">
+            <option value="no_bubble">连续漫画，无气泡</option>
+            <option value="bubble">连续漫画，有气泡</option>
+          </select>
+        </label>
+      </div>
+    </details>
+"""
+    block += '    <div class="inline-status" id="lsScript"></div>\n'
+    s = s[:start] + block + s[end:]
+
+    s = s.replace(">🩹 重新补正<", ">重新补正<", 1)
+    s = s.replace(">🔁 换渠道重跑<", ">换渠道重跑<", 1)
+    s = s.replace(">确认开跑（渲染全部场景图）<", ">开始画<", 1)
+    s = s.replace("💬 和修订助手聊剧本", "和修订助手聊剧本", 1)
+    s = s.replace(">↩️ 撤销对话改动<", ">撤销改动<", 1)
+
+    css = """
+  .note summary, .adv summary { cursor: pointer; color: var(--text-dim);
+    font-size: 13px; list-style: none; }
+  .note summary::-webkit-details-marker, .adv summary::-webkit-details-marker { display: none; }
+  .note summary::after, .adv summary::after { content: " ＋"; color: var(--text-mute); }
+  .note[open] summary::after, .adv[open] summary::after { content: " −"; }
+  .adv { margin: 0 0 10px; }
+  .adv summary { padding: 6px 0; }
+  @media (max-width: 640px) {
+    .wrap { padding: 12px; }
+    .topbar { padding: 4px 0 12px; }
+    .note summary, .adv summary { font-size: 14px; }
+  }
+"""
+    s = s.replace("</style>", css + "\n</style>", 1)
+    return s
+
+
 def main():
     raw = open(SRC, "rb").read()
     crlf = b"\r\n" in raw
@@ -595,11 +733,13 @@ def main():
             "poll();\nloadProviders();\nrestoreSession();\n</script>",
             JS + "poll();\nloadProviders();\nrestoreSession();\n</script>", "补丁 JS")
 
+    s = simplify_friend(s)
+
     s = s.replace("<title>漫画工作台</title>",
                   "<title>漫画工作台 · 群友版</title>\n<!-- 由 tools/comic_friend_patch.py 从 comic_studio.html 生成，请勿直接编辑 -->",
                   1)
 
-    out = s.replace("\n", "\r\n") if crlf else s
+    out = s  # 2026-11-17：仓库统一 LF，生成页也别再写 CRLF
     io.open(DST, "w", encoding="utf-8", newline="").write(out)
     print("生成 %s（%d 行，母本 %d 行）" %
           (os.path.relpath(DST, BASE), out.count("\n") + 1, raw.count(b"\n") + 1))
