@@ -213,6 +213,26 @@
     .log { padding: 12px; }
     .msg { max-width: 88%; }
   }
+
+  .back { margin-left: auto; color: var(--text-dim); font-size: 11px;
+    text-decoration: none; font-weight: 400; }
+  .back:hover { color: var(--accent); }
+  .tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  #pMoreBtn { display: none; }
+  /* 2026-11-17：手机顶栏别摊一排小按钮；常用只有「会话 / 更多」。 */
+  @media (max-width: 820px) {
+    .top { position: relative; }
+    .top .tools { display: none; position: absolute; right: 10px; top: calc(100% + 6px);
+      z-index: 30; width: min(320px, calc(100vw - 20px));
+      background: var(--bg-elev); border: 1px solid var(--border);
+      border-radius: var(--r); padding: 10px; box-shadow: 0 12px 30px rgba(0,0,0,.5);
+      align-items: stretch; gap: 8px; flex-direction: column; }
+    .top .tools.open { display: flex; }
+    #pMoreBtn { display: inline-flex; }
+    .top .tools .fsCtl { justify-content: flex-start; }
+    .top .tools .auto { padding: 4px 0; }
+  }
+
 </style>
 </head>
 <body>
@@ -220,7 +240,7 @@
 
   <aside class="side">
     <div class="side-head">
-      <h1>角色扮演 <span class="cnt" id="cnt">加载中…</span></h1>
+      <h1>会话 <span class="cnt" id="cnt">加载中…</span><a class="back" href="/">← 首页</a></h1>
       <!-- 小说模式是另一套记录（世界书 + 第三人称正文），不混进这份会话列表；
             入口放在这里，是因为「谁玩过什么」都从这一个台子进（2026-11-12）。 -->
       <div class="filters">
@@ -252,30 +272,33 @@
 
   <main class="main">
     <div class="top">
-      <button class="btn" id="menuBtn" aria-label="会话列表" title="展开会话列表">☰</button>
+      <button class="btn" id="menuBtn" aria-label="会话列表" title="展开会话列表">会话</button>
       <span class="who" id="who">选一个会话</span>
       <span class="meta" id="meta"></span>
       <span class="sp"></span>
-      <!-- 字号缩放（2026-11-09 用户要求）：整站 19 处 font-size 都吃 --fs 系数，
-           这两个按钮只动那一个变量。A 是复位（点一下回 100%）。 -->
-      <span class="fsCtl" title="字号缩放，存在这台浏览器里">
-        <button class="btn" id="fsDown">A-</button>
-        <b id="fsVal">100%</b>
-        <button class="btn" id="fsUp">A+</button>
-        <button class="btn" id="fsReset" title="恢复 100%">A</button>
-      </span>
-      <a class="btn" href="/characters" title="改角色卡详情文案、换默认/角色背景">角色卡管理</a>
-      <button class="btn" id="btnBilling" title="登记代充、看余额和逐笔用量">代充计费</button>
-      <label class="auto"><input type="checkbox" id="auto"> 自动刷新</label>
-      <button class="btn" id="refresh">刷新</button>
-      <!-- 「这张卡」（2026-11-09）：当前会话演的那张卡的详情。左栏那行也能点，
-           顶栏这个是给「已经打开对话、想看她是谁」用的。 -->
-      <button class="btn" id="btnCard" style="display:none">这张卡</button>
-      <button class="btn danger" id="del" style="display:none">删除</button>
+      <button class="btn" id="pMoreBtn" type="button" aria-expanded="false">更多</button>
+      <div class="tools" id="pTools">
+        <!-- 字号缩放（2026-11-09 用户要求）：整站 19 处 font-size 都吃 --fs 系数，
+             这两个按钮只动那一个变量。A 是复位（点一下回 100%）。 -->
+        <span class="fsCtl" title="字号缩放，存在这台浏览器里">
+          <button class="btn" id="fsDown">A-</button>
+          <b id="fsVal">100%</b>
+          <button class="btn" id="fsUp">A+</button>
+          <button class="btn" id="fsReset" title="恢复 100%">A</button>
+        </span>
+        <a class="btn" href="/characters" title="改角色卡详情文案、换默认/角色背景">角色卡</a>
+        <button class="btn" id="btnBilling" title="登记代充、看余额和逐笔用量">充值</button>
+        <label class="auto"><input type="checkbox" id="auto"> 自动刷新</label>
+        <button class="btn" id="refresh">刷新</button>
+        <!-- 「这张卡」（2026-11-09）：当前会话演的那张卡的详情。左栏那行也能点，
+             顶栏这个是给「已经打开对话、想看她是谁」用的。 -->
+        <button class="btn" id="btnCard" style="display:none">这张卡</button>
+        <button class="btn danger" id="del" style="display:none">删除</button>
+      </div>
     </div>
     <div class="note" id="note" style="display:none"></div>
     <div class="log" id="log">
-      <div class="empty">左边点一个人<br>看他跟角色聊了什么</div>
+      <div class="empty">点「会话」选一个人。</div>
     </div>
   </main>
 </div>
@@ -931,5 +954,29 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape") billClose();
 });
 </script>
+
+<script>
+(function(){
+  var btn = document.getElementById('pMoreBtn');
+  var tools = document.getElementById('pTools');
+  if (!btn || !tools) return;
+  function close(){
+    tools.classList.remove('open');
+    btn.setAttribute('aria-expanded', 'false');
+  }
+  btn.addEventListener('click', function(e){
+    e.stopPropagation();
+    var on = tools.classList.toggle('open');
+    btn.setAttribute('aria-expanded', on ? 'true' : 'false');
+  });
+  document.addEventListener('click', function(e){
+    if (tools.classList.contains('open') && !tools.contains(e.target) && e.target !== btn) close();
+  });
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') close();
+  });
+})();
+</script>
+
 </body>
 </html>
