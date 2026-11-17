@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""v2 成人向状态条结算器（app/affection_v2_adult.py）的契约测试。
+"""v2 成人向状态条结算器（app/features/persona/adult.py）的契约测试。
 
 这些测试钉的是**用户拍板的规则**，不是实现细节：
   · 冲动是档位，开发度 < 40 时最高 2 档
@@ -15,7 +15,7 @@
 
 import unittest
 
-from app import affection_v2_adult as ad
+from app.features.persona import adult as ad
 
 
 class ConfigTest(unittest.TestCase):
@@ -565,7 +565,8 @@ class AxisHelpTest(unittest.TestCase):
     """每条状态旁边的小问号：文案由配置给，前端只显示。"""
 
     def _panel(self):
-        from app import affection, affection_v2_adult as ad
+        from app.features.persona import adult as ad
+        from app import affection
         rec = {"schema": 2, "value": 45, "mode": "raid", "confess": 20,
                "contacts": [], "contact": 2, "day": 3, "turns": 12,
                "adult": ad.normalize({**ad.empty_state(), "arousal": "want",
@@ -640,7 +641,8 @@ class RelationAxisHelpTest(unittest.TestCase):
     """关系轴那几行（好感/表白/病娇/接触档/在一起）也要有问号。"""
 
     def _panel(self):
-        from app import affection, affection_v2_adult as ad
+        from app.features.persona import adult as ad
+        from app import affection
         rec = {"schema": 2, "value": 45, "mode": "raid", "confess": 20,
                "contacts": [], "contact": 2, "day": 3, "turns": 12,
                "adult": ad.normalize({**ad.empty_state(), "excite": 62,

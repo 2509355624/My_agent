@@ -59,7 +59,8 @@ import shutil
 import threading
 import time
 
-from app import (affection, affection_v2_adult as adult_state, items as _items,
+from app.features.persona import adult as adult_state
+from app import (affection, items as _items,
                    llm,
                    persona_rag, pregnancy, trigger,
                  writing_skills, writing_style)

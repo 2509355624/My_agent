@@ -1301,7 +1301,7 @@ def _blank(line_key="", value=None, schema=1):
         tier = _v2_i(card.get("start_arousal_tier"))
         if tier:
             try:
-                from app import affection_v2_adult as _ad
+                from app.features.persona import adult as _ad
                 key = _ad.arousal_key_for_tier(tier)
             except Exception:                              # noqa: BLE001
                 key = ""
@@ -2280,7 +2280,7 @@ def sleep(line_key):
     _adult = rec.get("adult")
     if isinstance(_adult, dict):
         # 函数内 import 用别名（项目约定）；规则只在 v2 结算器里写一份。
-        from app import affection_v2_adult as _adult_state
+        from app.features.persona import adult as _adult_state
         rec["adult"] = _adult_state.night_reset(_adult)
     ent["affection"] = rec
     _save_entry(line_key, ent)
@@ -3998,7 +3998,7 @@ def v2_start_help():
                             "desc": str(s.get("desc") or "")}
                            for s in ((cfg.get("yandere") or {}).get("stages") or [])]}
     try:
-        from app import affection_v2_adult as _ad
+        from app.features.persona import adult as _ad
         ladders["arousal"] = _ad.arousal_ladder()
         h = _ad.arousal_help()
         if h:
@@ -4015,7 +4015,7 @@ def _v2_adult_panel(rec):
     缺了这块前端会自动跳过（`if (ad && ad.rows)`）。
     """
     try:
-        from app import affection_v2_adult as _ad
+        from app.features.persona import adult as _ad
         return _ad.panel(_ad.load(rec))
     except Exception:                                     # noqa: BLE001
         log.warning("v2 身体面板生成失败，本次不给这块", exc_info=True)
@@ -4138,7 +4138,7 @@ def _v2_scoring_ctx(rec, card=None):
     _value_negative = value < 0
     adult_txt = ""
     try:
-        from app import affection_v2_adult as _ad
+        from app.features.persona import adult as _ad
         _ast = _ad.load(rec)
         _lines = []
         _a = _ad.arousal_of(_ast)

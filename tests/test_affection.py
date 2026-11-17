@@ -2031,7 +2031,7 @@ class V2NightResetTest(AffBase):
     """2026-11-10：跨天也要清 v2 的高潮值和冷却（v1 早就清了）。"""
 
     def test_sleep_clears_v2_excite_and_cooldown(self):
-        from app import affection_v2_adult as ad
+        from app.features.persona import adult as ad
         key = self._raid()
         ent, rec = affection._ensure(key)
         rec["adult"] = ad.normalize({**ad.empty_state(),
