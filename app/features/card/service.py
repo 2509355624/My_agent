@@ -582,7 +582,7 @@ def cover_opts(skill=COVER_SKILL):
 
     钉死尺寸那套（864×1536）已废弃：画幅压到默认的 1/7，字和脸一起糊。
     """
-    from app import comic_render_opts
+    from app.features.comic import render_opts as comic_render_opts
     return comic_render_opts.defaults(skill)
 
 

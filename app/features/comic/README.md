@@ -12,5 +12,6 @@
 
 状态：`quota.py`（原 `comic_quota.py`）、`thumb.py`（原 `comic_thumb.py`）、
 `prompt_suffix.py`（原 `comic_prompt_suffix.py`）、`delivery.py`（原 `comic_delivery.py`）、
-`portrait.py`（原 `comic_portrait.py`）、`story.py`（原 `comic_story.py`）已迁入并接线；
-漫画主流程仍在根目录，按“编剧/分镜/渲染/交付”继续拆，不和生图互相 import 内部文件。
+`portrait.py`（原 `comic_portrait.py`）、`story.py`（原 `comic_story.py`）、
+`render_opts.py`（原 `comic_render_opts.py`）已迁入并接线；漫画主流程仍在根目录，
+按“编剧/分镜/渲染/交付”继续拆，不和生图互相 import 内部文件。

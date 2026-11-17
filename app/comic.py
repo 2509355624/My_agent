@@ -43,8 +43,8 @@ from datetime import datetime
 import requests
 
 from app.features.comic import prompt_suffix as comic_prompt_suffix
-from app import (comfy_out, comfy_src,
-                 comic_render_opts, image_jobs)
+from app.features.comic import render_opts as comic_render_opts
+from app import (comfy_out, comfy_src, image_jobs)
 from app.cancel import Cancelled
 from app.config import BASE_DIR, COMFYUI_OUTPUT_DIR, COMFYUI_URL
 from app.skills import load_skill, load_workflow

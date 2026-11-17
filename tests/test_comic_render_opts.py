@@ -25,7 +25,8 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import comic, comic_render_opts as ro
+from app.features.comic import render_opts as ro
+from app import comic
 from app.tools.normal import generate_image as gi
 
 

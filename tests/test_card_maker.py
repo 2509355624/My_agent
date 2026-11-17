@@ -229,7 +229,7 @@ class CoverOptsTest(unittest.TestCase):
     def test_cover_keeps_the_channel_size_and_upscale(self):
         """10-20 用户实测：864×1536 只有 1.3 MP，构图发糊，不如渠道默认
         1024×1536 → ×1.2 → 2x（实际 2464×3680）。所以尺寸与放大一律不覆盖。"""
-        from app import comic_render_opts as ro
+        from app.features.comic import render_opts as comic_render_opts as ro
         opts = cm.cover_opts("silver")
         d = ro.defaults("silver")
         self.assertEqual((opts["width"], opts["height"]), (d["width"], d["height"]))
@@ -238,7 +238,7 @@ class CoverOptsTest(unittest.TestCase):
 
     def test_cover_does_not_touch_sampler_steps(self):
         """压步数是 864×1536 时代的省时间手段，现在不压了：参数逐字等于模板。"""
-        from app import comic_render_opts as ro
+        from app.features.comic import render_opts as comic_render_opts as ro
         opts = cm.cover_opts("silver")
         d = ro.defaults("silver")
         self.assertEqual(opts["base"], d["base"])
@@ -246,7 +246,7 @@ class CoverOptsTest(unittest.TestCase):
 
     def test_cover_opts_never_mutates_the_shared_defaults(self):
         """两次调用必须一致——早前那版是在 defaults() 的返回值上原地改。"""
-        from app import comic_render_opts as ro
+        from app.features.comic import render_opts as comic_render_opts as ro
         cm.cover_opts("silver")
         self.assertEqual(cm.cover_opts("silver")["width"], ro.defaults("silver")["width"])
 
@@ -267,7 +267,7 @@ class CoverWorkflowTest(unittest.TestCase):
               "image_gen_v1", "nsfw_pose_gen", "jank")
 
     def test_cover_workflow_is_the_channel_workflow(self):
-        from app import comic_render_opts as ro
+        from app.features.comic import render_opts as comic_render_opts as ro
         from app.tools.normal import generate_image
         for skill in self.SKILLS:
             with self.subTest(skill=skill):
