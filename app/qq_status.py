@@ -112,7 +112,7 @@ def snapshot(bot=None):
     # ── 群名/私聊昵称（顺手把刷新驱动一下）────────
     # refresh_lists 内部限速 10 分钟一次，状态后台每 2 秒调它不会刷爆 NapCat。
     try:
-        from app import qq_names
+        from app.features.qq import names as qq_names
         qq_names.refresh_lists()
         # 给会话/任务打名字（找不到返回 None → 前端回退到 ID）
         for s in sessions:
@@ -186,7 +186,7 @@ def _write_loop(bot, path, interval):
             # 起动时 last_refresh=0 必刷，之后每次写盘顺带检查但不真拉。
             # 这样起动后第一秒就能看到名字，也不会把 NapCat 打爆。
             try:
-                from app import qq_names
+                from app.features.qq import names as qq_names
                 qq_names.refresh_lists()
             except Exception:
                 pass

@@ -13,7 +13,7 @@ from unittest import mock
 from app import agents as agent_store
 from app import interject
 from app import qq_bot
-from app import qq_names
+from app.features.qq import names as qq_names
 
 
 def _group_event(text="大家好", group_id=1041079621, user_id=111, self_id=999):

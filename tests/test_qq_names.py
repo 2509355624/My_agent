@@ -1,4 +1,4 @@
-"""名字解析缓存测试（app/qq_names.py）。
+"""名字解析缓存测试（app/features/qq/names.py）。
 
 跟状态后台测试一样：NapCat 全 mock、不打 3000 口、不读真实 state/ 文件。
 模块级缓存字典在每个测试里手动重置，避免被上一次跑残留污染。
@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 
 import app.config as config
-from app import qq_names
+from app.features.qq import names as qq_names
 
 
 class StateIsolationTest(unittest.TestCase):

@@ -1777,7 +1777,7 @@ def get_image_review(agent_id):
     rows = image_review.items(state=state, limit=max(1, min(limit, 200)))
     out = []
     try:
-        from app import qq_names
+        from app.features.qq import names as qq_names
         for r in rows:
             item = dict(r)
             item["name"] = qq_names.name_for(r.get("target"),
@@ -1877,7 +1877,7 @@ def get_image_review_global():
     rows = image_review.items(state=state, limit=max(1, min(limit, 500)))
     out = []
     try:
-        from app import qq_names
+        from app.features.qq import names as qq_names
         for r in rows:
             item = dict(r)
             item["name"] = qq_names.name_for(r.get("target"),

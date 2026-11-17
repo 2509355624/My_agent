@@ -2230,9 +2230,9 @@ class QQBot:
 
         # 私聊昵称：消息事件里 sender.card/nickname 是免费的，非好友也能拿到。
         # 比 get_friend_list 兜底更靠谱（朋友列表只覆盖好友），所以这是主入口。
-        # 缓存持久化到 state/qq_names.json，重启不丢（见 app/qq_names.py）。
+        # 缓存持久化到 state/qq_names.json，重启不丢（见 app/features/qq/names.py）。
         if target == "private" and sender:
-            from app import qq_names
+            from app.features.qq import names as qq_names
             qq_names.note_private(target_id, sender)
 
         # ── /管理页（站主私聊专属）─────────────────────────────
