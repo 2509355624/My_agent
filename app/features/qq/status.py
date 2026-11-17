@@ -104,7 +104,7 @@ def snapshot(bot=None):
 
     # ── 最后一次收发（墙钟）────────────────────────
     try:
-        from app import notify
+        from app.features.qq import notify
         idle_for = round(now - notify.last_activity(), 1)
     except Exception:
         idle_for = None

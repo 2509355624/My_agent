@@ -106,14 +106,14 @@ except ImportError:  # 非 Windows 上退化成无锁（本项目不会走到这
     msvcrt = None
 
 from app.features.image import comfy_launch
-from app import notify
+from app.features.qq import notify
 from app.config import (BASE_DIR, COMFYUI_PYTHON, COMFYUI_ROOT,
                         NOTIFY_QRCODE_PATH, WEBUI_PORT,
                         WATCHDOG_COMFY_ENABLED,
                         WATCHDOG_SILENCE_COOLDOWN, WATCHDOG_SILENCE_MAX_GAP,
                         WATCHDOG_SILENCE_RESTART, WATCHDOG_SILENCE_SECONDS)
 from app.qq_api import check_alive
-from app.notify import push_text
+from app.features.qq.notify import push_text
 
 log = logging.getLogger("watchdog")
 

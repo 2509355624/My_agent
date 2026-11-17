@@ -16,7 +16,7 @@ import time
 import unittest
 from unittest import mock
 
-from app import notify
+from app.features.qq import notify
 
 
 def _post_capture(sink):
