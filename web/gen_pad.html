@@ -16,7 +16,7 @@
     --warn: #fbbf24; --info: #4fc3f7; --radius: 12px; --radius-sm: 8px;
   }
   html, body { background: var(--bg); color: var(--text);
-    font-family: "SF Mono", "JetBrains Mono", "Consolas", "Microsoft YaHei", monospace;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
     font-size: 14px; height: 100%; overflow: hidden; }
   .topbar { display: flex; align-items: center; gap: 12px; padding: 10px 16px;
     border-bottom: 1px solid var(--border-soft); }
@@ -236,14 +236,38 @@
   @media (max-width: 640px) {
     textarea, input[type="text"], input:not([type]), select { font-size: 16px; }
   }
+
+  /* 2026-11-17：手机不再三栏挤在一起；渠道变横向条，历史沉到底部。 */
+  @media (max-width: 760px) {
+    body { overflow: auto; }
+    .topbar { padding: 10px 14px; }
+    .topbar .sub { display: none; }
+    .pad { display: flex; flex-direction: column; height: auto;
+      min-height: calc(100vh - 46px); min-height: calc(100dvh - 46px); }
+    .channels { width: 100%; max-height: 104px; border-right: 0;
+      border-bottom: 1px solid var(--border-soft); }
+    .ch-head { padding: 8px 12px 4px; }
+    .ch-list { display: flex; gap: 8px; overflow-x: auto; overflow-y: hidden;
+      padding: 6px 10px 10px; }
+    .ch-item { flex: 0 0 auto; min-width: 148px; margin: 0; padding: 7px 10px; }
+    .stage { min-height: 0; }
+    .view { min-height: 240px; padding: 12px; }
+    .composer { padding: 10px 12px 12px; }
+    .history { width: 100%; max-height: 42vh; border-left: 0;
+      border-top: 1px solid var(--border-soft); }
+    .history.hidden { display: none; }
+    .show-history { top: 54px; }
+    .job, .shot { padding: 10px; }
+  }
+
 </style>
 </head>
 <body>
   <div class="topbar">
-    <h1>🎨 跑图台</h1>
-    <span class="sub">无 AI · 选渠道 · 写提示词 · 直接出图</span>
+    <h1>跑图台</h1>
+    <span class="sub">选渠道 · 写提示词 · 出图</span>
     <span class="spacer"></span>
-    <a class="link" href="/comic_studio.html">漫画工作台 →</a>
+    <a class="link" href="/">← 回首页</a>
   </div>
 
   <div class="pad">
