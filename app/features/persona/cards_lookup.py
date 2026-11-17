@@ -6,7 +6,6 @@ import os
 import time
 import uuid
 
-from app.config import BASE_DIR
 from app.core.agents import _atomic_write_text
 from app.features.persona.cards_store import (
     _as_int, _digits_only, _fresh_id, _level_names, _norm_card,
@@ -14,8 +13,6 @@ from app.features.persona.cards_store import (
 )
 
 log = logging.getLogger("persona")
-
-_STATE_PATH = os.path.join(BASE_DIR, "state", "persona_sessions.json")
 
 
 USER_CARD_MAX = 20                 # 每人最多几张
@@ -63,7 +60,10 @@ def user_cards_path(qq):
     s = _digits_only(qq)
     if not s:
         return None
-    return os.path.join(os.path.dirname(_STATE_PATH),
+    # 延迟读门面的 `_STATE_PATH`：测试会 patch `persona._STATE_PATH`，
+    # 模块在导入时抄一份就会绕过 patch，把测试卡写进真实 state。
+    from app.features.persona import service as persona_service
+    return os.path.join(os.path.dirname(persona_service._STATE_PATH),
                         "persona_user_cards", s + ".json")
 
 
