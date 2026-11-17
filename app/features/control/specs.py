@@ -62,8 +62,7 @@ def _env(**kwargs: str) -> dict[str, str]:
     return {k: v for k, v in kwargs.items() if v}
 
 
-def default_specs() -> list[ServiceSpec]:
-    """九张卡：对应旧启动器里会开出来的九个窗口。"""
+def _core_specs() -> list[ServiceSpec]:
     return [
         ServiceSpec(
             id="agent",
@@ -92,6 +91,11 @@ def default_specs() -> list[ServiceSpec]:
             port=5176,
             start_timeout=20,
         ),
+    ]
+
+
+def _tunnel_specs() -> list[ServiceSpec]:
+    return [
         ServiceSpec(
             id="friend_tunnel",
             name="群友隧道",
@@ -120,6 +124,11 @@ def default_specs() -> list[ServiceSpec]:
                 FRIEND_TUNNEL_URL_FILE="admin_url.txt",
             ),
         ),
+    ]
+
+
+def _qq_specs() -> list[ServiceSpec]:
+    return [
         ServiceSpec(
             id="snowluma",
             name="SnowLuma",
@@ -143,6 +152,11 @@ def default_specs() -> list[ServiceSpec]:
             pid_file=".qq_bot.pid",
             start_timeout=20,
         ),
+    ]
+
+
+def _optional_specs() -> list[ServiceSpec]:
+    return [
         ServiceSpec(
             id="watchdog",
             name="看门狗",
@@ -166,6 +180,11 @@ def default_specs() -> list[ServiceSpec]:
             autostart=False,  # 吃显存，按需手动开
         ),
     ]
+
+
+def default_specs() -> list[ServiceSpec]:
+    """九张卡：对应旧启动器里会开出来的九个窗口。"""
+    return _core_specs() + _tunnel_specs() + _qq_specs() + _optional_specs()
 
 
 # 状态 → 颜色。只允许三色，界面不靠颜色单独表达，旁边始终有文字。

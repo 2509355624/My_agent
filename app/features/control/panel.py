@@ -22,23 +22,19 @@ CONTROL_PORT = int(os.getenv("CONTROL_PORT", "5177"))
 HTML_PATH = ROOT / "web" / "control_panel.html"
 
 
-def create_app(manager: ServiceManager, token: str | None = None,
-               html_path: Path | None = None) -> Flask:
-    app = Flask(__name__, static_folder=None)
-    app.config["CONTROL_TOKEN"] = token or secrets.token_urlsafe(24)
-    app.config["CONTROL_MANAGER"] = manager
-    app.config["CONTROL_HTML"] = Path(html_path or HTML_PATH)
+def _authorized(app: Flask) -> bool:
+    got = request.headers.get("X-Control-Token", "")
+    want = app.config["CONTROL_TOKEN"]
+    return bool(got) and hmac.compare_digest(str(got), str(want))
 
-    def _authorized() -> bool:
-        got = request.headers.get("X-Control-Token", "")
-        want = app.config["CONTROL_TOKEN"]
-        return bool(got) and hmac.compare_digest(str(got), str(want))
 
-    def _need_auth():
-        if _authorized():
-            return None
-        return jsonify({"ok": False, "error": "forbidden"}), 401
+def _need_auth(app: Flask):
+    if _authorized(app):
+        return None
+    return jsonify({"ok": False, "error": "forbidden"}), 401
 
+
+def _register_page_routes(app: Flask) -> None:
     @app.get("/")
     def index():
         try:
@@ -53,9 +49,11 @@ def create_app(manager: ServiceManager, token: str | None = None,
     def health():
         return jsonify({"ok": True, "service": "control-panel"})
 
+
+def _register_api_routes(app: Flask, manager: ServiceManager) -> None:
     @app.get("/api/status")
     def api_status():
-        denied = _need_auth()
+        denied = _need_auth(app)
         if denied:
             return denied
         try:
@@ -66,7 +64,7 @@ def create_app(manager: ServiceManager, token: str | None = None,
 
     @app.post("/api/services/<sid>/<action>")
     def api_service(sid: str, action: str):
-        denied = _need_auth()
+        denied = _need_auth(app)
         if denied:
             return denied
         if action not in ("start", "stop", "restart"):
@@ -82,7 +80,7 @@ def create_app(manager: ServiceManager, token: str | None = None,
 
     @app.post("/api/all/restart")
     def api_restart_all():
-        denied = _need_auth()
+        denied = _need_auth(app)
         if denied:
             return denied
         try:
@@ -91,6 +89,15 @@ def create_app(manager: ServiceManager, token: str | None = None,
             log.warning("restart all failed: %s", e)
             return jsonify({"ok": False, "error": str(e)}), 500
 
+
+def create_app(manager: ServiceManager, token: str | None = None,
+               html_path: Path | None = None) -> Flask:
+    app = Flask(__name__, static_folder=None)
+    app.config["CONTROL_TOKEN"] = token or secrets.token_urlsafe(24)
+    app.config["CONTROL_MANAGER"] = manager
+    app.config["CONTROL_HTML"] = Path(html_path or HTML_PATH)
+    _register_page_routes(app)
+    _register_api_routes(app, manager)
     return app
 
 
