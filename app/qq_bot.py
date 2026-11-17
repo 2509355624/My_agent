@@ -762,7 +762,7 @@ def _maybe_admin_link(ev, text, user_id, target, target_id):
     from app.config import GALLERY_OWNER_QQ
     if (target == "private" and GALLERY_OWNER_QQ
             and str(user_id) == str(GALLERY_OWNER_QQ)):
-        from app import admin_site
+        from app.features.admin import site as admin_site
         url = admin_site.url()
         if url:
             body = "管理页（公网）：%s" % url

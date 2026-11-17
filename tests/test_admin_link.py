@@ -21,7 +21,7 @@ class AdminSiteUrlTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = os.path.join(self.tmp.name, "admin_url.txt")
-        patcher = mock.patch("app.admin_site.state_path", return_value=self.path)
+        patcher = mock.patch("app.features.admin.site.state_path", return_value=self.path)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -30,27 +30,27 @@ class AdminSiteUrlTest(unittest.TestCase):
             f.write(text)
 
     def test_reads_valid_https_url(self):
-        from app import admin_site
+        from app.features.admin import site as admin_site
         self._write("https://admin.trycloudflare.com/abc\n")
         self.assertEqual(admin_site.url(),
                          "https://admin.trycloudflare.com/abc")
 
     def test_strips_trailing_slash(self):
-        from app import admin_site
+        from app.features.admin import site as admin_site
         self._write("https://admin.trycloudflare.com/")
         self.assertEqual(admin_site.url(), "https://admin.trycloudflare.com")
 
     def test_missing_file_is_empty(self):
-        from app import admin_site
+        from app.features.admin import site as admin_site
         self.assertEqual(admin_site.url(), "")
 
     def test_empty_file_is_empty(self):
-        from app import admin_site
+        from app.features.admin import site as admin_site
         self._write("  \n")
         self.assertEqual(admin_site.url(), "")
 
     def test_non_https_is_rejected(self):
-        from app import admin_site
+        from app.features.admin import site as admin_site
         for bad in ("http://admin.trycloudflare.com",
                     "file:///C:/secret", "127.0.0.1:5176"):
             self._write(bad)
@@ -62,7 +62,7 @@ class AdminLinkCommandTest(unittest.TestCase):
         self.send = mock.Mock()
         p1 = mock.patch.object(qq_bot.qq_api, "send_private", self.send)
         p2 = mock.patch("app.config.GALLERY_OWNER_QQ", "2509355624")
-        p3 = mock.patch("app.admin_site.url",
+        p3 = mock.patch("app.features.admin.site.url",
                         return_value="https://admin.trycloudflare.com")
         for p in (p1, p2, p3):
             p.start()
@@ -102,7 +102,7 @@ class AdminLinkCommandTest(unittest.TestCase):
         self.send.assert_not_called()
 
     def test_no_url_tells_owner_to_start_tunnel(self):
-        with mock.patch("app.admin_site.url", return_value=""):
+        with mock.patch("app.features.admin.site.url", return_value=""):
             qq_bot._maybe_admin_link(
                 self.ev, "/管理页", "2509355624", "private", "2509355624")
         self.send.assert_called_once()

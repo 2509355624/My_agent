@@ -9,7 +9,7 @@
 - **数据只读**：只列 `guest/` 目录下那批游客会话，不碰网页 / 私聊 / 群聊；
   没有删除、没有角色卡管理、没有背景图上传。
 
-为什么单独一个模块：`friend_app.py`（5175，对外）和 `persona_admin_api.py`
+为什么单独一个模块：`friend_app.py`（5175，对外）和 `features/admin/routes.py`
 （5174，管理台）都要读这份名单，放谁那儿都会让另一个反向依赖。
 """
 import json

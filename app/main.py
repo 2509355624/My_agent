@@ -158,7 +158,7 @@ app.register_blueprint(rag_lab.bp)
 
 # 角色扮演「查看台」（2026-11-03）：看谁玩过、聊了什么。
 # 只挂 5174，公网只映射 5175 的网关，所以这里不需要额外鉴权。
-from app import persona_admin_api                  # noqa: E402
+from app.features.admin import routes as persona_admin_api                  # noqa: E402
 app.register_blueprint(persona_admin_api.bp)
 
 # 手动跑图台 API（独立 Blueprint，见 app/gen_api.py）：无 AI 的文生图页面
