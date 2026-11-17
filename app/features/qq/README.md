@@ -12,5 +12,5 @@
 （原 `qq_status.py`）、`notify.py`（原 `notify.py`，掉线/扫码 PushPlus 推送）、
 `stickers.py`（原 `stickers.py`，群表情收藏/检索）、`trigger.py`（触发词解析）、
 `play_bot.py`（`/play` 互动页）、`solo_bot.py`（单人页卡片）、`friend_site.py`
-（群友站隧道地址/入口）已迁入并接线；`qq_api.py`、`qq_bot.py` 等仍在根目录。QQ 机器人不是 Flask 进程，不注册
+（群友站隧道地址/入口）、`friend_api.py`（群友生图 Blueprint）已迁入并接线；`qq_api.py`、`qq_bot.py` 等仍在根目录。QQ 机器人不是 Flask 进程，不注册
 blueprint；事件循环放 `service.py`。
