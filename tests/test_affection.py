@@ -1321,8 +1321,49 @@ class ExciteTest(AffBase):
         self._settle(key, in_scene=False, act="none")
         res = self._settle(key, in_scene=False, act="none")
         self.assertFalse(res["in_scene"])
-        self.assertEqual(res["excite"], 0)
+        self.assertGreater(res["excite"], 0,
+                           "这一场到过高潮，收场后要留下余韵，不能抹成 0")
         self.assertEqual(res["orgasms"], 0, "收场后次数归零，下一场从头算")
+
+    def test_idle_end_keeps_afterglow_after_orgasm(self):
+        """高潮之后连续两轮空闲收场：余韵值还在，不能直接归零。
+
+        2026-11-18 用户实测：GC 过后本该剩一点高潮值，结果连续两轮没
+        身体接触就变成 0，而且没有 `just_orgasm`，前端自然不弹「射在哪里」。
+        """
+        key = self._raid()
+        res = None
+        for _ in range(6):
+            res = self._settle(key, in_scene=True, act="intense", excite=40)
+            if res["just_orgasm"]:
+                break
+        self.assertTrue(res and res["just_orgasm"], "先要制造一次高潮")
+        after = res["excite"]
+        self.assertGreater(after, 0)
+        self._settle(key, in_scene=False, act="none")
+        res = self._settle(key, in_scene=False, act="none")
+        self.assertFalse(res["in_scene"])
+        self.assertGreater(res["excite"], 0, "收场后余韵不能被抹成 0")
+        self.assertLessEqual(res["excite"], after, "余韵只该往下走，不能回升")
+        self.assertEqual(res["orgasms"], 0)
+        self.assertEqual(res["just_orgasm"], 0, "收场不是第二次高潮")
+        # 收场后的下一轮仍在余韵里，不能一开场就归零
+        res = self._settle(key, in_scene=False, act="none")
+        self.assertFalse(res["in_scene"])
+        self.assertGreater(res["excite"], 0, "收场后的余韵要自然回落，不是秒清零")
+
+    def test_full_record_outside_scene_does_not_silently_zero(self):
+        """满格的记录即使上一轮被判成不在场景，也要落一次高潮而不是清零。"""
+        key = self._raid()
+        ent, rec = affection._ensure(key)
+        rec.update({"excite": affection.EXCITE_MAX, "scene": False,
+                    "orgasms": 0, "recover": 0, "idle": 0})
+        affection._save_entry(key, ent)
+        res = self._settle(key, in_scene=False, act="none", excite=0)
+        self.assertGreaterEqual(res["just_orgasm"], 1,
+                                "满格要在这一轮落账，不能静默清零")
+        self.assertTrue(res["in_scene"])
+        self.assertGreater(res["excite"], 0)
 
     def test_tail_line_only_shows_it_in_scene(self):
         """没在场景里不该多一行「高潮 0」——那会让人以为她冷了。"""

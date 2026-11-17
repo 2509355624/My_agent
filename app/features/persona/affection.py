@@ -2274,6 +2274,7 @@ def sleep(line_key):
     rec["scene"] = False
     rec["orgasms"] = 0
     rec["idle"] = 0
+    rec["afterglow"] = 0             # 过夜不保留余韵
     # v2 成人向（2026-11-10「跨天清零」）：上面几行只动 v1 的记录，九条轴
     # 存在 rec["adult"] 里，碰不到。这里只清高潮值和冷却——开发/敏感/羞耻/
     # 堕落是「发生过的事实」，睡一觉不该消失（和 v1 同一口径）。
@@ -2532,6 +2533,7 @@ def settle(line_key, score, game_day=None):
     if _contact:
         # 有身体接触：在场景里，按增量累积
         idle = 0
+        rec["afterglow"] = 0          # 新一轮接触开始了，收场余韵结束
         base = int(rec.get("excite") or 0) if prev_scene else oh["start"]
         # AI 给了就用它的；没给（0）才按动作档位记——表只做兜底
         step = ex_mod if ex_mod else act_raise
@@ -2591,9 +2593,22 @@ def settle(line_key, score, game_day=None):
             # 数值按 AI 判的负增量往下走；它没给就减默认值。
             idle += 1
             if idle >= ORGASM_IDLE_END:
-                # 连续两轮都没有接触：这一场真的结束了，次数归零
+                # 连续两轮都没有接触：这一场真的结束了，次数归零。
+                # 2026-11-18 修（用户实测）：不能把**到过高潮**的余韵也抹成 0。
+                # 以前这里无条件 `excite=0`，于是「GC 过后只剩一点」的余韵
+                # 在两轮闲聊后直接消失，而且没有 `just_orgasm`，前端不会弹
+                # 「射在哪里」——玩家看到的就是满格/有值突然清零。
+                # 现在：到过就按空闲轮再落一次，并留一个 `afterglow` 标记，
+                # 让收场后的下一轮也继续自然回落，而不是立刻归零。
                 in_scene = False
-                rec["excite"] = 0
+                decel = ex_mod if ex_mod < 0 else -oh["idle_decay"]
+                if total_orgasm > 0:
+                    rec["excite"] = max(
+                        0, int(rec.get("excite") or 0) + decel)
+                    rec["afterglow"] = 1 if rec["excite"] > 0 else 0
+                else:
+                    rec["excite"] = 0
+                    rec["afterglow"] = 0
                 rec["orgasms"] = 0
                 total_orgasm = 0
                 idle = 0
@@ -2602,13 +2617,37 @@ def settle(line_key, score, game_day=None):
                 rec["excite"] = max(0, int(rec.get("excite") or 0) + decel)
                 in_scene = True    # 还在这场里，只是这一轮没动
     else:
-        # 本来就不在场景里：保持 0
-        in_scene = False
-        rec["excite"] = 0
-        rec["orgasms"] = 0
-        total_orgasm = 0
-        idle = 0
-        recover = 0              # 没在场景里就没有「刚要了」这回事
+        # 本来就不在场景里：正常保持 0。
+        # 2026-11-18 修：但满格记录不能被静默清零——哪怕上一轮模型把
+        # `in_scene` 判成 false，数值到顶就是到了，先落一次高潮再谈收场；
+        # 另外，刚收场留下的余韵（`afterglow`）也要自然回落，不能下一轮秒变 0。
+        if int(rec.get("excite") or 0) >= oh["max"] and recover <= 0:
+            total_orgasm += 1
+            rec["orgasms"] = total_orgasm
+            just_orgasm = total_orgasm
+            rec["excite"] = after_now
+            recover = ORGASM_RECOVER
+            just_recover = True
+            in_scene = True
+            idle = 0
+            rec["afterglow"] = 0
+        elif rec.get("afterglow"):
+            in_scene = False
+            decel = ex_mod if ex_mod < 0 else -oh["idle_decay"]
+            rec["excite"] = max(0, int(rec.get("excite") or 0) + decel)
+            if rec["excite"] <= 0:
+                rec["afterglow"] = 0
+            rec["orgasms"] = 0
+            total_orgasm = 0
+            idle = 0
+            recover = 0
+        else:
+            in_scene = False
+            rec["excite"] = 0
+            rec["orgasms"] = 0
+            total_orgasm = 0
+            idle = 0
+            recover = 0              # 没在场景里就没有「刚要了」这回事
     # 注意：递减**只在上面 `_contact` 分支里做一次**，这里不要再减。
     # 之前两处都减，等于每轮扣两格，「至少三轮」变成两轮——实测过的坑。
     rec["recover"] = recover
