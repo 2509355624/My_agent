@@ -36,7 +36,7 @@
   .box h1 { font-size: 1.12em; margin: 0 0 6px; letter-spacing: .02em; }
   .box p { color: var(--text-dim); font-size: .8em; margin: 0 0 18px; line-height: 1.65; }
   .box input { width: 100%; padding: 12px 13px; margin-bottom: 10px;
-    font: inherit; color: var(--text); background: var(--bg-input);
+    font-size: 16px; color: var(--text); background: var(--bg-input);
     border: 1px solid var(--border); border-radius: var(--rs); outline: none; }
   .box input:focus { border-color: var(--accent); }
   .box button { width: 100%; padding: 12px; margin-top: 2px; color: #fff;
@@ -166,6 +166,21 @@
     /* 打开详情时收起抽屉 */
     body.detail #menuBtn { display: inline-block; }
   }
+
+  .gtools { display: flex; align-items: center; gap: 6px; }
+  #gMoreBtn { display: none; }
+  /* 2026-11-17：手机顶栏只留「会话 / 更多」，字号导出退出都收进面板。 */
+  @media (max-width: 820px) {
+    header { position: relative; }
+    header .gtools { display: none; position: absolute; right: 10px; top: calc(100% + 6px);
+      z-index: 35; width: min(260px, calc(100vw - 20px));
+      background: var(--bg-elev); border: 1px solid var(--border);
+      border-radius: 10px; padding: 10px; flex-direction: column;
+      align-items: stretch; gap: 8px; box-shadow: 0 12px 30px rgba(0,0,0,.5); }
+    header .gtools.open { display: flex; }
+    #gMoreBtn { display: inline-block; }
+  }
+
 </style>
 </head>
 <body>
@@ -173,9 +188,8 @@
 <!-- 登录 -->
 <div id="login">
   <div class="box">
-    <h1>游客会话查看</h1>
-    <p>只读。只列出游客会话，不含网页 / 私聊 / 群聊。<br>
-       需要管理员 QQ 号，验证码会私聊发给你。</p>
+    <h1>游客会话</h1>
+    <p>只读。管理员 QQ 登录。</p>
     <input id="qq" inputmode="numeric" autocomplete="username"
            placeholder="管理员 QQ 号">
     <button id="sendBtn">发送验证码</button>
@@ -189,14 +203,17 @@
 <!-- 主界面 -->
 <div id="app">
   <header>
-    <button class="ibtn" id="menuBtn" aria-label="会话列表">☰</button>
+    <button class="ibtn" id="menuBtn" aria-label="会话列表">会话</button>
     <h1 id="title">游客会话</h1>
-    <button class="ibtn" id="fsDown" title="字号变小">A−</button>
-    <button class="ibtn" id="fsUp" title="字号变大">A+</button>
-    <button class="ibtn" id="autoBtn" aria-pressed="true"
-            title="自动刷新中（每 5 秒）· 点此关闭">↻</button>
-    <button class="ibtn" id="exportBtn" title="把当前会话导出成 Markdown" disabled>导出</button>
-    <button class="ibtn" id="logoutBtn">退出</button>
+    <button class="ibtn" id="gMoreBtn" type="button" aria-expanded="false">更多</button>
+    <div class="gtools" id="gTools">
+      <button class="ibtn" id="fsDown" title="字号变小">A−</button>
+      <button class="ibtn" id="fsUp" title="字号变大">A+</button>
+      <button class="ibtn" id="autoBtn" aria-pressed="true"
+              title="自动刷新中（每 5 秒）· 点此关闭">自动</button>
+      <button class="ibtn" id="exportBtn" title="把当前会话导出成 Markdown" disabled>导出</button>
+      <button class="ibtn" id="logoutBtn">退出</button>
+    </div>
   </header>
   <main>
     <aside id="list">
@@ -605,5 +622,29 @@ async function enterApp() {
   $("login").style.display = "flex";
 })();
 </script>
+
+<script>
+(function(){
+  var btn = document.getElementById('gMoreBtn');
+  var tools = document.getElementById('gTools');
+  if (!btn || !tools) return;
+  function close(){
+    tools.classList.remove('open');
+    btn.setAttribute('aria-expanded', 'false');
+  }
+  btn.addEventListener('click', function(e){
+    e.stopPropagation();
+    var on = tools.classList.toggle('open');
+    btn.setAttribute('aria-expanded', on ? 'true' : 'false');
+  });
+  document.addEventListener('click', function(e){
+    if (tools.classList.contains('open') && !tools.contains(e.target) && e.target !== btn) close();
+  });
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') close();
+  });
+})();
+</script>
+
 </body>
 </html>
