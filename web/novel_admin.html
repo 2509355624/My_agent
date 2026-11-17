@@ -83,6 +83,22 @@
   .chip { font-size: 11px; padding: 1px 7px; border-radius: 9px;
     background: var(--bg-input); border: 1px solid var(--border);
     color: var(--text-dim); }
+
+  /* 2026-11-17：手机改成上下两段，小说列表不再固定 330px 挤死正文。 */
+  @media (max-width: 760px) {
+    html, body { height: auto; overflow: auto; }
+    .app { display: flex; flex-direction: column; height: auto; min-height: 100vh; }
+    .side { height: auto; max-height: 48vh; border-right: 0;
+      border-bottom: 1px solid var(--border-soft); }
+    .side-list { max-height: 34vh; }
+    .mid { min-height: 60vh; }
+    .top { padding: 10px 14px; }
+    .body { padding: 14px 16px 40px; }
+    .filters input { font-size: 16px; }
+    .para { font-size: 15px; line-height: 1.9; }
+    .facts dl { grid-template-columns: 64px 1fr; }
+  }
+
 </style>
 </head>
 <body>
@@ -90,9 +106,9 @@
   <aside class="side">
     <div class="side-head">
       <h1>小说记录 <span class="cnt" id="cnt"></span></h1>
-      <a href="/admin">管理页 →</a>
+      <a href="/">← 回首页</a>
       <div class="filters">
-        <input id="q" placeholder="搜 QQ / 主角名 / 玩法" autocomplete="off">
+        <input id="q" placeholder="搜名字 / QQ" autocomplete="off">
         <button id="reload" type="button">刷新</button>
       </div>
     </div>
@@ -105,8 +121,7 @@
       <span class="meta" id="meta"></span>
     </div>
     <div class="body" id="body">
-      <div class="empty">左边选一本，右边看正文。<br>
-        这里只读：删书、改设定都不在这个页面做。</div>
+      <div class="empty">左边选一本，右边看正文。</div>
     </div>
   </main>
 </div>
