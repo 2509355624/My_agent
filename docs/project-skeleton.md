@@ -198,7 +198,7 @@ def run(job_id: str) -> None:
 | `rag` | `rag/`、`rag_lab.py`、`rerank.py` | 文档问答、切片、检索、重排 |
 | `rag` 迁移后 | `features/rag/lab.py`、`rag_client.py`、`rag_daemon.py`、`vector_store.py`、`rerank.py` | 已接线，URL 不变 |
 | `novel` | `novel.py`、`novel_api.py`、`novel_writing.py` | 小说模式、世界书、裁定链 |
-| `novel` 迁移后 | `features/novel/routes.py` 已接线；`novel.py` 暂留根目录 | 小说接口；开书/续写/裁定待拆 |
+| `novel` 迁移后 | `features/novel/routes.py`、`novel_writing.py` 已接线；`novel.py` 暂留根目录 | 小说接口、续写/改写辅助；开书/续写/裁定待拆 |
 | `card` | `card_api.py`、`card_bot.py`、`card_maker.py` | 角色卡生成、封面、五框 |
 | `card` 迁移后 | `features/card/routes.py`、`bot.py`、`service.py` | 已接线，URL 不变 |
 | `qq` | `qq_api.py`、`qq_bot.py`、`qq_bill.py`、`qq_names.py`、`qq_status.py`、`friend_api.py`、`friend_site.py`、`guest*.py` | QQ 事件、账单、群友页内核 |

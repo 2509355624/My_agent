@@ -998,7 +998,7 @@ def _head(world, for_director=False):
     # 天然就该在系统头里。编剧拿不到它——编剧只出裁定，不写正文。
     if not for_director:
         try:
-            from app import novel_writing
+            from app.features.novel import novel_writing
             _blk = novel_writing.block()
             if _blk:
                 parts.append(_blk)

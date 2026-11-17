@@ -2465,28 +2465,28 @@ class NovelWritingSkillTest(NovelBase):
 
     def test_block_is_substantial(self):
         """原来小说一条规范都没有；现在要给到和角色扮演同量级。"""
-        from app import novel_writing
+        from app.features.novel import novel_writing
         blk = novel_writing.block()
         self.assertGreater(len(blk), 2000, "笔法规范太短，等于没给")
         self.assertLessEqual(len(blk), novel_writing.MAX_CHARS + 200)
 
     def test_carries_deai_word_list(self):
         """禁用词表是最直接见效的一块。"""
-        from app import novel_writing
+        from app.features.novel import novel_writing
         blk = novel_writing.block()
         self.assertIn("禁用词", blk)
         self.assertIn("微微", blk)
         self.assertIn("仿佛", blk)
 
     def test_carries_human_techniques(self):
-        from app import novel_writing
+        from app.features.novel import novel_writing
         blk = novel_writing.block()
         self.assertIn("技法", blk)
         self.assertTrue("人味技法" in blk or "节奏法则" in blk)
 
     def test_adult_techniques_are_always_on(self):
         """成人技法常驻，**不按亲密程度挑**——小说没有那个维度可判。"""
-        from app import novel_writing
+        from app.features.novel import novel_writing
         used = novel_writing._CACHE.get("used") or []
         blk = novel_writing.guide()
         self.assertTrue(blk, "规范必须能切出来")
@@ -2501,7 +2501,7 @@ class NovelWritingSkillTest(NovelBase):
 
     def test_block_does_not_dictate_plot(self):
         """笔法只管怎么写，不许改剧情——抬头要写清楚。"""
-        from app import novel_writing
+        from app.features.novel import novel_writing
         blk = novel_writing.block()
         self.assertIn("不改变剧情走向", blk)
 
@@ -2528,7 +2528,7 @@ class NovelWritingSkillTest(NovelBase):
 
     def test_slice_missing_marker_returns_empty_not_raise(self):
         """规范文件缺失不该让正文写不出来。"""
-        from app import novel_writing
+        from app.features.novel import novel_writing
         self.assertEqual(novel_writing._slice("不存在的文件.md", "", "", 100), "")
 
 
