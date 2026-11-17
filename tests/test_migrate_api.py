@@ -16,7 +16,7 @@ import unittest
 from PIL import Image
 
 import app.main as main
-from app import image_migrate as im
+from app.features.image import migrate as im
 
 
 def _png(path, size=(120, 160), color=(180, 40, 40)):

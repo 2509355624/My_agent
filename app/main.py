@@ -17,7 +17,7 @@ from app import agents as agent_store
 from app import cancel as cancel_mod
 from app import comfy_out
 from app.features.image import audit as image_audit
-from app import image_migrate
+from app.features.image import migrate as image_migrate
 from app import logsetup
 from app import usage as usage_stats
 from app import qq_bill

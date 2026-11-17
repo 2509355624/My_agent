@@ -17,7 +17,7 @@ import shutil
 import tempfile
 import unittest
 
-from app import image_migrate as im
+from app.features.image import migrate as im
 
 
 def _write(path, data=b"x"):
