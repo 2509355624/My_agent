@@ -121,16 +121,17 @@ def _combo_blocks(out: list, seen: set, res: dict, gd: dict):
         _append(out, _by_key("combo.3.4"), seen)
 
     # 12.4 开发度 × 第一次/公共场合
-    # 「第一次进入」不是持久状态，代码里没有可靠事实；只在位置明确落在该处、
-    # 开发度还低、并且这一拍不是从同一个位置接着的时候注入痛感原文。
+    # 第一次进入由 `affection.mark_first()` 持久化在 `first_entry`，不是靠
+    # `contact_prev` 猜；只有 pussy 这一条规则依赖「第一次」，所以只看它。
+    first = res.get("first_entry") if isinstance(res.get("first_entry"), dict) else {}
     if (con == "pussy" and _num(dev.get("pussy")) < 30
-            and str(gd.get("contact_prev") or "") != "pussy"):
+            and not first.get("pussy")):
         _append(out, _by_key("combo.4.1"), seen)
     if con == "anus" and _num(dev.get("anus")) < 30:
         _append(out, _by_key("combo.4.2"), seen)
     if con == "mouth" and _num(dev.get("mouth")) < 30:
         _append(out, _by_key("combo.4.3"), seen)
-    # 「dev 某处 > 80 × 公共场合」需要公共场合事实；没有该字段时不能猜。
+    # 「dev 某处 > 80 × 公共场合」需要明确的 public 字段；没有就不猜。
 
     # 12.5 屈服 × 高潮表现
     if ex > 75:

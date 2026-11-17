@@ -9,8 +9,9 @@
 
 import pathlib
 import unittest
+from unittest import mock
 
-from app.features.persona import state_inject, state_policy, state_rules
+from app.features.persona import affection, state_inject, state_policy, state_rules
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 GUIDE = ROOT / "skills" / "writing" / "00-state-guide" / "state-guide.md"
@@ -76,10 +77,55 @@ class StatePolicyTest(unittest.TestCase):
         for part in ("mouth", "nipple", "pussy", "anus", "skin"):
             self.assertIn("dev.part.%s" % part, keys)
 
+    def test_first_entry_controls_first_time_rule(self):
+        """有 first_entry.pussy 后，哪怕是低开发度也不能再写「第一次进入」。"""
+        res = _base(dev={"mouth": 0, "nipple": 0, "pussy": 0,
+                          "anus": 0, "skin": 0})
+        gd = {"contact": "pussy"}
+        keys = [b.key for b in state_policy.select_blocks(res, gd)]
+        self.assertIn("combo.4.1", keys)
+        res["first_entry"] = {"pussy": {"day": 3}}
+        keys = [b.key for b in state_policy.select_blocks(res, gd)]
+        self.assertNotIn("combo.4.1", keys)
+
     def test_v1_only(self):
         self.assertEqual(state_inject.build(_base(schema=2)), "")
         self.assertEqual(state_inject.build({"active": False}), "")
         self.assertEqual(state_inject.build(None), "")
+
+
+class FirstEntryTest(unittest.TestCase):
+    def test_mark_first_persists_only_once(self):
+        rec = {"mode": "raid", "day": 2, "first_entry": {}}
+        ent = {"affection": rec}
+        with mock.patch.object(affection, "_ensure", return_value=(ent, rec)):
+            with mock.patch.object(affection, "_save_entry") as save:
+                first = affection.mark_first("k", "pussy", game_day=4,
+                                             place="房间")
+                self.assertEqual(first["pussy"], {"day": 4, "place": "房间"})
+                save.assert_called_once()
+                save.reset_mock()
+                again = affection.mark_first("k", "pussy", game_day=5)
+                self.assertEqual(again["pussy"]["day"], 4)
+                save.assert_not_called()
+
+    def test_unknown_contact_does_not_write(self):
+        rec = {"mode": "raid", "first_entry": {}}
+        ent = {"affection": rec}
+        with mock.patch.object(affection, "_ensure", return_value=(ent, rec)):
+            with mock.patch.object(affection, "_save_entry") as save:
+                first = affection.mark_first("k", "hand")
+                self.assertEqual(first, {})
+                save.assert_not_called()
+
+    def test_v2_is_not_touched(self):
+        rec = {"mode": "raid", "schema": 2, "first_entry": {}}
+        ent = {"affection": rec}
+        with mock.patch.object(affection, "_ensure", return_value=(ent, rec)):
+            with mock.patch.object(affection, "_save_entry") as save:
+                first = affection.mark_first("k", "pussy")
+                self.assertEqual(first, {})
+                save.assert_not_called()
 
 
 if __name__ == "__main__":

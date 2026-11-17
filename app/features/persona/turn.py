@@ -317,6 +317,15 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         # 自动跳会让玩家没得选，而且第五次那一轮被硬塞了「过渡到第二天」的
         # 指令，写出来就不再是那一场本身了。
         gd = svc._apply_gameday(key, score) or gd
+        # 第一次进入（2026-11-18）：本轮注入只读旧事实；先让 state_inject 看到
+        # 「这一拍之前有没有做过」，否则刚置上的 flag 会把本轮的第一次规则
+        # 自己压掉。落盘放在 state_inject 之后（见下面）。
+        if isinstance(aff_res, dict) and not v2:
+            try:
+                aff_res["first_entry"] = svc.affection.first_entry(key)
+            except Exception:                            # noqa: BLE001
+                svc.log.exception("first_entry 读取失败 %s", key)
+                aff_res["first_entry"] = {}
         # 跨天过渡（2026-11-10）：代码只报「上一拍收在第几天」这个事实，
         # 怎么把昨天接过来由模型自己写。自由模式不推进天数，恒为 False。
         crossed_day = int((gd or {}).get("day") or day_before) > day_before
@@ -391,6 +400,16 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         state_txt = state_inject.build(aff_res, gd)
         if state_txt:
             dyn_parts.append(state_txt)
+        # 本轮是不是「第一次进入」已经由上面的注入判定完；现在才落盘，
+        # 下一轮读到 flag 就不会再写「第一次进入」。落盘失败只影响下一轮去重，
+        # 不影响这一轮回复。
+        try:
+            aff_res["first_entry"] = svc.affection.mark_first(
+                key, (gd or {}).get("contact"),
+                game_day=(gd or {}).get("day"),
+                place=(gd or {}).get("place"))
+        except Exception:                                # noqa: BLE001
+            svc.log.exception("first_entry 记录失败 %s", key)
 
     # 第一轮把网页上那段开场导读也发给模型（2026-11-04）。
     # 否则玩家照着导读里的场景开口（「咖啡好香」），模型手里根本没这个场景，

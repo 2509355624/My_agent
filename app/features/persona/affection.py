@@ -65,6 +65,10 @@ V2_SCHEMA = 2
 # 一样，175 项老测试会集体被判成新档。老档不看这个开关。
 V2_AUTO_NEW = True
 
+# 第一次进入的三个位置（12.4 用）。只在这三处记「人生第一次」；
+# 手/胸/腿不写进这条规则，避免把普通接触也塞进「第一次进入」。
+FIRST_ENTRY_CONTACTS = ("pussy", "anus", "mouth")
+
 # ── 身体进度（2026-11-04 深夜改版）──────────────────────
 # 「你们到哪一步了」。0~6 级，**每一级的名字就是这一级能做什么**：
 # 还没碰过 / 能碰到了 / 能抱了 / 亲过了 / 碰过了 / 做过了 / 要不够。
@@ -1289,6 +1293,10 @@ def _blank(line_key="", value=None, schema=1):
            # 开发度（2026-11-05）：五个部位单独记，**只涨不掉、不设上限**，
            # 500 是满格（面板显示 /500）。老档在 `_migrate` 里补 0。
            "dev": dev_blank(),
+           # 第一次进入某个位置（2026-11-18）：挂在角色自己的存档里，
+           # 不是每轮临时推。`{"pussy": {"day": 3, "place": "房间"}}`。
+           # 与 v2 的 `firsts`（按接触程度记）分开，互不覆盖。
+           "first_entry": {},
            "day": 0, "chat": 0, "acts": 0,
            "streak": 1, "turns": 0, "ach": [], "hist": [],
            "mercy": MERCY_MAX, "suspicion": 0}
@@ -1337,6 +1345,46 @@ def _save_entry(line_key, ent):
     state = persona._load_state()                         # noqa: SLF001
     state[line_key] = ent
     persona._save_state(state)                            # noqa: SLF001
+
+
+def mark_first(line_key, contact, game_day=None, place=""):
+    """记下 V1 这条线的「第一次进入」；返回当前 first_entry。
+
+    这不是「这一拍刚进去」：`contact_prev` 只说明上一拍的位置，换回来一次
+    就会被误判成第一次。这里写进角色存档（`state/persona_sessions.json` 的
+    `affection.first_entry`），同一条线只置一次，之后读到的永远是事实。
+
+    V2 的第一次记录在 `firsts`（按接触程度记），这里不碰，避免两套覆盖。
+    """
+    ent, rec = _ensure(line_key)
+    if not isinstance(rec, dict) or rec.get("mode") != MODE_RAID or _v2_is(rec):
+        return {}
+    first = rec.get("first_entry")
+    first = first if isinstance(first, dict) else {}
+    c = str(contact or "").strip().lower()
+    if c not in FIRST_ENTRY_CONTACTS or c in first:
+        return first
+    try:
+        day = int(game_day or rec.get("day") or 0)
+    except (TypeError, ValueError):
+        day = int(rec.get("day") or 0)
+    first[c] = {"day": day, "place": str(place or "").strip()[:40]}
+    rec["first_entry"] = first
+    try:
+        _save_entry(line_key, ent)
+    except Exception:                                     # noqa: BLE001
+        # 落盘失败不该让这一轮回不了话；内存里已经置上，下次读再试。
+        log.warning("first_entry 落盘失败 %s", line_key)
+    return first
+
+
+def first_entry(line_key):
+    """只读当前 first_entry，不写盘；给本轮注入用。"""
+    _, rec = _ensure(line_key)
+    if not isinstance(rec, dict) or rec.get("mode") != MODE_RAID or _v2_is(rec):
+        return {}
+    first = rec.get("first_entry")
+    return first if isinstance(first, dict) else {}
 
 
 def _card_of(line_key):
