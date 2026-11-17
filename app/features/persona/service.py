@@ -291,6 +291,8 @@ from app.features.persona.prompts import (
     _SCENE_DUTY, _SCORE_PROMPT, _SCORE_PROMPT_V2, _SKIP_TASK,
     _SKIP_TASK_DOING, _SKIP_TASK_MULTI, _THIS_TURN_ECHO,
 )
+
+from app.features.persona.user_block import _visible_user_text, render_user_block
 from app.features.persona.prompt_facts import (
     FACT_MAX, FACT_TEXT_MAX, _FACTS_GUIDE, _facts_block, _outfit_block,
     _parse_facts, _place_block,
@@ -2170,136 +2172,6 @@ def _strip_stable_notes(user_block):
     return "\n\n".join(
         s.strip() for s in text.split("\n\n")
         if s.strip() and s.strip() not in stable)
-
-
-def render_user_block(segments, addressed=True, fallback="", remind=False,
-                      name=""):
-    """把第一段拆好的用户消息拼成演员层能读的块。
-
-    没有分段就退回原文（`fallback`）。分段里的「想」**必须明确写成看不见**，
-    不然模型会把心里话当成已经知道的事实——这是 2026-11-05 用户报的 bug。
-
-    2026-11-05 晚补：分段里的「做」现在只带**一句话概括**（不再原文照抄，
-    见 `_SEGMENT_GUIDE`），因为让打分模型复述露骨原文会把整份输出掐断。
-    代价是演员会丢掉动作的细节，所以：
-      · 这一轮**没有**「想」分段 → 把原文整段补在最后，信息一点不少；
-      · 有「想」→ 不能补原文（会把心里话带出去），只能靠概括。
-
-    `remind`（2026-11-06，2026-11-07 改）：只给**当前这一轮**加一句正向锚点
-    （`writing_style.tail()`）。模型最后读到的一句是它，比长契约开头那一行
-    更有用；历史消息不重复加，免得刷屏。原来是「不要用『他』指玩家」那种
-    禁令，白象效应下反而把被禁概念点亮一遍，现在只把「谁是她、谁是你、
-    镜头落在哪」说清。生产链路已在各处统一拼 `writing_style.tail()`，这个
-    参数保留给直接调用方，文案与统一尾注同源。
-    """
-    if not segments:
-        body = str(fallback or "")
-        stripped = body.strip()
-        if remind and stripped:
-            return stripped + "\n" + writing_style.tail(name=name)
-        # 多行原文才加说明（2026-11-08 用户要的）：玩家在主对话框里会写一大段，
-        # 里面混着「他说的话 / 他做的动作 / 他心里的想法」，三种没有标记。
-        # 编剧要自己拆——这里只点明「有这三种」和「换行是他自己的分段」。
-        # 单行不加，省 token。
-        if "\n" in stripped:
-            return ("【玩家这一轮写的主输入框原文】\n"
-                    "这是**他这一拍要做什么**，不是已经发生的旁白，是给你的指令。"
-                    "里面可能混着三种东西：\n"
-                    "· **他要做的动作**——走过去、伸手、拉起来、摘下帽子、抱住……\n"
-                    "· **他说的话**——带「」『』的，或者明显是冲着人说的那一句；\n"
-                    "· **他心里想的**——写了「心想」「心里」「暗想」的，她看不见。\n"
-                    "\n"
-                    "**换行是他自己分的段**，按行读，别合并。\n"
-                    "**没有引号的句子不要一律当成台词**：句子里只要有一个明确的动作"
-                    "（走、站、坐、拿、拉、抱、推、摘、递……），那个动作就是「做」，"
-                    "要写进正文。真正的台词只有那种「冲着人说、没有动作」的句子。\n\n"
-                    + body
-                    + "\n\n" + _SCENE_DUTY)
-        return fallback
-    lines = ["【这一轮你收到的（按发生顺序）】"]
-    has_think = False
-    for seg in segments:
-        who = str(seg.get("who") or "用户")
-        typ = str(seg.get("type") or "说")
-        text = str(seg.get("text") or "").strip()
-        # 剧情推进（2026-11-07 改）：写成一句正向指令，让它真的落进画面。
-        # 原来是「导演意图（她不知道，只用来安排这一拍）」，重点落在
-        # 「她不知道」上，模型容易当背景略过；玩家填了却看不出变化。
-        # 同一句还会在近因位 tail(plot=...) 再钉一次，离生成点最近。
-        if who == "导演" or typ in ("剧情", "plot"):
-            if text:
-                lines.append("- 这一拍往这个方向走，让它真的发生在画面里：%s" % text)
-            continue
-        if typ == "想":
-            has_think = True
-        if who == "助手":
-            if typ == "说":
-                label = "助手 · 说（已经发生）"
-            elif typ == "做":
-                label = "助手 · 做（已经发生，照它往下演）"
-            else:
-                label = "助手 · 想（只有你自己知道）"
-            if text:
-                lines.append("- %s：%s" % (label, text))
-            continue
-        if typ == "想":
-            # 心里话的正文**要给**（2026-11-08 用户纠正）：
-            # 演员就是写作 AI，不知道他在想什么就只能瞎编她的反应。
-            # 原来把内容抠掉，等于让它猜；正确的解法是给内容 + 标明「她听不见」。
-            if text:
-                lines.append("- 用户 · 想（心里想的，她听不见、不知道内容；"
-                             "但你的写法要让读者看出他心里有这句）：%s" % text)
-            else:
-                lines.append("- 用户 · 想（有一句没说出口，内容他没写）")
-            continue
-        if not text:
-            continue
-        if typ == "说":
-            label = "用户 · 说（你听得见）"
-        else:
-            label = "用户 · 做（你看得见）"
-        lines.append("- %s：%s" % (label, text))
-    if not addressed:
-        lines.append("（他这一轮不是在对你说，可能只是自言自语或旁白；"
-                     "写你看到的反应，不要当成他在跟你对话。）")
-    # 没有心里话时，把原文完整补上——上面那些是标签，细节以原文为准。
-    # 2026-11-06：原文里玩家会用自己的「我」，必须当场说清那个「我」= 玩家，
-    # 不然演员会把它和她台词/心声里的「我」混成同一个人。
-    # 原文**总是**补上（2026-11-08）：以前有心事就不补，怕心里话漏进正文。
-    # 现在心事内容本来就给写作 AI 了（见上面的「用户 · 想」），没有漏的问题；
-    # 不补原文反而让演员只看得到摘要，动作和语气全丢。
-    if str(fallback or "").strip():
-        lines.append("")
-        lines.append("【他这一轮的原话（完整，照着它演）】")
-        lines.append("（这段里的「我」= 玩家本人，不是你；原文里的动作都是玩家做的。）")
-        lines.append(str(fallback).strip())
-    lines.append("")
-    lines.append(_SCENE_DUTY)
-    if remind:
-        lines.append(writing_style.tail(name=name))
-    return "\n".join(lines)
-
-
-def _visible_user_text(segments, fallback=""):
-    """给 RAG 用的「用户可见文本」：只留说 / 做，不含想。
-
-    没有分段就退回原文。只有「想」时返回空——宁可这一条只索引她的回复，
-    也不要把玩家没说出口的话写进长期记忆（那是演员本来就不该知道的东西）。
-    """
-    if not segments:
-        return str(fallback or "").strip()
-    parts = []
-    for seg in segments:
-        if not isinstance(seg, dict):
-            continue
-        if str(seg.get("who") or "用户") != "用户":
-            continue
-        if str(seg.get("type") or "说") in ("想", "剧情", "plot"):
-            continue
-        text = str(seg.get("text") or "").strip()
-        if text:
-            parts.append(text)
-    return "\n".join(parts)
 
 
 def _rag_context(hist, rounds=2):
