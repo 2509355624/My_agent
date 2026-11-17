@@ -283,6 +283,10 @@ from app.features.persona.manual_input import (
 )
 
 from app.features.persona.json_utils import _close_json, _parse_json_loose
+from app.features.persona.prompt_facts import (
+    FACT_MAX, FACT_TEXT_MAX, _FACTS_GUIDE, _facts_block, _outfit_block,
+    _parse_facts, _place_block,
+)
 from app.features.persona.story import (
     STORY_MAX_CHARS, _clip_items, _ledger_section,
     _shares_phrase, story_line,
@@ -2508,98 +2512,6 @@ INTENTS = {
 # 清单还兼一个作用：契约里有「你话里交代的前因，她没跟着去过」，场景义务
 # 又要求「他做的动作要演出来」。玩家写「我把鸡蛋拿出来」时模型会摇摆，
 # 于是把摆好的东西当没发生。这里正面说清「就在这一幕眼前」，不动契约正文。
-FACT_MAX = 12
-FACT_TEXT_MAX = 40
-
-_FACTS_GUIDE = (
-    "【再列一张「这一幕已经有的东西」】\n"
-    "facts：按他写的顺序，把这一轮他摆出来、做出来、说出口的具体东西各记一条，"
-    "每条不超过 20 字，只写名词和动作，不写解释：\n"
-    "  · 拿出来的、放下的、摆在某处的东西：一把小油菜、几个西红柿、豆干、"
-    "几颗鸡蛋、两块方便面……\n"
-    "  · 已经做完的一件事：中午和晚上的菜分好放进冰箱、冰箱塞满。\n"
-    "  · 他台词里点名的东西：早餐煮西红柿鸡蛋汤面加豆干。\n"
-    "并列的东西一样一条，写具体的名字和数量，越具体演员越好落地。\n"
-    "这里只记她眼前看得见、此刻已经发生的事；心里想的、别处发生过的，"
-    "交给别的字段。\n"
-)
-
-
-def _parse_facts(raw):
-    """把编剧交的 `facts` 裁成短句列表。只裁剪，不补写、不合并。"""
-    if not isinstance(raw, (list, tuple)):
-        return []
-    out = []
-    for item in raw:
-        if isinstance(item, dict):
-            item = item.get("text") or item.get("name") or ""
-        s = " ".join(str(item or "").split())[:FACT_TEXT_MAX]
-        if s and s not in out:
-            out.append(s)
-        if len(out) >= FACT_MAX:
-            break
-    return out
-
-
-def _facts_block(facts):
-    """给演员的最后一张清单：这一轮已经在场的东西，按原顺序各落地一次。
-
-    放在场景义务之后、尾注之前——越贴近生成点，越不会被 300~600 字、
-    闲笔、物件锚点那些要求摊薄。措辞全部正向：只说「让它在画面里出现」，
-    不写「不许复述」，免得白象效应把复述点亮一遍。
-    """
-    items = _parse_facts(facts)
-    if not items:
-        return ""
-    lines = ["【这一幕已经有的东西（按他写的顺序）】"]
-    lines.extend("- " + f for f in items)
-    lines.append("这些是他这一轮摆到眼前、已经发生的事，就在这一幕里。")
-    lines.append("让它们按这个顺序在画面里各落地一次：写清东西此刻在哪、被谁碰过、"
-                 "成了什么样；中间接上她的动作、停顿、反应，再往下走一拍。"
-                 "落地是让它出现在这一刻的画面里，由她的动作带过去。")
-    return "\n".join(lines)
-
-
-def _place_block(gd):
-    """同一地点已经连着写了几拍（2026-11-09）。**只报数，不判换不换场。**
-
-    用户实测的问题：同一个早餐铺被写了十几拍，早餐的葱油味、摊主问要点什么、
-    隔着玻璃数了数——同一批句子在轮与轮之间反复出现。契约里「接着写」这条
-    本来是为了防跳戏，模型把它读成了「这一拍不许走」，于是原地转圈。
-
-    代码能确定的只有一件事：地点这几拍没变过。剩下的交给模型——它自己有权
-    决定就地接着写（正常）还是该动身了（前面被拖住时）。所以这里只给数字，
-    三拍以内不出现，免得每轮都占一行预算、还暗示它「该动了」。
-    """
-    try:
-        n = int((gd or {}).get("place_streak") or 0)
-    except (TypeError, ValueError):
-        n = 0
-    if n < 3:
-        return ""
-    return ("（这个场景已经连着写了 %d 拍。就地接着写没问题，只是再往下得有东西"
-            "真的变——有人动身、有个决定定了、有件事办完了；或者这一拍就停在"
-            "某个还没做完的动作上。）" % n)
-
-
-def _outfit_block(outfit):
-    """给演员的「她此刻穿着」：只递上一轮的事实，**判断交给模型**。
-
-    位置同 `_facts_block`（场景义务之后、尾注之前），越贴近生成点越不会被
-    长契约摊薄。这里不列「脱下/穿上」词表、不做准入闸门——代码只检测事实，
-    穿没穿、该不该变由演员从这一轮的动作里自己判断。措辞全部正向：
-    说清「没动就照抄」，不写「不许穿回来」这类禁令（白象效应）。
-    """
-    cur = str(outfit or "").strip()
-    if not cur:
-        return ""
-    return ("【她此刻穿着（上一轮留下的状态）】\n"
-            "- " + cur + "\n"
-            "这一轮她脱了一件、加了一件、换了一身，就在「服饰：」行里写出"
-            "新的那一身；身上的东西没动，就把这串照抄过去。写具体到哪件、"
-            "什么颜色、什么状态，一件一件数清楚。")
-
-
 _INTENT_PROMPT = """判断下面这句话**在干什么**。只输出一个 JSON 对象，不要解释。
 
 {
