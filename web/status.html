@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>状态后台</title>
+<title>运行状态</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%237c5cff'/></svg>">
 <style>
   html, body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
@@ -109,18 +109,98 @@
   }
   .flash { animation: f 1s; }
   @keyframes f { from { background: rgba(124,92,255,.18); } to { background: transparent; } }
+
+/* ============================================================
+   2026-11-17 状态页收口：总览 / 对话排队 / 生图队列 三个页内分区
+   ============================================================ */
+body::before { display: none; }
+html, body {
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  line-height: 1.5;
+}
+.wrap { max-width: 1180px; padding: 20px 24px 36px; }
+header { margin-bottom: 14px; }
+h1 { font-size: 20px; }
+.sub { line-height: 1.4; }
+
+.tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 5px;
+  margin: 0 0 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--bg-elev);
+}
+.tabs button {
+  flex: 0 0 auto;
+  padding: 7px 16px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.tabs button:hover { color: var(--text); }
+.tabs button.on {
+  color: var(--text);
+  background: rgba(124, 92, 255, 0.16);
+  border-color: rgba(124, 92, 255, 0.45);
+}
+
+.page-panel { display: none; }
+.page-panel.on { display: block; }
+.row.page-panel.on { display: grid; }
+
+.card { padding: 14px 16px; border-radius: 10px; margin-bottom: 12px; }
+.card h2 { color: var(--text); font-size: 14px; margin-bottom: 8px; }
+.card .hint { margin-bottom: 10px; }
+.stat .val { font-size: 17px; }
+.meta { margin-top: 4px; }
+
+@media (max-width: 640px) {
+  .wrap { padding: 14px 12px 28px; }
+  .tabs { position: sticky; top: 0; z-index: 10; margin-bottom: 10px; }
+  .row { gap: 10px; }
+  .card { padding: 12px; }
+  header { flex-wrap: wrap; gap: 8px; }
+  header .spacer { display: none; }
+  /* 表格变成一张张可读的小卡，不再横向拖 */
+  table { display: block; width: 100%; overflow-x: visible; }
+  tbody { display: block; }
+  thead { display: none; }
+  tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 3px 10px;
+    padding: 9px 10px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  td { display: block; padding: 0; border: 0; }
+  td.who, td.preview, td.empty { grid-column: 1 / -1; }
+  td.preview { color: var(--text-mute); }
+}
+
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>状态后台</h1>
+    <h1>运行状态</h1>
     <span class="sub" id="updated">加载中…</span>
     <span class="spacer"></span>
     <a class="back" href="/admin">Agent 管理 →</a>
   </header>
 
-  <div class="row">
+  <nav class="tabs" id="statusTabs" aria-label="状态分区">
+    <button type="button" data-panel="overview" class="on">总览</button>
+    <button type="button" data-panel="sessions">对话排队</button>
+    <button type="button" data-panel="jobs">生图队列</button>
+  </nav>
+
+  <div class="row page-panel on" data-panel="overview">
     <div class="card">
       <h2>QQ bot 进程</h2>
       <div class="stat">
@@ -149,12 +229,9 @@
     </div>
   </div>
 
-  <div class="card">
-    <h2>对话轮次 · 谁在排队</h2>
-    <div class="hint">
-      「排队等并发槽」= 并发槽（QQ_MAX_CONCURRENCY）占满，这个会话在<b>干等</b>——
-      不是卡死，等前面轮次让出槽就会跑。同群的连发会被合并成一轮（攒消息中）。
-    </div>
+  <div class="card page-panel" data-panel="sessions">
+    <h2>对话排队</h2>
+    <div class="hint">等槽位不是卡死；同群连发会合并成一轮。</div>
     <table id="tblSessions">
       <thead>
         <tr>
@@ -165,9 +242,9 @@
     </table>
   </div>
 
-  <div class="card">
+  <div class="card page-panel" data-panel="jobs">
     <h2>生图队列</h2>
-    <div class="hint">全局串行：同一时刻只画一张，其余排队。「已等」从入队那刻算起。</div>
+    <div class="hint">全局串行，一张一张画。</div>
     <table>
       <thead>
         <tr>
@@ -334,5 +411,26 @@ async function refresh() {
 refresh();
 setInterval(refresh, 2000);
 </script>
+
+<script>
+(function () {
+  var tabs = document.getElementById("statusTabs");
+  if (!tabs) return;
+  function pick(name) {
+    tabs.querySelectorAll("button[data-panel]").forEach(function (btn) {
+      btn.classList.toggle("on", btn.getAttribute("data-panel") === name);
+    });
+    document.querySelectorAll(".page-panel").forEach(function (panel) {
+      panel.classList.toggle("on", panel.getAttribute("data-panel") === name);
+    });
+  }
+  tabs.addEventListener("click", function (e) {
+    var btn = e.target.closest("button[data-panel]");
+    if (btn) pick(btn.getAttribute("data-panel"));
+  });
+  pick("overview");
+})();
+</script>
+
 </body>
 </html>
