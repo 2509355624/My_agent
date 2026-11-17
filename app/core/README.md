@@ -11,8 +11,9 @@
 - 不建万能 `utils/`；路径进 `paths.py`，日志进 `logging.py`，鉴权/限流进 `security.py`。
 
 状态：`config/` 包已建立，`paths.py`、`env.py`、`llm.py`、`image.py`、
-`runtime.py` 已从旧 `app/config.py` 拆出；`runtime.py` 提供管理页可热更新的
-非密钥设置，`llm.py` 提供统一 LLM 降级链/超时/重试/预算的默认值与校验，
-`image.py` 只管生图渠道和 ComfyUI 水位，调用逻辑仍在 `app/comfy_*` 与
-`app/image_jobs.py`。其余配置域仍暂留旧文件。
+`vision.py`、`runtime.py` 已从旧 `app/config.py` 拆出；`runtime.py` 提供管理页
+可热更新的非密钥设置，`llm.py` 提供统一 LLM 降级链/超时/重试/预算的默认值与
+校验，`image.py` 管生图渠道、ComfyUI 水位和生图审核阈值，`vision.py` 管通用
+识图参数；调用逻辑仍在 `app/vision.py`、`app/image_audit.py`、
+`app/comfy_*` 与 `app/image_jobs.py`。其余配置域仍暂留旧文件。
 迁移顺序见 `docs/project-skeleton.md` 第 9 节。

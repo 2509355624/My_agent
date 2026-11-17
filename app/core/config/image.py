@@ -267,5 +267,21 @@ NAI_PROXY = os.getenv("NAI_PROXY", "")
 NAI_ENABLED = os.getenv("NAI_ENABLED", "true").lower() not in ("0", "false", "no", "")
 NAI_OPEN_ACCESS = os.getenv("NAI_OPEN_ACCESS", "true").lower() not in ("0", "false", "no", "")
 
+# ─── 生图审核（出图前最后一道闸）────────────────────
+# 单张的识图超时。**故意比 VISION_TIMEOUT 短**：
+# 识图预处理卡住只是让这轮对话慢，而审核卡住是**挡在发图这一步前面**，
+# 用户在群里干等。实测正常 1.3~2.1 秒返回，30 秒足够宽松。注意口径已改成
+# fail-closed：超时是**拦下不发**（见那个模块的注释），所以这个值往下砍等于
+# 更容易误拦——识图偶尔慢一点，本来合规的图也发不出去。别乱调短。
+IMAGE_AUDIT_TIMEOUT = float(os.getenv("IMAGE_AUDIT_TIMEOUT", "30"))
+
+# 自定义审核提示词的长度上限（字符）。审核提示词**每张图都要重发一遍**，
+# 它是尾巴的一部分、每次都全价计费，所以给个上限防手滑贴进来一整篇文章。
+# 内置默认那份约 300 字。2026-10-06 用户从 2000 放宽到 **3000**：实际那份
+# 口径已经写到 1961 字、只剩 39 字余量，改一个字就存不进去了。
+# ——别再往下砍：明细口径写不下 = 误拦变多，而误拦现在有人二审兜底
+# （见人工审核队列），比少烧几十 token 值钱得多。
+IMAGE_AUDIT_PROMPT_MAX = int(os.getenv("IMAGE_AUDIT_PROMPT_MAX", "3000"))
+
 
 __all__ = [name for name in globals() if name.isupper()]
