@@ -553,7 +553,7 @@ COMFY_RESTART_WAIT = float(os.getenv("COMFY_RESTART_WAIT", "180"))
 # 提交前等 ComfyUI 在线的上限（秒）。与上面那个的区别：COMFY_RESTART_WAIT 是
 # 「我们主动重启它、再等它回来」，这个是「它被别的进程/用户重启了，我们还没
 # 提交，先等它活」。实测重启 14~22 秒，留 120 秒够慢启动。
-COMFY_WAIT_UP = float(os.getenv("COMFY_WAIT_UP", "120"))
+COMFY_WAIT_UP = float(os.getenv("COMFY_WAIT_UP", "180"))
 
 # ─── ComfyUI 显存水位（提交前先 /free）───────────────
 #
