@@ -32,7 +32,7 @@ def _chain_head():
     if c:
         return c[0]
     return (main.LLM_PROVIDER, main.PROVIDERS[main.LLM_PROVIDER]["model"])
-import app.agents as agents
+import app.core.agents as agents
 import app.features.chat.memory as memory
 import app.tools.normal.documents as documents
 from app.main import _safe_base_filename

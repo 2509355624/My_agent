@@ -23,7 +23,7 @@ import os
 import re
 import threading
 import time
-from app.agents import session_file as _agent_session_file
+from app.core.agents import session_file as _agent_session_file
 from app.config import CONTEXT_BUDGET, CONTEXT_MAX_TURNS, physical_budget
 from app.llm import current_usage
 
@@ -479,7 +479,7 @@ def _agent_budget(agent_id):
     if not agent_id:
         return physical_budget(None, None, CONTEXT_BUDGET)
     try:
-        from app.agents import agent_config
+        from app.core.agents import agent_config
         cfg = agent_config(agent_id)
         # 顺带按 provider 封顶：QQ 侧的压缩走 save_history -> trim_window，
         # 那条路拿不到本轮 provider（也没必要拿——QQ 用的一直是 agent.json

@@ -301,7 +301,8 @@ class VisibilityTest(unittest.TestCase):
     """QQ 机器人得能看见它们（白名单），否则默认渠道也传不进来。"""
 
     def test_qq_whitelist_includes_both_anime_channels(self):
-        from app import agents
+        from app.core import agents
+        from app.core import agents as agent_store
         self.assertTrue(agents.allows_skill("qq", "anima"))
         self.assertTrue(agents.allows_skill("qq", "anima_realskin"))
 

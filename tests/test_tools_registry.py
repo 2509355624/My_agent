@@ -173,7 +173,7 @@ class ImageGenGateTest(unittest.TestCase):
         from app.tools.normal import generate_image as gi
         with mock.patch("app.qq_api.current_context",
                         return_value=("group", "111")), \
-                mock.patch("app.agents.image_gen_allowed",
+                mock.patch("app.core.agents.image_gen_allowed",
                            return_value=(False, "生图功能已被管理员全局关闭")):
             out = gi._qq_gate()
         self.assertIn("管理员", out)

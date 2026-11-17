@@ -35,7 +35,7 @@ import threading
 import unittest
 from unittest import mock
 
-import app.agents as agents
+import app.core.agents as agents
 import app.features.chat.memory as memory
 import app.features.chat.longterm as longterm
 from app.core import usage

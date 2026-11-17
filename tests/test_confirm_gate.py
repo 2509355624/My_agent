@@ -119,7 +119,7 @@ class ConsumeTest(unittest.TestCase):
         self._en = mock.patch.object(confirm_gate, "enabled",
                                      return_value=True)
         self._en.start()
-        self.allowed = mock.patch("app.agents.image_gen_allowed",
+        self.allowed = mock.patch("app.core.agents.image_gen_allowed",
                                   return_value=(True, ""))
         self.allowed.start()
         self.addCleanup(self.allowed.stop)
@@ -266,7 +266,7 @@ class ConsumeTest(unittest.TestCase):
 
     def test_gen_disallowed_between_card_and_confirm(self):
         self._pending_comfy()
-        with mock.patch("app.agents.image_gen_allowed",
+        with mock.patch("app.core.agents.image_gen_allowed",
                         return_value=(False, "生图被关了")):
             reply = confirm_gate.consume_if_confirmed("group", "123", "好")
         self.assertIn("生图被关了", reply)
@@ -280,7 +280,7 @@ class ConsumeTest(unittest.TestCase):
             "note": "",
         }
         job = mock.Mock()
-        with mock.patch("app.agents.nai_allowed",
+        with mock.patch("app.core.agents.nai_allowed",
                         return_value=(True, "")), \
              mock.patch("app.image_jobs.enqueue",
                         return_value=(job, None)) as en, \
@@ -378,11 +378,11 @@ class DisabledByDefaultTest(unittest.TestCase):
 
     def test_defaults_to_disabled(self):
         """settings 里没这个键 = 关（绝不在热路径上因为缺配置把生图卡住）。"""
-        with mock.patch("app.agents.load_settings", return_value={}):
+        with mock.patch("app.core.agents.load_settings", return_value={}):
             self.assertFalse(confirm_gate.enabled())
 
     def test_settings_key_turns_it_on(self):
-        with mock.patch("app.agents.load_settings",
+        with mock.patch("app.core.agents.load_settings",
                         return_value={"confirm_gate_enabled": True}):
             self.assertTrue(confirm_gate.enabled())
 

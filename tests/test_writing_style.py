@@ -18,7 +18,7 @@ from unittest import mock
 
 from flask import Flask, jsonify
 
-import app.agents as agents
+import app.core.agents as agents
 import app.persona as persona
 import app.persona_api as persona_api
 from app.features.persona import writing_style

@@ -10,7 +10,8 @@ Agent System Prompt
 
 import os
 from datetime import datetime
-from app import agents as agent_store
+from app.core import agents
+from app.core import agents as agent_store
 from app.core.skills import list_skills, load_skill, skill_summary
 from app.tools.registry import TOOLS
 
@@ -628,7 +629,7 @@ def sync_session_system(agent_id=None, session_key=None):
     真的变了时才付。
     """
     from app.features.chat.memory import load_history, peek_system, save_history
-    from app.agents import session_file as _session_file
+    from app.core.agents import session_file as _session_file
 
     key = agent_store.safe_agent_id(agent_id) or "_default"
     ckey = (key, session_key or "")

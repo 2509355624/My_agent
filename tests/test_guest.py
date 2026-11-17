@@ -34,7 +34,8 @@ class GuestBase(unittest.TestCase):
         # 直接 `persona.save_cards([...])`——`_cards_path()` 走的是
         # `agents.agent_dir()`，于是**把用户真正的 11 张卡覆盖成了 1 张**。
         # 从那以后，凡是碰 `save_cards` 的测试都必须先 patch `AGENTS_DIR`。
-        from app import agents
+        from app.core import agents
+        from app.core import agents as agent_store
         root = os.path.join(self.tmp.name, "agents")
         os.makedirs(root, exist_ok=True)
         pa = mock.patch.object(agents, "AGENTS_DIR", root)

@@ -19,7 +19,7 @@ import unittest
 from unittest import mock
 
 import app.agent as agent
-import app.agents as agents
+import app.core.agents as agents
 from app.features.image import comfy_status
 import app.features.chat.longterm as longterm
 import app.features.chat.memory as memory

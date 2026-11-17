@@ -12,7 +12,8 @@ from unittest import mock
 
 from PIL import Image
 
-from app import agents
+from app.core import agents
+from app.core import agents as agent_store
 from app.features.image import nai
 
 

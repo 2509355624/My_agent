@@ -230,7 +230,7 @@ def resolve_prompt(agent_id):
     也不该因为读配置出岔子就变成不审。
     """
     try:
-        from app.agents import image_audit_prompt
+        from app.core.agents import image_audit_prompt
         return image_audit_prompt(agent_id) or _PROMPT
     except Exception as exc:
         log.warning("读自定义审核提示词失败，用内置默认：%s", exc)
@@ -373,7 +373,7 @@ def allow_send(path, agent_id, target, target_id, notify=True, meta=None):
     后收尾的那张就掉回 QQ 分支被审（16:26 实测 9J74 第 3 页被拦、第 4 页
     正常，就是这个竞态）。QQ 号是纯数字，`web_` 前缀不会撞上真会话。
     """
-    from app.agents import image_audit_enabled
+    from app.core.agents import image_audit_enabled
 
     if target is None:
         return True

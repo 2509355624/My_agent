@@ -15,7 +15,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-import app.agents as agents
+import app.core.agents as agents
 import app.main as main
 import app.qq_bot as qq_bot
 

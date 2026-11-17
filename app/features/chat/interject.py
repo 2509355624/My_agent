@@ -64,7 +64,8 @@ import random
 import threading
 import time
 
-from app import agents as agent_store
+from app.core import agents
+from app.core import agents as agent_store
 from app.features.chat import recent
 from app.core import usage
 from app.config import (

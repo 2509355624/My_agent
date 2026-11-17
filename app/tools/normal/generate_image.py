@@ -347,7 +347,7 @@ def _qq_gate():
     别让整轮变成工具执行失败。
     """
     from app import qq_api
-    from app.agents import image_gen_allowed, image_quota_allowed
+    from app.core.agents import image_gen_allowed, image_quota_allowed
     target, target_id = qq_api.current_context()
     if target is None:
         return None
@@ -406,7 +406,7 @@ def _quota_balance(target_id, used):
     限流关掉 / 免额名单里时不返回：那种情况下没数可报，硬加一句「不限量」
     只会挤掉真正要说的那句「画好会自动发」。
     """
-    from app.agents import (private_image_daily_limit,
+    from app.core.agents import (private_image_daily_limit,
                             private_image_quota_whitelist)
     limit = private_image_daily_limit(QQ_AGENT_ID)
     if limit <= 0 or str(target_id) in private_image_quota_whitelist(QQ_AGENT_ID):
@@ -525,7 +525,8 @@ def _receipt_text(ahead, skill=None, waiting=False, preset=""):
     这时状态句换成「正在重启，上线就画」，且**不报排在第几**——前面那几张也在
     等同一台机器，报个「前面还有 3 张」只会让人以为它在慢慢挪。
     """
-    from app import agents as agent_store
+    from app.core import agents
+    from app.core import agents as agent_store
     if waiting:
         lines = [_RECEIPT_WAITING]
     else:
@@ -1048,7 +1049,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     if skill in image_jobs.NAI_SKILLS:
         from app.features.image import nai
         from app import qq_api
-        from app.agents import nai_allowed
+        from app.core.agents import nai_allowed
         # 种子这事儿到 NAI 门口就停：它是云端出的图，模型版本、参数都在别人
         # 机器上，同一个数在 NAI 那边不保证还是同一张图（用户 2026-10-02 明确
         # 「NAI 加种子无意义」）。但**必须明说**，不能默默忽略——不然对方以为

@@ -10,7 +10,8 @@ import re
 from app.core.cancel import is_cancelled
 from app.llm import (call_llm_stream, candidates, current_stream_meta,
                      current_usage, get_effective_config)
-from app import agents as agent_store
+from app.core import agents
+from app.core import agents as agent_store
 from app.features.chat.memory import trim_history
 from app.tools import execute_tool
 

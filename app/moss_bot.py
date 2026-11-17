@@ -793,7 +793,7 @@ def _do_album(target, target_id, sid, page_id, rest, reply_to):
         _say(target, target_id, "这个范围里没有页（一共 %d 页）" % len(line), reply_to)
         return
 
-    from app.agents import image_send_format
+    from app.core.agents import image_send_format
     try:
         fmt = image_send_format(QQ_AGENT_ID, target, target_id)
     except Exception:                           # noqa: BLE001
@@ -933,7 +933,7 @@ def _send_image(target, target_id, rel, caption, reply_to="", sender_uin=None):
     却没用，结果文字回执引用着、图本身裸发——用户要的就是图跟着引用回来。
     """
     from app.features.image import audit as image_audit
-    from app.agents import image_send_format
+    from app.core.agents import image_send_format
 
     # 网页模式：图已经落在磁盘上了，前端自己去 `/api/persona/comic` 取，
     # 这里只要保证文件可取就行——**不过图审、不进 QQ 发送队列**。

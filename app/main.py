@@ -13,7 +13,8 @@ import time
 import requests
 from flask import (Flask, request, jsonify, send_from_directory, send_file,
                    Response, stream_with_context)
-from app import agents as agent_store
+from app.core import agents
+from app.core import agents as agent_store
 from app.core import cancel as cancel_mod
 from app.features.image import comfy_out
 from app.features.image import audit as image_audit
@@ -2258,7 +2259,7 @@ def set_agent_session_prompt(agent_id, session_key):
 
     borrow = str(body.get("agent") or "").strip()
     if borrow:
-        from app.agents import safe_agent_id
+        from app.core.agents import safe_agent_id
         if safe_agent_id(borrow) is None or borrow not in {
                 a["id"] for a in agent_store.list_agents()}:
             return jsonify({"error": "要借用的 agent 不存在：" + borrow}), 400

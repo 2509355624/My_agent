@@ -1797,7 +1797,8 @@ def _digits_only(v):
 
 def _cards_path():
     """卡库落在 agent 自己目录下（`agents/` 整个被 gitignore，卡是私有数据）。"""
-    from app import agents
+    from app.core import agents
+    from app.core import agents as agent_store
     d = agents.agent_dir(QQ_AGENT_ID)
     if not d:
         return None
@@ -2054,7 +2055,7 @@ def save_cards(cards, force=False):
     old_by_id = {str(c.get("id") or ""): c for c in old}
     builtins = [c for c in old if is_builtin_card(c)]
 
-    from app.agents import _atomic_write_text
+    from app.core.agents import _atomic_write_text
     out, seen = [], set()
     for c in (cards or []):
         if not isinstance(c, dict):
@@ -2153,7 +2154,7 @@ def _write_cards_raw(cards):
     path = _cards_path()
     if not path:
         return False
-    from app.agents import _atomic_write_text
+    from app.core.agents import _atomic_write_text
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -2354,7 +2355,7 @@ def _write_user_cards(qq, cards):
     path = user_cards_path(qq)
     if not path:
         return False
-    from app.agents import _atomic_write_text
+    from app.core.agents import _atomic_write_text
     owner = _digits_only(qq)
     out = []
     for c in cards or []:
@@ -2623,7 +2624,7 @@ def _save_state(state, deleted=None):
         if dt > mt:
             mine["turn_total"] = dt
 
-    from app.agents import _atomic_write_text
+    from app.core.agents import _atomic_write_text
     parent = os.path.dirname(_STATE_PATH)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -2747,7 +2748,7 @@ def _erase(session_key):
         except OSError:
             log.exception("清空历史失败 %s", path)
             try:
-                from app.agents import _atomic_write_text
+                from app.core.agents import _atomic_write_text
                 _atomic_write_text(path, "")
             except Exception:
                 log.exception("清空历史时连写空文件都失败 %s", path)
@@ -3730,7 +3731,8 @@ def _hist_path(session_key):
     角色开口就串味；切出去以后生图机器人又得读一遍角色说过的话。
     文件名带 `persona_` 前缀，管理页里能一眼分出来。
     """
-    from app import agents
+    from app.core import agents
+    from app.core import agents as agent_store
     if not _SAFE_KEY.match(session_key or ""):
         return None
     d = agents.agent_dir(QQ_AGENT_ID)
@@ -3763,7 +3765,7 @@ def _save_hist(session_key, msgs):
     path = _hist_path(session_key)
     if not path:
         return
-    from app.agents import _atomic_write_text
+    from app.core.agents import _atomic_write_text
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -7461,7 +7463,7 @@ def _save_archive(session_key, rows):
     p = _archive_path(session_key)
     if not p:
         return
-    from app.agents import _atomic_write_text
+    from app.core.agents import _atomic_write_text
     parent = os.path.dirname(p)
     if parent:
         os.makedirs(parent, exist_ok=True)

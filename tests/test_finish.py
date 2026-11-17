@@ -17,7 +17,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-import app.agents as agents
+import app.core.agents as agents
 import app.persona as persona
 
 

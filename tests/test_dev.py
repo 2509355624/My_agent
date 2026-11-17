@@ -131,7 +131,7 @@ class DevSettleTest(unittest.TestCase):
         import os
         import tempfile
         from unittest import mock
-        import app.agents as agents
+        import app.core.agents as agents
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         root = os.path.join(self.tmp.name, "agents")

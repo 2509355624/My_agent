@@ -20,7 +20,7 @@ import time
 import unittest
 from unittest import mock
 
-import app.agents as agents
+import app.core.agents as agents
 from app.features.image import comfy_status
 from app.features.image import out as image_out
 import app.features.qq.notify as notify

@@ -75,7 +75,7 @@ _CAPTION_NOTE_DEFAULT = "引用这张图：「提取提示词」拿原词 ｜ �
 def _caption_note_text():
     """这段附言的当前内容：管理页设了就用设的（空串 = 不要附言），没设用默认。"""
     try:
-        from app.agents import caption_note
+        from app.core.agents import caption_note
         note = caption_note(QQ_AGENT_ID)
     except Exception:                        # 配置读坏了也不能把发图这一路弄断
         return _CAPTION_NOTE_DEFAULT
@@ -116,7 +116,7 @@ def _send_image(target, target_id, filename, tag="", skill="", seed=None,
     from app import qq_api
     from app.features.image import audit as image_audit
     from app.features.image import out as image_out
-    from app.agents import image_send_format
+    from app.core.agents import image_send_format
     fmt = image_send_format(QQ_AGENT_ID, target, target_id)
     path = image_out.prepare_for_send(filename, fmt)
     # caption 提到审核**之前**算：被拦时它要跟着图一起进人工二审队列，管理员

@@ -200,7 +200,8 @@ def active_choice(agent_id=None):
     不指定 model 时用它自己的 deepseek-flash）。
     """
     try:
-        from app import agents as agent_store
+        from app.core import agents
+        from app.core import agents as agent_store
         pid, model = agent_store.vision_choice(agent_id or QQ_AGENT_ID)
     except Exception:                    # noqa: BLE001
         # 配置层坏了不该让识图跟着挂——退回 .env，行为与改动前完全一致。

@@ -654,7 +654,7 @@ class ReceiptTest(unittest.TestCase):
              mock.patch.object(image_out, "prepare_for_send",
                                lambda f, fmt="jpg": next(paths)), \
              mock.patch("app.features.image.audit.allow_send", return_value=True), \
-             mock.patch("app.agents.image_send_format", return_value="jpg"), \
+             mock.patch("app.core.agents.image_send_format", return_value="jpg"), \
              mock.patch.object(qq_api, "send_image", fake_send):
             moss_bot._render_and_send("group", "1103174141", self.sid,
                                       self.page,
@@ -705,7 +705,7 @@ class AlbumTest(unittest.TestCase):
              mock.patch.object(moss_api, "_page_file",
                                lambda d, n: "x/%s.png" % d), \
              mock.patch.object(image_out, "prepare_for_send", fake_prepare), \
-             mock.patch("app.agents.image_send_format", return_value="jpg"), \
+             mock.patch("app.core.agents.image_send_format", return_value="jpg"), \
              mock.patch.object(qq_api, "send_forward",
                                lambda t, i, nodes: sent.append(nodes)), \
              mock.patch.object(moss_bot, "_say",
@@ -742,7 +742,7 @@ class AlbumTest(unittest.TestCase):
              mock.patch.object(moss_api, "_page_file", lambda d, n: "x.png"), \
              mock.patch.object(image_out, "prepare_for_send",
                                lambda rel, fmt=None: "C:/a.jpg"), \
-             mock.patch("app.agents.image_send_format", return_value="jpg"), \
+             mock.patch("app.core.agents.image_send_format", return_value="jpg"), \
              mock.patch.object(qq_api, "send_forward",
                                mock.Mock(side_effect=RuntimeError(
                                    "OneBot 调用失败 send_group_forward_msg: "

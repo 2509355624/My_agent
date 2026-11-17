@@ -351,7 +351,7 @@ class AuditHookTest(unittest.TestCase):
              mock.patch.object(image_audit, "check",
                                return_value=Verdict(False, reason="走光",
                                                     category="clothing")), \
-             mock.patch("app.agents.image_audit_enabled",
+             mock.patch("app.core.agents.image_audit_enabled",
                         return_value=True), \
              mock.patch("app.qq_api.send_group") as sg:
             ok = image_audit.allow_send(path, "qq", "group", "233",
@@ -375,7 +375,7 @@ class AuditHookTest(unittest.TestCase):
             f.write(b"x")
         with mock.patch.object(image_audit, "check",
                                return_value=Verdict(False, reason="x")), \
-             mock.patch("app.agents.image_audit_enabled", return_value=True), \
+             mock.patch("app.core.agents.image_audit_enabled", return_value=True), \
              mock.patch("app.features.image.review.record",
                         side_effect=OSError("disk full")), \
              mock.patch("app.qq_api.send_group") as sg:
@@ -387,7 +387,7 @@ class AuditHookTest(unittest.TestCase):
         from app.features.image import audit as image_audit
         with mock.patch.object(image_audit, "check",
                                return_value=Verdict(True)), \
-             mock.patch("app.agents.image_audit_enabled", return_value=True), \
+             mock.patch("app.core.agents.image_audit_enabled", return_value=True), \
              mock.patch("app.features.image.review.record") as rec:
             self.assertTrue(image_audit.allow_send("x.jpg", "qq", "group", "233"))
         self.assertFalse(rec.called)

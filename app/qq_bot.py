@@ -147,7 +147,7 @@ def _session_prompt_extra(session_key):
     键 session_prompts = {"group_<群号>": "...", "private_<QQ号>": "..."}；
     没配或空串 = 用默认人设，不打折。
     """
-    from app.agents import load_settings
+    from app.core.agents import load_settings
     try:
         prompts = load_settings(QQ_AGENT_ID).get("session_prompts") or {}
     except Exception:
@@ -161,7 +161,8 @@ def _session_prompt_agent(session_key):
     配了就用那个 agent 的**完整**稳定层 system prompt 当基底（整个换人，
     不只是加一段）；没配 / 配了自己 / 配了个不存在的 id = 回默认人设。
     """
-    from app import agents as agent_store
+    from app.core import agents
+    from app.core import agents as agent_store
     try:
         m = (agent_store.load_settings(QQ_AGENT_ID)
              .get("session_prompt_agents") or {})
@@ -183,7 +184,7 @@ def _session_system_prompt(session_key):
     想给某个群 / 私聊单独改人设就走这里。别整份替换——那会把工具目录和
     Skill 目录写成快照，之后加工具加技能就全对不上了。
     """
-    from app.agents import load_settings
+    from app.core.agents import load_settings
     try:
         m = load_settings(QQ_AGENT_ID).get("session_system_prompts") or {}
     except Exception:
@@ -260,7 +261,7 @@ def _stable_blocks(session_key, aid=QQ_AGENT_ID):
     # 882 字钉在头里纯属死重（2026-10-04 白名单砍到 4 个生图工具后补的判据）。
     # 只在 QQ 自己的头像限内注入：表情包库是 QQ 机器人的库存，被借的 agent
     # 没有这一套，塞清单等于给它一份并不存在的素材目录。
-    from app.agents import allows_tool
+    from app.core.agents import allows_tool
     menu = (stickers.catalog(aid)
             if (aid == QQ_AGENT_ID
                 and allows_tool(aid, "send_sticker")) else "")
@@ -795,7 +796,7 @@ def _private_gate(user_id):
     （用户 2026-09-26 加的需求，方便临时放开）。
     load_settings 按 mtime 缓存，管理页改完下一条消息就生效。
     """
-    from app.agents import load_settings
+    from app.core.agents import load_settings
     try:
         s = load_settings(QQ_AGENT_ID)
     except Exception:
@@ -819,11 +820,12 @@ def _private_gate(user_id):
 def _at_only_groups():
     """本 agent 设成「只认 @」的群（settings.json 的 at_only_groups）。
 
-    循环导入：`app.agents` 只在函数里取——跟本模块其它地方一个写法。
+    循环导入：`app.core.agents` 只在函数里取——跟本模块其它地方一个写法。
     读盘失败（设置文件坏了）返回空集而不是抛错：它在每轮消息的热路径上，
     宁可退回全局规则（关键词照旧生效），也不能让消息处理整个挂掉。
     """
-    from app import agents as agent_store
+    from app.core import agents
+    from app.core import agents as agent_store
     try:
         return agent_store.at_only_groups(QQ_AGENT_ID)
     except Exception:
@@ -838,7 +840,8 @@ def _groups_muted():
     一律不接，私聊才理。存 true = 所有群静音；存一组群号 = 只静音这几个。
     读盘失败返回 False（不静音）——热路径上宁可多回一句也不能整条链路挂掉。
     """
-    from app import agents as agent_store
+    from app.core import agents
+    from app.core import agents as agent_store
     try:
         return agent_store.groups_muted(QQ_AGENT_ID)
     except Exception:
@@ -1739,7 +1742,7 @@ class SessionRunner:
         # 借用线同样跳过：被借的 agent 不受这份私聊额度约束。
         if not borrowed:
             try:
-                from app.agents import image_quota_line
+                from app.core.agents import image_quota_line
                 quota_line = image_quota_line(QQ_AGENT_ID, self.target,
                                               self.target_id)
                 if quota_line:
@@ -2044,7 +2047,7 @@ class SessionRunner:
         `status_key` 非空 = 在卡片底部附一条「此刻」窄条（自由模式用；
         攻略模式已经有 `tail_line` 状态块，调用方传空串，别叠两遍）。
         """
-        from app.agents import image_send_format
+        from app.core.agents import image_send_format
         send_text = (qq_api.send_group if self.target == "group"
                      else qq_api.send_private)
         spoke = False

@@ -667,7 +667,8 @@ class VisibilityTest(unittest.TestCase):
     """QQ 机器人得能看见四个渠道，否则默认渠道也传不进来。"""
 
     def test_qq_whitelist_includes_all_four(self):
-        from app import agents
+        from app.core import agents
+        from app.core import agents as agent_store
         for name in CHANNELS:
             self.assertTrue(agents.allows_skill("qq", name), name)
 
@@ -946,7 +947,8 @@ class HdChannelTest(unittest.TestCase):
         忘了把它写进白名单**是这类改动最容易踩的坑（模型描述里写了，
         白名单却没有，结果点名 hd_* 直接被 `allows_skill` 拒）。
         """
-        from app import agents
+        from app.core import agents
+        from app.core import agents as agent_store
         for name in HD_CHANNELS:
             self.assertTrue(agents.allows_skill("qq", name), name)
 
@@ -1404,7 +1406,8 @@ class Krea2ChannelTest(unittest.TestCase):
         `allows_skill()` **只认** `agents/*/agent.json` 的 skills 白名单：
         目录建了、工具描述写了，白名单漏了照样点不到（会被静默降级成 silver）。
         """
-        from app import agents
+        from app.core import agents
+        from app.core import agents as agent_store
         for agent_id in ("qq", "draw"):
             for name in KREA2_CHANNELS:
                 self.assertTrue(agents.allows_skill(agent_id, name),
@@ -2257,7 +2260,8 @@ class AnimaLoraChannelTest(unittest.TestCase):
         漏了 `agents/qq/agent.json` 那一份 = 模型看不见，就算传了 skill 也会被
         静默降级成默认档（2026-10-06 silver 实录）。
         """
-        from app import agents
+        from app.core import agents
+        from app.core import agents as agent_store
         from app.direct_gen import _allowed_skills
         allowed = _allowed_skills()
         for name in self.NAMES:
@@ -2439,7 +2443,9 @@ class Anima2sChannelTest(unittest.TestCase):
 
     def test_qq_and_persona_both_use_it(self):
         from app.features.image import char_loras
-        from app import agents, persona
+        from app.core import agents
+        from app.core import agents as agent_store
+        from app import (persona)
         from app.direct_gen import _allowed_skills
         self.assertTrue(agents.allows_skill("qq", self.NAME))
         self.assertIn(self.NAME, _allowed_skills())
@@ -2475,7 +2481,8 @@ class AnimaGuizhencaoTest(unittest.TestCase):
         self.assertEqual(data["kind"], "生图", self.NAME)
 
     def test_qq_can_see_and_use_it(self):
-        from app import agents
+        from app.core import agents
+        from app.core import agents as agent_store
         from app.direct_gen import _allowed_skills
         self.assertTrue(agents.allows_skill("qq", self.NAME), self.NAME)
         self.assertIn(self.NAME, _allowed_skills())

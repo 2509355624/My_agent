@@ -13,7 +13,7 @@ from unittest import mock
 
 import requests
 
-import app.agents as agents
+import app.core.agents as agents
 from app.features.image import comfy_src
 from app import image_jobs
 from app.features.image import log as image_log
@@ -3036,7 +3036,8 @@ class QqWhitelistTest(unittest.TestCase):
         "image_gen_v1_hires", "nsfw_pose_gen", "pose_library")
 
     def test_qq_whitelist_matches_the_offered_channels(self):
-        from app import agents
+        from app.core import agents
+        from app.core import agents as agent_store
         for name in self.VISIBLE:
             self.assertTrue(agents.allows_skill("qq", name), name)
         for name in self.HIDDEN:

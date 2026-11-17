@@ -306,7 +306,8 @@ class OutputTest(unittest.TestCase):
 
 class VisibilityTest(unittest.TestCase):
     def test_qq_whitelist_includes_it(self):
-        from app import agents
+        from app.core import agents
+        from app.core import agents as agent_store
         self.assertTrue(agents.allows_skill("qq", CHANNEL))
 
     def test_skill_list_shows_it_as_a_character_channel(self):

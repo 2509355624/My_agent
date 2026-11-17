@@ -13,7 +13,8 @@ from unittest import mock
 
 sys.path.insert(0, ".")
 
-from app import agents as agent_store         # noqa: E402
+from app.core import agents
+from app.core import agents as agent_store
 from app.features.qq import stickers                      # noqa: E402
 from app.tools.normal import collect_sticker  # noqa: E402
 

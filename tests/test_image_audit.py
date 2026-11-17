@@ -26,7 +26,9 @@ from unittest import mock
 
 sys.path.insert(0, ".")
 
-from app import agents, main  # noqa: E402
+from app.core import agents
+from app.core import agents as agent_store
+from app import main  # noqa: E402
 from app.features.image import audit as image_audit
 
 
@@ -719,7 +721,7 @@ class SendHookTest(unittest.TestCase):
         with mock.patch("app.features.image.out.prepare_for_send",
                         return_value="D:/fake/out.jpg"), \
              mock.patch.object(image_jobs, "QQ_AGENT_ID", "qq"), \
-             mock.patch("app.agents.image_send_format", return_value="jpg"), \
+             mock.patch("app.core.agents.image_send_format", return_value="jpg"), \
              mock.patch("app.features.image.audit.allow_send", return_value=allow), \
              mock.patch("app.qq_api.send_image") as send:
             rv = image_jobs._send_image("group", "123", "Anima_1_.png")

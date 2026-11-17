@@ -17,7 +17,7 @@ import time
 import unittest
 from unittest import mock
 
-import app.agents as agents
+import app.core.agents as agents
 import app.features.chat.memory as memory
 import app.features.chat.agent_prompt as prompt_mod
 
@@ -384,7 +384,8 @@ class PersonaTrimmedTest(unittest.TestCase):
     """
 
     def _persona(self):
-        from app import agents as agent_store
+        from app.core import agents
+        from app.core import agents as agent_store
         return agent_store.persona_text("qq")
 
     def test_persona_is_small(self):
@@ -422,20 +423,23 @@ class GroupsMutedTest(unittest.TestCase):
     """群聊总开关：开了所有群都不回，私聊照常（当纯私人工具用）。"""
 
     def test_settings_true_mutes_every_group(self):
-        from app import agents as agent_store
+        from app.core import agents
+        from app.core import agents as agent_store
         with mock.patch.object(agent_store, "load_settings",
                                return_value={"groups_muted": True}):
             self.assertIs(agent_store.groups_muted("qq"), True)
 
     def test_settings_list_mutes_only_those(self):
-        from app import agents as agent_store
+        from app.core import agents
+        from app.core import agents as agent_store
         with mock.patch.object(agent_store, "load_settings",
                                return_value={"groups_muted": ["111", "222"]}):
             got = agent_store.groups_muted("qq")
             self.assertEqual(got, {"111", "222"})
 
     def test_absent_means_not_muted(self):
-        from app import agents as agent_store
+        from app.core import agents
+        from app.core import agents as agent_store
         with mock.patch.object(agent_store, "load_settings", return_value={}):
             self.assertFalse(agent_store.groups_muted("qq"))
 
@@ -474,7 +478,8 @@ class GroupsMutedTest(unittest.TestCase):
 
     def test_bot_gate_returns_reason(self):
         import app.qq_bot as qb
-        from app import agents as agent_store
+        from app.core import agents
+        from app.core import agents as agent_store
         ev = {"user_id": "1"}
         with mock.patch.object(qb, "_groups_muted", return_value=True):
             ok, why = qb._should_reply(ev, "group", "999", "大大怪", True)
@@ -488,7 +493,8 @@ class GroupsMutedTest(unittest.TestCase):
         别在前端另算：那份可能是 True 也可能是群号列表（只静音部分群），
         两种都算「开」，前端只判布尔。
         """
-        from app import agents as agent_store
+        from app.core import agents
+        from app.core import agents as agent_store
         with open("app/main.py", encoding="utf-8") as f:
             src = f.read()
         self.assertIn('"groups_muted_on"', src,

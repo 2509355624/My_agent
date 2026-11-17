@@ -33,7 +33,8 @@ import os
 import threading
 import time
 
-from app import agents as agent_store
+from app.core import agents
+from app.core import agents as agent_store
 from app.core import usage
 from app.config import QQ_MEMORY_DIGEST_TIMEOUT
 from app.llm import call_llm

@@ -24,7 +24,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-import app.agents as agents
+import app.core.agents as agents
 import app.config as config
 import app.image_jobs as image_jobs
 from app.features.image import quota as image_quota

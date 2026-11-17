@@ -40,7 +40,8 @@ def enabled():
     别让设置文件的问题把生图整个卡住。
     """
     try:
-        from app import agents
+        from app.core import agents
+        from app.core import agents as agent_store
         from app.config import QQ_AGENT_ID
         return bool(agents.load_settings(QQ_AGENT_ID)
                     .get("confirm_gate_enabled"))
@@ -206,13 +207,13 @@ def consume_if_confirmed(target, target_id, text):
                  (text or "")[:40])
         return None
     from app import image_jobs
-    from app.agents import image_gen_allowed
+    from app.core.agents import image_gen_allowed
     from app.tools.normal import generate_image as gi
     ok, why = image_gen_allowed(gi.QQ_AGENT_ID, target, target_id)
     if not ok:
         return "错误：" + why + "，这张不放行了。"
     if pend["kind"] == "nai":
-        from app.agents import nai_allowed
+        from app.core.agents import nai_allowed
         ok, why = nai_allowed(gi.QQ_AGENT_ID, target, target_id)
         if not ok:
             return "错误：" + why + "，这张不放行了。"

@@ -11,7 +11,9 @@ from unittest import mock
 import flask
 
 from app.gateways import guest
-from app import agents, persona
+from app.core import agents
+from app.core import agents as agent_store
+from app import (persona)
 from app.features.admin import routes as persona_admin_api
 
 

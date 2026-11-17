@@ -11,7 +11,9 @@ from unittest import mock
 
 import flask
 
-from app import agents, llm, persona, persona_api
+from app.core import agents
+from app.core import agents as agent_store
+from app import (llm, persona, persona_api)
 
 QQ = "2509355624"
 

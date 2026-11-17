@@ -8,7 +8,8 @@ import os
 import unittest
 from unittest import mock
 
-from app import agents as agent_store
+from app.core import agents
+from app.core import agents as agent_store
 from app.features.qq import stickers
 
 

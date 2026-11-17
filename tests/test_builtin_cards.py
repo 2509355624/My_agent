@@ -13,7 +13,9 @@ import tempfile
 import unittest
 from unittest import mock
 
-from app import agents, persona
+from app.core import agents
+from app.core import agents as agent_store
+from app import (persona)
 
 
 BUILTIN = "izumi_sagiri"
