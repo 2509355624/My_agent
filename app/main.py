@@ -842,77 +842,24 @@ _NOTE_TEXT_MAX = 400
 
 
 
-@app.route("/admin")
-def admin_page():
-    """agent 管理页（独立页面，不动 index.html）。"""
-    return send_from_directory(WEB_DIR, "admin.html")
+from app.web import pages
+app.register_blueprint(pages.bp)
 
 
-@app.route("/status")
-def status_page():
-    """状态后台：队列 / 轮次 / ComfyUI / NapCat 的实时看板。"""
-    return send_from_directory(WEB_DIR, "status.html")
 
 
-@app.route("/comic")
-def comic_page():
-    """漫画工作台：编剧 → 逐格渲染 → 加气泡（见 app/comic_api.py）。"""
-    return send_from_directory(WEB_DIR, "comic_studio.html")
 
 
-@app.route("/comic_admin")
-def comic_admin_page():
-    """群友漫画台管理：独立页面，不塞在 /admin 的 QQ 机器人卡片里。
-
-    只在 5174 开：5175 不反代这个路径，群友也拿不到 /api/comic/admin 的数据。
-    """
-    return send_from_directory(WEB_DIR, "comic_admin.html")
 
 
-@app.route("/comic_works")
-def comic_works_page():
-    """群友作品浏览：站主按账号翻群友跑的漫画 / 写真作品集（只读）。
-
-    和 /comic_admin 同一信任边界——只在 5174 开，5175 不反代这个路径；数据
-    走 /api/comic/works，那个接口还会再挡一次群友态（5175 是通配反代）。
-    """
-    return send_from_directory(WEB_DIR, "comic_works.html")
 
 
-@app.route("/moss")
-def moss_comic_page():
-    """moss 漫画台：一句话 → 编剧写整页 → 一次出图（见 app/moss_api.py）。"""
-    return send_from_directory(WEB_DIR, "moss_studio.html")
 
 
-@app.route("/persona")
-def persona_page():
-    """网页端角色扮演（2026-11-03）。
-
-    三栏：左选角色 / 中聊天 / 右看状态。和 QQ 用同一套 `persona` 引擎，
-    见 `app/persona_api.py`。
-    """
-    return send_from_directory(WEB_DIR, "persona.html")
 
 
-@app.route("/novel")
-def novel_page():
-    """小说模式：丧尸末日生存模拟（见 app/novel.py、app/novel_api.py）。
-
-    独立的第三套页面，左边玩法列表、中间小说正文、右边纯事实状态卡；
-    跟 /persona 的好感数值条没有任何关系。
-    """
-    return send_from_directory(WEB_DIR, "novel.html")
 
 
-@app.route("/novel_admin")
-def novel_admin_page():
-    """小说模式记录：站主按 QQ 翻别人写了什么（只读）。
-
-    跟 `/comic_admin` 同一个信任边界——只在 5174 开，5175 不反代这个路径；
-    接口 `/api/novel/admin/*` 还会再挡一次群友态（5175 是通配反代）。
-    """
-    return send_from_directory(WEB_DIR, "novel_admin.html")
 
 
 @app.after_request
@@ -945,89 +892,18 @@ def _no_cache_persona(resp):
     return resp
 
 
-@app.route("/persona_admin")
-def persona_admin_page():
-    """角色扮演查看台（2026-11-03）：谁玩过、聊了什么。
-
-    只在 5174，且 5174 不对外——公网只映射 5175 的网关。同 `admin` / `comic`
-    那些管理页一个口径。
-    """
-    return send_from_directory(WEB_DIR, "persona_admin.html")
 
 
-@app.route("/compat")
-def compat_page():
-    """兼容自检（2026-11-03）。
-
-    群友反馈「看不到输入框」，但不同手机/浏览器表现不一样。这一页把
-    UA、视口实测值、各特性是否支持全列出来，让问题可以截图定位，
-    不用靠猜。
-    """
-    return send_from_directory(WEB_DIR, "compat.html")
 
 
-@app.route("/output")
-def output_page():
-    """图片管理台：ComfyUI output 目录的网页资源管理器（见 app/output_api.py）。"""
-    return send_from_directory(WEB_DIR, "output_manager.html")
 
 
-@app.route("/characters")
-def characters_page():
-    """人设卡池：QQ 角色扮演用的人设卡（见 app/persona.py）。"""
-    return send_from_directory(WEB_DIR, "characters.html")
 
 
-@app.route("/api/characters")
-def api_get_characters():
-    """读卡库。卡库是**整表**读写的：卡的数量是几张、几十张的量级，
-    整表替换比逐张 diff 简单得多，也不会出现半张卡存进去的状态。
-    """
-    from app.features.persona import service as persona
-    from app.features.chat import background as chat_bg
-    cards = persona.load_cards()
-    for c in cards:
-        c["background"] = chat_bg.info("card", str(c.get("id") or ""))
-    return jsonify({"cards": cards})
+from app.features.persona import cards_api
+app.register_blueprint(cards_api.bp)
 
 
-@app.route("/api/characters", methods=["PUT"])
-def api_put_characters():
-    """整表覆盖卡库。规范化（补字段 / 丢空名 / 去重 id）在 persona 里做。
-
-    **只影响卡库，不动任何正在进行的会话**：某条会话线正在演的角色要是被
-    删了，下一次说话时 `persona.active_card` 会取不到卡，自动退回生图机器人
-    （不需要额外清理）。
-
-    **批量删除闸**（2026-11-04 深夜）：整表覆盖 + 前端列表被截断 = 静默删卡。
-    实测丢过 14 张。现在 `save_cards` 在「提交的卡不到磁盘一半」时抛
-    `SaveCardsRejected`，这里把它变成 409 回给前端。想真删一批要带
-    `{"force": true}`——故意多一个词，让「删掉一大片」变成一个有意识的动作。
-    """
-    from app.features.persona import service as persona
-    from app.features.chat import background as chat_bg
-    data = request.get_json(silent=True) or {}
-    cards = data.get("cards")
-    if not isinstance(cards, list):
-        return jsonify({"ok": False, "error": "cards 必须是列表"}), 400
-    try:
-        ok = persona.save_cards(cards, force=bool(data.get("force")))
-    except persona.SaveCardsRejected as e:
-        return jsonify({
-            "ok": False,
-            "error": str(e),
-            "rejected": True,
-            "oldCount": e.old_n,
-            "newCount": e.new_n,
-            "lost": e.lost,
-            "hint": "如果确实要删这么多，请在请求里带 force=true。",
-        }), 409
-    if not ok:
-        return jsonify({"ok": False, "error": "卡库路径不可用"}), 500
-    out = persona.load_cards()
-    for c in out:
-        c["background"] = chat_bg.info("card", str(c.get("id") or ""))
-    return jsonify({"ok": True, "cards": out})
 
 
 @app.route("/api/status")
