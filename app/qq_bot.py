@@ -38,8 +38,13 @@ import time
 
 try:
     import msvcrt                      # Windows 文件锁，用于单实例保护
-except ImportError:                    # 非 Windows 平台退化为不做检查
+except ImportError:                    # 非 Windows 平台改用 fcntl.flock
     msvcrt = None
+
+try:
+    import fcntl                       # Linux / macOS 文件锁
+except ImportError:
+    fcntl = None
 
 from app.features.qq import status as qq_status
 from app.features.qq import notify
@@ -2256,7 +2261,7 @@ def _acquire_single_instance():
     拿不到锁文件本身（如目录只读）时不拦启动，只记一条警告。
     """
     global _SINGLETON_HANDLE
-    if msvcrt is None:
+    if msvcrt is None and fcntl is None:
         return True
     path = os.path.join(BASE_DIR, ".qq_bot.lock")
     try:
@@ -2265,7 +2270,10 @@ def _acquire_single_instance():
         log.warning("无法创建锁文件 %s（%s），跳过单实例检查", path, e)
         return True
     try:
-        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        if msvcrt is not None:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         handle.close()
         return False
