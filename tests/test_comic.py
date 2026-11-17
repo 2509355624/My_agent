@@ -20,7 +20,8 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import comic, comic_writer, skills
+from app.features.comic import writer as comic_writer
+from app import comic, skills
 
 
 def _panel_dict(no, **kw):

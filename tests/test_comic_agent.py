@@ -1948,7 +1948,7 @@ class PrevStoryTest(unittest.TestCase):
         self.assertEqual("", comic_agent.prev_story_text("这个文件不存在.md"))
 
     def test_user_prompt_carries_continuity_rules(self):
-        from app import comic_writer
+        from app.features.comic import writer as comic_writer
         p = comic_writer._user_prompt("设定", 3, "", "## 01\n（女）上集台词")
         self.assertIn("前情：", p)
         self.assertIn("上集台词", p)

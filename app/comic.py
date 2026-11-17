@@ -1748,7 +1748,7 @@ def main(argv=None):
     if args.cmd in ("write", "new"):
         # 函数内 import：comic_writer 反过来要 import comic（复用解析器），
         # 模块级互相 import 会成环。
-        from app import comic_writer
+        from app.features.comic import writer as comic_writer
         text = comic_writer.write_script(args.brief, panels=args.panels,
                                          character=args.character)
         if args.cmd == "write":
