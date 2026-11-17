@@ -175,7 +175,7 @@ import requests
 from app.features.image import comfy_launch
 from app.features.image import comfy_progress
 from app.features.image import comfy_out
-from app import comfy_gate
+from app.features.image import comfy_gate
 from app.features.image import log as image_log
 from app.features.image.delivery import (
     _caption, _caption_note_text, _send_image, caption_note_default)
@@ -1370,7 +1370,7 @@ def _upload_i2i(job):
 
     失败抛 RuntimeError（`comfy_src.upload` 抛的就是一句能直接转述的人话）。
     """
-    from app import comfy_src
+    from app.features.image import comfy_src
 
     real = comfy_src.upload(job.i2i_src, wait=False)
     ph = job.i2i_name

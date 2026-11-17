@@ -58,7 +58,8 @@ import uuid
 
 from flask import Blueprint, jsonify, request, send_file
 
-from app import comfy_src, friend_auth, image_jobs, qq_api
+from app.features.image import comfy_src
+from app import friend_auth, image_jobs, qq_api
 from app.config import QQ_AGENT_ID, state_path
 from app.skills import load_workflow
 

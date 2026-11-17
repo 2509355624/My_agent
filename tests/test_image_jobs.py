@@ -14,7 +14,7 @@ from unittest import mock
 import requests
 
 import app.agents as agents
-from app import comfy_src
+from app.features.image import comfy_src
 from app import image_jobs
 from app.features.image import log as image_log
 from app import nai

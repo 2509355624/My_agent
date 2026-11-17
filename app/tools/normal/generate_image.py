@@ -8,7 +8,8 @@ import requests
 import json
 import random
 from flask import request
-from app import comfy_src, image_jobs
+from app.features.image import comfy_src
+from app import image_jobs
 from app.features.image import char_guard
 from app import nai as nai_mod
 from app.core.cancel import Cancelled, is_cancelled

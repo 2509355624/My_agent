@@ -30,7 +30,8 @@ import time
 import unittest
 from unittest import mock
 
-from app import comfy_gate, image_jobs
+from app.features.image import comfy_gate
+from app import image_jobs
 
 
 def _clear_dir(path):

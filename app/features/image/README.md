@@ -15,6 +15,7 @@
 档位）、`default_loras.py`（默认 LoRA 表）、`comfy_status.py`（ComfyUI 在线状态探测）、
 `comfy_launch.py`（ComfyUI 启动命令）、`comfy_progress.py`（ComfyUI 进度解析）、
 `comfy_out.py`（output 按会话/渠道分目录）、`job_ledger.py`（任务/重抽台账）、
+`comfy_gate.py`（ComfyUI 并发/显存门禁）、`comfy_src.py`（ComfyUI 源目录定位）、
 `random_tags.py`（标签随机）、`gen_params.py`（参数规整）、`char_guard.py`
 （角色提示词内容守卫）、`routes.py`（原 `gen_api.py`，手动跑图台 Blueprint）、
 `outfit_api.py`（双图换装/换姿势 Blueprint）已迁入并接线；

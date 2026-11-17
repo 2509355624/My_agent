@@ -26,7 +26,8 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.features.comic import routes as comic_api
-from app import comic, comfy_gate, image_jobs, main
+from app.features.image import comfy_gate
+from app import comic, image_jobs, main
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
