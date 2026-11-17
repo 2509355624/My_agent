@@ -11,12 +11,13 @@
 - 不建万能 `utils/`；路径进 `paths.py`，日志进 `logging.py`，鉴权/限流进 `security.py`。
 
 状态：`config/` 包已建立，`paths.py`、`env.py`、`llm.py`、`image.py`、
-`vision.py`、`rag.py`、`web.py`、`card.py`、`runtime.py` 已从旧
+`vision.py`、`rag.py`、`web.py`、`card.py`、`qq.py`、`runtime.py` 已从旧
 `app/config.py` 拆出；`runtime.py` 提供管理页可热更新的非密钥设置，`llm.py`
 提供统一 LLM 降级链/超时/重试/预算的默认值与校验，`image.py` 管生图渠道、
 ComfyUI 水位和生图审核阈值，`vision.py` 管通用识图参数，`rag.py` 管知识库
 开关、角色记忆向量库和世界书预算，`web.py` 管端口/管理访问/画廊/工坊入口，
-`card.py` 管内置卡保护名单；调用逻辑仍在 `app/vision.py`、`app/image_audit.py`、
-`app/persona_rag.py`、`app/rag/`、`app/comfy_*` 与 `app/image_jobs.py`。
-其余配置域仍暂留旧文件。
+`card.py` 管内置卡保护名单，`qq.py` 管 QQ 接入、回复策略、主动接话、长期
+记忆与掉线通知；调用逻辑仍在 `app/vision.py`、`app/image_audit.py`、
+`app/persona_rag.py`、`app/rag/`、`app/qq_bot.py`、`app/notify.py`、
+`app/watchdog.py` 与 `app/image_jobs.py`。看门狗和 persona 配置仍暂留旧文件。
 迁移顺序见 `docs/project-skeleton.md` 第 9 节。
