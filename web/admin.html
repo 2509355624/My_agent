@@ -489,6 +489,7 @@ textarea { min-height: 180px; }
 
   <nav class="view-tabs" id="adminTabs" aria-label="管理页分区">
     <button type="button" data-view="basic" class="on">基础</button>
+    <button type="button" data-view="global">全局</button>
     <button type="button" data-view="group">群聊</button>
     <button type="button" data-view="private">私聊</button>
     <button type="button" data-view="audit">审核</button>
@@ -539,6 +540,45 @@ textarea { min-height: 180px; }
           </div>
         </div>
         <div class="eff" id="budgetEff"></div>
+      </div>
+
+      <div class="card card--wide" data-view="global">
+        <h2>LLM 降级链与超时</h2>
+        <div class="hint">所有「继承全局」的 agent 共用这一套；保存后下一次请求即生效，不用重启。
+          单个 agent 在「基础」里指定了模型时仍优先。</div>
+        <div class="field">
+          <label>降级链（provider:model，逗号分隔）</label>
+          <textarea id="llmChain" spellcheck="false" placeholder="volc:模型,deepseek:模型"></textarea>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>请求超时（秒）</label>
+            <input id="llmTimeout" type="number" min="5" max="600" step="1" spellcheck="false">
+          </div>
+          <div class="field">
+            <label>识图/判定超时（秒）</label>
+            <input id="llmJudgeTimeout" type="number" min="5" max="600" step="1" spellcheck="false">
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>同一候选重试次数</label>
+            <input id="llmRetryTimes" type="number" min="1" max="10" step="1" spellcheck="false">
+          </div>
+          <div class="field">
+            <label>重试间隔（秒）</label>
+            <input id="llmRetryDelay" type="number" min="0" max="30" step="0.1" spellcheck="false">
+          </div>
+          <div class="field">
+            <label>重试总预算（秒）</label>
+            <input id="llmRetryBudget" type="number" min="0" max="600" step="1" spellcheck="false">
+          </div>
+        </div>
+        <div class="actions">
+          <button id="llmSave">保存全局设置</button>
+          <button class="ghost" id="llmReload">重新读取</button>
+          <span class="status" id="llmStatus"></span>
+        </div>
       </div>
 
       <div class="actions" data-view="basic">
@@ -1164,6 +1204,63 @@ async function save() {
     status(e.message, 'err');
   } finally {
     $('save').disabled = false;
+  }
+}
+
+function llmStatus(msg, cls) {
+  const el = $('llmStatus');
+  el.textContent = msg || '';
+  el.className = 'status' + (cls ? ' ' + cls : '');
+}
+
+function fillLlmSettings(d) {
+  const e = (d && d.effective) || {};
+  $('llmChain').value = e.fallback_chain || '';
+  $('llmTimeout').value = e.request_timeout == null ? '' : String(e.request_timeout);
+  $('llmJudgeTimeout').value = e.judge_timeout == null ? '' : String(e.judge_timeout);
+  $('llmRetryTimes').value = e.retry_times == null ? '' : String(e.retry_times);
+  $('llmRetryDelay').value = e.retry_delay == null ? '' : String(e.retry_delay);
+  $('llmRetryBudget').value = e.retry_budget == null ? '' : String(e.retry_budget);
+}
+
+async function loadLlmSettings() {
+  try {
+    const d = await api('/api/llm/settings');
+    fillLlmSettings(d);
+    llmStatus('当前生效 · ' + (d.runtime_file || 'runtime_settings.json'), 'ok');
+  } catch (e) {
+    llmStatus(e.message, 'err');
+  }
+}
+
+function llmNum(id) {
+  const text = $(id).value.trim();
+  return text === '' ? null : Number(text);
+}
+
+async function saveLlmSettings() {
+  $('llmSave').disabled = true;
+  llmStatus('保存中…');
+  try {
+    const d = await api('/api/llm/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        LLM_FALLBACK_CHAIN: $('llmChain').value.trim(),
+        LLM_REQUEST_TIMEOUT: llmNum('llmTimeout'),
+        LLM_JUDGE_TIMEOUT: llmNum('llmJudgeTimeout'),
+        LLM_RETRY_TIMES: llmNum('llmRetryTimes'),
+        LLM_RETRY_DELAY: llmNum('llmRetryDelay'),
+        LLM_RETRY_BUDGET: llmNum('llmRetryBudget'),
+      }),
+    });
+    fillLlmSettings(d);
+    llmStatus('已保存 · 下一次请求即生效', 'ok');
+    await loadDetail();
+  } catch (e) {
+    llmStatus(e.message, 'err');
+  } finally {
+    $('llmSave').disabled = false;
   }
 }
 
@@ -3303,6 +3400,7 @@ async function boot() {
     cur = exists ? wanted : (agents.some((a) => a.id === d.default) ? d.default : agents[0].id);
     await loadDetail();
     renderList();
+    loadLlmSettings().catch(() => {});
   } catch (e) {
     status(e.message, 'err');
   }
@@ -3312,6 +3410,8 @@ $('save').addEventListener('click', save);
 $('reload').addEventListener('click', () => {
   loadDetail().catch((e) => status(e.message, 'err'));
 });
+$('llmSave').addEventListener('click', saveLlmSettings);
+$('llmReload').addEventListener('click', loadLlmSettings);
 $('sessReload').addEventListener('click', loadSessions);
 $('selNone').addEventListener('click', () => {
   selKeys = new Set(); syncCheckboxes(); renderSelBar();
@@ -3588,7 +3688,7 @@ boot();
   var panel = document.querySelector(".panel");
   var layout = document.querySelector(".layout");
   if (!tabs || !panel || !layout) return;
-  var views = ["basic", "group", "private", "audit", "usage", "sessions"];
+  var views = ["basic", "global", "group", "private", "audit", "usage", "sessions"];
 
   function pick(view) {
     if (views.indexOf(view) < 0) view = "basic";

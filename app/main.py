@@ -37,8 +37,7 @@ from app import output_api
 from app import outfit_api
 from app import novel_api
 from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
-                        LLM_PROVIDER, LLM_FALLBACK_CHAIN, PROVIDERS,
-                        OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
+                        PROVIDERS, OLLAMA_BASE_URL, DEFAULT_AGENT_ID,
                         ADMIN_ALLOW_REMOTE, ADMIN_ALLOW_REMOTE_LAN,
                         CONTEXT_BUDGET, IMAGE_AUDIT_PROMPT_MAX,
                         QQ_PRIVATE_ENABLE, QQ_WHITELIST_USERS,
@@ -46,6 +45,9 @@ from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         QQ_AGENT_ID, provider_vision,
                         CUSTOM_PROVIDERS_FILE, load_custom_providers,
                         COMFYUI_OUTPUT_DIR)
+from app.core.config.llm import get_llm_settings, update_llm_settings
+from app.core.config import llm as llm_config
+from app.core.config.runtime import runtime_path
 from app import provider_store
 from app.skills import list_skills, load_skill
 from app import model_catalog
@@ -325,7 +327,9 @@ def get_providers():
             # 公开展示的形态：密钥只给尾 4 位（见 provider_store.public_view）。
             item.update(provider_store.public_view(key, cfg))
         items.append(item)
-    return jsonify({"providers": items, "default": LLM_PROVIDER, "model": MODEL,
+    settings = get_llm_settings()
+    return jsonify({"providers": items, "default": settings["provider"],
+                    "model": PROVIDERS.get(settings["provider"], {}).get("model", MODEL),
                     "custom_file": os.path.basename(CUSTOM_PROVIDERS_FILE)})
 
 
@@ -443,6 +447,45 @@ def test_custom_provider():
                     "elapsed": round(time.time() - t0, 1)})
 
 
+@app.route("/api/llm/settings")
+def get_llm_settings_api():
+    """管理页读取当前生效的 LLM 设置与代码默认值。"""
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    return jsonify({
+        "ok": True,
+        "effective": get_llm_settings(),
+        "defaults": {
+            "fallback_chain": llm_config.LLM_FALLBACK_CHAIN,
+            "request_timeout": llm_config.LLM_REQUEST_TIMEOUT,
+            "judge_timeout": llm_config.LLM_JUDGE_TIMEOUT,
+            "retry_times": llm_config.LLM_RETRY_TIMES,
+            "retry_delay": llm_config.LLM_RETRY_DELAY,
+            "retry_budget": llm_config.LLM_RETRY_BUDGET,
+            "fallback_ttl": llm_config.LLM_FALLBACK_TTL,
+            "rate_limit_ttl": llm_config.LLM_RATE_LIMIT_TTL,
+            "concurrency_ttl": llm_config.LLM_CONCURRENCY_TTL,
+        },
+        "runtime_file": os.path.basename(runtime_path()),
+    })
+
+
+@app.route("/api/llm/settings", methods=["PUT"])
+def put_llm_settings_api():
+    """管理页保存 LLM 设置；落盘后下一次请求即生效。"""
+    if not _admin_allowed():
+        return jsonify({"error": "管理接口默认只允许本机访问，"
+                                 "如需远程改 .env 的 ADMIN_ALLOW_REMOTE"}), 403
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "请求体必须是 JSON 对象"}), 400
+    effective, error = update_llm_settings(data)
+    if error:
+        return jsonify({"error": error}), 400
+    return jsonify({"ok": True, "effective": effective})
+
+
 @app.route("/api/agents")
 def get_agents():
     """返回所有 agent（供前端切换下拉）。
@@ -484,8 +527,11 @@ def get_history():
     agent_id = _req_agent_id()
     h = load_history(agent_id)
     msgs = [m for m in h if m.get("role") != "system"]
-    return jsonify({"messages": msgs, "model": MODEL, "count": len(msgs),
-                    "provider": LLM_PROVIDER, "agent": agent_id})
+    settings = get_llm_settings()
+    return jsonify({"messages": msgs,
+                    "model": PROVIDERS.get(settings["provider"], {}).get("model", MODEL),
+                    "count": len(msgs),
+                    "provider": settings["provider"], "agent": agent_id})
 
 
 @app.route("/api/chat", methods=["POST"])
@@ -876,14 +922,16 @@ def _agent_detail(aid):
     cfg = agent_store.agent_config(aid)
     raw = agent_store.agent_raw_config(aid)
     from app.llm import parse_chain
-    chain = parse_chain(LLM_FALLBACK_CHAIN)
+    settings = get_llm_settings()
+    chain = parse_chain(settings["fallback_chain"])
+    default_model = PROVIDERS.get(settings["provider"], {}).get("model", MODEL)
     if cfg["provider"] or cfg["model"]:
-        eff_provider = cfg["provider"] or LLM_PROVIDER
+        eff_provider = cfg["provider"] or settings["provider"]
         eff_model = cfg["model"] or PROVIDERS.get(eff_provider, {}).get("model", "")
     else:
-        # 继承全局 = 降级链链头（链空才退 LLM_PROVIDER）
-        eff_provider = chain[0][0] if chain else LLM_PROVIDER
-        eff_model = chain[0][1] if chain else MODEL
+        # 继承全局 = 降级链链头（链空才退默认 provider）
+        eff_provider = chain[0][0] if chain else settings["provider"]
+        eff_model = chain[0][1] if chain else default_model
     # 识图实际生效的那份：界面选过就按界面那份，否则退回 .env。
     # active_choice 内部会重读 settings（mtime 缓存），所以管理页改完立刻变。
     _v_pid, _v_model = vision_mod.active_choice(aid)
@@ -901,8 +949,8 @@ def _agent_detail(aid):
         "providers": [{"id": k, "label": v["label"], "model": v["model"],
                        "vision": bool(v.get("vision"))}
                       for k, v in PROVIDERS.items()],
-        "global_provider": LLM_PROVIDER,
-        "global_model": MODEL,
+        "global_provider": settings["provider"],
+        "global_model": default_model,
         # 全局降级链（继承全局时文本模型实际跑的顺序），管理页拿它把
         # 「继承全局」的真正含义亮出来，别让人以为继承=固定某一家
         "global_chain": [{"pid": pid, "model": model,
