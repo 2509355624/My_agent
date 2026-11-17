@@ -1307,7 +1307,7 @@ def _decorate_session_names(items):
         return True
 
     # 局部 import：不接 QQ 的 agent 列表压根走不到这里，没必要在启动时加载
-    from app import qq_api
+    from app.features.qq import api as qq_api
 
     names, ok = {}, True
     if "group" in kinds:

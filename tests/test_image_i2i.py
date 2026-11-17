@@ -35,7 +35,8 @@ from app.features.image import comfy_src
 from app.features.image import nai
 from app.core import agents
 from app.core import agents as agent_store
-from app import (image_jobs, qq_api)
+from app.features.qq import api as qq_api
+from app import (image_jobs)
 from app.integrations import vision
 from app.core.skills import load_workflow
 from app.tools.normal import generate_image as gi

@@ -33,9 +33,9 @@ class _Ctx:
         self.text = text
 
     def __enter__(self):
-        p1 = mock.patch("app.qq_api.current_turn_text",
+        p1 = mock.patch("app.features.qq.api.current_turn_text",
                         return_value=self.text)
-        p2 = mock.patch("app.qq_api.current_context",
+        p2 = mock.patch("app.features.qq.api.current_context",
                         return_value=("group", "123"))
         p1.start(); p2.start()
         self._ps = (p1, p2)

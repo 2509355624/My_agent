@@ -11,7 +11,7 @@
 否则同一句话会被发两遍。
 """
 
-from app import qq_api
+from app.features.qq import api as qq_api
 
 
 def _send_qq_message(message, target=None, target_id=None):

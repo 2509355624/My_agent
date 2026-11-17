@@ -54,7 +54,8 @@ from app.core import usage
 from app.features.qq import play_bot, solo_bot, trigger
 from app.features.image import direct_gen
 from app.features.comic import moss_bot
-from app import (image_jobs, persona, qq_api)
+from app.features.qq import api as qq_api
+from app import (image_jobs, persona)
 from app.features.card import bot as card_bot
 from app.features.image import log as image_log
 from app.features.image import out as image_out
@@ -1040,7 +1041,7 @@ def _note_private_send_failure(target, target_id, exc):
     实际是 QQ 的策略限制——**加好友就能好**。所以这里把它降级成一条说得清的
     WARNING，并顺手推一次管理员通知；否则用户永远只能看到「闪一下」。
     """
-    from app import qq_api
+    from app.features.qq import api as qq_api
     if target != "private" or not qq_api.friend_required_error(exc):
         return False
     log.warning("私聊发不出去：%s 还不是好友（QQ 不允许给陌生人发私聊）。"

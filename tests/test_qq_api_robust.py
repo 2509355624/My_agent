@@ -14,7 +14,7 @@ from unittest import mock
 sys.path.insert(0, ".")
 
 from app.features.qq import stickers
-from app import qq_api  # noqa: E402
+from app.features.qq import api as qq_api  # noqa: E402
 
 
 def _resp(json_value, raise_json_error=False):

@@ -34,7 +34,7 @@ from unittest import mock
 
 from app.features.comic import moss_api
 from app.features.comic import moss_bot, moss_comic
-from app import qq_api
+from app.features.qq import api as qq_api
 from app.features.comic import moss_msgs, moss_series
 from app.features.image import out as image_out
 

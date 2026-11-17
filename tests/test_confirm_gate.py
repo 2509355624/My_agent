@@ -21,13 +21,13 @@ def _fake_ctx(target="group", target_id="123", message_id="", sender_uin=None):
     message_id / sender_uin（2026-10-30）：定义「点单那条消息」的引用和 @ 对象，
     确认闸要在拦下那一刻把它们快照进 pending。
     """
-    with mock.patch("app.qq_api.current_context",
+    with mock.patch("app.features.qq.api.current_context",
                     return_value=(target, target_id)), \
-         mock.patch("app.qq_api.current_turn_text",
+         mock.patch("app.features.qq.api.current_turn_text",
                     return_value="大大怪跑这个"), \
-         mock.patch("app.qq_api.current_message_id",
+         mock.patch("app.features.qq.api.current_message_id",
                     return_value=message_id), \
-         mock.patch("app.qq_api.current_sender_uin",
+         mock.patch("app.features.qq.api.current_sender_uin",
                     return_value=sender_uin):
         yield
 
@@ -93,7 +93,7 @@ class InterceptTest(unittest.TestCase):
         self.assertEqual(pend["seed"], 42)
 
     def test_web_turn_passes_through(self):
-        with mock.patch("app.qq_api.current_context",
+        with mock.patch("app.features.qq.api.current_context",
                         return_value=(None, None)):
             gate = confirm_gate.intercept(
                 "comfy", skill="anima_clear", prompt="1girl",
@@ -186,9 +186,9 @@ class ConsumeTest(unittest.TestCase):
     def test_intercept_snapshots_the_landscape_word(self):
         """卡发出去那一刻就把横屏判据存下来（`intercept` 跑在会话线程，
         `qq_api` 的上下文还绑着；等到确认时线程本地变量早不是本轮了）。"""
-        with mock.patch("app.qq_api.current_context",
+        with mock.patch("app.features.qq.api.current_context",
                         return_value=("group", "123")), \
-             mock.patch("app.qq_api.current_turn_text",
+             mock.patch("app.features.qq.api.current_turn_text",
                         return_value="silver 横屏 一个女孩"), \
              mock.patch("app.tools.normal.generate_image._send_receipt"):
             confirm_gate.intercept("comfy", skill="silver", prompt="1girl",
@@ -196,9 +196,9 @@ class ConsumeTest(unittest.TestCase):
         self.assertTrue(confirm_gate._PENDING[("group", "123")]["landscape"])
 
     def test_intercept_without_the_word_snapshots_false(self):
-        with mock.patch("app.qq_api.current_context",
+        with mock.patch("app.features.qq.api.current_context",
                         return_value=("group", "123")), \
-             mock.patch("app.qq_api.current_turn_text",
+             mock.patch("app.features.qq.api.current_turn_text",
                         return_value="silver 一个女孩"), \
              mock.patch("app.tools.normal.generate_image._send_receipt"):
             confirm_gate.intercept("comfy", skill="silver", prompt="1girl",

@@ -14,7 +14,7 @@ import unittest
 
 import app.config as config
 from app.features.image import log as image_log
-from app import qq_api
+from app.features.qq import api as qq_api
 
 
 class StateIsolationTest(unittest.TestCase):

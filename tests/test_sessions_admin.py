@@ -18,7 +18,7 @@ from unittest import mock
 import app.core.agents as agents
 import app.config as config
 import app.main as main
-import app.qq_api as qq_api
+from app.features.qq import api as qq_api
 
 
 class SessionsTestBase(unittest.TestCase):

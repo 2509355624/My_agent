@@ -263,7 +263,7 @@ class WiringTest(unittest.TestCase):
     def test_outfit_text_signs_source(self):
         from app.features.qq import friend_site
         from app.features.image import direct_gen
-        from app import (qq_api)
+        from app.features.qq import api as qq_api
         with mock.patch.object(friend_site, "url", return_value="https://x.trycloudflare.com"), \
              mock.patch.object(qq_api, "current_context", return_value=("private", "1234567890")):
             txt = direct_gen._outfit_text()

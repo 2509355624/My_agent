@@ -139,7 +139,8 @@ def intercept(kind, *, skill, prompt, seed=None, intent=None, workflow=None,
     skip_confirm：直达生图管道（direct_gen）专用——用户打的指令本身就是确认，
     不再拦（agent 路径保持 False）。
     """
-    from app import image_jobs, qq_api
+    from app.features.qq import api as qq_api
+    from app import (image_jobs)
     if skip_confirm:
         return None
     # 总开关（settings.json 热生效，默认关）：关 = 整道闸不存在，直接放行。

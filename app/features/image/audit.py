@@ -336,7 +336,7 @@ def _notify_blocked(target, target_id, verdict):
     verdict.failed 决定说哪句：判违规 → `BLOCKED_NOTICE`；审核没生效 →
     `FAILED_NOTICE`。后者明说是服务问题，免得用户回去改没问题的提示词。
     """
-    from app import qq_api
+    from app.features.qq import api as qq_api
     notice = FAILED_NOTICE if verdict.failed else BLOCKED_NOTICE
     try:
         if target == "group":

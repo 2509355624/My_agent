@@ -333,7 +333,7 @@ def approve(rid):
             return False, "记录里没有接收方，发不回去"
         if not os.path.exists(path):
             return False, "图文件已经不在了（可能被清理）"
-        from app import qq_api
+        from app.features.qq import api as qq_api
         try:
             qq_api.send_image(target, tid, path, caption=row.get("caption") or "")
         except Exception as exc:

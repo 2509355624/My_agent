@@ -65,10 +65,10 @@ class QqNamesTest(unittest.TestCase):
     def test_refresh_lists_populates_from_api(self):
         qq_names._group = {}
         qq_names._private = {}
-        with mock.patch("app.qq_api.get_group_list",
+        with mock.patch("app.features.qq.api.get_group_list",
                         return_value=[{"group_id": 1, "group_name": "我的群"},
                                       {"group_id": "2", "group_name": "另一群"}]), \
-             mock.patch("app.qq_api.get_friend_list",
+             mock.patch("app.features.qq.api.get_friend_list",
                         return_value=[{"user_id": 100, "nickname": "小张",
                                        "remark": "老张"},
                                       {"user_id": 200, "nickname": "小李",
@@ -84,15 +84,15 @@ class QqNamesTest(unittest.TestCase):
 
     def test_refresh_lists_rate_limited(self):
         qq_names._last_refresh = time.time()
-        with mock.patch("app.qq_api.get_group_list") as gl:
+        with mock.patch("app.features.qq.api.get_group_list") as gl:
             ok = qq_names.refresh_lists(force=False)
         self.assertFalse(ok)
         gl.assert_not_called()
 
     def test_refresh_lists_force_bypasses_rate_limit(self):
         qq_names._last_refresh = time.time()
-        with mock.patch("app.qq_api.get_group_list", return_value=[]), \
-             mock.patch("app.qq_api.get_friend_list", return_value=[]), \
+        with mock.patch("app.features.qq.api.get_group_list", return_value=[]), \
+             mock.patch("app.features.qq.api.get_friend_list", return_value=[]), \
              mock.patch.object(qq_names, "_persist"):
             ok = qq_names.refresh_lists(force=True)
         self.assertTrue(ok)
@@ -101,7 +101,7 @@ class QqNamesTest(unittest.TestCase):
         """NapCat 不在线时静默失败，缓存保留原样。"""
         qq_names._group = {"1": "旧群名"}
         qq_names._last_refresh = 0.0
-        with mock.patch("app.qq_api.get_group_list",
+        with mock.patch("app.features.qq.api.get_group_list",
                         side_effect=RuntimeError("napcat down")):
             ok = qq_names.refresh_lists(force=True)
         self.assertFalse(ok)

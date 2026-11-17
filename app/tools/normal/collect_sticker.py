@@ -11,7 +11,7 @@ stickers 的「最近图片」缓冲（最新在尾）。模型不传参 = 收�
 """
 
 from app.features.qq import stickers
-from app import qq_api
+from app.features.qq import api as qq_api
 from app.config import QQ_AGENT_ID
 
 

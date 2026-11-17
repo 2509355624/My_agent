@@ -113,7 +113,7 @@ def _send_image(target, target_id, filename, tag="", skill="", seed=None,
     ⚠️ 审核审的是 `prepare_for_send` 的产物（本地文件），也就是**真正要发出去
     的那份字节**，不是 ComfyUI 的原图。见 app/image_audit.py 的模块注释。
     """
-    from app import qq_api
+    from app.features.qq import api as qq_api
     from app.features.image import audit as image_audit
     from app.features.image import out as image_out
     from app.core.agents import image_send_format

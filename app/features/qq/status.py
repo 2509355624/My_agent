@@ -57,7 +57,7 @@ _ORDER = {"waiting_slot": 0, "running": 1, "debouncing": 2, "idle": 3}
 def _alive():
     """探 NapCat 协议端。返回 (online, detail)。"""
     try:
-        from app import qq_api
+        from app.features.qq import api as qq_api
         uid, nick = qq_api.check_alive(timeout=_ALIVE_TIMEOUT)
         if uid:
             return True, (nick or str(uid))

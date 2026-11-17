@@ -165,13 +165,13 @@ class ImageGenGateTest(unittest.TestCase):
     def test_gate_passes_outside_qq(self):
         # 网页端对话没有 QQ 绑定 → 不受限
         from app.tools.normal import generate_image as gi
-        with mock.patch("app.qq_api.current_context",
+        with mock.patch("app.features.qq.api.current_context",
                         return_value=(None, None)):
             self.assertIsNone(gi._qq_gate())
 
     def test_gate_blocks_when_denied(self):
         from app.tools.normal import generate_image as gi
-        with mock.patch("app.qq_api.current_context",
+        with mock.patch("app.features.qq.api.current_context",
                         return_value=("group", "111")), \
                 mock.patch("app.core.agents.image_gen_allowed",
                            return_value=(False, "生图功能已被管理员全局关闭")):

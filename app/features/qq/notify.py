@@ -238,7 +238,6 @@ def _bot_label():
 
 def _online():
     """探活：协议端还能取到登录信息就算在线。"""
-    from app import qq_api          # 延迟 import，避免模块级循环依赖
     try:
         uid, _ = qq_api.check_alive(timeout=5)
         return bool(uid)

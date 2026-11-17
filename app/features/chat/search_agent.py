@@ -92,7 +92,7 @@ _TOOLS = {
 def _sk():
     """当前会话标识，只用于日志。取不到就返回 "-"（测试环境没有会话）。"""
     try:
-        from app import qq_api
+        from app.features.qq import api as qq_api
         return qq_api.current_session_key() or "-"
     except Exception:
         return "-"

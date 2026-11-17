@@ -18,7 +18,7 @@ from app.features.image import comfy_src
 from app import image_jobs
 from app.features.image import log as image_log
 from app.features.image import nai
-from app import qq_api
+from app.features.qq import api as qq_api
 from app.core import skills
 from app.features.image import out as image_out
 from app.core.cancel import Cancelled
@@ -3620,7 +3620,7 @@ class SilentRetryTest(_Base):
 
     def test_retry_exhausted_sends_soft_notice(self):
         self._patch_send([])                            # 全拦
-        with mock.patch("app.qq_api.send_group") as sg:
+        with mock.patch("app.features.qq.api.send_group") as sg:
             job, _ = self._run(resample_fn=lambda: "pn")
         self.assertEqual(sg.call_args.args,
                          ("9", image_jobs.RANDOM_BLOCKED_NOTICE))
@@ -3631,7 +3631,7 @@ class SilentRetryTest(_Base):
     def test_resample_returns_empty_falls_back_to_notice(self):
         # 重抽拿不出新提示词 → 不重跑，直接兜底话术
         self._patch_send([False])
-        with mock.patch("app.qq_api.send_group") as sg:
+        with mock.patch("app.features.qq.api.send_group") as sg:
             self._run(resample_fn=lambda: "")
         self.assertEqual(sg.call_args.args,
                          ("9", image_jobs.RANDOM_BLOCKED_NOTICE))
@@ -3640,7 +3640,7 @@ class SilentRetryTest(_Base):
         # 用户点的单（无 resample_fn）：拦下即回 image_audit 的话术，不重抽。
         # 话术本身在 allow_send 里发（此处 mock 掉），worker 层零动作。
         seen = self._patch_send([False])
-        with mock.patch("app.qq_api.send_group") as sg:
+        with mock.patch("app.features.qq.api.send_group") as sg:
             self._run()                                 # 不传 resample_fn
         self.assertEqual(len(seen), 1)
         self.assertTrue(seen[0]["notify"])

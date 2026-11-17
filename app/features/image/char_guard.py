@@ -180,7 +180,7 @@ def check(prompt):
     与守卫家族同判据：`current_turn_text()` 为 None（网页端/单测直调）
     一律放行。宁可漏判（对不上时模型照画）不可误判（白拦一轮）。
     """
-    from app import qq_api
+    from app.features.qq import api as qq_api
     text = qq_api.current_turn_text()
     if text is None:
         return None

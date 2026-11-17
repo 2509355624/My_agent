@@ -126,7 +126,7 @@ class ListTest(_TmpCase):
 
     def test_filter_by_state(self):
         ids = self._add(3)
-        with mock.patch("app.qq_api.send_image") as send:
+        with mock.patch("app.features.qq.api.send_image") as send:
             image_review.approve(ids[0])
         self.assertTrue(send.called)
         self.assertEqual(2, len(image_review.items(state=image_review.PENDING)))
@@ -136,7 +136,7 @@ class ListTest(_TmpCase):
     def test_pending_count(self):
         ids = self._add(2)
         self.assertEqual(2, image_review.pending_count())
-        with mock.patch("app.qq_api.send_image"):
+        with mock.patch("app.features.qq.api.send_image"):
             image_review.approve(ids[0])
         self.assertEqual(1, image_review.pending_count())
 
@@ -158,7 +158,7 @@ class ApproveTest(_TmpCase):
     def test_approve_resends_with_the_original_caption(self):
         """对方收到的跟一张没被拦过的图一个字都不差。"""
         rid = self._blocked()
-        with mock.patch("app.qq_api.send_image") as send:
+        with mock.patch("app.features.qq.api.send_image") as send:
             ok, msg = image_review.approve(rid)
         self.assertTrue(ok, msg)
         send.assert_called_once_with("group", "233",
@@ -168,7 +168,7 @@ class ApproveTest(_TmpCase):
     def test_approve_backfills_the_ledger(self):
         """账本只在真发出去之后记——补发完了就得补上，否则引用查不到提示词。"""
         rid = self._blocked()
-        with mock.patch("app.qq_api.send_image"), \
+        with mock.patch("app.features.qq.api.send_image"), \
              mock.patch("app.features.image.log.save") as save:
             ok, _msg = image_review.approve(rid)
         self.assertTrue(ok)
@@ -197,7 +197,7 @@ class ApproveTest(_TmpCase):
             entered.set()
             release.wait(10)
 
-        with mock.patch("app.qq_api.send_image", side_effect=slow_send):
+        with mock.patch("app.features.qq.api.send_image", side_effect=slow_send):
             t = threading.Thread(target=image_review.approve, args=(rid,))
             t.start()
             self.assertTrue(entered.wait(10), "第一个请求没进到发图那一步")
@@ -211,17 +211,17 @@ class ApproveTest(_TmpCase):
     def test_inflight_is_released_after_failure(self):
         """发失败要能把 id 放出来，管理员还点得动第二次。"""
         rid = self._blocked()
-        with mock.patch("app.qq_api.send_image",
+        with mock.patch("app.features.qq.api.send_image",
                         side_effect=RuntimeError("onebot down")):
             self.assertFalse(image_review.approve(rid)[0])
-        with mock.patch("app.qq_api.send_image") as send:
+        with mock.patch("app.features.qq.api.send_image") as send:
             ok, msg = image_review.approve(rid)
         self.assertTrue(ok, msg)
         send.assert_called_once()
 
     def test_approve_twice_is_refused(self):
         rid = self._blocked()
-        with mock.patch("app.qq_api.send_image") as send:
+        with mock.patch("app.features.qq.api.send_image") as send:
             self.assertTrue(image_review.approve(rid)[0])
             ok, msg = image_review.approve(rid)
         self.assertFalse(ok)
@@ -232,7 +232,7 @@ class ApproveTest(_TmpCase):
         rid = self._blocked()
         row = image_review.get(rid)
         os.remove(row["path"])
-        with mock.patch("app.qq_api.send_image") as send:
+        with mock.patch("app.features.qq.api.send_image") as send:
             ok, msg = image_review.approve(rid)
         self.assertFalse(ok)
         self.assertIn("不在了", msg)
@@ -245,7 +245,7 @@ class ApproveTest(_TmpCase):
 
     def test_no_recipient_is_refused(self):
         rid = image_review.record(self.src, "", "")
-        with mock.patch("app.qq_api.send_image") as send:
+        with mock.patch("app.features.qq.api.send_image") as send:
             ok, msg = image_review.approve(rid)
         self.assertFalse(ok)
         self.assertIn("接收方", msg)
@@ -254,7 +254,7 @@ class ApproveTest(_TmpCase):
     def test_send_failure_keeps_it_pending(self):
         """发不出去就还是待审——管理员还能再点一次。"""
         rid = self._blocked()
-        with mock.patch("app.qq_api.send_image",
+        with mock.patch("app.features.qq.api.send_image",
                         side_effect=RuntimeError("onebot down")):
             ok, msg = image_review.approve(rid)
         self.assertFalse(ok)
@@ -283,7 +283,7 @@ class RejectTest(_TmpCase):
     def test_rejected_cannot_be_approved(self):
         rid = image_review.record(self.src, "group", "233")
         image_review.reject(rid)
-        with mock.patch("app.qq_api.send_image") as send:
+        with mock.patch("app.features.qq.api.send_image") as send:
             ok, _msg = image_review.approve(rid)
         self.assertFalse(ok)
         self.assertFalse(send.called)
@@ -299,7 +299,7 @@ class SweepTest(_TmpCase):
             ids.append(image_review.record(self.src, "group", str(i)))
         processed = ids[:-3]
         pending = ids[-3:]
-        with mock.patch("app.qq_api.send_image"):
+        with mock.patch("app.features.qq.api.send_image"):
             for rid in processed:
                 image_review.approve(rid)
         # 再塞几条触发瘦身
@@ -353,7 +353,7 @@ class AuditHookTest(unittest.TestCase):
                                                     category="clothing")), \
              mock.patch("app.core.agents.image_audit_enabled",
                         return_value=True), \
-             mock.patch("app.qq_api.send_group") as sg:
+             mock.patch("app.features.qq.api.send_group") as sg:
             ok = image_audit.allow_send(path, "qq", "group", "233",
                                         meta={"tag": "HT-1", "caption": "C"})
             # ⚠️ 断言必须在 patch 生效期间做：出了 with，PATH 已经指回
@@ -378,7 +378,7 @@ class AuditHookTest(unittest.TestCase):
              mock.patch("app.core.agents.image_audit_enabled", return_value=True), \
              mock.patch("app.features.image.review.record",
                         side_effect=OSError("disk full")), \
-             mock.patch("app.qq_api.send_group") as sg:
+             mock.patch("app.features.qq.api.send_group") as sg:
             ok = image_audit.allow_send(path, "qq", "group", "233")
         self.assertFalse(ok)
         sg.assert_called_once()
@@ -421,7 +421,7 @@ class RoutesTest(_TmpCase):
 
     def test_list_can_filter_out_processed_ones(self):
         rid = self._blocked()
-        with mock.patch("app.qq_api.send_image"):
+        with mock.patch("app.features.qq.api.send_image"):
             self.client.post("/api/agent/qq/image_review/%s/approve" % rid)
         d = self.client.get("/api/agent/qq/image_review?state=pending").get_json()
         self.assertEqual(0, len(d["items"]))
@@ -430,7 +430,7 @@ class RoutesTest(_TmpCase):
 
     def test_approve_endpoint_resends(self):
         rid = self._blocked()
-        with mock.patch("app.qq_api.send_image") as send:
+        with mock.patch("app.features.qq.api.send_image") as send:
             r = self.client.post("/api/agent/qq/image_review/%s/approve" % rid)
         self.assertEqual(200, r.status_code, r.get_json())
         self.assertTrue(r.get_json()["ok"])
@@ -439,7 +439,7 @@ class RoutesTest(_TmpCase):
 
     def test_reject_endpoint_marks_it(self):
         rid = self._blocked()
-        with mock.patch("app.qq_api.send_image") as send:
+        with mock.patch("app.features.qq.api.send_image") as send:
             r = self.client.post("/api/agent/qq/image_review/%s/reject" % rid)
         self.assertEqual(200, r.status_code, r.get_json())
         self.assertFalse(send.called)
@@ -508,7 +508,7 @@ class GlobalRoutesTest(_TmpCase):
 
     def test_global_list_can_filter_processed(self):
         rid = self._blocked()
-        with mock.patch("app.qq_api.send_image"):
+        with mock.patch("app.features.qq.api.send_image"):
             self.client.post("/api/image_review/%s/approve" % rid)
         d = self.client.get("/api/image_review?state=pending").get_json()
         self.assertEqual(0, len(d["items"]))
@@ -517,7 +517,7 @@ class GlobalRoutesTest(_TmpCase):
 
     def test_global_approve_resends(self):
         rid = self._blocked()
-        with mock.patch("app.qq_api.send_image") as send:
+        with mock.patch("app.features.qq.api.send_image") as send:
             r = self.client.post("/api/image_review/%s/approve" % rid)
         self.assertEqual(200, r.status_code, r.get_json())
         self.assertTrue(r.get_json()["ok"])
@@ -525,7 +525,7 @@ class GlobalRoutesTest(_TmpCase):
 
     def test_global_reject_marks_it(self):
         rid = self._blocked()
-        with mock.patch("app.qq_api.send_image") as send:
+        with mock.patch("app.features.qq.api.send_image") as send:
             r = self.client.post("/api/image_review/%s/reject" % rid)
         self.assertEqual(200, r.status_code, r.get_json())
         self.assertFalse(send.called)

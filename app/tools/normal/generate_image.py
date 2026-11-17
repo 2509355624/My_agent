@@ -169,7 +169,7 @@ def _hd_tier_guard(skill, default_skill):
     """
     if not skill or not skill.startswith("hd_"):
         return skill, ""
-    from app import qq_api
+    from app.features.qq import api as qq_api
 
     text = qq_api.current_turn_text()
     if text is None:                      # 网页端 / 单测：无证据，不拦
@@ -239,7 +239,7 @@ def _t2i_guard(is_i2i):
     """
     if not is_i2i:
         return True, ""
-    from app import qq_api
+    from app.features.qq import api as qq_api
 
     text = qq_api.current_turn_text()
     if text is None:
@@ -346,7 +346,7 @@ def _qq_gate():
     时返回一句模型能转述的话，而不是抛错——让它正常回话「生图被关了」，
     别让整轮变成工具执行失败。
     """
-    from app import qq_api
+    from app.features.qq import api as qq_api
     from app.core.agents import image_gen_allowed, image_quota_allowed
     target, target_id = qq_api.current_context()
     if target is None:
@@ -985,7 +985,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 群聊只认公开池、私聊先认自己的——分流规则在 lora_presets.resolve 里。
     if preset:
         from app.features.image import lora_presets as _lp
-        from app import qq_api as _qq
+        from app.features.qq import api as _qq
         # 走局部变量而不是直接比对模块常量：test_image_channels 拿源码里
         # 「对 NAI 分流那行」当锚点，多一处同名语句会让它误判顺序。
         _nai_set = image_jobs.NAI_SKILLS
@@ -1048,7 +1048,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 同一套闸和同一份额度，没有任何新开关。
     if skill in image_jobs.NAI_SKILLS:
         from app.features.image import nai
-        from app import qq_api
+        from app.features.qq import api as qq_api
         from app.core.agents import nai_allowed
         # 种子这事儿到 NAI 门口就停：它是云端出的图，模型版本、参数都在别人
         # 机器上，同一个数在 NAI 那边不保证还是同一张图（用户 2026-10-02 明确
@@ -1311,7 +1311,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 在 ComfyUI 内部——agent 侧看不见也管不着，多个会话并发时 N×2 张一起灌
     # 进去，显存瞬间见底。会话身份在这一刻快照下来：worker 线程读不到 qq_api
     # 的线程本地上下文。
-    from app import qq_api
+    from app.features.qq import api as qq_api
     target, target_id = qq_api.current_context()
     # 同一件事还没出图又被提交一遍：不再排第二张。模型这一轮要么是没看到
     # 上一轮的回执（上下文被压缩 / 守卫误判成空头承诺），要么是把「再跑一张」

@@ -1160,7 +1160,7 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
     # 点单消息；显式传 = 确认闸那种「下一条消息（「好」）里重入队」的场景，
     # 必须用它当初快照的值，不然引用的是那句「好」。
     if reply_to is None:
-        from app import qq_api
+        from app.features.qq import api as qq_api
         reply_to = qq_api.current_message_id()
         if at_user is None and target == "group":
             at_user = qq_api.current_sender_uin()
@@ -1990,7 +1990,7 @@ def _maybe_restart_for_heavy_switch(job):
 
 def _send_image_bytes(target, target_id, path):
     """直接发一张本地文件（NAI 这种不走 ComfyUI 的图用）。"""
-    from app import qq_api
+    from app.features.qq import api as qq_api
     qq_api.send_image(target, target_id, path)
 
 
@@ -2594,7 +2594,7 @@ def turn_is_landscape():
 
     ⚠️ **只能在会话线程调**（`enqueue` 里那一处）。worker 线程读出来是 None。
     """
-    from app import qq_api
+    from app.features.qq import api as qq_api
     text = qq_api.current_turn_text()
     return bool(text) and bool(_LANDSCAPE_RE.search(text))
 
@@ -2973,7 +2973,7 @@ def _reason(exc):
     """
     if isinstance(exc, TimeoutError):
         return "超时"
-    from app import qq_api
+    from app.features.qq import api as qq_api
     text = str(exc) or type(exc).__name__
     return qq_api.onebot_reason(text) or text[:30]
 
@@ -3000,7 +3000,7 @@ def _fail_text(exc, stage="submit", skill=None):
         # （3.89MB），它收到的却是「图没画出来（OneBot 调用失败 send_private_msg: ）」。
         # 根因在 qq_api（QQ 换了种措辞、没被认出来，兜底链路没启动），但
         # 「说图没画出来」这句谎话是这里说的。
-        from app import qq_api
+        from app.features.qq import api as qq_api
         if qq_api.friend_required_error(exc):
             return "图画好了，但私聊发不出去——得先加好友。加完再喊我一次。"
         return "图画好了，但没发出去（%s）。稍后再喊我一次。" % _reason(exc)
@@ -3064,7 +3064,7 @@ def _notice(job, stage="submit"):
         # 对方不是好友时，连这句失败说明都发不出去（QQ 不允许给非好友发私聊）。
         # 那是同一条策略限制，别在这儿再留一段看着像崩溃的堆栈——qq_bot 那边
         # 已经有一条说得清的 WARNING 加一次管理员通知了。
-        from app import qq_api
+        from app.features.qq import api as qq_api
         if qq_api.friend_required_error(exc):
             log.warning("生图失败说明也发不出去 %s %s：对方还不是好友",
                         job.target, job.target_id)
@@ -3082,7 +3082,7 @@ def _send_text(target, target_id, text):
     卡片发不出去（协议端偶发不支持合并转发、私聊临时会话）再退回普通消息，
     不能让一句回执因为卡片折了而彻底消失。
     """
-    from app import qq_api
+    from app.features.qq import api as qq_api
     from app.config import QQ_BOT_NAME
     body = str(text or "").strip()
     if not body:
@@ -3145,7 +3145,7 @@ def _notify_random_blocked(job):
     """随机口令重抽尽的兜底话术。**绝不提审核**——用户视角这只是机器人
     自己出的图没画好，提「审核」反而引人去故意试探边界。发不出去就算了，
     不抛异常（跟 _notify_blocked 同一纪律）。"""
-    from app import qq_api
+    from app.features.qq import api as qq_api
     try:
         if job.target == "group":
             qq_api.send_group(job.target_id, RANDOM_BLOCKED_NOTICE)

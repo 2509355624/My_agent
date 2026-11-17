@@ -475,7 +475,7 @@ class NotifyTest(unittest.TestCase):
         识图一抖用户就去改本来没问题的提示词。
         """
         v = image_audit.Verdict(False, reason="识图失败：timeout", failed=True)
-        with mock.patch("app.qq_api.send_group") as sg:
+        with mock.patch("app.features.qq.api.send_group") as sg:
             image_audit._notify_blocked("group", "123", v)
         sg.assert_called_once_with("123", image_audit.FAILED_NOTICE)
         self.assertNotEqual(image_audit.FAILED_NOTICE,
@@ -483,8 +483,8 @@ class NotifyTest(unittest.TestCase):
 
     def test_notify_uses_group_and_private_channels(self):
         v = image_audit.Verdict(False, reason="x", category="nudity")
-        with mock.patch("app.qq_api.send_group") as sg, \
-             mock.patch("app.qq_api.send_private") as sp:
+        with mock.patch("app.features.qq.api.send_group") as sg, \
+             mock.patch("app.features.qq.api.send_private") as sp:
             image_audit._notify_blocked("group", "123", v)
             image_audit._notify_blocked("private", "456", v)
         sg.assert_called_once_with("123", image_audit.BLOCKED_NOTICE)
@@ -493,7 +493,7 @@ class NotifyTest(unittest.TestCase):
     def test_notify_swallows_send_failure(self):
         """通知发不出去也不能抛 —— 拦截本身已经生效了，不该再炸一层。"""
         v = image_audit.Verdict(False, reason="x", category="nudity")
-        with mock.patch("app.qq_api.send_group",
+        with mock.patch("app.features.qq.api.send_group",
                         side_effect=RuntimeError("发不出去")):
             image_audit._notify_blocked("group", "123", v)   # 不抛就算过
 
@@ -723,7 +723,7 @@ class SendHookTest(unittest.TestCase):
              mock.patch.object(image_jobs, "QQ_AGENT_ID", "qq"), \
              mock.patch("app.core.agents.image_send_format", return_value="jpg"), \
              mock.patch("app.features.image.audit.allow_send", return_value=allow), \
-             mock.patch("app.qq_api.send_image") as send:
+             mock.patch("app.features.qq.api.send_image") as send:
             rv = image_jobs._send_image("group", "123", "Anima_1_.png")
         return rv, send
 

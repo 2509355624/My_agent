@@ -91,7 +91,7 @@ def resolve(spec):
     或本地路径。来源说明是给模型转述用的一句话（「引用的那张图」），免得它
     把垫了哪张说错。失败抛 RuntimeError。
     """
-    from app import qq_api
+    from app.features.qq import api as qq_api
     from app.integrations.vision import fetch_image
 
     spec = str(spec or "").strip()

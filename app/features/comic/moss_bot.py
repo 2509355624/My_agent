@@ -110,7 +110,7 @@ from app.features.comic import moss_series as series_mod
 from app.features.comic import moss_api
 from app.features.qq import trigger
 from app.features.comic import moss_comic
-from app import qq_api
+from app.features.qq import api as qq_api
 from app.config import QQ_AGENT_ID
 from app.features.image import out as image_out
 

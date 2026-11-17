@@ -23,7 +23,7 @@ import threading
 import time
 
 from app.features.qq import stickers
-from app import qq_api
+from app.features.qq import api as qq_api
 from app.config import QQ_AGENT_ID
 
 # 两次发表情包的最小间隔（秒）。节流记在发送**之前**：失败也计入，

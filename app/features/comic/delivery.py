@@ -211,7 +211,7 @@ def deliver(task_dir, qq, force=False, auto=False):
                 continue
             try:
                 path = _pack(task_dir, qq, label, files)
-                from app import qq_api
+                from app.features.qq import api as qq_api
                 qq_api.send_private_file(qq, path, os.path.basename(path))
                 results[label] = {"fingerprint": fp, "state": "sent",
                                   "name": pack_name(task_dir, label),
@@ -247,7 +247,7 @@ def deliver(task_dir, qq, force=False, auto=False):
     if sent:
         # 一行一个包，只说「发了什么」，不写「正在打包 / 正在发送」这类长句。
         try:
-            from app import qq_api
+            from app.features.qq import api as qq_api
             qq_api.send_private(qq, "\n".join(
                 "%s 已发送" % pack_name(task_dir, lab) for lab in sent))
         except Exception:
@@ -289,7 +289,7 @@ def notify_ready(task_dir, qq, kind="comic"):
             % (n, "写真" if is_portrait else "底图",
                "一键发送 zip" if is_portrait else "一键加气泡"))
     try:
-        from app import qq_api
+        from app.features.qq import api as qq_api
         qq_api.send_private(qq, text)
     except Exception:
         pass

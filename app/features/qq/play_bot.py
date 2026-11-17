@@ -20,7 +20,7 @@ import logging
 import re
 
 from app.features.qq import friend_site
-from app import qq_api
+from app.features.qq import api as qq_api
 
 log = logging.getLogger("play_bot")
 

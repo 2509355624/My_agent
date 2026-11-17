@@ -24,7 +24,7 @@ import app.core.agents as agents
 from app.features.image import comfy_status
 from app.features.image import out as image_out
 import app.features.qq.notify as notify
-import app.qq_api as qq_api
+from app.features.qq import api as qq_api
 import app.qq_bot as qq_bot
 from app.features.qq import status as qq_status
 from app.tools.normal import send_qq_message
@@ -463,7 +463,7 @@ class FileSegmentTest(unittest.TestCase):
         self.assertEqual(imgs, [])
 
     def test_resolve_file_ref_calls_the_api(self):
-        with mock.patch("app.qq_api.file_url",
+        with mock.patch("app.features.qq.api.file_url",
                         return_value="https://e.com/real.png") as fu:
             got = qq_bot._resolve_file_ref("fileid://group/9/102/FID%2F1")
         self.assertEqual(got, "https://e.com/real.png")
@@ -475,14 +475,14 @@ class FileSegmentTest(unittest.TestCase):
 
     def test_resolve_file_ref_keeps_ref_when_api_fails(self):
         """解析失败原样返回：fetch_image 会抛，_prepare_images 记一行跳过。"""
-        with mock.patch("app.qq_api.file_url", return_value=""):
+        with mock.patch("app.features.qq.api.file_url", return_value=""):
             got = qq_bot._resolve_file_ref("fileid://private/77/0/X")
         self.assertEqual(got, "fileid://private/77/0/X")
 
     def test_prepare_images_resolves_file_ref_first(self):
         """_prepare_images 是唯一能发 HTTP 的地方：伪地址必须先换成真链接。"""
         seen = []
-        with mock.patch("app.qq_api.file_url",
+        with mock.patch("app.features.qq.api.file_url",
                         return_value="https://e.com/real.jpg"), \
              mock.patch("app.integrations.vision.fetch_image",
                         side_effect=lambda u: (seen.append(u), b"RAW")[1]), \
@@ -503,7 +503,7 @@ class FileSegmentTest(unittest.TestCase):
                 return {"url": "https://e.com/g.png"}
             return {"url": "should-not-be-used"}
 
-        with mock.patch("app.qq_api._call", side_effect=fake_call):
+        with mock.patch("app.features.qq.api._call", side_effect=fake_call):
             got = qq_api.file_url("group", "9", "F", busid="7")
         self.assertEqual(got, "https://e.com/g.png")
         self.assertEqual(calls, ["get_group_file_url"])
@@ -515,7 +515,7 @@ class FileSegmentTest(unittest.TestCase):
                 raise RuntimeError("不支持")
             return {"file": "AAABBBBCCCC"}       # base64，不是地址
 
-        with mock.patch("app.qq_api._call", side_effect=fake_call):
+        with mock.patch("app.features.qq.api._call", side_effect=fake_call):
             self.assertEqual(qq_api.file_url("group", "9", "F"), "")
 
 

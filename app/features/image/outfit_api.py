@@ -60,7 +60,8 @@ from flask import Blueprint, jsonify, request, send_file
 
 from app.features.image import comfy_src
 from app.gateways import friend_auth
-from app import (image_jobs, qq_api)
+from app.features.qq import api as qq_api
+from app import (image_jobs)
 from app.config import QQ_AGENT_ID, state_path
 from app.core.skills import load_workflow
 

@@ -80,7 +80,8 @@ import time
 from app.features.image import random_tags
 from app.features.qq import trigger
 from app.integrations import llm
-from app import (image_jobs, qq_api)
+from app.features.qq import api as qq_api
+from app import (image_jobs)
 from app.features.image import log as image_log
 from app.config import IMAGE_DEFAULT_SKILL, QQ_GROUP_KEYWORDS
 from app.features.chat.confirm_gate import _ATTRIBUTION_RE
@@ -1447,7 +1448,7 @@ def _outfit_text():
     """
     from app.features.qq import friend_site
     from app.gateways import friend_auth
-    from app import (qq_api)
+    from app.features.qq import api as qq_api
     url = friend_site.url()
     if not url:
         return ("换装页现在打不开——隧道没开，让群主双击"
@@ -1520,7 +1521,7 @@ def _runbench_text():
     """
     from app.features.qq import friend_site
     from app.gateways import friend_auth
-    from app import (qq_api)
+    from app.features.qq import api as qq_api
     url = friend_site.url()
     if not url:
         return ("跑图台现在打不开——隧道没开，让群主双击"
@@ -3248,7 +3249,7 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         # 在那之前访问就是 UnboundLocalError（2026-11-08 实测，私聊发指令直接炸）。
         # 用别名，不碰外面的同名符号。
         from app.gateways import guest_view as _gv
-        from app import qq_api as _qqapi
+        from app.features.qq import api as _qqapi
         try:
             sender = str(_qqapi.current_sender_uin() or "")
         except Exception:                            # noqa: BLE001

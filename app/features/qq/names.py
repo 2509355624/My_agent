@@ -102,7 +102,7 @@ def refresh_lists(force=False):
     new_group = {}
     new_private = {}
     try:
-        from app import qq_api
+        from app.features.qq import api as qq_api
         for g in qq_api.get_group_list():
             gid = str(g.get("group_id") or "")
             nm = (g.get("group_name") or "").strip()
@@ -112,7 +112,7 @@ def refresh_lists(force=False):
         log.warning("get_group_list 失败（保留原缓存）：%s", exc)
         return False
     try:
-        from app import qq_api
+        from app.features.qq import api as qq_api
         for u in qq_api.get_friend_list():
             uid = str(u.get("user_id") or "")
             nm = (u.get("remark") or u.get("nickname") or "").strip()

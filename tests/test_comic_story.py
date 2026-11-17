@@ -359,7 +359,7 @@ class LandscapeSnapshotTest(unittest.TestCase):
         with mock.patch.object(image_jobs, "turn_is_landscape",
                                return_value=True) as m_ls, \
              mock.patch.object(gc.gi, "_qq_gate", return_value=None), \
-             mock.patch("app.qq_api.current_context",
+             mock.patch("app.features.qq.api.current_context",
                         return_value=("private", "123")), \
              mock.patch.object(comic_story, "write_story",
                                return_value=("fixed_tag", ["d1", "d2"])), \
@@ -379,7 +379,7 @@ class LandscapeSnapshotTest(unittest.TestCase):
         with mock.patch.object(image_jobs, "turn_is_landscape",
                                return_value=True) as m_ls, \
              mock.patch.object(gc.gi, "_qq_gate", return_value=None), \
-             mock.patch("app.qq_api.current_context",
+             mock.patch("app.features.qq.api.current_context",
                         return_value=("private", "123")), \
              mock.patch.object(comic_story, "write_story",
                                return_value=("fixed_tag", ["d1"])), \
@@ -407,7 +407,7 @@ class GroupComicBlockTest(unittest.TestCase):
         from app.tools.normal import generate_comic as gc
 
         with mock.patch.object(gc.gi, "_qq_gate", return_value=None), \
-             mock.patch("app.qq_api.current_context",
+             mock.patch("app.features.qq.api.current_context",
                         return_value=(target, "123")), \
              mock.patch.object(comic_story, "write_story",
                                return_value=("fixed_tag", ["d1", "d2"])) as m_write, \

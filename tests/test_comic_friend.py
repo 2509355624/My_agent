@@ -317,7 +317,7 @@ class TestDelivery(_TempMixin, unittest.TestCase):
             self.assertIn(k, comic_delivery.RULE)
 
     def test_自动发送按指纹去重且失败写状态(self):
-        from app import qq_api
+        from app.features.qq import api as qq_api
         d = self.mk_task(raw=True, final=True)
         with mock.patch.object(qq_api, "send_private_file") as send, \
                 mock.patch.object(qq_api, "send_private") as hint:
@@ -354,7 +354,7 @@ class TestDelivery(_TempMixin, unittest.TestCase):
                          "failed")
 
     def test_完成通知只发文字不发zip且同一本只通知一次(self):
-        from app import qq_api
+        from app.features.qq import api as qq_api
         d = self.mk_task(name="C20261110-09", raw=True)
         with mock.patch.object(qq_api, "send_private") as text, \
                 mock.patch.object(qq_api, "send_private_file") as files:

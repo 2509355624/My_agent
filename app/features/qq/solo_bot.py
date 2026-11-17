@@ -11,7 +11,7 @@
 import logging
 import re
 
-from app import qq_api
+from app.features.qq import api as qq_api
 
 log = logging.getLogger("solo_bot")
 

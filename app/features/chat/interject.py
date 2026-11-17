@@ -74,7 +74,7 @@ from app.config import (
     QQ_INTERJECT_MODE,
 )
 from app.integrations.llm import call_llm
-from app.qq_api import group_display_name
+from app.features.qq.api import group_display_name
 
 log = logging.getLogger("interject")
 

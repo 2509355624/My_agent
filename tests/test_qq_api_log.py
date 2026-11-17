@@ -9,7 +9,7 @@
 import unittest
 from unittest import mock
 
-from app import qq_api
+from app.features.qq import api as qq_api
 
 
 def _reset_names():

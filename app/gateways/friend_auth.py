@@ -141,7 +141,7 @@ def _friend_ids(force=False):
         if not force and _friends["ok"] and now - _friends["ts"] < 60:
             return set(_friends["ids"]), True
     try:
-        from app import qq_api
+        from app.features.qq import api as qq_api
         rows = qq_api.get_friend_list()
     except Exception:
         log.warning("拉好友列表失败", exc_info=True)
@@ -239,7 +239,7 @@ def send_code(qq):
     text = ("【生图页登录】验证码 %s，5 分钟内有效。\n"
             "不是你自己在登录就直接忽略，别把码给别人。" % code)
     try:
-        from app import qq_api
+        from app.features.qq import api as qq_api
         qq_api.send_private(int(qq), text)
     except Exception as e:
         log.warning("验证码私聊发送失败 %s：%s", qq, e)

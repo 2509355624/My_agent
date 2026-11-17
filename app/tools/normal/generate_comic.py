@@ -40,7 +40,7 @@ def _generate_comic(brief, panels=None, style="silver", landscape=None):
     if landscape is None:
         landscape = image_jobs.turn_is_landscape()
 
-    from app import qq_api
+    from app.features.qq import api as qq_api
     target, target_id = qq_api.current_context()
     if target is None:
         return "错误：连续漫画目前只在 QQ 里画，网页端用不了。"

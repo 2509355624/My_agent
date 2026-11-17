@@ -1799,7 +1799,7 @@ class HdTierGuardTest(unittest.TestCase):
     @staticmethod
     def _guard(skill, text, default="silver"):
         from app.tools.normal import generate_image as gi
-        from app import qq_api
+        from app.features.qq import api as qq_api
         with mock.patch.object(qq_api, "current_turn_text",
                                return_value=text):
             return gi._hd_tier_guard(skill, default)
@@ -1841,7 +1841,7 @@ class HdTierGuardTest(unittest.TestCase):
 
     def test_no_evidence_passes_through(self):
         """网页端（拿不到原话）不拦 —— 没有证据不能当成「他没说要」。"""
-        from app import qq_api
+        from app.features.qq import api as qq_api
         from app.tools.normal import generate_image as gi
         with mock.patch.object(qq_api, "current_turn_text",
                                return_value=None):
@@ -1923,7 +1923,7 @@ class T2iGuardTest(unittest.TestCase):
     def _guard(self, is_i2i, text):
         from unittest import mock
         from app.tools.normal import generate_image as gi
-        with mock.patch("app.qq_api.current_turn_text", return_value=text):
+        with mock.patch("app.features.qq.api.current_turn_text", return_value=text):
             return gi._t2i_guard(is_i2i)
 
     def test_explicit_t2i_drops_source(self):
@@ -1952,7 +1952,7 @@ class T2iGuardTest(unittest.TestCase):
         """网页端/单测没有原话这个证据源，一律不拦（拿不到证据就别动模型的决定）。"""
         from unittest import mock
         from app.tools.normal import generate_image as gi
-        with mock.patch("app.qq_api.current_turn_text", return_value=None):
+        with mock.patch("app.features.qq.api.current_turn_text", return_value=None):
             self.assertEqual(gi._t2i_guard(True), (True, ""))
 
     def test_gate_runs_before_nai_split(self):
@@ -2014,7 +2014,7 @@ class I2iForceRemovedTest(unittest.TestCase):
                 mock.patch.object(gi.char_guard, "check", lambda p: None), \
                 mock.patch.object(gi, "load_skill", lambda skill: None), \
                 mock.patch.object(gi.comfy_src, "resolve", boom), \
-                mock.patch("app.qq_api.current_turn_text",
+                mock.patch("app.features.qq.api.current_turn_text",
                            return_value="图生图 把衣服换成jk"):
             out = gi._generate_image(prompt="change her coat to red")
         self.assertIn(gi.T2I_DEFAULT_SKILL, out)   # 落默认渠道，没被代码补成垫图

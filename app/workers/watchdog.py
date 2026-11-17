@@ -10,7 +10,7 @@ qrcode.png）。这个进程独立于 qq_bot / NapCat，定时探 NapCat 是否�
 
 为什么独立：如果看门狗是 qq_bot 内部的一个线程，适配层自己卡死时就没人能救它了。
 
-探测对象：NapCat OneBot HTTP（:3000）。复用 app.qq_api.check_alive（自带
+探测对象：NapCat OneBot HTTP（:3000）。复用 app.features.qq.api.check_alive（自带
 trust_env=False，不受本机 Clash 注册表代理影响）。
 
 判定（探活三态，见 `_probe`）：
@@ -112,7 +112,7 @@ from app.config import (BASE_DIR, COMFYUI_PYTHON, COMFYUI_ROOT,
                         WATCHDOG_COMFY_ENABLED,
                         WATCHDOG_SILENCE_COOLDOWN, WATCHDOG_SILENCE_MAX_GAP,
                         WATCHDOG_SILENCE_RESTART, WATCHDOG_SILENCE_SECONDS)
-from app.qq_api import check_alive
+from app.features.qq.api import check_alive
 from app.features.qq.notify import push_text
 
 log = logging.getLogger("watchdog")
