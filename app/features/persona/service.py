@@ -106,48 +106,10 @@ def current_model():
 
 
 def _llm_call(messages, **kw):
-    """扮演链路的 LLM 调用：默认用角色扮演专用模型。
-
-    2026-11-09：**链头永远是公用中转站 V4 Pro**（`PERSONA_PROVIDER/MODEL`）。
-    玩家在网页里配的自定义模型是降级链的第二段，排在三次重试之后，不再是
-    「整轮换人」——所以这里无条件点名链头，绝不能因为玩家配了模型就省掉。
-
-    **输出上限（2026-11-06）**：这里显式给一个很大的 `max_tokens`。
-    不给的话会用服务端的默认值，而那个默认值可能只有一两千 token——
-    实测有一条回复在 `帽檐后…` 处断掉，玩家看到的是「AI 说话说到一半」。
-    这不是代码在截断，恰恰是**代码没给够额度**。8192 对 1000~2000 字的
-    契约回复绰绰有余，正常永远碰不到；真碰到时 `llm` 那边会打 warning。
-    """
-    kw.setdefault("max_tokens", REPLY_MAX_TOKENS)
-    # 省掉 provider/model 的后果：candidates() 没有链头，就会去接全局
-    # LLM_FALLBACK_CHAIN，第一项正是付费的官方 DeepSeek。中转站闭站时
-    # 那就是站主自掏腰包，所以链头在这里写死。
-    # 链头：玩家这一轮挑的模型优先（白名单过一遍），没挑就用默认。
-    _pick = current_model()
-    if _pick.get("provider"):
-        kw.setdefault("provider", _pick["provider"])
-    elif PERSONA_PROVIDER:
-        kw.setdefault("provider", PERSONA_PROVIDER)
-    if _pick.get("id"):
-        kw.setdefault("model", _pick["id"])
-    return llm.call_llm(messages, **kw)
+    """扮演链路的 LLM 调用：链头固定，玩家自选模型作为降级段。"""
+    return llm_bridge.call(messages, current_model(), **kw)
 
 
-# 回复的 token 上限。**不是**用来压缩篇幅的——正文长度由提示词约束，
-# 这里是防止服务端默认值把话砍在半句上（2026-11-06 实测过的坑）。
-# 2026-11-13：8192 → 32768。链头是 deepseek-v4-pro 这类带思维链的模型，
-# reasoning 与正文**共享** max_tokens 额度，思维链一长正文就被挤砍（日志
-# [reply-truncated] 里 4224/4359 字被砍正是这个）。32768 是上限不是配额，
-# 模型写完就停，篇幅仍由提示词约束，给大不会让它变啰嗦。
-REPLY_MAX_TOKENS = 32768
-
-# 一轮的结果：`reply` 是要发回去的正文，`scene` 是这一轮要画的画面（可能为空）。
-# 用命名元组而不是 `(reply, scene)`：调用方写 `turn.reply` 比 `[0]` 看得懂，
-# 也不会在改动时把两个字段的顺序弄反。
-# 2026-11-02：加三个字段做「自由模式」的情绪与视觉状态。
-# `mood` 是情绪名（十个之一），`intensity` 是 0~10 的整数，`state` 是她此刻
-# 身上的客观状态（穿着、位置、有没有肢体接触）。用 defaults 而不是新加一个
-# 类：老调用方读 `.reply` / `.scene` 完全不受影响。
 Turn = collections.namedtuple(
     "Turn", "reply scene mood intensity state aff finish",
     defaults=("", 0, "", None, ""))
@@ -294,6 +256,8 @@ from app.features.persona.prompts import (
 
 from app.features.persona.user_block import _visible_user_text, render_user_block
 from app.features.persona import head_builder
+from app.features.persona import llm_bridge
+from app.features.persona.llm_bridge import REPLY_MAX_TOKENS
 from app.features.persona.head_builder import (
     _env_note, _guard_block, _note_block, _state_block,
 )
