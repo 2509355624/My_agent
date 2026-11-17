@@ -266,6 +266,8 @@ from app.features.persona.contract import (
     _CONTRACT, _CONTRACT_NO_INTIMATE, _CONTRACT_TAIL, _GROUP_NOTE, _NOTE_PROMPT,
 )
 
+from app.features.persona import state_store
+
 
 
 
@@ -959,156 +961,28 @@ def remove_user_card(qq, cid):
 
 _STATE_PATH = os.path.join(BASE_DIR, "state", "persona_sessions.json")
 
-# 状态文件的进程内互斥（2026-11-05）。
-#
-# 场景：主线程在聊天落盘的同时，小记压缩线程（`compress_note`）也在写同一份
-# 文件。两个线程「读整份 → 改 → 写整份」时，读者可能在 `os.replace` 换名的
-# 那一瞬 `open()` 失败（Windows 上报 PermissionError），按 `_load_state` 的
-# 新规矩这一轮就直接报错。游客连聊 30 轮时必现（LLM 被 mock 成瞬时返回，
-# 压缩线程每次都还在跑）。
-#
-# 用一把 RLock 把读/写串起来：同进程内不再有交叉窗口；跨进程（QQ 适配层 /
-# 网页后端各一份）不归它管，那边靠 `_save_state` 的读合并 + 原子写。
-_STATE_LOCK = threading.RLock()
-
-
 def _state_guard(fn):
-    """把状态文件的读写串行化（可重入：`_load_state` 里会调 `_save_state`）。"""
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        with _STATE_LOCK:
-            return fn(*args, **kwargs)
-    return wrapper
+    """兼容旧引用：把状态文件的读写串行化。"""
+    return state_store.state_guard(fn)
 
 
-@_state_guard
 def _read_state_raw():
-    """直接读盘，**不迁移、不落盘**。给 `_save_state` 做合并用。
-
-    返回 None 表示「文件在、但读不了」——调用方必须当成危险信号，不能拿
-    空字典去覆盖。
-    """
-    try:
-        with open(_STATE_PATH, "r", encoding="utf-8") as f:
-            d = json.load(f)
-    except FileNotFoundError:
-        return {}
-    except (OSError, ValueError):
-        return None
-    return d if isinstance(d, dict) else {}
+    """兼容旧引用：直接读盘，不迁移、不落盘。"""
+    return state_store.read_raw(_STATE_PATH)
 
 
-@_state_guard
 def _load_state():
-    try:
-        with open(_STATE_PATH, "r", encoding="utf-8") as f:
-            d = json.load(f)
-    except FileNotFoundError:
-        return {}
-    except ValueError:
-        # 文件真坏了：先把它挪去旁边留尸，再从空库起——但绝不静默覆盖。
-        bad = "%s.corrupt-%s" % (_STATE_PATH, time.strftime("%Y%m%d-%H%M%S"))
-        log.exception("角色扮演状态文件坏了，已挪到 %s", bad)
-        try:
-            os.replace(_STATE_PATH, bad)
-        except OSError:
-            log.exception("坏状态文件挪不动，继续用空库（写盘会再次被拒）")
-        return {}
-    except OSError:
-        # 2026-11-05：这里以前是 `return {}`。读到一半权限/占用失败时，
-        # 调用方拿空库继续跑、反手整份写回，就把所有人的存档洗掉了
-        # （今天 546587874 的学妹线和其他二十多条线就是这么没的）。
-        # 现在宁可让这一轮报错，也不许用空库覆盖。
-        log.exception("读角色扮演状态失败（拒绝用空库覆盖）：%s", _STATE_PATH)
-        raise
-    d = d if isinstance(d, dict) else {}
-    # QQ 私聊分线的一次性迁移（2026-11-03 方案 B）。幂等：迁移完的库再扫
-    # 一遍不会写盘（线键已存在、副本一致）。
-    if d and _migrate_private_lines(d):
-        _save_state(d)
-    return d
+    """读整份状态；分线迁移有改动就顺手落盘。"""
+    with state_store.STATE_LOCK:
+        state = state_store.load(_STATE_PATH)
+        if state and _migrate_private_lines(state):
+            _save_state(state)
+        return state
 
 
-@_state_guard
 def _save_state(state, deleted=None):
-    """整份落盘，但**先把盘上别的线合并回来**。
-
-    2026-11-05 修（存档成片消失）：两个进程（QQ 适配层 / 网页后端）都是
-    「读整份 → 改一条 → 写整份」。A 读完还没写回，B 已经新建了几条线；
-    A 一写回就把 B 刚建的线按旧快照盖掉——今天丢的那二十多条线正是这么来的。
-    合并只补「盘上有、这次没带」的键；真要删线必须显式传 `deleted`，
-    不然删档会被合并动作复活。
-    """
-    cur = _read_state_raw()
-    if cur is None:
-        if os.path.exists(_STATE_PATH):
-            log.error("状态文件读不出来，拒绝整份覆盖：%s", _STATE_PATH)
-            raise RuntimeError("persona state unreadable; refuse to overwrite")
-        cur = {}
-    drop = {str(k) for k in (deleted or ())}
-    for k, v in cur.items():
-        if k in drop:
-            continue
-        if k not in state:
-            state[k] = v
-            continue
-        # ── 同一把键两边都有：**天数只许前进**（2026-11-06 用户报的 bug）
-        #
-        # 两个进程（QQ 机器人 / 网页后端）各自「读整库 → 改一条 → 写整库」。
-        # 后写的那份会把它读到的**旧快照**盖回去：网页把天数推到第 2 天，
-        # QQ 那边一保存，第 2 天又变回第 1 天。群友报的「天数又变回去了」
-        # 就是这个。
-        #
-        # 这里不猜谁更新，只守一条**单调性**：游戏日只许涨不许跌。
-        # 回退功能要倒退时，`rollback_last_turn` 会先挂 `_day_back_ok`——
-        # 见到这个标记就放行并吃掉，所以只有「显式回退」能往回走。
-        mine, disk = state.get(k), v
-        if not isinstance(mine, dict) or not isinstance(disk, dict):
-            continue
-        if mine.pop("_day_back_ok", False) or disk.pop("_day_back_ok", False):
-            continue
-        try:
-            md = int((mine.get("gameday") or {}).get("day") or 0)
-            dd = int((disk.get("gameday") or {}).get("day") or 0)
-        except (TypeError, ValueError):
-            md = dd = 0
-        if dd > md:
-            # 连同 phase / event / 约定一起接过来，别只拿天数、时点对不上。
-            mine["gameday"] = copy.deepcopy(disk.get("gameday") or {})
-            mine.pop("gameday_prev", None)
-        try:
-            mt = int(mine.get("turn_total") or -1)
-            dt = int(disk.get("turn_total") or -1)
-        except (TypeError, ValueError):
-            mt = dt = -1
-        if dt > mt:
-            mine["turn_total"] = dt
-
-    from app.core.agents import _atomic_write_text
-    parent = os.path.dirname(_STATE_PATH)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    # 写前备份（2026-11-06 事故之后加的）：
-    #   · `.prev`  —— 上一代，每次落盘前覆盖写一份；
-    #   · `.hourly-YYYYMMDD-HH` —— 每小时一份，留 12 份（半天）。
-    # 只有 `.prev` 的话，连着几次错误覆盖就把它也冲掉了；按小时留档才有
-    # 真正的「回到几小时前」。写失败一律不影响主流程。
-    try:
-        if os.path.exists(_STATE_PATH):
-            shutil.copy2(_STATE_PATH, _STATE_PATH + ".prev")
-            hourly = _STATE_PATH + ".hourly-" + time.strftime("%Y%m%d-%H")
-            if not os.path.exists(hourly):
-                shutil.copy2(_STATE_PATH, hourly)
-                olds = sorted(glob.glob(_STATE_PATH + ".hourly-*"))
-                for old in olds[:-12]:
-                    try:
-                        os.remove(old)
-                    except OSError:
-                        pass
-    except (OSError, NameError):
-        log.warning("写前备份失败（不影响落盘）：%s", _STATE_PATH)
-    _atomic_write_text(_STATE_PATH, json.dumps(state, ensure_ascii=False, indent=2))
-
+    """整份落盘，但先合并盘上别的线；天数和总轮次只许前进。"""
+    state_store.save(_STATE_PATH, state, deleted, read_raw_fn=_read_state_raw)
 
 
 def _migrate_private_lines(state):
