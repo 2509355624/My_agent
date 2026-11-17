@@ -24,7 +24,7 @@ import urllib.parse
 
 from flask import Blueprint, Response, jsonify, request, send_file, send_from_directory
 
-from app import card_maker
+from app.features.card import service as card_maker
 from app.config import WEB_DIR
 
 log = logging.getLogger("card_api")

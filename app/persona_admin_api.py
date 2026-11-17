@@ -373,7 +373,7 @@ def api_delete():
 # 转发，仍按卡管理的口径拦一道：本地直连放行，经网关只给站主。
 
 def _may_manage():
-    from app.card_api import _may_write
+    from app.features.card.routes import _may_write
     return _may_write()
 
 

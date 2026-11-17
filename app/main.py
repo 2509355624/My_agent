@@ -32,7 +32,7 @@ from app import gen_api
 from app import friend_api
 from app import friend_site
 from app import gallery_api
-from app import card_api
+from app.features.card import routes as card_api
 from app import output_api
 from app import outfit_api
 from app import novel_api
@@ -214,8 +214,8 @@ def _tunnel_guard():
         return None
     return jsonify({"ok": False, "error": "not found"}), 404
 
-# 角色卡工作台 API（独立 Blueprint，见 app/card_api.py）：一句话 → 星陨AI 的
-# 五个文本框 + 竖版封面
+# 角色卡工作台 API（独立 Blueprint，见 app/features/card/routes.py）：一句话 →
+# 星陨AI 的五个文本框 + 竖版封面
 app.register_blueprint(card_api.bp)
 
 # output 图片管理台 API（独立 Blueprint，见 app/output_api.py）：ComfyUI output

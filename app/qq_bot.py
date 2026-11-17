@@ -41,13 +41,14 @@ try:
 except ImportError:                    # 非 Windows 平台退化为不做检查
     msvcrt = None
 
-from app import (card_bot, confirm_gate, direct_gen, galgame, image_jobs,
+from app import (confirm_gate, direct_gen, galgame, image_jobs,
                  lora_bot, play_bot, solo_bot,
                  image_log,
                  image_out, interject,
                  logsetup,
                  longterm, moss_bot, notify, persona, qq_api, qq_status, recent,
                  stickers, trigger, usage)
+from app.features.card import bot as card_bot
 from app.agent import run_agent_stream, tail_tokens
 from app.agent_prompt import build_stable_prompt
 from app.config import (

@@ -11,7 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, ".")
 
-from app import card_bot as cb
+from app.features.card import bot as cb
 from app import direct_gen
 
 

@@ -23,7 +23,7 @@ SOLO_PATH = "/play"
 
 def _bot_identity():
     try:
-        from app.card_bot import _bot_identity as ident
+        from app.features.card.bot import _bot_identity as ident
         return ident()
     except Exception:                                  # noqa: BLE001
         from app.config import QQ_BOT_NAME

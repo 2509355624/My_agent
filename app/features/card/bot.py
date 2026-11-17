@@ -29,7 +29,8 @@ import re
 import threading
 import time
 
-from app import card_maker, direct_gen, image_jobs, qq_api
+from app import direct_gen, image_jobs, qq_api
+from app.features.card import service as card_maker
 from app.config import QQ_AGENT_ID, state_path
 
 log = logging.getLogger("card_bot")

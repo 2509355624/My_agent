@@ -194,6 +194,7 @@ def run(job_id: str) -> None:
 | `rag` | `rag/`、`rag_lab.py`、`rerank.py` | 文档问答、切片、检索、重排 |
 | `novel` | `novel.py`、`novel_api.py`、`novel_writing.py` | 小说模式、世界书、裁定链 |
 | `card` | `card_api.py`、`card_bot.py`、`card_maker.py` | 角色卡生成、封面、五框 |
+| `card` 迁移后 | `features/card/routes.py`、`bot.py`、`service.py` | 已接线，URL 不变 |
 | `qq` | `qq_api.py`、`qq_bot.py`、`qq_bill.py`、`qq_names.py`、`qq_status.py`、`friend_api.py`、`friend_site.py`、`guest*.py` | QQ 事件、账单、群友页内核 |
 | `admin` | `admin_site.py`、`usage.py`、`job_ledger.py`、`provider_store.py`、`model_catalog.py`、`agents.py`、`skills.py` | 用量、账本、预设、配置、后台 |
 | `gateways` | `admin_app.py`、`friend_app.py` | 反代、登录、限流、CF 头 |

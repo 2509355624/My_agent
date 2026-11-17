@@ -32,7 +32,7 @@ PLAY_RE = re.compile(r"[/／]\s*玩法")
 def _bot_identity():
     """合并转发卡片里每个节点的「发言人」。与 lora_bot 同一套。"""
     try:
-        from app.card_bot import _bot_identity as ident
+        from app.features.card.bot import _bot_identity as ident
         return ident()
     except Exception:                                  # noqa: BLE001
         return ("大大怪", "10000")
