@@ -1,8 +1,8 @@
 """SnowLuma + ComfyUI 心跳看门狗（独立进程）。
 
 目的：SnowLuma 偶尔直接崩 / 卡死，崩了之后没人知道、扫码通知也不会发（死进程不写
-qrcode.png）。这个进程独立于 qq_bot / SnowLuma，定时探 SnowLuma 是否还活着，死了就拉起
-「一键启动全部 force」把三个窗口（Agent Web / SnowLuma / QQBOT-ADAPTER）全重启。
+qrcode.png）。这个进程独立于 qq_bot / SnowLuma，定时探 SnowLuma 是否还活着，死了就
+拉起一个**隐藏重启助手**，由控制台托管器重启 Agent Web / SnowLuma / QQBOT-ADAPTER。
 
 **另外还盯 ComfyUI（2026-09-30 加，见「ComfyUI 分支」一节）**：它原先**没有任何守护**
 ——协议端自身可能有自愈、qq_bot 有本看门狗，只有 ComfyUI
@@ -26,16 +26,15 @@ trust_env=False，不受本机 Clash 注册表代理影响）。
   用户手上**（用户 09-29 要求「掉线就重启，别只丢个二维码让我自己扫 —— 我扫完还没反应」）。
   OFFLINE_GRACE 留够时间给「人正在扫」，免得白重启一次、还要人多扫一次码。
 
-重启：subprocess 拉起「一键启动全部.bat force auto」（**隐藏窗口**，不阻塞 watchdog）。
-  - force = 忽略「5099 还在监听就跳过 SnowLuma」的保护，强制杀掉再起，处理「进程活着
-    但卡死」的情形。
-  - auto  = 启动器跑完直接退出，不留窗口、不等回车。看门狗每重启一次就多一个窗口的话
-    桌面上很快就堆满了（09-29 用户抱怨）。
+重启：subprocess 拉起 `app.workers.restart_services`（**隐藏进程**，不阻塞 watchdog）。
+  旧实现是 `一键启动全部.bat force auto`，但它里面每个服务都用
+  `start "TITLE" cmd /k ...`，根窗口隐藏了也会新开一排 cmd 窗口（2026-11-18 用户
+  反馈「窗口一直闪」）。新助手用控制台的 `ServiceManager`，子进程全部
+  CREATE_NO_WINDOW，不再产生可见窗口。
 
-  ⚠ 这个批处理会把**看门狗自己也换掉**（用户实测 09-29 20:30：发起重启的那个看门狗
-  在写出结论通知之前就没了，`finally` 里的 clear_restarting() 没执行，qq_bot 那边的
-  掉线通知被孤儿标记压了 15 分钟）。所以结论通知**不能只指望发起者还活着**：
-  notify.restarting() 会检查标记里记的发起 pid，发现它死了就立刻交还通知权。
+  ⚠ 旧批处理会把**看门狗自己也换掉**的历史坑仍在：如果助手重启的服务里包含
+  看门狗自己，结论通知可能发不出去。所以这里只重启 Agent Web / SnowLuma /
+  QQBOT-ADAPTER，不碰看门狗进程。
 
 **重启后只发一条通知，而且只在「要扫码」时发**（09-29 用户拍板）：重启一发起就立刻
 盯结果，等出结论再发，不再先发「正在自动重启」。三种结论：
@@ -153,13 +152,11 @@ _STATUS_PATH = os.path.join(BASE_DIR, "state", "qq_status.json")
 # 状态快照每 1 秒写一次，120 秒留了很宽的余量。
 STATUS_STALE = 120.0
 
-_ALL_BAT = os.path.join(BASE_DIR, "一键启动全部.bat")
 _LOCK_PATH = os.path.join(BASE_DIR, "state", "watchdog.lock")
 
-# ── 协议端固定 SnowLuma ─────────────────────────────
-# 看门狗重启时把 snowluma 透传给一键启动，避免拉错协议端。
-# WebUI 端口默认 5099，只用于区分「进程没起来」和「起来了但没登录」。
-_PROTOCOL_ARG = "snowluma"
+# 隐藏重启助手：只重启这三项，和旧批处理里的三个窗口对齐。
+# 不再使用 一键启动全部.bat：它的 start cmd /k 会开一排可见窗口。
+_RESTART_IDS = ("agent", "snowluma", "qqbot")
 
 # ── ComfyUI 分支参数 ──────────────────────────────────
 # ComfyUI 单独采用约 120 秒失联阈值：30 秒探一次，连续 4 次失败才重启。
@@ -342,7 +339,7 @@ def _comfy_cycle(state, now=None):
 
 
 def _comfy_restart(state, now, detail):
-    """拉起 ComfyUI 启动脚本。**静默**，只在连续失败到上限时才通知。返回 True。"""
+    """按固定 Python 命令重启 ComfyUI。**静默**，只在连续失败到上限时才通知。返回 True。"""
     log.error("ComfyUI 心跳丢失（%s），触发重启", detail)
     state["comfy_fails"] = 0
     if not _trigger_comfy_restart():
@@ -351,8 +348,8 @@ def _comfy_restart(state, now, detail):
             log.error("连续 %d 次都拉不起 ComfyUI，暂停自动重启，退避 %.0f 秒",
                       MAX_RESTART_FAILS, BACKOFF)
             push_text("ComfyUI 需人工处理",
-                      "看门狗多次尝试重启 ComfyUI 都没有成功，请手动双击"
-                      "「启动ComfyUI.bat」检查。")
+                      "看门狗多次尝试重启 ComfyUI 都没有成功，请到服务控制台"
+                      "手动启动 ComfyUI 检查。")
             state["comfy_backoff_until"] = now + BACKOFF
             state["comfy_restart_fails"] = 0
         return True
@@ -476,21 +473,16 @@ def _silent_seconds(now):
 
 
 def _trigger_restart():
-    """拉起「一键启动全部 force auto」，隐藏窗口、不阻塞。返回是否成功发起。
+    """拉起隐藏重启助手，返回是否成功发起。
 
-    ⚠️ 第三个参数（协议端）必须跟着 `_PROTOCOL` 走：`一键启动全部.bat` 默认起
-    SnowLuma，如果这里不传，那么在跑 SnowLuma 的时候看门狗一重启就会把 SnowLuma
-    拉起来 —— 两个协议端抢 3000/3001 端口，比不重启更糟。
+    助手进程用 `ServiceManager` 重启 Agent Web / SnowLuma / QQBOT-ADAPTER；
+    所有子进程 CREATE_NO_WINDOW，不会在桌面新开 cmd 窗口。
     """
-    if not os.path.exists(_ALL_BAT):
-        log.error("找不到 %s，无法重启", _ALL_BAT)
-        return False
-    args = ["cmd", "/c", _ALL_BAT, "force", "auto"]
-    if _PROTOCOL_ARG:
-        args.append(_PROTOCOL_ARG)
+    args = [sys.executable, "-m", "app.workers.restart_services", *_RESTART_IDS]
     try:
         subprocess.Popen(
             args,
+            cwd=BASE_DIR,
             creationflags=subprocess.CREATE_NO_WINDOW,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -498,7 +490,7 @@ def _trigger_restart():
         )
         return True
     except Exception as e:
-        log.error("拉起一键启动失败：%s", e)
+        log.error("拉起隐藏重启助手失败：%s", e)
         return False
 
 
@@ -629,7 +621,7 @@ def _restart(state, now, reason):
         if not _trigger_restart():
             state["restart_fails"] += 1
             push_text("QQ 机器人自动重启失败",
-                      "找不到或无法拉起「一键启动全部.bat」，请手动处理。")
+                      "无法拉起隐藏重启助手，请手动处理。")
             if state["restart_fails"] >= MAX_RESTART_FAILS:
                 state["backoff_until"] = now + BACKOFF
                 state["restart_fails"] = 0
@@ -680,7 +672,7 @@ def _restart(state, now, reason):
 def run():
     _acquire_lock()
     log.info("看门狗启动：探 SnowLuma :3000，间隔 %.0fs；连不上 %d 次、或未登录 %.0fs 即重启。"
-             "同时探 ComfyUI :8188，连不上 %d 次即静默拉起「启动ComfyUI.bat」",
+             "同时探 ComfyUI :8188，连不上 %d 次即静默重启",
              PROBE_INTERVAL, MAX_FAILS, OFFLINE_GRACE, MAX_FAILS)
     state = {"fails": 0, "restart_fails": 0, "offline_since": None,
              "backoff_until": 0.0, "silence_until": 0.0, "silence_gap": 0.0,

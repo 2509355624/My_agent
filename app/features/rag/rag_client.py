@@ -70,6 +70,10 @@ class RagClient:
             env=env,
             cwd=str(ROOT_DIR),
             text=True,
+            # 隐藏控制台：Agent 由控制台用 CREATE_NO_WINDOW 拉起，但 RAG 这个
+            # 子进程若不带标志，Windows 会单独给它开一个 python 黑框（2026-11-18
+            # 用户反馈启动/重启时会闪窗口）。
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             # 必须显式指定编码（2026-11-08）：Windows 上 `text=True` 默认按
             # GBK 解码，daemon 输出的是 UTF-8 JSON，遇到第一个非 GBK 字节
             # （比如「」这类）读线程直接 UnicodeDecodeError 崩掉。

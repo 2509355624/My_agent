@@ -155,6 +155,37 @@ def _qq_specs() -> list[ServiceSpec]:
     ]
 
 
+def _comfyui_spec() -> ServiceSpec:
+    """ComfyUI 直接起 python，不再经过 cmd /c 启动ComfyUI.bat。
+
+    批处理里的 for /f / PowerShell 会额外派生控制台进程，控制台重启 ComfyUI
+    时就闪一堆黑框。`comfy_launch` 已经是看门狗用的同一份命令，这里复用它，
+    cwd / 参数 / 显存环境都一致。
+    """
+    try:
+        from app.features.image import comfy_launch
+        cmd = tuple(comfy_launch.command() or ())
+        cwd = str(comfy_launch.cwd() or ROOT)
+        env = comfy_launch.env() if cmd else {}
+    except Exception:                                        # noqa: BLE001
+        cmd, cwd, env = (), str(ROOT), {}
+    if not cmd:
+        cmd = (COMSPEC, "/c", "启动ComfyUI.bat", "auto")
+    return ServiceSpec(
+        id="comfyui",
+        name="ComfyUI",
+        group="可选",
+        command=cmd,
+        order=9,
+        cwd=cwd,
+        port=8188,
+        start_timeout=120,
+        stop_timeout=30,
+        env=env,
+        autostart=False,  # 吃显存，按需手动开
+    )
+
+
 def _optional_specs() -> list[ServiceSpec]:
     return [
         ServiceSpec(
@@ -165,20 +196,9 @@ def _optional_specs() -> list[ServiceSpec]:
             order=8,
             cwd=str(ROOT),
             start_timeout=12,
-            autostart=False,  # 旧看门狗仍会拉起一键启动全部.bat；先手动开
+            autostart=False,  # 会重启三项服务，先手动开，避免和控制台启动抢跑
         ),
-        ServiceSpec(
-            id="comfyui",
-            name="ComfyUI",
-            group="可选",
-            command=(COMSPEC, "/c", "启动ComfyUI.bat", "auto"),
-            order=9,
-            cwd=str(ROOT),
-            port=8188,
-            start_timeout=120,
-            stop_timeout=30,
-            autostart=False,  # 吃显存，按需手动开
-        ),
+        _comfyui_spec(),
     ]
 
 

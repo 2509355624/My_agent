@@ -113,6 +113,13 @@ class SpecsTest(unittest.TestCase):
         self.assertTrue(agent.command[-1].endswith("agent.py"))
         self.assertEqual(5174, agent.port)
 
+    def test_comfyui_does_not_start_through_cmd_batch(self):
+        """ComfyUI 直接起 python；批处理会派生额外的 cmd/PowerShell 闪窗。"""
+        comfy = next(s for s in default_specs() if s.id == "comfyui")
+        self.assertNotIn("启动ComfyUI.bat", comfy.command)
+        self.assertTrue(any(str(part).endswith("main.py")
+                            for part in comfy.command))
+
     def test_watchdog_and_comfyui_stay_manual(self):
         specs = {s.id: s for s in default_specs()}
         self.assertTrue(specs["agent"].autostart)

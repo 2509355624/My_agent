@@ -13,6 +13,20 @@ from unittest.case import skipIf
 from app.workers import watchdog as wd
 
 
+class WatchdogTriggerTest(TestCase):
+    """重启入口不得再用会开窗口的一键启动批处理。"""
+
+    def test_trigger_restart_uses_hidden_python_helper(self):
+        with mock.patch.object(wd.subprocess, "Popen") as popen:
+            self.assertTrue(wd._trigger_restart())
+        args = popen.call_args.args[0]
+        self.assertIn("app.workers.restart_services", args)
+        self.assertNotIn("一键启动全部.bat", args)
+        self.assertEqual(wd.subprocess.CREATE_NO_WINDOW,
+                         popen.call_args.kwargs["creationflags"])
+        self.assertEqual(wd.BASE_DIR, popen.call_args.kwargs["cwd"])
+
+
 class ProbeStateTest(TestCase):
     """_probe 的三态：用 5099 WebUI 口区分「进程死了」和「活着但没登录」。"""
 
@@ -421,43 +435,6 @@ class SilentSecondsTest(TestCase):
         self.assertIsNone(self._call(1000.0))
 
 
-class RestartProtocolTest(TestCase):
-    """看门狗重启必须把「协议端」透传下去。
-
-    一键启动全部.bat 的第 3 个参数决定起 SnowLuma 还是 SnowLuma，不传就是 SnowLuma。
-    如果 `_trigger_restart` 忘了透传，那么在跑 SnowLuma 时一旦看门狗触发重启，
-    就会把 SnowLuma 也拉起来 —— 两个协议端抢 3000/3001，比不重启更糟。
-    """
-
-    def setUp(self):
-        p = mock.patch.object(wd, "subprocess")
-        self.sp = p.start()
-        self.addCleanup(p.stop)
-        self.addCleanup(setattr, wd, "_PROTOCOL_ARG", wd._PROTOCOL_ARG)
-
-    def _args(self):
-        wd._trigger_restart()
-        return wd.subprocess.Popen.call_args[0][0]
-
-    def test_snowluma_protocol_arg_is_always_passed(self):
-        """协议端固定 SnowLuma，重启时始终把 snowluma 透传给一键启动。"""
-        wd._PROTOCOL_ARG = "snowluma"
-        args = self._args()
-        self.assertEqual(args[:4], ["cmd", "/c", wd._ALL_BAT, "force"])
-        self.assertEqual(args[4], "auto")
-        self.assertEqual(args[-1], "snowluma")
-
-    def test_snowluma_is_passed_through(self):
-        """跑 SnowLuma 时重启必须带 snowluma，否则会拉错协议端。"""
-        wd._PROTOCOL_ARG = "snowluma"
-        args = self._args()
-        self.assertEqual(args[-1], "snowluma")
-
-    def test_protocol_arg_is_always_snowluma(self):
-        """协议端固定 SnowLuma，不再按端口反推。"""
-        self.assertEqual("snowluma", wd._PROTOCOL_ARG)
-
-
 class AwaitOutcomeTest(TestCase):
     """_await_outcome 的三态判定：三条件缺一不可。"""
 
@@ -682,14 +659,18 @@ class ComfyuiRestartCommandTest(TestCase):
     """固定启动命令和进程树强杀参数。"""
 
     def test_restart_kills_port_pid_and_starts_requested_command(self):
+        from app.features.image import comfy_launch
         fake = mock.Mock()
         fake.run.return_value = mock.Mock(returncode=0, stdout=b"")
         fake.Popen.return_value = mock.Mock()
         with mock.patch.object(wd, "subprocess", fake), \
              mock.patch("app.workers.watchdog.os.path.isfile", return_value=True), \
              mock.patch.object(wd, "_comfy_pid_by_port", return_value=1234), \
-             mock.patch.object(wd, "COMFYUI_PYTHON", "D:/AI/confyui_env/Scripts/python.exe"), \
-             mock.patch.object(wd, "COMFYUI_ROOT", "D:/AI/ComfyUI_v037"):
+             mock.patch.object(comfy_launch, "COMFYUI_PYTHON",
+                               "D:/AI/confyui_env/Scripts/python.exe"), \
+             mock.patch.object(comfy_launch, "COMFYUI_ROOT", "D:/AI/ComfyUI_v037"), \
+             mock.patch.object(comfy_launch, "COMFYUI_LAUNCH_ARGS",
+                               "--listen 127.0.0.1 --port 8188 --enable-cors-header *"):
             self.assertTrue(wd._trigger_comfy_restart())
         fake.run.assert_called_once_with(
             ["taskkill", "/F", "/T", "/PID", "1234"],

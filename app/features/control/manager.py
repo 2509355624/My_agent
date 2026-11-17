@@ -291,9 +291,28 @@ class ServiceManager:
         if tree:
             cmd.insert(3, "/T")
         try:
-            subprocess.run(cmd, capture_output=True, timeout=10)
+            subprocess.run(
+                cmd,
+                capture_output=True, timeout=10,
+                stdin=subprocess.DEVNULL,
+                creationflags=_CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
         except Exception:                                    # noqa: BLE001
             pass
+
+    def wait_idle(self, ids: list[str], timeout: float = 120.0) -> bool:
+        """等一批服务重启线程收尾；隐藏重启助手用它避免进程提前退出。
+
+        返回 True=都收尾了，False=超时。只读线程状态，不触发新动作。
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with self._lock:
+                busy = any(self._busy(sid) for sid in ids)
+            if not busy:
+                return True
+            time.sleep(0.5)
+        return False
 
     def _ensure_qq(self):
         if self._find_by_name("qq.exe"):
@@ -505,9 +524,13 @@ class ServiceManager:
             except Exception:                                # noqa: BLE001
                 pass
         try:
-            out = subprocess.run([_sys_tool("netstat.exe"), "-ano"], capture_output=True,
-                                 text=True, timeout=15, encoding="utf-8",
-                                 errors="replace").stdout
+            out = subprocess.run(
+                [_sys_tool("netstat.exe"), "-ano"],
+                capture_output=True, text=True, timeout=15,
+                encoding="utf-8", errors="replace",
+                stdin=subprocess.DEVNULL,
+                creationflags=_CREATE_NO_WINDOW if os.name == "nt" else 0,
+            ).stdout
         except Exception:                                    # noqa: BLE001
             return None
         for line in out.splitlines():

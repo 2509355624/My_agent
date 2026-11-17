@@ -29,8 +29,9 @@
 ## 手动 vs 自动
 
 `agent`、`friend`、`admin`、两条隧道、`snowluma`、`qqbot` 默认自动启动；
-`watchdog` 和 `comfyui` 默认手动——前者仍会调用旧的 `一键启动全部.bat`，
-后者吃显存，按需开更稳。
+`watchdog` 和 `comfyui` 默认手动。看门狗重启走隐藏助手
+`app/workers/restart_services.py`，不再调用会开一排 cmd 窗口的 `一键启动全部.bat`；
+ComfyUI 直接按 `comfy_launch` 的 python 命令启动，不走批处理。
 
 ## 运行
 
