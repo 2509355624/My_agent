@@ -118,6 +118,10 @@ REJECTED = "rejected"
 STATES = (PENDING, APPROVED, REJECTED)
 
 
+_ID_LOCK = threading.Lock()
+_USED_IDS = set()
+
+
 def new_id(ts=None):
     """生成一条队列记录的 id，形如 `RV-20261006-144800-123`。
 
@@ -126,10 +130,19 @@ def new_id(ts=None):
     沿用 image_log 那条约束：以字母开头、不含 `_` 和 `*`（Markdown 降级会吃）。
     """
     t = time.time() if ts is None else float(ts)
-    st = time.localtime(t)
-    ms = int(round((t - int(t)) * 1000)) % 1000
-    return "RV-%s-%s-%03d" % (time.strftime("%Y%m%d", st),
-                              time.strftime("%H%M%S", st), ms)
+    with _ID_LOCK:
+        # 同一毫秒里连续落两条会撞 id（Linux 上实测会）。撞了就往后挪 1ms，
+        # 保证「一条记录一个 id」，不动对外格式。
+        for _ in range(1000):
+            st = time.localtime(t)
+            ms = int(round((t - int(t)) * 1000)) % 1000
+            rid = "RV-%s-%s-%03d" % (time.strftime("%Y%m%d", st),
+                                     time.strftime("%H%M%S", st), ms)
+            if rid not in _USED_IDS:
+                _USED_IDS.add(rid)
+                return rid
+            t += 0.001
+    raise RuntimeError("无法生成唯一二审编号")
 
 
 def _keep_file(path, rid):
