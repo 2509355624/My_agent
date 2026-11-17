@@ -214,7 +214,7 @@ def proxy(sub):
     # 5174 的部分 Blueprint（friend_api / gallery_api）只认内部令牌。
     # 用与 5175 同一个 secret，网关才有资格调这些接口。
     try:
-        from app import friend_auth
+        from app.gateways import friend_auth
         headers["X-Friend-Token"] = friend_auth.secret()
     except Exception:
         pass
