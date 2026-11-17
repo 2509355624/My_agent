@@ -259,6 +259,7 @@ from app.features.persona import llm_bridge
 from app.features.persona import mood as _mood_store
 from app.features.persona import gameday
 from app.features.persona.wipe import clear, erase as _erase, wipe
+from app.features.persona.gameday import game_day, game_phase, set_phase
 from app.features.persona.judge_fields import (
     NOTE_MAX_CHARS, _director_fields, _item_keys_text, _judge_ledger,
     _norm_finish,
@@ -1852,45 +1853,6 @@ def _apply_gameday(key, score=None, force_new_day=False, days=1):
     """把这一轮的时间推进落账，返回最新 gameday。"""
     return gameday.apply(key, score, force_new_day, days,
                          load_state=_load_state, save_state=_save_state)
-
-
-def game_day(session_key):
-    """这条线游戏内第几天（面板/回包用）；没在演返回 None。"""
-    ent = _entry(resolve_line(session_key))
-    if not isinstance(ent, dict):
-        return None
-    return _gameday(ent).get("day")
-
-
-# 时段常量与 normalizing 见 game_time。
-
-
-def game_phase(session_key):
-    """这条线当前时段；没在演返回 ""。"""
-    ent = _entry(resolve_line(session_key))
-    if not isinstance(ent, dict):
-        return ""
-    return str(_gameday(ent).get("phase") or "")
-
-
-def set_phase(session_key, phase, sender_uin=""):
-    """手动切换今天时段，返回 `{"day": N, "phase": "中午"}`；没在演返回 None。
-
-    刻意不碰 `gameday_prev`：切时段不是一轮对话，回退上一轮不该把它撤掉。
-    也不重置 `turns_today`，否则「这一天聊了很久」的收束节拍会被刷掉。
-    """
-    ph = normalize_phase(phase)
-    if ph not in PHASES:
-        return None
-    key = resolve_line(_persona_key(session_key, sender_uin))
-    st = _load_state()
-    ent = st.get(key)
-    if not isinstance(ent, dict):
-        return None
-    gd = _gameday(ent)
-    gd["phase"] = ph
-    _save_state(st)
-    return {"day": gd["day"], "phase": gd["phase"]}
 
 
 # ─── 怀孕 / 时间跳跃（2026-11-05）────────────────────────

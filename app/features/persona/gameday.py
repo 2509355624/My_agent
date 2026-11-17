@@ -3,7 +3,7 @@
 import copy
 
 from app.features.persona.game_text import _gameday, _roll_event
-from app.features.persona.game_time import normalize_phase
+from app.features.persona.game_time import PHASES, normalize_phase
 
 
 def apply(key, score=None, force_new_day=False, days=1,
@@ -71,3 +71,45 @@ def apply(key, score=None, force_new_day=False, days=1,
             gd["place"] = place[:40]
     save_state(st)
     return gd
+
+
+def game_day(session_key):
+    from app.features.persona import service as svc
+    """这条线游戏内第几天（面板/回包用）；没在演返回 None。"""
+    ent = svc._entry(svc.resolve_line(session_key))
+    if not isinstance(ent, dict):
+        return None
+    return _gameday(ent).get("day")
+
+
+# 时段常量与 normalizing 见 game_time。
+
+
+def game_phase(session_key):
+    from app.features.persona import service as svc
+    """这条线当前时段；没在演返回 ""。"""
+    ent = svc._entry(svc.resolve_line(session_key))
+    if not isinstance(ent, dict):
+        return ""
+    return str(_gameday(ent).get("phase") or "")
+
+
+def set_phase(session_key, phase, sender_uin=""):
+    from app.features.persona import service as svc
+    """手动切换今天时段，返回 `{"day": N, "phase": "中午"}`；没在演返回 None。
+
+    刻意不碰 `gameday_prev`：切时段不是一轮对话，回退上一轮不该把它撤掉。
+    也不重置 `turns_today`，否则「这一天聊了很久」的收束节拍会被刷掉。
+    """
+    ph = normalize_phase(phase)
+    if ph not in PHASES:
+        return None
+    key = svc.resolve_line(svc._persona_key(session_key, sender_uin))
+    st = svc._load_state()
+    ent = st.get(key)
+    if not isinstance(ent, dict):
+        return None
+    gd = _gameday(ent)
+    gd["phase"] = ph
+    svc._save_state(st)
+    return {"day": gd["day"], "phase": gd["phase"]}
