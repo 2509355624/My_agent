@@ -10,7 +10,7 @@
 import unittest
 from unittest import mock
 
-from app import comfy_status
+from app.features.image import comfy_status
 from app import image_jobs
 
 

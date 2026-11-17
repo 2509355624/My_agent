@@ -12,5 +12,6 @@
 状态：`log.py`（生图编号 → 提示词账本）、`out.py`（发图副本/临时目录）、
 `quota.py`（私聊额度）、`audit.py`（发图前审核）、`review.py`（人工二审）、
 `migrate.py`（旧图目录迁移）、`delivery.py`（caption 与投递）、`gen_steps.py`（步数/采样器
-档位）、`default_loras.py`（默认 LoRA 表）已迁入并接线；`image_jobs.py` 仍留在根目录，
-测试直接 patch 它的队列/ComfyUI 内部函数，硬拆前要先定测试兼容策略。
+档位）、`default_loras.py`（默认 LoRA 表）、`comfy_status.py`（ComfyUI 在线状态探测）
+已迁入并接线；`image_jobs.py` 仍留在根目录，测试直接 patch 它的队列/ComfyUI 内部函数，
+硬拆前要先定测试兼容策略。

@@ -1183,7 +1183,7 @@ def get_status():
     快照，在这里查更实时。
     """
     from app.features.qq import status as qq_status
-    from app import comfy_status
+    from app.features.image import comfy_status
 
     snap, stale = qq_status.read()
     snap = snap or {}

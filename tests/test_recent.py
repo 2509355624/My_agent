@@ -20,7 +20,7 @@ from unittest import mock
 
 import app.agent as agent
 import app.agents as agents
-import app.comfy_status as comfy_status
+from app.features.image import comfy_status
 import app.longterm as longterm
 import app.memory as memory
 import app.qq_bot as qq_bot

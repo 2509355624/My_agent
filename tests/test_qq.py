@@ -21,7 +21,7 @@ import unittest
 from unittest import mock
 
 import app.agents as agents
-import app.comfy_status as comfy_status
+from app.features.image import comfy_status
 from app.features.image import out as image_out
 import app.notify as notify
 import app.qq_api as qq_api

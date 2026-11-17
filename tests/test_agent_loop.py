@@ -15,7 +15,7 @@ from unittest import mock
 
 import app.agent as agent
 import app.agents as agent_store
-import app.comfy_status as comfy_status
+from app.features.image import comfy_status
 import app.config as config
 
 # comfy_status.snapshot 一律吃内存快照，任何路径都不走真网络

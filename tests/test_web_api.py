@@ -17,7 +17,7 @@ from unittest import mock
 
 import app.agent as agent
 import app.cancel as cancel_mod
-import app.comfy_status as comfy_status
+from app.features.image import comfy_status
 import app.main as main
 
 
