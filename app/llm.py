@@ -332,6 +332,17 @@ def describe_effective(provider=None, model=None):
                ("…" if tail else ""), tail))
 
 
+def default_provider():
+    """当前全局默认 provider。
+
+    正常路径读管理页可热更新的设置；旧测试/旧代码把 `CURRENT_PROVIDER`
+    改成别的值时仍以它为准，保持兼容。
+    """
+    if CURRENT_PROVIDER and CURRENT_PROVIDER != LLM_PROVIDER:
+        return CURRENT_PROVIDER
+    return _settings()["provider"]
+
+
 def get_effective_config(provider=None, model=None):
     """解析出一次请求要用的 (base_url, model, api_key, provider)"""
     # 扮演降级链里的自定义模型：伪 provider + 列表下标，从线程本地取配置。
@@ -358,8 +369,8 @@ def get_effective_config(provider=None, model=None):
             return {"provider": "custom", "base_url": c["base_url"],
                     "model": c["model"], "api_key": c["api_key"],
                     "reasoning_effort": ""}
-    default_pid = _settings()["provider"]
-    provider = (provider or CURRENT_PROVIDER or default_pid).lower()
+    default_pid = default_provider()
+    provider = (provider or default_pid).lower()
     if provider not in PROVIDERS:
         provider = default_pid if default_pid in PROVIDERS else LLM_PROVIDER
     cfg = PROVIDERS[provider]

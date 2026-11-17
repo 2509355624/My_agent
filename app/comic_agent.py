@@ -2606,12 +2606,11 @@ def write_script(brief, panels=3, character="", provider=None, model=None,
     if not (brief or "").strip():
         raise ValueError("设定不能为空")
 
-    # provider 留空 = 用「当前全局生效的那家」（.env 的 LLM_PROVIDER，网页端
-    # 切过就是切后的那家）。**不能真的把 None 传下去**——llm.call_llm 在
-    # provider 为空时压根不看全局默认，而是直接从降级链的链头开跑（实测是
-    # volc），于是 `.env` 里写着的 LLM_PROVIDER=deepseek 被整个绕过。
+    # provider 留空 = 用「当前全局生效的那家」（管理页可热更新的默认 provider）。
+    # **不能真的把 None 传下去**——llm.call_llm 在 provider 为空时压根不看全局
+    # 默认，而是直接从降级链的链头开跑（实测是 volc），于是默认 provider 被绕过。
     # 2026-10-11 实跑逮到：日志是 `volc / deepseek-v4-flash-ga` 而不是 deepseek。
-    provider = (provider or "").strip() or llm.CURRENT_PROVIDER or None
+    provider = (provider or "").strip() or llm.default_provider() or None
 
     # 跳过查库时轮数不需要 12 轮：只有「交稿 / 被催稿」两种走向，3 轮足够
     # （1 轮正常 + 2 轮兜底催稿）。用满 12 轮只会让模型在原地反复道歉。
@@ -3028,7 +3027,7 @@ def fix_script(brief, text, provider=None, model=None, timeout=None,
     """
     if not (text or "").strip():
         raise ValueError("剧本不能为空")
-    provider = (provider or "").strip() or llm.CURRENT_PROVIDER or None
+    provider = (provider or "").strip() or llm.default_provider() or None
     issues = (collect_issues(text, brief or "", pov_mode=pov_mode)
               if issues is None else list(issues))
     out = {"text": text, "issues": issues, "diff": [], "adopted": False,

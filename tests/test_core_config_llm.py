@@ -46,6 +46,12 @@ class LlmRuntimeSettingsTest(unittest.TestCase):
         self.assertEqual(app_llm._settings()["fallback_chain"],
                          "volc:vm,scnet2:sm")
 
+    def test_provider_hot_update_reaches_request_default(self):
+        effective, err = llm.update_llm_settings({"LLM_PROVIDER": "deepseek"})
+        self.assertIsNone(err)
+        self.assertEqual(app_llm.default_provider(), "deepseek")
+        self.assertEqual(app_llm.get_effective_config()["provider"], "deepseek")
+
     def test_unknown_provider_is_rejected(self):
         effective, err = llm.update_llm_settings({
             "LLM_FALLBACK_CHAIN": "nope:x,volc:vm",

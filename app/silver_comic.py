@@ -299,7 +299,7 @@ def write_script_detail(brief, panels=10, character="", provider=None, model=Non
             "空一行，然后是动态部分：正好 %d 格，每格一行英文，格之间用 --- 分隔，\n"
             "不要写 ## 01，不要写「画面:」，不要解释、不要编号、不要目录。"
             % (panels, brief.strip(), fixed_hint, previous, panels))
-    provider = (provider or "").strip() or llm.CURRENT_PROVIDER or None
+    provider = (provider or "").strip() or llm.default_provider() or None
     # 输出上限按格数放大（2026-10-22）：50 格约 3500+ token，服务端默认 4096 会在
     # 半句话上截断，表现出来就是「输出 47 格，要求 50 格」或固定部分干脆丢了。
     # 160 是实测每格一行英文标签的宽松估算，至少给 4096。
