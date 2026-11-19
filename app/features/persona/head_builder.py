@@ -26,15 +26,16 @@ def _guard_block():
 def _note_block(note):
     """「之前的事」小记块：旧账本可能带第三人称，注入前先纠成「你」。
 
-    2026-11-19：注入副本去掉「约定与未完成」一节。账本仍保留这一节给
-    压缩器参考，但写作 AI 不再每轮回收里面的旧细节（用户报的「裙摆划痕
-    贯穿全文」就是这一节把一次性细节写成了待办）。
+    2026-11-19：注入副本去掉「约定与未完成」一节。账本新格式已经不再生成
+    这一节；这里保留删除动作，只为兼容旧存档里残留的「约定」。写作 AI 不再
+    每轮回收旧细节（用户报的「裙摆划痕」贯穿全文就是这一节把一次性细节
+    写成了待办）。
     """
     if not str(note or "").strip():
         return ""
     body = _ledger_fix_pronouns(note)
     if not _ledger_ok(body):
-        # 旧版散文小记不是六节账本：它不是「之前的事」的账，而是一段
+        # 旧版散文小记不是分节账本：它不是「之前的事」的账，而是一段
         # 可以直接被演员扩写的场景散文。宁可这一轮不带旧事，也不把
         # 「晚饭 → 红酒 → 洗澡 → 第二天」这类旧线残片塞进新存档。
         return ""
@@ -106,7 +107,7 @@ def build(card, session_key, sender, cname, note="", state="", intimate=True,
     if sty:
         parts.append(sty)
     if not str(session_key or "").startswith("group_"):
-        parts.append(writing_examples.full_example())
+        parts.append(writing_examples.prompt_example())
         # 范文把契约末尾的人称提醒推远了；这里把同一句再钉一次，
         # 保证生成前最后读到的仍是「你 / 她」的指代规则。
         parts.append("## 生成前最后一句\n\n"

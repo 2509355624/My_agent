@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""完整写作示范块：静态前缀、长度、去 AI 痕迹与接入点。"""
+"""完整写作示范块：真实回合、改前/改后、接入点。"""
 
 import re
 import unittest
@@ -19,24 +19,25 @@ def _card():
 
 
 class WritingExampleTest(unittest.TestCase):
-    def test_example_is_700_to_800_chars(self):
-        self.assertGreaterEqual(len(writing_examples.EXAMPLE), 700)
-        self.assertLessEqual(len(writing_examples.EXAMPLE), 800)
+    def test_example_is_long_enough_to_be_real_prose(self):
+        """约 4,900 字的真实回合 + 改前/改后，不是角色卡开场白。"""
+        self.assertGreaterEqual(len(writing_examples.EXAMPLE), 4500)
+        self.assertLessEqual(len(writing_examples.EXAMPLE), 5500)
 
-    def test_example_avoids_mechanical_ticks(self):
+    def test_example_is_turn_based_not_first_message(self):
         text = writing_examples.EXAMPLE
-        # 「像潮水 / 像钉子」是正常白描；这里禁的是 AI 腔的解释式比喻
-        # 「像是……」「好像……」。
-        for bad in ("顿了顿", "停了", "卡了", "像是", "好像"):
-            self.assertNotIn(bad, text)
-        # 不要用「不是……是……」解释情绪。
-        self.assertIsNone(re.search(r"不是[^。！？\n]{0,14}是", text))
-        # 范文必须来自真实角色卡，不是自己写的；保留来源注释。
-        self.assertIn("Chub", writing_examples.__doc__)
-        self.assertIn("old_charity_66451", writing_examples.__doc__)
-        # 系统头里不能出现「他」：模型会把范文里的代词当示范学走。
-        self.assertEqual(text.count("他"), 0)
-        self.assertIn("她", text)
+        self.assertIn("## 真实回合示范", text)
+        self.assertIn("玩家：", text)
+        self.assertIn("角色：", text)
+        self.assertIn("## 改前 / 改后", text)
+        self.assertNotIn("first_mes", writing_examples.__doc__)
+        self.assertIn("真实回合", writing_examples.__doc__)
+        self.assertIn("examples.md", writing_examples.__doc__)
+
+    def test_prompt_example_has_no_he_pronoun(self):
+        """存档原文可以保留她的心声「他听见了」；送模型前必须纠成「你」。"""
+        self.assertEqual(writing_examples.prompt_example().count("他"), 0)
+        self.assertIn("你听见了", writing_examples.prompt_example())
 
     def test_block_has_header_and_body_once(self):
         block = writing_examples.full_example()
@@ -48,7 +49,7 @@ class WritingExampleTest(unittest.TestCase):
         head = persona.build_head(_card(), "private_1", "张三")
         self.assertIn("## 完整示范", head)
         self.assertEqual(head.count("## 完整示范"), 1)
-        self.assertIn(writing_examples.EXAMPLE, head)
+        self.assertIn(writing_examples.prompt_example(), head)
 
     def test_group_head_does_not_take_the_private_example(self):
         head = persona.build_head(_card(), "group_123", "张三")
