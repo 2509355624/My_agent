@@ -27,6 +27,7 @@ from unittest import mock
 import app.core.agents as agents
 from app.features.persona import affection as affection
 from app.features.persona import service as persona
+from app.features.persona import turn as turn_mod
 from app.features.persona import rag as persona_rag
 
 
@@ -451,6 +452,18 @@ class CharNameTest(PersonaBase):
         self.assertEqual(persona.set_char_name(key, "  苏   暖  "), "苏 暖")
         self.assertEqual(len(persona.set_char_name(key, "名" * 30)), 20)
 
+    def test_stale_one_turn_line_is_rebuilt_on_switch(self):
+        """1 轮的新线挂着 1000 字旧散文 → 切回来按新线重建。"""
+        card, key = self._enter()
+        st = persona._load_state()
+        st[key]["note"] = "门锁响的那一下，她早就听见了。" * 40
+        st[key]["turn_total"] = 1
+        persona._save_state(st)
+        persona.switch_line("private_7", card, 0)
+        ent = persona._entry(key) or {}
+        self.assertEqual(ent.get("note"), "")
+        self.assertEqual(ent.get("turn_total", 0), 0)
+
 
 class HeadTest(PersonaBase):
     def test_head_has_persona_contract_env_and_nothing_else(self):
@@ -481,8 +494,11 @@ class HeadTest(PersonaBase):
         self.assertIn("她开口也只叫你「你」", head)
 
     def test_note_is_attached(self):
-        head = persona.build_head(_card("纱雾"), "private_1", "张三",
-                                  "他昨天让我画了只兔子。")
+        note = ("## 关系\n- 你昨天让她画了只兔子。\n\n"
+                "## 你的事\n- 你叫她画兔子。\n\n"
+                "## 她的事\n- 她画完了。\n\n"
+                "## 日常\n- 住在学校附近。")
+        head = persona.build_head(_card("纱雾"), "private_1", "张三", note)
         self.assertIn("【之前的事】", head)
         self.assertIn("画了只兔子", head)
 
@@ -813,6 +829,27 @@ class TurnTest(PersonaBase):
         self.assertEqual(turn[2], "害羞")
         self.assertEqual(turn[3], 6)
         self.assertEqual(turn[4], "坐在桌前")
+
+    def test_split_turn_tolerates_markdown_wrapped_labels(self):
+        """模型把四行写成 `*画面：* ...`（斜体/星号包住标签）也要剥干净。
+
+        线上实测（2026-11-19）：正文里整段露出「*画面： *」「*服饰： *」
+        「*心情： *」「*状态： *」，就是正则只认行首裸标签、没吃 Markdown
+        星号。这里按截图的真实形状钉住。
+        """
+        raw = ("门口没动静。\n\n"
+               "*画面： * medium shot of her kneeling, soft light\n"
+               "*服饰： * loose pale-blue hoodie and grey shorts\n"
+               "*心情： * 害羞 强度5\n"
+               "*状态： * 房间书桌前跪坐 · 浅蓝宽松连帽衫 · 下午 · 无")
+        body, scene, mood, val, state = persona.split_turn(raw)
+        self.assertEqual(body, "门口没动静。")
+        self.assertEqual(scene, "medium shot of her kneeling, soft light")
+        self.assertEqual(mood, "害羞")
+        self.assertEqual(val, 5)
+        self.assertEqual(state, "房间书桌前跪坐 · 浅蓝宽松连帽衫 · 下午 · 无")
+        self.assertEqual(persona.split_outfit(raw),
+                         "loose pale-blue hoodie and grey shorts")
 
     def test_history_keeps_dialogue_only(self):
         """历史里每条 assistant 都必须带三行（2026-11-02 起会补齐）。
@@ -1197,6 +1234,39 @@ class DrawTest(unittest.TestCase):
             self.assertEqual(persona.draw_shot({}, "group_1"),
                              ("", "这一轮没有可画的画面"))
 
+    def test_draw_shot_accepts_a_custom_channel(self):
+        """网页选了自定义渠道：这条出图必须用它，不能又退回 silver。"""
+        from unittest import mock
+        self._patch()
+        with mock.patch.object(persona, "shot_scene",
+                               return_value="sitting, smile"):
+            name, note = persona.draw_shot({"appearancePrompt": "1girl"},
+                                           "group_1", landscape=True,
+                                           skill="krea2-jiguang")
+        self.assertEqual((name, note), ("a.png", ""))
+        from app.features.image import jobs as ij
+        _, kw = ij.enqueue.call_args
+        self.assertEqual(kw["skill"], "krea2-jiguang")
+        self.assertTrue(kw["landscape"])
+
+    def test_shot_pref_is_account_level_and_can_be_cleared(self):
+        """账号级渠道记忆：写一次能读回；空 skill = 删掉，回默认。"""
+        import os
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "prefs.json")
+            with mock.patch.object(persona, "_SHOT_PREF_PATH", path):
+                self.assertEqual(persona.shot_pref("2509355624"), "")
+                persona.set_shot_pref("2509355624", "krea2-jiguang")
+                self.assertEqual(persona.shot_pref("2509355624"),
+                                 "krea2-jiguang")
+                # 换角色不影响：同一个账号读到的还是它
+                self.assertEqual(persona.shot_pref("2509355624"),
+                                 "krea2-jiguang")
+                persona.set_shot_pref("2509355624", "")
+                self.assertEqual(persona.shot_pref("2509355624"), "")
+
 
 class PovContractTest(unittest.TestCase):
     """2026-11-08：POV 机位由代码固定拼，画面行写以镜头为受体的动作。"""
@@ -1430,6 +1500,42 @@ class LedgerTest(unittest.TestCase):
     def test_valid_ledger_passes(self):
         self.assertTrue(persona._ledger_ok(self.LEDGER))
 
+    def test_note_block_drops_agreement_section(self):
+        """注入副本不带「约定与未完成」；账本原文仍保留这一节。"""
+        block = persona._note_block(self.LEDGER)
+        self.assertIn("【之前的事】", block)
+        self.assertIn("你做了早餐", block)
+        self.assertNotIn("周末去图书馆", block)
+        self.assertNotIn("约定与未完成", block)
+
+    def test_note_block_keeps_other_sections(self):
+        block = persona._note_block(self.LEDGER)
+        for key in ("关系", "你的事", "她的事", "忌讳", "日常"):
+            self.assertIn(key, block)
+
+    def test_note_block_drops_freeform_prose(self):
+        """旧版散文小记不是账本，不能当「之前的事」注入（2026-11-19）。"""
+        prose = "门锁响的那一下，她早就听见了，笔停在半空。第二天。"
+        self.assertEqual(persona._note_block(prose), "")
+
+    def test_note_for_prompt_drops_prose_at_one_turn(self):
+        prose = "门锁响的那一下，她早就听见了，笔停在半空。第二天。" * 30
+        self.assertEqual(
+            turn_mod._note_for_prompt({"turn_total": 1}, prose,
+                                      persona.NOTE_EVERY_TURNS), "")
+
+    def test_note_for_prompt_keeps_ledger_after_five_turns(self):
+        self.assertEqual(
+            turn_mod._note_for_prompt({"turn_total": 6}, self.LEDGER,
+                                      persona.NOTE_EVERY_TURNS), self.LEDGER)
+
+    def test_note_for_prompt_drops_long_ledger_before_five_turns(self):
+        """就算格式对，1 轮也不该有 1000 字旧账——那是旧线残留。"""
+        self.assertEqual(
+            turn_mod._note_for_prompt({"turn_total": 1}, self.LEDGER,
+                                      persona.NOTE_EVERY_TURNS), "")
+
+
     def test_freeform_note_is_rejected(self):
         self.assertFalse(persona._ledger_ok("我们聊了很久，她今天很开心。"))
 
@@ -1461,8 +1567,11 @@ class LedgerTest(unittest.TestCase):
     def test_build_head_sanitizes_legacy_note(self):
         """存量脏账本不改数据，注入前也要把「他」纠成「你」。"""
         card = {"name": "x", "systemPrompt": "y"}
-        head = persona.build_head(card, "private_1", "",
-                                  "- 房钱他出，账记他头上", "")
+        note = ("## 关系\n- 房钱他出，账记他头上\n\n"
+                "## 你的事\n- 他做了早餐\n\n"
+                "## 她的事\n- 她答应帮你复习\n\n"
+                "## 日常\n- 住在学校附近")
+        head = persona.build_head(card, "private_1", "", note, "")
         self.assertNotIn("他出", head)
         self.assertIn("你出", head)
 
@@ -2144,62 +2253,60 @@ class NovelCraftContractTest(unittest.TestCase):
     """
 
     def test_contract_is_positive_not_prohibition_heavy(self):
-        """每轮必拼的契约正文里，禁令词要几乎清零（白象效应）。"""
-        c = persona._CONTRACT_NO_INTIMATE   # 不含亲密指导，日常轮也拼这一段
+        """每轮必拼的契约规则段里，禁令词要几乎清零（白象效应）。
+
+        示例里的自然对白（「你能不能别管我」）不算规则禁令，先切掉示例再数。
+        """
+        c = persona._CONTRACT_NO_INTIMATE.split("## 二、示例")[0]
         for w in ("不许", "不能", "禁止", "必须", "算不合格", "缺一段都不行",
                   "两条硬规矩", "不许用「他」"):
             self.assertNotIn(w, c, "契约正文里还在用禁令词：%s" % w)
-        # 唯一剩下的「不要」是「要不要配图」，不是禁令
         self.assertLessEqual(c.count("不要"), 1)
 
     def test_contract_teaches_novel_craft(self):
-        """酒馆那套让内容有趣的招式，得真的进每一轮提示词。"""
+        """新写作规范（30% 规则 + 70% 示例）要真的进每一轮提示词。"""
         c = persona._CONTRACT
-        for phrase in ("可以这样写", "先给她一个能碰的东西", "闲笔",
-                       "没用的道具", "对话可以碎", "情绪写成身体", "专属感",
-                       "不回收的干扰项", "潜台词", "句式跟着情绪走",
-                       "平淡的内容可以有", "均匀的机灵 = AI"):
-            self.assertIn(phrase, c, "笔法节漏了：%s" % phrase)
+        for phrase in ("## 写作规范（DeepSeek 小说去 AI 味）",
+                       "配比：约 30% 规则，70% 示例",
+                       "## 一、规则", "## 二、示例",
+                       "### 示例 1 · 日常短答", "### 示例 51 · 早上",
+                       "不设下限", "一段只写一个变化"):
+            self.assertIn(phrase, c, "写作规范漏了：%s" % phrase)
 
     def test_scene_section_exists(self):
-        """「这一拍的戏」小节（2026-11-07）：主动权、想要/怕/赌、
-        一轮一变化、留线头——爽感来源，不能被改丢。
-        2026-11-08：钩子表述按用户要求清掉，线头只留在这一拍里。"""
+        """「一拍的结构」四件事：想要 / 挡住 / 变了 / 留口子。"""
         c = persona._CONTRACT
-        for phrase in ("### 这一拍的戏", "她可以主动",
-                       "怕什么", "和开头不一样", "线头留在这一拍里"):
+        for phrase in ("### 3. 一拍的结构", "她想要什么",
+                       "什么挡着她", "哪里变了", "留什么口子"):
             self.assertIn(phrase, c)
         self.assertNotIn("想看下一拍", c)
         self.assertNotIn("悬着的那一下", c)
 
     def test_word_count_relaxed(self):
-        """300~600 字区间（2026-11-07 二改：600~2000 实测催出凑字数）；
-        旧的 400~800、1000 常态、字数不是目标、允许烂尾都不回来，
-        「收得住」这种作文收尾口径也撤掉。"""
-        c = persona._CONTRACT
-        # 2026-11-08 改：保底 300，上限交给模型（600~1200 正常）。
-        self.assertIn("至少 300 字", c)
-        # 2026-11-08：角色扮演没有结尾，钩子收尾的说法一并不回来
-        self.assertIn("这一拍没有结尾", c)
-        self.assertNotIn("想看下一拍", c)
-        self.assertNotIn("一轮 **300~600 字**就把这一拍写完", c)
-        self.assertNotIn("收得住", c)
-        self.assertNotIn("1000 字", c)
-        self.assertNotIn("400~800", c)
-        self.assertNotIn("字数不是目标", c)
-        self.assertNotIn("允许烂尾", c)
-        self.assertNotIn("3~4 段", c)
-        self.assertNotIn("每段都要有具体的感官细节", c)
-        self.assertNotIn("这一轮要有变化", c)
+        """篇幅不再写死 300~600：长度由这一拍的信息量决定。"""
+        head = persona.build_head({"name": "x", "systemPrompt": "y"},
+                                  "private_1", "", intimate=False)
+        self.assertIn("不设下限", head)
+        self.assertIn("信息量", head)
+        self.assertNotIn("至少 300 字", head)
+        self.assertNotIn("300~600 字", head)
+        self.assertNotIn("收得住", head)
+        self.assertNotIn("1000 字", head)
+        self.assertNotIn("400~800", head)
+        self.assertNotIn("字数不是目标", head)
+        self.assertNotIn("允许烂尾", head)
+        self.assertNotIn("3~4 段", head)
+        self.assertNotIn("每段都要有具体的感官细节", head)
+        self.assertNotIn("这一轮要有变化", head)
 
     def test_craft_reaches_every_turn_including_non_intimate(self):
         """笔法写在契约里，日常轮（不带亲密指导）也要吃到。"""
-        plain = persona._CONTRACT_NO_INTIMATE
-        self.assertIn("可以这样写", plain)
-        self.assertIn("闲笔", plain)
         head = persona.build_head({"name": "x", "systemPrompt": "y"},
                                   "private_1", "", intimate=False)
-        self.assertIn("可以这样写", head)
+        self.assertIn("## 写作规范（DeepSeek 小说去 AI 味）", head)
+        self.assertIn("### 示例 1 · 日常短答", head)
+        self.assertIn("## 写作规范", head)
+        self.assertNotIn("## 正文：写一段小说", head)
 
     def test_history_keeps_a_full_long_reply(self):
         """正文放宽到 2000 字后，历史单条也得装得下，不然下一轮只剩半截。"""
@@ -2220,13 +2327,11 @@ class NovelCraftContractTest(unittest.TestCase):
         self.assertIn("全程待在角色里", g)
 
     def test_monologue_melts_into_narration(self):
-        """2026-11-06：心声改成混在第三人称叙述里的念头，靠例子教写法。"""
+        """心声混在第三人称叙述里，新规范保留一节短规则。"""
         c = persona._CONTRACT_NO_INTIMATE
-        self.assertIn("念头可以就长在叙述里", c)
-        self.assertIn("这一下有点像在拖延", c)
-        self.assertIn("怎么偏偏是腰", c)
-        self.assertIn("一轮留一处就够", c)
-        self.assertIn("这一轮一句都没有也很正常", c)
+        self.assertIn("她的心思", c)
+        self.assertIn("念头可以长在叙述里", c)
+        self.assertIn("〔心声〕", c)
 
     def test_monologue_has_no_quota_or_tag(self):
         """硬配额和元数据标签都要从每轮提示词里消失。"""
@@ -2592,6 +2697,14 @@ class ArchiveHistoryTest(PersonaBase):
         self.assertFalse(os.path.exists(path))
         self.assertEqual(persona.load_archive(self.key), [])
 
+    def test_wipe_slot_removes_state_even_if_merge(self):
+        """删槽要连状态条目一起 drop；不然 `_save_state` 合并会把它复活。"""
+        self._seed(1)
+        line = self.key
+        persona.wipe_slot(line)
+        self.assertNotIn(line, persona._load_state())
+        self.assertFalse(os.path.exists(persona._hist_path(line)))
+
 
 class ClearCommandTest(PersonaBase):
     """`#清空`（2026-11-02）；2026-11-05 起不再直接删，改走删档两步确认。"""
@@ -2677,15 +2790,15 @@ class OffscreenTest(unittest.TestCase):
     def test_contract_has_offscreen_section(self):
         head = persona.build_head({"name": "纱雾", "systemPrompt": "你是纱雾。"},
                                   "private_1", "")
-        self.assertIn("你离开她视线的时候", head)
-        self.assertIn("线索摆好，动作留给玩家", head)
-        self.assertIn("最后要落回她的反应", head)
+        self.assertIn("你走开的时候", head)
+        self.assertIn("镜头留在她这边", head)
+        self.assertIn("她第一眼看的", head)
 
     def test_offscreen_section_survives_no_intimate_variant(self):
         """亲密场景块被剔掉时，场外写法还得在（两个版本共用同一节）。"""
         head = persona.build_head({"name": "纱雾", "systemPrompt": "你是纱雾。"},
                                   "private_1", "", intimate=False)
-        self.assertIn("你离开她视线的时候", head)
+        self.assertIn("你走开的时候", head)
 
     def test_room_material_only_in_private(self):
         card = {"name": "纱雾", "systemPrompt": "你是纱雾。",
@@ -3561,7 +3674,7 @@ class ManualRunTurnTest(PersonaBase):
         actor = "\n".join(m["content"] for m in seen[-1])
         self.assertIn("这一拍往这个方向走", actor)
         self.assertIn("让她先开口", actor)
-        self.assertIn("至少 300 字", actor)
+        self.assertIn("不设下限", actor)
         self.assertIn("想让她主动", actor)   # 2026-11-08：心里话给写作 AI
         # 剧情推进（导演条）已随缓存优化 Phase A 挪到末尾玩家消息，不再进
         # system 头；这里改查最后一条 user 消息。
@@ -3752,7 +3865,7 @@ class StoryLineTest(unittest.TestCase):
         "## 日常与场景\n- 靠窗的饭馆。\n"
     )
 
-    def test_story_line_orders_time_done_and_todo(self):
+    def test_story_line_orders_time_done_without_todo(self):
         out = persona.story_line(
             {"day": 3, "phase": "下午", "place": "饭馆",
              "plan": "陪她挑耳机", "plan_day": 5}, self.NOTE)
@@ -3760,12 +3873,12 @@ class StoryLineTest(unittest.TestCase):
             "【故事到现在】\n时间：第 3 天 · 下午 · 饭馆"))
         self.assertIn("已经发生：", out)
         self.assertIn("早上揽住她的头先吻了一回", out)
-        self.assertIn("账本里还记着的约定：陪她挑耳机（约在第 5 天）", out)
-        self.assertIn("早饭欠着", out)
-        # 2026-11-10：代码只报「账本记着」，做没做完交给模型判断。
-        # 以前硬写「还没完成：」，把已办完的约定跨天一遍遍重演。
+        # 2026-11-19：发展线不再带「约定与未完成」——一次性细节被写成待办，
+        # 演员会连续多轮回收它，剧情反而失去推进。
+        self.assertNotIn("账本里还记着的约定", out)
+        self.assertNotIn("早饭欠着", out)
+        self.assertNotIn("陪她挑耳机", out)
         self.assertNotIn("还没完成：", out)
-        self.assertIn("做过的事留在昨天", out)
         # 正向写法：整块不含禁令词
         for bad in ("不能", "不许", "不要", "禁止", "必须"):
             self.assertNotIn(bad, out)
@@ -3801,16 +3914,16 @@ class StoryLineTest(unittest.TestCase):
         self.assertEqual(persona._ledger_section(self.NOTE, "不存在"), [])
         self.assertEqual(persona._ledger_section("一段散文", "约定"), [])
 
-    def test_plan_and_ledger_are_not_duplicated(self):
-        """同一条约定只写一遍：结构化那条带天数，优先留它。"""
+    def test_plan_and_ledger_are_no_longer_injected(self):
+        """发展线只报已经发生的事；约定和 plan 交给最近原文与压缩记忆。"""
         note = ("## 约定与未完成\n"
                 "- 下课后一起去超市买菜，然后上你家做饭。\n"
                 "- 下一顿早餐她亲手做给你吃。\n")
         out = persona.story_line(
             {"day": 1, "plan": "一起买菜回家做饭", "plan_day": 2}, note)
-        self.assertEqual(out.count("做饭"), 1)
-        self.assertIn("一起买菜回家做饭（约在第 2 天）", out)
-        self.assertIn("下一顿早餐", out)
+        self.assertNotIn("约定", out)
+        self.assertNotIn("一起买菜回家做饭", out)
+        self.assertNotIn("下一顿早餐", out)
 
     def test_clip_items_strips_double_punctuation(self):
         got = persona._clip_items(["她笑了。", "他说好；"], 4, 40)
@@ -3824,13 +3937,13 @@ class CrossDayFactTest(unittest.TestCase):
     根子是三处代码替模型下了「还没完成」的结论。
     """
 
-    def test_stale_plan_is_reported_as_a_date_not_a_todo(self):
+    def test_stale_plan_is_not_injected_as_a_todo(self):
         out = persona.story_line(
             {"day": 3, "plan": "去市场买菜", "plan_day": 2}, "")
-        self.assertIn("那天已经过了", out)
-        self.assertNotIn("就说今天", out)
+        self.assertNotIn("去市场买菜", out)
+        self.assertNotIn("账本里还记着的约定", out)
+        self.assertNotIn("那天已经过了", out)
         self.assertNotIn("还没完成：", out)
-        self.assertIn("账本里还记着的约定", out)
 
     def test_gameday_block_never_asserts_plan_is_pending(self):
         blk = persona._gameday_block(
@@ -3900,18 +4013,10 @@ class ReplayContract20261108Test(unittest.TestCase):
     def test_contract_new_rules(self):
         c = persona._CONTRACT
         for s in ("她只知道这一刻站在她眼前能看见、能听见的",
-                  "一句台词换一次气",
-                  # 2026-11-09：原来那句「一件事写到底 / 镜头不换场地、手里不换物件」
-                  # 被模型读成「这一拍不许走」，同一条线 84 轮里攒出 345 个跨轮
-                  # 复刻片段。现在改成「写下一步」+ 每拍挪动一样东西 + 意象只用一次。
-                  "上一拍停下的那个动作的下一步",
-                  "每一拍至少挪动一样东西", "同一个意象只用一次",
-                  # 2026-11-09：过程要有阻力（用户：抱起→放床→盖被子太平淡了）
-                  "过程要有阻力", "分成几步给", "阻碍之后一定有一次推进",
-                  # 2026-11-09：一整拍的示范
-                  "一整拍长什么样", "挡的人自己松了",
                   "这件事能走到哪一步", "半路被挡下来不是失败",
-                  "这一拍没有结尾", "〔心声〕"):
+                  "## 写作规范（DeepSeek 小说去 AI 味）",
+                  "### 3. 一拍的结构", "什么挡着她", "哪里变了",
+                  "结尾停在动作、声音或物件上", "〔心声〕"):
             self.assertIn(s, c)
         for s in ("想看下一拍", "悬着的那一下", "收得干干净净",
                   # 旧写法必须彻底退场，否则两条相反的指令会打架
@@ -3923,8 +4028,8 @@ class ReplayContract20261108Test(unittest.TestCase):
         d = persona._SCENE_DUTY
         self.assertIn("用叙述演出来", d)
         self.assertIn("只接不重念", d)
-        self.assertIn("顺序按他写的来", d)
-        self.assertIn("她知道不了", d)
+        self.assertIn("顺序按你写的来", d)
+        self.assertIn("她不会点破", d)
         self.assertIn("〔心声〕", d)
 
     def test_thought_marker_survives_web_but_not_plain_text(self):

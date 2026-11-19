@@ -146,10 +146,13 @@ class StyleUnitTest(unittest.TestCase):
                          writing_style.tail(12, "雨"))
 
     def test_tail_default_carries_length_anchor(self):
-        """篇幅锚点在近因位：300~600，停在哪都行，不收作文尾巴。"""
+        """篇幅锚点在近因位：不设下限，长度随这一拍的信息量。"""
         out = writing_style.tail()
-        self.assertIn("300~600 字", out)
-        self.assertIn("停", out)
+        self.assertIn("不设下限", out)
+        self.assertIn("信息量", out)
+        self.assertIn("停在动作上", out)
+        self.assertNotIn("至少 300 字", out)
+        self.assertNotIn("300~600 字", out)
         self.assertNotIn("收得住", out)
         for bad in ("不能", "不许", "不要", "禁止", "必须"):
             self.assertNotIn(bad, out)
@@ -169,7 +172,7 @@ class StyleUnitTest(unittest.TestCase):
         out = writing_style.tail(plot="  换行\n 压成一行  ")
         self.assertNotIn("\n", out)
         self.assertIn("换行 压成一行", out)
-        self.assertLessEqual(len(writing_style.tail(plot="方" * 400)), 300)
+        self.assertLessEqual(len(writing_style.tail(plot="方" * 400)), 360)
 
 
 class BuildHeadTest(unittest.TestCase):
