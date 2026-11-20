@@ -368,6 +368,17 @@ class RetrieveTest(RagBase):
         block = rank.build_block("web_10001__rem", "周末去哪")
         self.assertIn("傍晚两人聊到周末", block)
 
+    def test_merge_parent_dedupes_same_id_from_multiple_sources(self):
+        # 同一父块从 recent 和挂载两路各读回一份，不能被当成 part 拼接两遍。
+        gid = "batch-1-5-0"
+        base = {"id": gid, "content": "整批经过叙事。",
+                "metadata": {"kind": "parent", "group_id": gid, "part": 1}}
+        recent = dict(base); recent["metadata"] = dict(base["metadata"])
+        mounted = dict(base); mounted["metadata"] = dict(base["metadata"])
+        merged = rank._merge_parent_parts([recent, mounted])
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["content"], "整批经过叙事。")
+
 
 class ForgetTest(RagBase):
     def test_forget_last_pops_pending(self):

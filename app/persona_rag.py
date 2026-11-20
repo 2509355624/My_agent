@@ -1287,9 +1287,17 @@ def _merge_parent_parts(parents):
     标题拆开摆。旧 batch 没有 group_id，按自身 id 成组。
     """
     by_group, order = {}, []
+    seen_ids = set()
     for d in parents:
         m = _meta(d)
         gid = str(m.get("group_id") or d.get("id") or "")
+        eid = str(d.get("id") or "")
+        # 同一父块可能从 recent、挂载、召回多路各读回一份 dict；按 id 去重，
+        # 不能当成 part1/part2 把同一段叙事 join 两遍。
+        if eid:
+            if eid in seen_ids:
+                continue
+            seen_ids.add(eid)
         if gid not in by_group:
             by_group[gid] = []
             order.append(gid)
