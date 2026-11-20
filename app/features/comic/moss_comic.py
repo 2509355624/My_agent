@@ -1217,6 +1217,12 @@ def build_page_prompt(spec, page, with_text=True):
     输出是一条字符串（不是 dict）：调用方要把它塞进 workflow 的
     `__MULTI_PROMPTS__`，那边本来就按文本替换。
     """
+    # 双段式链路（编剧 AI + 逐页编译 AI）产出的整页 Layout JSON：
+    # 已经由代码闸门钉死分格/落格/画风锁，这里不再二次拼装，原样交给出图端。
+    ov = (page or {}).get("prompt_override")
+    if isinstance(ov, str) and ov.strip():
+        return ov.strip()
+
     lay = page.get("layout") or "single"
     lay_text = LAYOUTS[lay][0]                 # 分格句
     boxes = LAYOUT_BOXES[lay]
@@ -1564,3 +1570,22 @@ def digest(spec, provider=None, timeout=90):
         fb_s, fb_c = _digest_fallback(spec)
         return (summary or fb_s), (scene or fb_c)
     return summary, scene
+
+
+# ══════════════════════════════════════════════════════════
+#  L0–L5 骨架注册（2026-11-21 双段式链路实装）
+# ══════════════════════════════════════════════════════════
+# 这六套版式由 `moss_twopass.SKELETONS` 定义，出图时走每页的
+# `prompt_override`（build_page_prompt 直接放行），所以本文件的
+# LAYOUTS / LAYOUT_BOXES 只用于：页面显示版式名、`check()` 数期望格数。
+# 放文件末尾注册而不是塞进上面两张表：两处口径必须同源，改骨架只改一处。
+def _register_two_pass_layouts():
+    from app.features.comic import moss_twopass as _tp
+
+    for _name, _boxes in _tp.SKELETONS.items():
+        roles = [_tp._CELL_ROLE[_name][i] for i in range(1, len(_boxes) + 1)]
+        LAYOUTS.setdefault(_name, (_tp.LAYOUT_SENTENCE[_name], roles))
+        LAYOUT_BOXES.setdefault(_name, [list(b) for b in _boxes])
+
+
+_register_two_pass_layouts()

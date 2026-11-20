@@ -45,6 +45,8 @@ from flask import Blueprint, jsonify, request, send_file
 from app.features.comic import soda_letter
 from app.features.image import lora_slots
 from app.features.comic import moss_comic
+from app.features.comic import moss_twopass
+from app.integrations import llm
 from app.features.image import jobs as image_jobs
 from app.config import BASE_DIR, COMFYUI_OUTPUT_DIR
 from app.core.skills import load_workflow
@@ -117,6 +119,9 @@ LEGACY_SKILLS = ("moss-qunyou", "moss8", "moss50")
 # 运行中的任务：{任务目录绝对路径: {"t0": 起跑时间, "n": 当前页}}
 _RUNNING = {}
 _RUN_LOCK = threading.Lock()
+# 中止信号：{任务目录: threading.Event}。用户点「终止」就置位，
+# 出图线程每页看一眼；正在跑的那张由 jobs 走定向 /interrupt。
+_ABORT = {}
 # state.json 的读写互斥：后台线程写、HTTP 线程读，同一个文件。
 _STATE_LOCK = threading.Lock()
 
@@ -343,6 +348,10 @@ def _payload(d, spec=None, prompts=None):
                    if rel else "",
         })
         pages.append(item)
+    # 双段链路的页自带 prompt_override；旧链路的体检 moss_comic.check() 是拿
+    # 「散文分镜规则」去查一份 Layout JSON，只会吐假错（没有 plan / 景别单一 / 缺旁白）。
+    # 2026-11-21：双段模式直接跳过，不给页面添噪音。
+    two_pass = any(p.get("prompt_override") for p in (spec.get("pages") or []))
     return {
         "ok": True,
         "task": task,
@@ -350,9 +359,10 @@ def _payload(d, spec=None, prompts=None):
         "style": spec.get("style"),
         "cast": spec.get("cast") or {},
         "ratio": "%dx%d" % (WIDTH, HEIGHT),
-        "steps": STEPS,
+        "steps": int(spec.get("steps") or STEPS),
+        "cfg": CFG,
         "running": _running(d),
-        "issues": moss_comic.check(spec),
+        "issues": [] if two_pass else moss_comic.check(spec),
         "pages": pages,
     }
 
@@ -388,6 +398,58 @@ def api_moss_write():
     spec, ps = _save(d, spec, raw)
     out = _payload(d, spec, ps)
     out["brief"] = brief
+    return jsonify(out)
+
+
+def _twopass_call(system, user, max_tokens=8000, temperature=None, tag=""):
+    """把台子的 LLM 链路包成 moss_twopass 要的 call(system, user, …)。
+
+    `tag` 只用于日志对账，不参与请求。
+    """
+    text = llm.call_llm(
+        [{"role": "system", "content": system},
+         {"role": "user", "content": user}],
+        max_tokens=max_tokens,
+        temperature=temperature,
+        timeout=300,
+    )
+    return text or ""
+
+
+@bp.route("/api/moss/two_agent", methods=["POST"])
+def api_moss_two_agent():
+    """双 Agent 链路：编剧 AI 拆幕 → 逐页编译 AI 出 Layout JSON → 代码闸门。
+
+    和 `/api/moss/write` **两条独立链路**：那边是官方一次出整篇，这边每页
+    独立编译并带 `prompt_override`，`build_page_prompt` 见到它就原样放行。
+    出图、状态、保存全部复用原有那套，前端不用另开页面。
+    """
+    data = request.get_json(silent=True) or {}
+    brief = str(data.get("brief") or "").strip()
+    if not brief:
+        return jsonify({"ok": False, "error": "先写一句剧情"}), 400
+    try:
+        pages = max(1, min(12, int(data.get("pages") or 3)))
+    except (TypeError, ValueError):
+        pages = 3
+    try:
+        spec, report = moss_twopass.generate(brief, pages, _twopass_call)
+    except BaseException as exc:                # noqa: BLE001 - 模型侧异常一律转 502
+        return jsonify({"ok": False,
+                        "error": "双 Agent 编译失败：%s" % (str(exc) or exc.__class__.__name__)}), 502
+
+    d = _new_task_dir(spec)
+    spec, ps = _save(d, spec, None)
+    with open(os.path.join(d, "script.md"), "w", encoding="utf-8") as fh:
+        fh.write(report.get("script_md") or "")
+    with open(os.path.join(d, "twopass_report.json"), "w", encoding="utf-8") as fh:
+        json.dump({k: v for k, v in report.items() if k != "script_md"},
+                  fh, ensure_ascii=False, indent=1)
+    out = _payload(d, spec, ps)
+    out["brief"] = brief
+    out["two_agent"] = {"secs": report.get("secs"),
+                        "pages": report.get("pages") or [],
+                        "notes": report.get("script_issues") or []}
     return jsonify(out)
 
 
@@ -431,17 +493,27 @@ def _node_id(wf, cls, field):
     raise RuntimeError("工作流里找不到 %s.%s（渠道结构变了？）" % (cls, field))
 
 
-def _draw(page, prompt, base_wf, seed, out_dir, title, letter_info=""):
+def _draw(page, prompt, base_wf, seed, out_dir, title, letter_info="",
+          steps=None, abort=None):
     """一页 → 一张图。返回 (相对 ComfyUI output 的路径 or None, 错误串)。
 
     `letter_info` 非空 = Soda 程序排字模式（`soda_letter.page_info` 的产物）：
     在 SaveImage 前插 `SodaLetterPage`，存盘的就是排好字的整页。
+
+    `steps` 空＝用默认 30 步；用户可以在页面上改（2026-11-21）。
+    `abort` 是 threading.Event：置位后 job.wait() 抛 Cancelled，
+    并走定向 /interrupt + /queue delete，不留僵尸任务。
     """
     wf = json.loads(json.dumps(base_wf))
     lat = _node_id(wf, "EmptyFlux2LatentImage", "width")
     wf[lat]["inputs"]["width"] = WIDTH
     wf[lat]["inputs"]["height"] = HEIGHT
-    wf[_node_id(wf, "KSampler", "steps")]["inputs"]["steps"] = STEPS
+    try:
+        use_steps = int(steps) if steps else STEPS
+    except (TypeError, ValueError):
+        use_steps = STEPS
+    use_steps = min(max(use_steps, 1), 150)
+    wf[_node_id(wf, "KSampler", "steps")]["inputs"]["steps"] = use_steps
     # cfg 同样只认这里的常量，不吃模板里的 3.0（`_node_id` 找不到就抛，
     # 不退回写死编号）。
     wf[_node_id(wf, "KSampler", "cfg")]["inputs"]["cfg"] = CFG
@@ -474,9 +546,20 @@ def _draw(page, prompt, base_wf, seed, out_dir, title, letter_info=""):
                                   seed=seed, out_dir=out_dir)
     if job is None:
         return None, why or "队列没接"
+    # 中止信号转交：置位后 wait() 抛 Cancelled → process() 走定向 /interrupt
+    if abort is not None:
+        job.cancel = abort
     try:
         job.wait()
     except BaseException as exc:                # noqa: BLE001  见文件头 ⚠️
+        # 用户点了终止：`job.wait()` 只是放弃等待，ComfyUI 里那张还在跑，
+        # 白占显存、跑完还会把图写进 output。定向掐掉这一张
+        # （只带这个 prompt_id，不会误伤 web/qq_bot 同机的别的任务）。
+        if abort is not None and abort.is_set() and job.prompt_id:
+            try:
+                image_jobs._abort(job.prompt_id)
+            except BaseException:               # noqa: BLE001  清不掉不算错
+                pass
         return None, str(exc) or exc.__class__.__name__
     files = image_jobs.output_images(job.entry, job=job)
     if not files:
@@ -486,11 +569,14 @@ def _draw(page, prompt, base_wf, seed, out_dir, title, letter_info=""):
     return files[0].replace("\\", "/"), ""
 
 
-def _run(d, spec, nums, seed_base, loras=None):
+def _run(d, spec, nums, seed_base, loras=None, steps=None, abort=None):
     """后台线程：逐页出图，每页状态落 state.json（页面靠它轮询）。
 
     `loras` 是这一批的 LoRA 槽位（见 `lora_slots`）：只改**这批的**工作流副本，
     模板不动。空 = 照模板现有配置。
+    `steps` 空＝默认 30 步。
+    `abort` 是 threading.Event：用户在页面上点了终止就置位，
+    正在跑的那一页走定向 /interrupt，后面没开始的页直接标成 canceled。
     """
     title = spec.get("title") or "未命名"
     try:
@@ -506,9 +592,12 @@ def _run(d, spec, nums, seed_base, loras=None):
         lettering = soda_letter.enabled()
         by_n = {p.get("n"): p for p in spec.get("pages") or []}
         out_dir = "%s/%s" % (OUT_ROOT, os.path.basename(d))
-        for n in nums:
+        for i, n in enumerate(nums):
             page = by_n.get(n)
             if not page:
+                continue
+            if abort is not None and abort.is_set():
+                _set_page(d, n, status="canceled", error="用户终止")
                 continue
             with _RUN_LOCK:
                 if d in _RUNNING:
@@ -524,13 +613,22 @@ def _run(d, spec, nums, seed_base, loras=None):
                     draw_prompt = moss_comic.build_page_prompt(spec, page,
                                                                with_text=False)
                 rel, err = _draw(page, draw_prompt, base_wf, seed,
-                                 out_dir, title, letter_info=info)
+                                 out_dir, title, letter_info=info,
+                                 steps=steps, abort=abort)
             except BaseException as exc:        # noqa: BLE001
                 rel, err = None, str(exc) or exc.__class__.__name__
             if rel:
                 _set_page(d, n, status="done", file=rel, seed=seed,
                           secs=round(time.time() - t0, 1), error="",
                           rev=int(time.time()))
+            elif abort is not None and abort.is_set():
+                # 当前这页被打断 + 后面的页都不画了，一起标 canceled
+                _set_page(d, n, status="canceled", error="用户终止",
+                          seed=seed, secs=round(time.time() - t0, 1),
+                          rev=int(time.time()))
+                for m in nums[i + 1:]:
+                    _set_page(d, m, status="canceled", error="用户终止")
+                break
             else:
                 _set_page(d, n, status="error", error=err or "没出图", seed=seed,
                           secs=round(time.time() - t0, 1), rev=int(time.time()))
@@ -543,6 +641,7 @@ def _run(d, spec, nums, seed_base, loras=None):
     finally:
         with _RUN_LOCK:
             _RUNNING.pop(d, None)
+            _ABORT.pop(d, None)
 
 
 @bp.route("/api/moss/render", methods=["POST"])
@@ -588,16 +687,56 @@ def api_moss_render():
     if errs:
         return jsonify({"ok": False, "error": "；".join(errs)}), 400
 
+    # 步长：不传＝用 spec 里存过的，再没有就默认 30。范围 1–150。
+    try:
+        steps = int(data.get("steps") or 0)
+    except (TypeError, ValueError):
+        steps = 0
+    steps = min(max(steps or int(spec.get("steps") or 0) or STEPS, 1), 150)
+    spec["steps"] = steps
+
     with _RUN_LOCK:
         if _RUNNING.get(d):
             return jsonify({"ok": False, "error": "这个任务正在画，等它画完"}), 409
         _RUNNING[d] = {"t0": time.time(), "n": nums[0]}
+        ev = _ABORT[d] = threading.Event()
 
-    threading.Thread(target=_run, args=(d, spec, nums, seed_base, slots),
+    # 步长记进 spec.json：下次打开这个任务还是这个步数，不用每次重填
+    try:
+        _save(d, spec)
+    except BaseException:                       # noqa: BLE001  存盘失败不该拦出图
+        pass
+
+    threading.Thread(target=_run,
+                     args=(d, spec, nums, seed_base, slots, steps, ev),
                      daemon=True,
                      name="moss-comic-%s" % os.path.basename(d)).start()
     return jsonify({"ok": True, "task": os.path.basename(d), "pages": nums,
-                    "seed": seed_base or None})
+                    "seed": seed_base or None, "steps": steps})
+
+
+@bp.route("/api/moss/abort", methods=["POST"])
+def api_moss_abort():
+    """终止这一批出图。
+
+    不是杀进程：置位 Event → 出图线程每页看一眼；正在跑的那一页由出图层
+    走定向 `/interrupt` + `/queue delete`（只有当前跑的就是这张时才停），
+    后面没开始的页直接标成「已终止」。ComfyUI 本身不动。
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        d = _task_dir(data.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    with _RUN_LOCK:
+        ev = _ABORT.get(d)
+        running = bool(_RUNNING.get(d))
+    if not ev or not running:
+        return jsonify({"ok": True, "aborted": False,
+                        "message": "这个任务没在跑"})
+    ev.set()
+    return jsonify({"ok": True, "aborted": True,
+                    "message": "已发终止信号，当前这一页会停下"})
 
 
 # ══════════════════════════════════════════════════════════

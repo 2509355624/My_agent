@@ -206,9 +206,17 @@
       </select>
       <input id="styleCustom" placeholder="自定义画风串（英文，写画法+光照+色调+气质）"
              style="display:none;flex:1;min-width:260px">
-      <label style="font-size:12px;color:var(--text-dim)">页数
-        <input id="pages" type="number" value="1" min="1" max="12" style="width:62px">
+      <label style="font-size:12px;color:var(--text-dim)">页数上限
+        <input id="pages" type="number" value="4" min="1" max="12" style="width:62px"
+               title="这是上限，不是配额。编剧按内容写几页就几页，素材不够会更少">
       </label>
+      <label style="font-size:12px;color:var(--text-dim)"
+             title="编剧 AI 逐格写稿（格｜景别｜画面｜台词）→ 逐页编译 AI 出整页 Layout JSON → 代码闸门。黑白网点口径，约 60 秒/页">
+        <input id="twoAgent" type="checkbox"> 双段链路
+      </label>
+      <span id="twoHint" style="display:none;font-size:12px;color:var(--text-dim)">
+        版式与画风交给链路：编剧写几格就几格（一页一格也合法），页数只是上限，画风固定黑白网点
+      </span>
       <div class="spacer"></div>
       <button class="btn primary" id="btn-write">让编剧写剧本</button>
     </div>
@@ -240,6 +248,12 @@
     <div class="row" style="margin-top:12px">
       <button class="btn" id="btn-save">保存修改</button>
       <button class="btn primary" id="btn-draw-all">全部出图</button>
+      <button class="btn" id="btn-abort"
+              style="display:none;color:var(--error);border-color:var(--error)">终止</button>
+      <label style="font-size:12px;color:var(--text-dim)">步长
+        <input id="steps" type="number" min="1" max="150" value="30" style="width:64px">
+      </label>
+      <span class="hint" id="steps-hint" style="margin:0"></span>
       <span class="hint" id="save-hint" style="margin:0"></span>
     </div>
   </div>
@@ -264,11 +278,19 @@
 
 <script>
 var S = { task: null, spec: null, pages: [], timer: null, saving: false,
-          pending: false, poll: null };
+          pending: false, poll: null, aborted: false };
 
-var LAYOUT_LABEL = { single: "单格", "2h": "两格·上下", "3h": "三格·上中下",
-                     "3t": "三格·上大下二小", "2x2": "四格 2×2" };
-var LAYOUT_N = { single: 1, "2h": 2, "3h": 3, "3t": 3, "2x2": 4 };
+/* 双段链路的骨架名与旧链路不同（L0–L5 / S1 / D1 / D2）。这里两套都列，
+   否则 spec 里是 L0、下拉却只认 single/2h，选中状态全空、看起来像选错了。 */
+var LAYOUT_LABEL = {
+  S1: "S1 单格·满版（一页一拍）", D1: "D1 两格·上下", D2: "D2 两格·左右",
+  L0: "L0 五格·右主格（日常）", L1: "L1 五格·左主格", L2: "L2 四格·上主下三",
+  L3: "L3 六格·等权", L4: "L4 三横带", L5: "L5 三格·左主右二",
+  single: "单格", "2h": "两格·上下", "3h": "三格·上中下",
+  "3t": "三格·上大下二小", "2x2": "四格 2×2"
+};
+var LAYOUT_N = { S1: 1, D1: 2, D2: 2, L0: 5, L1: 5, L2: 4, L3: 6, L4: 3, L5: 3,
+                 single: 1, "2h": 2, "3h": 3, "3t": 3, "2x2": 4 };
 
 function $(id) { return document.getElementById(id); }
 function esc(s) {
@@ -310,15 +332,18 @@ async function doWrite() {
   if (!brief) { toast("先写一句剧情", true); return; }
   var style = $("style").value;
   if (style === "custom") style = $("styleCustom").value.trim();
+  var two = $("twoAgent") && $("twoAgent").checked;
+  var nPages = parseInt($("pages").value, 10) || 1;
   var btn = $("btn-write");
   btn.disabled = true;
   btn.innerHTML = '<span class="spin"></span>编剧中…';
-  bar("编剧正在写剧本（几秒）…");
+  bar(two ? ("双段链路：拆幕 + 逐页编译（约 " + (nPages * 60) + " 秒）…")
+          : "编剧正在写剧本（几秒）…");
   try {
-    var r = await api("/api/moss/write", {
-      brief: brief, layout: $("layout").value, style: style,
-      pages: parseInt($("pages").value, 10) || 1
-    });
+    var payload = { brief: brief, pages: nPages };
+    // 双段模式的版式与画风由链路自己定，这两个值连传都不传，省得后端还要忽略
+    if (!two) { payload.layout = $("layout").value; payload.style = style; }
+    var r = await api(two ? "/api/moss/two_agent" : "/api/moss/write", payload);
     if (!r.ok) {
       bar("编剧失败：" + (r.error || "未知原因"), true);
       if (r.raw) console.warn("模型原始回复：\n" + r.raw);
@@ -327,8 +352,16 @@ async function doWrite() {
     bar("");
     loadPayload(r);
     loadList();
-    if (r.issues && r.issues.length) toast("剧本有 " + r.issues.length + " 条体检提示，看剧本区");
-    else toast("剧本写好了，看看没问题就出图");
+    /* 结构提醒只提示、不改剧本：把「格数对不上、有东西没落进任何一格」
+       这类事实摆出来，判断留给编剧自己，原文照旧落盘给人看。 */
+    var notes = (r.two_agent && r.two_agent.notes) || [];
+    if (notes.length) {
+      bar("剧本结构提醒：" + notes.join("；"));
+    } else if (r.issues && r.issues.length) {
+      toast("剧本有 " + r.issues.length + " 条体检提示，看剧本区");
+    } else {
+      toast("剧本写好了，看看没问题就出图");
+    }
   } finally {
     btn.disabled = false;
     btn.textContent = "让编剧写剧本";
@@ -345,6 +378,9 @@ function loadPayload(p) {
     pages: (p.pages || []).map(function (x) {
       return {
         n: x.n, layout: x.layout, scene: x.scene,
+        // 双段式链路每页自带整页 Layout JSON，原样带回，save 时才不会被重拼
+        prompt_override: x.prompt_override || "",
+        plan: x.plan || null,
         panels: (x.panels || []).map(function (pan) {
           // 一格两条气泡（2026-11-01）。老 spec 只有单条 `bubble`，转成数组；
           // 统一补齐成两个槽位，界面上两个输入框就一一对应，不用判断长度。
@@ -473,7 +509,7 @@ function patch(p) {
     var badge = box.querySelector('[data-role="badge"]');
     badge.className = "badge b-" + (it.status || "pending");
     badge.textContent = { pending: "未出图", running: "画图中…", done: "已完成",
-                          error: "失败" }[it.status] || it.status;
+                          error: "失败", canceled: "已终止" }[it.status] || it.status;
     var seed = box.querySelector('[data-role="seed"]');
     seed.textContent = it.seed ? ("seed " + it.seed + (it.secs ? " · " + it.secs + "s" : "")) : "";
     var errEl = box.querySelector('[data-role="err"]');
@@ -492,6 +528,15 @@ function patch(p) {
     if (pt && document.activeElement !== pt) pt.value = it.prompt || "";
   });
   renderIssues(p.issues || []);
+  // 终止按钮只在跑的时候露出来；步长回填（别抢用户正在编辑的焦点）
+  var ab = $("btn-abort");
+  // 点过终止后服务端可能还挂着 running 几秒（正在收尾 /interrupt），
+  // 按钮不能再冒出来，否则会连点第二次。
+  if (ab) ab.style.display = (p.running && !S.aborted) ? "" : "none";
+  var st = $("steps");
+  if (st && document.activeElement !== st && p.steps) st.value = p.steps;
+  $("steps-hint").textContent = (p.ratio || "") + " · cfg " + (p.cfg || "")
+    + " · 20 步以下黑白网点画风会跑偏";
   if (p.running) {
     bar('<span class="spin"></span>正在画第 ' + p.running.page + " 页 · 已等 " +
         Math.round(p.running.waited) + " 秒（一页约 150~200 秒）");
@@ -673,9 +718,12 @@ async function draw(pageNo, reroll) {
   var body = { task: S.task };
   if (pageNo) body.pages = [pageNo];
   if (reroll) body.reroll = true;
+  var sv = parseInt(($("steps") || {}).value, 10);
+  if (!isNaN(sv)) body.steps = Math.min(Math.max(sv, 1), 150);
   if (LORA.length) body.loras = loraPayload();
   var btns = document.querySelectorAll("button[data-act]");
   btns.forEach(function (b) { b.disabled = true; });
+  S.aborted = false;
   var r = await api("/api/moss/render", body);
   btns.forEach(function (b) { b.disabled = false; });
   if (!r.ok) { toast(r.error || "没排上队", true); return; }
@@ -701,8 +749,38 @@ document.addEventListener("click", function (e) {
 $("zoom").addEventListener("click", function () { $("zoom").className = ""; });
 
 $("btn-write").addEventListener("click", doWrite);
+
+/* 双段链路接管版式与画风：格数由编剧写了几格决定（1 格 S1 / 2 格 D1·D2 /
+  3~6 格 L5·L4·L2·L0·L1·L3），画风由代码锁成黑白网点。
+   这两个下拉在双段模式下根本不会被读，所以不是灰掉而是
+   **直接收起来**——放着只会让人以为选了「四格」就能出四格。 */
+$("twoAgent").addEventListener("change", function () {
+  var on = this.checked;
+  ["layout", "style"].forEach(function (id) {
+    var el = $(id);
+    el.disabled = on;
+    el.style.display = on ? "none" : "";
+  });
+  var sc = $("styleCustom");
+  sc.disabled = on;
+  sc.style.display = on ? "none"
+    : ($("style").value === "custom" ? "" : "none");
+  $("twoHint").style.display = on ? "" : "none";
+});
 $("btn-save").addEventListener("click", function () { saveNow().then(function () { toast("已保存"); }); });
 $("btn-draw-all").addEventListener("click", function () { draw(null, false); });
+/* 终止：不是杀进程。置位一个信号，出图线程当前这页会让 ComfyUI 定向停下，
+   后面没开始的页直接标「已终止」。 */
+$("btn-abort").addEventListener("click", async function () {
+  if (!S.task) return;
+  S.aborted = true;
+  this.disabled = true;
+  var r = await api("/api/moss/abort", { task: S.task });
+  this.disabled = false;
+  toast(r.message || (r.ok ? "已终止" : "终止失败"), !r.ok);
+  this.style.display = "none";
+  refreshStatus();
+});
 $("btn-lora-save").addEventListener("click", async function () {
   if (!LORA.length) return;
   var r = await api("/api/lora/save", { skill: "moss-qunyou", slots: loraPayload() });
