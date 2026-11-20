@@ -162,10 +162,10 @@ class DistillTest(RagBase):
                ' "content": "伊蕾娜：嘴上嫌他乱，还是把帽子收好了"}]}')
         entries = rank.parse_memory_json(raw, 21, 25, day=2, phase="中午",
                                         card_name="伊蕾娜")
-        self.assertEqual(entries[0]["metadata"]["kind"], "batch")
+        self.assertEqual(entries[0]["metadata"]["kind"], "parent")
         self.assertEqual(entries[0]["metadata"]["day"], 2)
         self.assertIn("【第2天 · 中午】", entries[0]["content"])
-        self.assertEqual(entries[1]["metadata"]["kind"], "fact")
+        self.assertEqual(entries[1]["metadata"]["kind"], "subfact")
         self.assertTrue(entries[1]["content"].startswith("伊蕾娜："))
 
     def test_remember_flushes_batch_when_day_changes(self):
@@ -206,6 +206,30 @@ class DistillTest(RagBase):
             rank.distill([{"turn": 1, "user": "我怕黑", "assistant": "嗯。"}],
                          custom=cfg)
         self.assertIsNone(llm.get_custom_override())
+
+    def test_parent_summary_splits_into_parts(self):
+        summary = "字" * 800
+        raw = '{"skip": false, "summary": "%s"}' % summary
+        entries = rank.parse_memory_json(raw, 3, 7, day=1, phase="中午",
+                                         batch_id="batch-3-7-0")
+        parents = [e for e in entries if e["metadata"]["kind"] == "parent"]
+        self.assertEqual(len(parents), 2)
+        self.assertEqual(parents[0]["metadata"]["part"], 1)
+        self.assertEqual(parents[1]["metadata"]["part"], 2)
+        self.assertEqual(parents[0]["metadata"]["group_id"], "batch-3-7-0")
+        self.assertEqual(parents[1]["metadata"]["group_id"], "batch-3-7-0")
+
+    def test_subfact_no_cap_and_no_hard_truncate(self):
+        long_text = "用户：" + "细节" * 120      # 远超旧 160 字硬截断
+        facts = [{"about": "user", "content": long_text} for _ in range(6)]
+        raw = json.dumps({"skip": False, "facts": facts}, ensure_ascii=False)
+        entries = rank.parse_memory_json(raw, 1, 2, phase="中午")
+        subs = [e for e in entries if e["metadata"]["kind"] == "subfact"]
+        self.assertEqual(len(subs), 6)           # 旧 4 条硬上限已去掉
+        for e in subs:
+            self.assertGreater(len(e["content"]), 160)
+            self.assertEqual(e["metadata"]["parent_group_id"], "batch-1-2-0")
+            self.assertEqual(e["metadata"]["phase"], "中午")
 
     def test_process_ingests_distilled_entries(self):
         entries = [{"id": "1-2-0", "content": "用户：讨厌香菜",
@@ -312,6 +336,38 @@ class RetrieveTest(RagBase):
         self.assertIn("四楼走廊尽头", block)
         self.assertIn("【第2天】", block)
 
+    def test_mount_parents_parts_ordered_by_group(self):
+        gid = "batch-3-7-0"
+        self.client.entries = [
+            {"id": gid + "-p2", "content": "后半段经过。",
+             "metadata": {"kind": "parent", "group_id": gid, "part": 2,
+                          "part_total": 2, "turn_start": 3, "turn_end": 7}},
+            {"id": gid, "content": "前半段经过。",
+             "metadata": {"kind": "parent", "group_id": gid, "part": 1,
+                          "part_total": 2, "turn_start": 3, "turn_end": 7}},
+        ]
+        subs = [{"id": "3-7-0", "content": "用户：中午一起吃了玉子烧。",
+                 "metadata": {"kind": "subfact", "parent_group_id": gid,
+                              "turn_start": 3, "turn_end": 7}}]
+        mounted = rank._mount_parents("web_10001__rem", subs)
+        self.assertEqual([d["id"] for d in mounted], [gid, gid + "-p2"])
+
+    def test_build_block_mounts_parent_for_hit_subfact(self):
+        gid = "batch-1-5-0"
+        self.client.docs = [
+            {"id": "1-5-0", "content": "用户：晚上答应周末去海边。",
+             "distance": 0.30,
+             "metadata": {"kind": "subfact", "parent_group_id": gid,
+                          "about": "user", "turn_start": 1, "turn_end": 5}},
+        ]
+        self.client.entries = [
+            {"id": gid, "content": "【第1天】傍晚两人聊到周末的安排。",
+             "metadata": {"kind": "parent", "group_id": gid, "part": 1,
+                          "part_total": 1, "turn_start": 1, "turn_end": 5}},
+        ]
+        block = rank.build_block("web_10001__rem", "周末去哪")
+        self.assertIn("傍晚两人聊到周末", block)
+
 
 class ForgetTest(RagBase):
     def test_forget_last_pops_pending(self):
@@ -335,9 +391,9 @@ class ForgetTest(RagBase):
         self.assertEqual(payload["end"], 2)
         self.assertIn("batch-1-2-0", payload["batch_ids"])
         rank._process(kind, _line, payload)
-        # 新批次 id + 旧版 batch-start-end + 4 条事实 + 2 轮 × 2 条原话
-        self.assertEqual(len(self.client.deleted_entries), 10)
+        # 父块 group_id + part2/part3 兜底 id + 2 轮 × 2 条旧原话兜底
         ids = [eid for _coll, eid in self.client.deleted_entries]
+        self.assertIn("batch-1-2-0", ids)
         for rid in ("raw-1-u", "raw-1-a", "raw-2-u", "raw-2-a"):
             self.assertIn(rid, ids)
         # 回退最后一轮后，前一轮放回 pending，下一轮会重新凑批
@@ -528,19 +584,17 @@ class RawMemoryTest(RagBase):
         got = rank.retrieve_raw("web_10001__rem", "打雷")
         self.assertEqual([d["id"] for d in got], ["raw-1"])
 
-    def test_build_block_has_both_layers(self):
+    def test_build_block_has_distilled_layer_only(self):
         self.client.docs = [
-            {"id": "b1", "content": "昨天在旧书市被人看见", "distance": 0.30,
-             "metadata": {"kind": "batch", "turn_start": 1, "turn_end": 5,
+            {"id": "f1", "content": "用户：怕打雷。", "distance": 0.30,
+             "metadata": {"kind": "fact", "about": "user",
+                          "turn_start": 1, "turn_end": 5,
                           "source": rank._SOURCE}},
-            {"id": "raw-3-u", "content": "第2天 用户说：我不怕打雷",
-             "distance": 0.40,
-             "metadata": {"kind": "raw", "source": rank._RAW_SOURCE}},
         ]
         blk = rank.build_block("web_10001__rem", "打雷")
         self.assertIn("【长期记忆", blk)
-        self.assertIn("【当时的原话", blk)
-        self.assertIn("我不怕打雷", blk)
+        # V3：原话层已取消，注入块里不再出现原话段。
+        self.assertNotIn("【当时的原话", blk)
         self.assertIn("正在发生的比旧话更重要", blk)
         self.assertIn("当时记下的话", blk)
         self.assertIn("想提旧事照提", blk)
@@ -553,14 +607,12 @@ class RawMemoryTest(RagBase):
         self.assertLessEqual(len(body.replace("\n", "")),
                              rank.RAW_BLOCK_CHARS + rank.RAW_ITEM_CHARS)
 
-    def test_process_ingests_raw_before_distill(self):
+    def test_process_no_longer_ingests_raw(self):
         turns = [{"turn": 1, "user": "我怕黑", "assistant": "嗯。"}]
         with mock.patch.object(rank, "distill", return_value=[]):
             rank._process("distill", "web_10001__rem", {"turns": turns})
-        # 提炼结果为空也要入原话：细节不能跟着摘要一起丢
-        self.assertEqual(len(self.client.ingested), 1)
-        _coll, entries = self.client.ingested[0]
-        self.assertEqual([e["id"] for e in entries], ["raw-1-u", "raw-1-a"])
+        # V3：不再单独入库原话；提炼为空就什么都不写。
+        self.assertEqual(self.client.ingested, [])
 
 
 class BackfillTest(RagBase):

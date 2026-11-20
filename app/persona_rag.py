@@ -1,28 +1,34 @@
-"""角色扮演的长期记忆向量库（2026-11-05，2026-11-07 加原文层）。
+"""角色扮演的长期记忆向量库（2026-11-05；2026-11-20 V3 父子块）。
 
-## 两层：提炼事实 + 原文片段
+## V3 父子块
 
-**事实层**（`_SOURCE`）：**每 5 次 AI 回复**把最近一批对话交给「记忆提炼器」，
-只留下可以长期复用的事实，再把事实入库。入库形状：
+每 5 次 AI 回复把最近一批对话交给「记忆提炼器」，产出两类条目，共用一个
+`parent_group_id`（一批一个）：
+
+**子块 `subfact`（检索单元）**：一条一事的原子事实，AI 概括重写（不切原文
+句子），150–200 字软约束。骨架：`[归属] 第N天·时段 谁 做了什么/说了什么
+（关键对象）`。向量召回只认子块；重复实体必须带时段锚点消歧（早/中/晚各是
+哪一次）。入库形状：
 
     {"about": "user|character|shared", "content": "用户：……",
      "topics": "…", "primary_emotion": "…", "open_threads": "…",
-     "turn_start": 3, "turn_end": 5, "source": "batch_summary_v3"}
+     "day": 2, "phase": "中午", "turn_start": 3, "turn_end": 5,
+     "parent_group_id": "batch-3-5-0", "source": "batch_summary_v3"}
+
+**父块 `parent`（压缩叙事）**：整批 500–1000 字的概括叙事，按时间顺序写清
+谁在何时做了什么、说了什么。**不参与向量召回**，只在子块命中后按
+`parent_group_id` 挂载取回；单块超 `_PARENT_MAX_CHARS` 边界时拆 part 1/2，
+同编号关联、召回按序拼接。
+
+**锚点 `anchor`**：只发生一次的节点（第一次/关系确认…），规则置顶，不看
+向量距离。
 
 归属（about）是关键：用户亲口说的才算用户事实；角色说的不能写成用户事实；
-只有双方明确同意的计划才算 shared。检索时按归属标注，并带一条「旧事实
-优先于近期提及」的裁决规则。
+只有双方明确同意的计划才算 shared。
 
-**原文层**（`_RAW_SOURCE`，2026-11-07 加）：每批顺手把这一批的对话原文
-也入库，一条消息一条，按 `RAW_MAX_CHARS` 截断。
-
-为什么要加：提炼后的批次叙事只有 200~300 字，细节全丢了。用户问「上次
-你说的那句」「我们当时是怎么说好的」时，演员手里只有摘要，回答只能靠猜。
-原文条目专门补这个洞——它**只用来说明细节**，注入块里写明「当前这一拍
-接着往下演，正在发生的比旧话更重要」，避免演员照着旧对话复述。
-
-原来担心的两个问题（演员复述旧对话、库里全是寒暄垃圾）用三件事压住：
-阈值放宽但条数限死（3 条）、注入时再压到 260 字、块内明确它只是细节来源。
+**旧版兼容**：老库残留 `kind=batch`（视同 parent）、`kind=fact`（视同
+subfact）、`kind=raw`（原话层，新数据不再写入，检索/注入不再取用）。旧数据
+不迁移，检索时兼容读取兜底。
 
 ## 隔离
 
@@ -35,7 +41,7 @@
 ## 慢加载
 
 CPU 小模型冷启动十几秒，绝不能在聊天轮里同步等：
-  · 提炼、原文入库都在后台线程/队列里做；
+  · 提炼入库都在后台线程/队列里做；
   · 检索只在 daemon ready 时发生，否则这一轮不带回忆。
 """
 import hashlib
@@ -64,6 +70,26 @@ _TESTING = "unittest" in sys.modules
 
 _COLL_PREFIX = "persona_"
 _SOURCE = "batch_summary_v3"
+
+# ── V3 父子块 kind ──────────────────────────────────────────────
+# parent  父块：整批压缩叙事，不参与向量召回，只按子块 parent_group_id 挂载
+# subfact 子块：一条一事的检索单元，向量召回只认它
+# anchor  锚点：只发生一次的节点，规则置顶，不看距离
+# raw     旧版原话层残留；新数据不再写入，检索/注入不再取用
+_KIND_PARENT = "parent"
+_KIND_SUB = "subfact"
+_KIND_ANCHOR = "anchor"
+_KIND_RAW = "raw"
+# 旧库兼容：batch 视同 parent，fact 视同 subfact（旧数据不迁移，兜底读取）
+_LEGACY_PARENT_KINDS = ("batch",)
+_LEGACY_SUB_KINDS = ("fact",)
+
+# 子块软约束：prompt 让模型控制在 150–200 字；代码不再做 160 字硬截断兜底，
+# 避免把一条完整事实拦腰切断。
+_SUB_SOFT_MAX = 200
+# 父块单块字符硬边界（对齐 bge-small 512 token）。父块不参与召回，拆 part
+# 只为注入预算与历史兼容；超长按句号/分号语义边界切，同 group_id 关联。
+_PARENT_MAX_CHARS = 700
 
 # 原文层（2026-11-07）。和事实层并存，不替代它：
 #   · 阈值 0.70 比事实的 0.60 宽——原文句子长、复述多，距离天然更远；
@@ -100,31 +126,38 @@ _WARMED = False
 # 提炼器提示词（2026-11-06 改为「批次叙事 + 原子事实」两层）。
 # 之前的版本只让模型抽 4 条碎事实，一批 5 轮最多约 480 字，既没有整体经过、
 # 也没有角色名和天数；用户问「昨天太招摇」时手里只有零散条目。
-_MEMORY_PROMPT = """你是角色扮演对话的记忆提炼器。把这一批对话整理成两层：
-1) 一段「批次叙事」——以后问「昨天/上次」时能直接拿来回答「那时发生了什么」；
-2) 最多 4 条「原子事实」——偏好、承诺、关系变化、重要物品/地点、未解决线头。
+_MEMORY_PROMPT = """你是角色扮演对话的记忆提炼器。把这一批对话整理成「父块叙事 + 子块事实」两层。
 
 【对话（第 {start}–{end} 次回复）】
 {dialogue}
 
-【批次叙事怎么写】
-- 200–300 字，按时间顺序写清：地点/场合 → 用户做了什么、说了什么 →
+【父块叙事（summary）——给演员补语境】
+- 500–1000 字，按时间顺序写清：地点/场合 → 用户做了什么、说了什么 →
   {name}怎么反应、身体/情绪怎么变 → 这一批结束时停在哪。
+- 保留「谁在什么时候做了什么、说了什么」：关键对象、地点、承诺、约定状态
+  都要留下，不要写成干巴巴的提纲。
 - 用「用户」「{name}」称呼，不要写「角色」。
-- 不要写「画面/心情/状态」这些格式元数据；不要复述原对话，不要评价文笔。
+- 时间口径：每个动作带上时段（早晨/上午/中午/下午/傍晚/深夜）；同一对象在
+  不同时段重复出现时，写清是哪一次——「中午一起吃了玉子烧」和「晚上回去
+  热玉子烧」不能混成一句。
+- 不要写「画面/心情/状态」这些格式元数据；不要逐字复述原对话，不要评价文笔。
 - 不要写「第 N 天」——调用方会加。
-- 提到往后的安排，写成当时记下的一笔：「当时约好第二天早上七点在
-  宿舍楼下见」。这样的句子以后被召回时，读起来是过去发生过的事。
+- 往后的安排写成当时记下的一笔：「当时约好第二天早上七点在宿舍楼下见」，
+  以后被召回时读起来是过去发生过的事。
 
-【原子事实怎么写】
-- 只有用户亲口说出的偏好/经历/承诺/关系信息，才能写 about="user"。
-- {name}亲口说出的设定、喜好、承诺，写 about="character"。
-- 只有双方都明确同意的计划，才写 about="shared"。
-- 每条 content ≤120 字，必须以「用户：」「{name}：」「双方：」开头。
-- 承诺和约定写成过去式的一笔记录，带上「第二天」「那一周」这类锚点，
-  方便以后判断它指的是哪一天、是不是已经过去了。
+【子块事实（facts）——检索单元，一条一事】
+- 每条只记一件可长期复用的事：偏好、承诺、关系变化、重要物品/地点、未决线头。
+- 写法骨架：`[归属] 第N天·时段 谁 做了什么/说了什么（关键对象）`。
+  例如「用户：中午在食堂说讨厌香菜」「{name}：晚上答应周末一起去海边」。
+- 150–200 字，一条一事；不要把两件事塞进同一条。
+- 归属判据：
+  · 只有用户亲口说出的偏好/经历/承诺/关系信息，about="user"；
+  · {name}亲口说出的设定、喜好、承诺，about="character"；
+  · 只有双方都明确同意的计划，about="shared"。
+- 承诺和约定写成过去式的一笔记录，带上「第二天」「那一周」这类锚点。
+- 重复出现的对象必须带时段消歧，光写对象名分不清是哪一次。
 - 不要记寒暄、重复日常、临场玩笑、出图 tags、穿着和镜头。
-- 确实没有值得记的原子事实 → entries=[]，但 summary 仍要写。
+- 确实没有值得记的子块 → facts=[]，但 summary 仍要写。
 
 【锚点事实（anchors）】
 如果这一批里出现了下面这些**只发生一次**的事，必须单独写一条 anchor：
@@ -135,7 +168,7 @@ _MEMORY_PROMPT = """你是角色扮演对话的记忆提炼器。把这一批对
 - 一条只写一件事，不合并；没有就是空数组。
 - `key` 用英文短标识：first_time / first_kiss / first_oral / first_anal /
   relationship / moved / discovered。
-- anchor 不占 entries 的 4 条名额，另算。
+- anchor 不占 facts 名额，另算。
 
 ⚠️ **判据要严**（2026-11-08 实测教训）：模型曾把「换了新地点/新玩法」也当成
 第一次，同一条线写出了三个「破处」。只有对话里**明确出现**「第一次」「头一回」
@@ -145,11 +178,11 @@ _MEMORY_PROMPT = """你是角色扮演对话的记忆提炼器。把这一批对
 【输出 JSON】
 {{
   "skip": false,
-  "summary": "地点…用户…{name}…这一批结束时…",
-  "entries": [
-    {{"about": "user", "content": "用户：……",
+  "summary": "地点…第N天·时段 用户…{name}…这一批结束时…",
+  "facts": [
+    {{"about": "user", "content": "用户：中午在食堂说讨厌香菜",
       "topics": ["主题"], "primaryEmotion": "", "openThreads": []}},
-    {{"about": "character", "content": "{name}：……",
+    {{"about": "character", "content": "{name}：晚上答应周末一起去海边",
       "topics": [], "primaryEmotion": "", "openThreads": []}}
   ],
   "anchors": [
@@ -674,6 +707,70 @@ def _recent_docs_uncached(line, batches=3, limit=12):
     return out[:limit]
 
 
+def _mount_parents(line, sub_docs, extra_lines=()):
+    """命中子块 → 按 `parent_group_id` 取回同组父块，按 part 排序。
+
+    父块不参与向量召回，只作为子块命中后的语境挂载。兼容旧库：旧 fact 没有
+    `parent_group_id` 时，按 (turn_start, turn_end) 关联到同批旧 batch。
+    返回的父块条目可能含多个 part，注入时按 part 顺序拼成完整父块。
+    """
+    lines = _lines_with(line, extra_lines)
+    group_ids, legacy_keys = set(), set()
+    for d in sub_docs or []:
+        meta = _meta(d)
+        gid = str(meta.get("parent_group_id") or "").strip()
+        if gid:
+            group_ids.add(gid)
+            continue
+        try:
+            legacy_keys.add((int(meta.get("turn_start") or 0),
+                             int(meta.get("turn_end") or 0)))
+        except (TypeError, ValueError):
+            pass
+    if not group_ids and not legacy_keys:
+        return []
+    client = _client()
+    if not client.is_ready() or not hasattr(client, "list_entries"):
+        return []
+    mounted, seen = [], set()
+    for ln in lines:
+        try:
+            r = client.list_entries(collection_name(ln),
+                                    timeout=PERSONA_RAG_TIMEOUT)
+        except Exception:                                # noqa: BLE001
+            log.exception("父块挂载读取失败 %s", ln)
+            continue
+        for e in r.get("entries") or []:
+            if not _is_parent(e):
+                continue
+            m = _meta(e)
+            gid = str(m.get("group_id") or "").strip()
+            hit = bool(gid and gid in group_ids)
+            if not hit and not gid:
+                try:
+                    key = (int(m.get("turn_start") or 0),
+                           int(m.get("turn_end") or 0))
+                except (TypeError, ValueError):
+                    key = (0, 0)
+                hit = key in legacy_keys
+            if not hit:
+                continue
+            eid = str(e.get("id") or "")
+            if eid in seen:
+                continue
+            seen.add(eid)
+            mounted.append(e)
+
+    def _part(e):
+        try:
+            return int(_meta(e).get("part") or 1)
+        except (TypeError, ValueError):
+            return 1
+    # 同组按 part 排序；组间按 group_id 稳定排列。
+    mounted.sort(key=lambda e: (str(_meta(e).get("group_id") or ""), _part(e)))
+    return mounted
+
+
 def _bigrams(text):
     """字符 bigram 集合。中文里「她做了早餐」和「早餐是她做的」重叠率很高，
     比词袋稳（没有分词器也能跑）。"""
@@ -733,8 +830,24 @@ def _age_key(doc):
     return (_int(m.get("day")), _int(m.get("turn_end") or m.get("turn")))
 
 
+def _kind(doc):
+    return str(_meta(doc).get("kind") or "")
+
+
+def _is_parent(doc):
+    """父块：新 parent 或旧 batch（兜底兼容）。"""
+    return _kind(doc) == _KIND_PARENT or _kind(doc) in _LEGACY_PARENT_KINDS
+
+
+def _is_sub(doc):
+    """子块：新 subfact、旧 fact，或缺 kind 的老提炼条目（兜底兼容）。"""
+    k = _kind(doc)
+    return k == "" or k == _KIND_SUB or k in _LEGACY_SUB_KINDS
+
+
 def _is_fact(doc):
-    return _meta(doc).get("kind") == "fact"
+    # 兼容旧名：时效裁决规则对子块（新 subfact / 旧 fact）同样适用。
+    return _is_sub(doc)
 
 
 def _superseded_dedupe(docs, sim=_STALE_SIM):
@@ -925,9 +1038,7 @@ def retrieve(line, query, k=None, day=None):
             log.exception("回忆按天检索失败 %s", line)
             r = None
         if r and r.get("ok"):
-            out = [d for d in (r.get("docs") or [])
-                   if str((d.get("metadata") or {}).get("kind") or "") in
-                   ("", "batch", "fact")]
+            out = [d for d in (r.get("docs") or []) if _is_sub(d)]
             if out:
                 out = _superseded_dedupe(out)
                 log.info("[回忆] %s 按第 %d 天命中 %d 条（query=%r）",
@@ -946,6 +1057,9 @@ def retrieve(line, query, k=None, day=None):
         return []
     out = []
     for d in r.get("docs") or []:
+        # 向量候选只认子块；父块走挂载、锚点走规则置顶、原话层不再取用。
+        if not _is_sub(d):
+            continue
         try:
             dist = float(d.get("distance", 1.0))
         except (TypeError, ValueError):
@@ -1120,35 +1234,63 @@ def _trace_doc(doc, source):
     }
 
 
-def _fact_block(docs, recent=(), trace=None):
-    """提炼事实 → 一段；没有可用的返回空串。
+def _merge_parent_parts(parents):
+    """同 `group_id` 的多个 part 按序拼成一条父块；返回去重保序的列表。
 
-    `docs` 是按相关性排好的（锚点在最前）。`recent` 单独传：它是「最近 2 批
-    无条件带上」（2026-11-08 用户拍板），但它只补批次名额和一条事实名额，
-    不跟旧事实抢 `_FACT_SLOTS`——以前 recent 直接拼在 docs 最前面，三条事实
-    名额全被近期占掉，检索明明召回了旧事也端不上桌（2026-11-09 母本副本
-    实测：14 个窗口外考点，可召回 9 个，进注入块只有 4 个）。
+    父块超长时拆成 part1/part2 入库，注入时要连成完整一段，不能各带一个
+    标题拆开摆。旧 batch 没有 group_id，按自身 id 成组。
+    """
+    by_group, order = {}, []
+    for d in parents:
+        m = _meta(d)
+        gid = str(m.get("group_id") or d.get("id") or "")
+        if gid not in by_group:
+            by_group[gid] = []
+            order.append(gid)
+        by_group[gid].append(d)
+    merged = []
+    for gid in order:
+        parts = by_group[gid]
+        try:
+            parts.sort(key=lambda e: int(_meta(e).get("part") or 1))
+        except (TypeError, ValueError):
+            pass
+        base = dict(parts[0])
+        base["content"] = "".join(str(p.get("content") or "") for p in parts)
+        merged.append(base)
+    return merged
+
+
+def _fact_block(docs, recent=(), mounted=(), trace=None):
+    """长期记忆 → 一段；没有可用的返回空串。
+
+    分层（锚点置顶）：锚点 → 父块叙事（挂载 + 近期批次）→ 子块事实。
+    `docs` 按相关性排好；`recent` 是最近几批无条件带上的语境，只补父块
+    名额和一条子块名额，不跟旧子块抢 `_FACT_SLOTS`。`mounted` 是命中子块
+    按 group_id 挂载回来的父块。
     """
     def _split(items):
-        bs, fs = [], []
+        ps, ss = [], []
         for d in items:
-            kind = str((d.get("metadata") or {}).get("kind") or "")
-            if kind == "raw":
-                # 原话条目走 `_raw_block`；混进事实层会被当成「原子事实」读。
-                continue
-            (bs if kind == "batch" else fs).append(d)
-        return bs, fs
+            if _is_parent(d):
+                ps.append(d)
+            elif _is_sub(d):
+                ss.append(d)
+            # raw / anchor 不在此分层，忽略
+        return ps, ss
 
-    batches, facts = _split(docs)
     anchors = [d for d in docs if (d.get("metadata") or {}).get("_anchor")]
     _aid = {id(d) for d in anchors}
-    batches = [d for d in batches if id(d) not in _aid]
-    facts = [d for d in facts if id(d) not in _aid]
-    r_batches, r_facts = _split(recent)
-    pick = (anchors[:_ANCHOR_SLOTS]
-            + (r_batches + batches)[:_BATCH_SLOTS]
-            + facts[:_FACT_SLOTS]
-            + r_facts[:_RECENT_FACT_SLOTS])
+    p_docs, s_docs = _split(docs)
+    p_docs = [d for d in p_docs if id(d) not in _aid]
+    s_docs = [d for d in s_docs if id(d) not in _aid]
+    r_parents, r_subs = _split(recent)
+    m_parents, _ = _split(mounted)
+
+    parents = _merge_parent_parts(r_parents + m_parents + p_docs)[:_BATCH_SLOTS]
+    subs = s_docs[:_FACT_SLOTS] + r_subs[:_RECENT_FACT_SLOTS]
+
+    pick = anchors[:_ANCHOR_SLOTS] + parents + subs
     seen = set()
     pick = [d for d in pick
             if id(d) not in seen and not seen.add(id(d))]
@@ -1166,13 +1308,13 @@ def _fact_block(docs, recent=(), trace=None):
             # 「[双方约定]」这种标签，读起来像普通的计划，模型不会当回事。
             head = "[锚点·只发生过一次]"
             limit = 200
-        elif str(meta.get("kind") or "") == "batch":
+        elif _is_parent(d):
             head = "[当时的经过]"
-            limit = 320
+            limit = 1200
         else:
             about = who.get(str(meta.get("about") or ""), "记忆")
             head = "[%s]" % about
-            limit = 160
+            limit = _SUB_SOFT_MAX
         start = meta.get("turn_start")
         end = meta.get("turn_end")
         rng = "｜第 %s–%s 次回复" % (start, end) if start and end else ""
@@ -1237,12 +1379,11 @@ def build_block(line, query, k=None, day=None, context="", trace=None,
     默认 None = 不截断，生产路径一点不变。
 
     2026-11-06：两路检索——当前用户话 + 最近几轮上下文，合并去重后
-    优先取 2 条批次叙事 + 3 条原子事实。问「昨天」这种短句时，
+    优先取 2 条父块叙事 + 若干条子块事实。问「昨天」这种短句时，
     上下文那一路能把「昨天在哪、和谁、发生了什么」带出来。
 
-    2026-11-07：加原文层。两层分工写进块标题——提炼层说「经过与事实」，
-    原文层说「用来确认说过和做过什么」，结尾用法句再点明「正在发生的
-    比旧话更重要」，避免演员拿旧对话当台词复述。
+    V3 父子块：向量只召回子块；命中后按 group_id 挂载同组父块补语境。
+    原话层已取消，新数据不再单独存原文。
 
     `trace` 是展示页的可选只读输出：传入 dict 时记录 query、召回条目、
     距离与最终入选项；默认 None，原有调用方的行为和返回值完全不变。
@@ -1260,19 +1401,9 @@ def build_block(line, query, k=None, day=None, context="", trace=None,
                 pooled.append(d)
         return _rank_merged(pooled, k or PERSONA_RAG_K)
 
-    def _rec_raw(q):
-        if not multi:
-            return retrieve_raw(line, q)
-        pooled = []
-        for ln in lines:
-            for d in retrieve_raw(ln, q):
-                d["_line"] = ln
-                pooled.append(d)
-        return _rank_merged(pooled, RAW_BLOCK_ITEMS)
-
     # 纯向量双查询（2026-11-20）：消解短语一路、用户原话一路，RRF 按位次
     # 融合。两路文本相同（memory_query 空退回原话）时只查一路，不重复烧
-    # embedding；原话层补细节仍走单路 query，不参与这次融合。
+    # embedding。向量候选只认子块；父块命中后按 group_id 挂载，不参与召回。
     docs_lists = [_rec(query)]
     qr = str(query_raw or "").strip()
     if qr and qr != str(query or "").strip():
@@ -1315,19 +1446,21 @@ def build_block(line, query, k=None, day=None, context="", trace=None,
         if trace is not None:
             trace["context_hit_count"] = len(extra)
             trace["context_hits"] = [_trace_doc(d, "context") for d in extra]
+    # 父块挂载：只从命中子块取 group_id，锚点/近期批次不参与挂载。
+    mounted = _mount_parents(line, [d for d in docs if _is_sub(d)],
+                             extra_lines)
+    if trace is not None:
+        trace["mounted_count"] = len(mounted)
     parts = []
-    fact = _fact_block(docs, recent, trace=trace)
+    fact = _fact_block(docs, recent, mounted=mounted, trace=trace)
     if fact:
         parts.append(fact)
-    raw = _raw_block(_rec_raw(query), trace=trace)
-    if raw:
-        parts.append(raw)
     if not parts:
         return ""
     parts.append(
         "【用法】用户问起自己/双方/角色的既有事实，或「昨天/上次发生过什么」时，"
-        "以此为准。原话是当时确实说过、做过的细节，用来说明「是谁说的、"
-        "当时怎么说的」；当前这一拍接着往下演，正在发生的比旧话更重要。"
+        "以此为准。父块是当时整批经过的概括，子块是记下的具体事实；"
+        "当前这一拍接着往下演，正在发生的比旧话更重要。"
         "旧事实只能补充，不会被近期闲聊覆盖。"
         "她主动提昨天的事是好的，用已经发生过的口吻提；里面写到「明天」"
         "「下次」的约定都是当时那一轮的说法，不代表今天还欠着。")
@@ -1426,10 +1559,9 @@ def _scan_stale(client, coll, line, dry_run=None):
         return 0
     facts, raws = [], []
     for e in entries:
-        kind = str(_meta(e).get("kind") or "")
-        if kind == "fact":
+        if _is_sub(e):
             facts.append(e)
-        elif kind == "raw":
+        elif _kind(e) == _KIND_RAW:
             raws.append(e)
     stale_facts = _stale_fact_ids(facts)
     # 原话老化：按轮次排序，保留最近 N 批（一批 INGEST_EVERY 轮），更早的入候选。
@@ -1538,13 +1670,8 @@ def _process(kind, line, payload):
         if epoch != _current_epoch(line):
             log.info("记忆批次已作废，跳过入库 %s（epoch=%d）", line, epoch)
             return
-        # 原话先入库（2026-11-07）：它不依赖 LLM，所以放在 distill 之前。
-        # 提炼连续失败两次会整批丢弃，但原话已经落地，细节不会一起没掉。
-        raws = raw_entries(turns)
-        if raws:
-            rr = client.ingest(coll, _with_line(raws, line))
-            if not rr.get("ok"):
-                log.warning("原话入库失败 %s：%s", coll, rr.get("error"))
+        # V3：不再单独入库原话层。原话属于压缩记忆的一部分，由父块叙事
+        # 概括保留；新数据只走提炼后的父子块。旧库残留 raw 由遗忘扫描自然清理。
         entries = distill(turns, custom, card_name=card_name,
                           epoch=epoch, batch_id=batch_id)
         if entries is None:
@@ -1580,18 +1707,38 @@ def _process(kind, line, payload):
         end = int((payload or {}).get("end") or 0)
         ids = [str(x) for x in ((payload or {}).get("batch_ids") or []) if x]
         if start and end:
-            ids.append("batch-%d-%d" % (start, end))
-            ids += ["%d-%d-%d" % (start, end, idx) for idx in range(4)]
-            # 原文条目（2026-11-07）：这一批每一轮的原话都要一起撤掉，
-            # 否则回退之后演员还能把被撤掉的那句话召回出来。
+            # 父块若拆过 part，part2/part3 的 id 是 `<group_id>-p2/-p3`。
+            ids += ["%s-p%d" % (g, p) for g in ids for p in (2, 3)]
+            # 兜底按轮次范围读出本批全部条目（子块/锚点/父块/旧原话）整批
+            # 撤掉——V3 子块不再限 4 条，靠拼 id 会漏；读全量最稳。
+            try:
+                r = client.list_entries(coll, timeout=PERSONA_RAG_TIMEOUT)
+                for e in r.get("entries") or []:
+                    m = _meta(e)
+                    try:
+                        ts = int(m.get("turn_start") or m.get("turn") or 0)
+                        te = int(m.get("turn_end") or m.get("turn") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if ts == start and te == end:
+                        eid = str(e.get("id") or "")
+                        if eid:
+                            ids.append(eid)
+            except Exception:                            # noqa: BLE001
+                log.exception("回退清理读取批次失败 %s", coll)
+            # 旧原话 id 兜底（list_entries 不可用时也能撤掉残留）。
             for t in range(start, end + 1):
                 ids += ["raw-%d-u" % t, "raw-%d-a" % t]
+        ids = [x for x in dict.fromkeys(ids) if x]
         try:
-            for entry_id in ids:
-                r = client.delete_entry(coll, entry_id)
-                if not r.get("ok"):
-                    log.warning("记忆删除失败 %s/%s：%s", coll, entry_id,
-                                r.get("error"))
+            if hasattr(client, "delete_entries") and len(ids) > 1:
+                client.delete_entries(coll, ids)
+            else:
+                for entry_id in ids:
+                    r = client.delete_entry(coll, entry_id)
+                    if not r.get("ok"):
+                        log.warning("记忆删除失败 %s/%s：%s", coll, entry_id,
+                                    r.get("error"))
         finally:
             # 回退清理完成，恢复检索；失败也要放开，不能永久锁死这条线。
             with _LOCK:
@@ -1618,8 +1765,8 @@ def _format_dialogue(turns, name="角色"):
 def distill(turns, custom=None, card_name="角色", epoch=0, batch_id=""):
     """调 LLM 提炼一批对话，返回可入库的 entries；失败返回 None。
 
-    返回里第 0 条是 `kind=batch` 的批次叙事（如果模型给了 summary），
-    后面是 `kind=fact` 的原子事实。
+    返回里父块是 `kind=parent` 的整批叙事（如果模型给了 summary），
+    后面是 `kind=subfact` 的子块事实，另有 `kind=anchor` 锚点。
     """
     turns = [t for t in (turns or []) if isinstance(t, dict)]
     if not turns:
@@ -1647,7 +1794,7 @@ def distill(turns, custom=None, card_name="角色", epoch=0, batch_id=""):
         if PERSONA_MODEL:
             kw["model"] = PERSONA_MODEL
         raw = llm.call_llm([{"role": "user", "content": prompt}],
-                           temperature=0.2, max_tokens=1600, **kw)
+                           temperature=0.2, max_tokens=2600, **kw)
     except Exception:                                    # noqa: BLE001
         log.exception("记忆提炼调用失败 %s-%s", start, end)
         return None
@@ -1673,12 +1820,45 @@ def distill(turns, custom=None, card_name="角色", epoch=0, batch_id=""):
     return []
 
 
+def _split_parent(text, max_chars=_PARENT_MAX_CHARS):
+    """父块超长时按句读边界切成多段；返回非空 list。
+
+    父块不参与向量召回，拆 part 只为注入预算与历史兼容。尽量在句号/问号/
+    分号处收段，不拦腰切断一句话；实在切不开才退回硬边界。
+    """
+    text = str(text or "").strip()
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
+    parts, buf = [], ""
+    for s in re.split(r"(?<=[。！？!?；;])", text):
+        if not s:
+            continue
+        # 单句本身就超长：先按硬边界切开，避免整段压成一块。
+        while len(s) > max_chars:
+            if buf:
+                parts.append(buf.rstrip())
+                buf = ""
+            parts.append(s[:max_chars])
+            s = s[max_chars:]
+        if buf and len(buf) + len(s) > max_chars:
+            parts.append(buf.rstrip())
+            buf = s
+        else:
+            buf += s
+    if buf.strip():
+        parts.append(buf.rstrip())
+    return parts or [text[:max_chars]]
+
+
 def parse_memory_json(raw, start, end, day=0, phase="", card_name="角色",
                       epoch=0, batch_id=""):
     """解析提炼器输出 → Chroma entries。坏 JSON / 空内容一律返回 []。
 
-    2026-11-06 起支持两层：`summary`（批次叙事，kind=batch）+
-    `entries`（原子事实，kind=fact）。批次叙事带「第 N 天 · 时段」前缀。
+    V3 父子块：`summary` → 父块 `kind=parent`（同 `group_id`，超长拆 part）；
+    `facts`（兼容旧 `entries`）→ 子块 `kind=subfact`，挂 `parent_group_id`。
+    父块带「第 N 天 · 时段」前缀。
     """
     text = str(raw or "")
     lo = text.find("{")
@@ -1693,6 +1873,8 @@ def parse_memory_json(raw, start, end, day=0, phase="", card_name="角色",
     if not isinstance(data, dict) or data.get("skip"):
         return []
     out = []
+    group_id = str(batch_id or ("batch-%d-%d-%d"
+                                % (start, end, int(epoch or 0))))
     summary = " ".join(str(data.get("summary") or "").split())
     if summary:
         # day=0 不写前缀（2026-11-08）：补录归档时不知道历史轮次属于第几天，
@@ -1700,22 +1882,26 @@ def parse_memory_json(raw, start, end, day=0, phase="", card_name="角色",
         prefix = ("【第%d天%s】" % (int(day or 0),
                                  (" · " + str(phase)) if phase else "")
                   if int(day or 0) else "")
-        content = prefix + summary[:320]
-        out.append({
-            "id": str(batch_id or ("batch-%d-%d-%d"
-                                  % (start, end, int(epoch or 0)))),
-            "content": content,
-            "metadata": {
-                "kind": "batch",
-                "about": "shared",
-                "day": int(day or 0),
-                "phase": str(phase or "")[:12],
-                "turn_start": start,
-                "turn_end": end,
-                "topics": "",
-                "source": _SOURCE,
-            },
-        })
+        parts = _split_parent(prefix + summary)
+        total = len(parts)
+        for pi, seg in enumerate(parts, start=1):
+            pid = group_id if total == 1 else "%s-p%d" % (group_id, pi)
+            out.append({
+                "id": pid,
+                "content": seg,
+                "metadata": {
+                    "kind": _KIND_PARENT,
+                    "group_id": group_id,
+                    "part": pi,
+                    "part_total": total,
+                    "about": "shared",
+                    "day": int(day or 0),
+                    "phase": str(phase or "")[:12],
+                    "turn_start": start,
+                    "turn_end": end,
+                    "source": _SOURCE,
+                },
+            })
     # 锚点事实（2026-11-08）：只发生一次的节点，单独存 kind=anchor。
     # 渲染时它们不看向量距离、直接排最前（见 `_anchor_docs`）。
     raw_anchors = data.get("anchors")
@@ -1731,7 +1917,7 @@ def parse_memory_json(raw, start, end, day=0, phase="", card_name="角色",
                                            str(a.get("key") or j)[:24]),
                 "content": ac[:200],
                 "metadata": {
-                    "kind": "anchor",
+                    "kind": _KIND_ANCHOR,
                     "key": str(a.get("key") or "")[:24],
                     "about": "shared",
                     "day": int(day or 0),
@@ -1742,36 +1928,39 @@ def parse_memory_json(raw, start, end, day=0, phase="", card_name="角色",
                     "source": _SOURCE,
                 },
             })
-    raw_entries = data.get("entries")
-    if not isinstance(raw_entries, list):
-        return out
-    for i, e in enumerate(raw_entries[:4]):
-        if not isinstance(e, dict):
-            continue
-        content = str(e.get("content") or "").strip()
-        if not content:
-            continue
-        about = _norm_about(e.get("about"), content, card_name)
-        content = _ensure_prefix(about, content, card_name)
-        if len(content) > 160:                    # 提示词说 120，留点余量
-            content = content[:160]
-        topics = e.get("topics") if isinstance(e.get("topics"), list) else []
-        opens = e.get("openThreads") if isinstance(e.get("openThreads"), list) else []
-        out.append({
-            "id": "%d-%d-%d" % (start, end, i),
-            "content": content,
-            "metadata": {
-                "kind": "fact",
-                "about": about,
-                "day": int(day or 0),
-                "turn_start": start,
-                "turn_end": end,
-                "topics": ",".join(str(x) for x in topics if x)[:120],
-                "primary_emotion": str(e.get("primaryEmotion") or "")[:60],
-                "open_threads": ",".join(str(x) for x in opens if x)[:160],
-                "source": _SOURCE,
-            },
-        })
+    raw_facts = data.get("facts")
+    if not isinstance(raw_facts, list):
+        raw_facts = data.get("entries")     # 兼容旧提炼输出字段名
+    if isinstance(raw_facts, list):
+        for i, e in enumerate(raw_facts):
+            if not isinstance(e, dict):
+                continue
+            content = str(e.get("content") or "").strip()
+            if not content:
+                continue
+            about = _norm_about(e.get("about"), content, card_name)
+            content = _ensure_prefix(about, content, card_name)
+            # V3：去掉 4 条硬上限与 160 字硬截断——一条一事由 prompt 约束，
+            # 代码不再拦腰切断完整事实。
+            topics = e.get("topics") if isinstance(e.get("topics"), list) else []
+            opens = e.get("openThreads") if isinstance(e.get("openThreads"), list) else []
+            out.append({
+                "id": "%d-%d-%d" % (start, end, i),
+                "content": content,
+                "metadata": {
+                    "kind": _KIND_SUB,
+                    "about": about,
+                    "day": int(day or 0),
+                    "phase": str(phase or "")[:12],
+                    "turn_start": start,
+                    "turn_end": end,
+                    "parent_group_id": group_id,
+                    "topics": ",".join(str(x) for x in topics if x)[:120],
+                    "primary_emotion": str(e.get("primaryEmotion") or "")[:60],
+                    "open_threads": ",".join(str(x) for x in opens if x)[:160],
+                    "source": _SOURCE,
+                },
+            })
     return out
 
 
