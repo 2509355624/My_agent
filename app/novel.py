@@ -1142,11 +1142,11 @@ def _messages(world, facts=None, said="", for_director=False):
 
 
 def warm_world(world):
-    """打开一本老世界就把已有 history 排进 RAG 回填，不用等下一轮写完。
+    """打开一本老世界就把已有 history 排进 RAG 提炼回填，不用等下一轮写完。
 
-    2026-11-12：第一版小说模式没有 RAG，站主正在玩的那 5 轮只有 world
-    里的 history。`schedule_backfill` 按 line 幂等、后台执行，所以这里可以
-    在 `/api/novel/state` 里放手调——打开即排队，接着写第一轮就能检索到
+    2026-11-20 V3：history 配对成轮次后分批提炼成父子块入库，不写旧原话
+    层。`schedule_backfill` 按 line 幂等、后台执行，所以这里可以在
+    `/api/novel/state` 里放手调——打开即排队，接着写第一轮就能检索到
     之前的正文。回填不改动 world，也不重跑封样。
     """
     line = _rag_line(world)

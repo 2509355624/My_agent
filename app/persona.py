@@ -6367,9 +6367,9 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     rag_on = persona_rag.enabled_for(key)
     if rag_on:
         persona_rag.warm()
-        # 老线原文补齐（2026-11-10）：原文层上线前的轮次只有提炼摘要，
-        # 旧条目还被 400 字截过。本进程每条线只排一次后台回填，幂等；
-        # 全量归档用 callable 传，没排上就不读，不拖聊天这一轮。
+        # 老线归档回填（2026-11-20 V3）：归档历史配对成轮次，后台分批提炼
+        # 成父子块入库。本进程每条线只排一次，幂等；全量归档用 callable 传，
+        # 没排上就不读，不拖聊天这一轮。
         try:
             persona_rag.schedule_backfill(key, lambda: load_archive(key))
         except Exception:                                    # noqa: BLE001

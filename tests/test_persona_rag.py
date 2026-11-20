@@ -703,15 +703,47 @@ class BackfillTest(RagBase):
         blk = rank._raw_block([{"content": "字" * 800 + tail}])
         self.assertIn(tail, blk, "单条 520 字硬截会把后半段细节砍掉")
 
-    def test_process_backfill_only_writes_raw(self):
+    def test_process_backfill_distills_into_parent_child(self):
         self.client.entries = []
-        with mock.patch.object(rank, "distill") as dist:
+        entries = [{
+            "id": "batch-1-1-0", "content": "父块叙事",
+            "metadata": {"kind": "parent", "source": rank._SOURCE},
+        }, {
+            "id": "1-1-0", "content": "子块",
+            "metadata": {"kind": "subfact", "source": rank._SOURCE},
+        }]
+        with mock.patch.object(rank, "distill", return_value=entries) as dist:
             rank._process("backfill", "web_10001__rem",
                           {"rows": self._rows(2)})
-        dist.assert_not_called()
+        dist.assert_called_once()
+        turns = dist.call_args[0][0]
+        self.assertEqual(len(turns), 1, "两条归档配对成一轮")
+        self.assertEqual(turns[0]["day"], 0)
+        self.assertEqual(turns[0]["phase"], "")
         self.assertEqual(len(self.client.ingested), 1)
         for e in self.client.ingested[0][1]:
-            self.assertEqual(e["metadata"]["kind"], "raw")
+            self.assertNotEqual(e["metadata"]["kind"], "raw",
+                                "回填不再写旧原话层")
+
+    def test_backfill_pairs_orphan_user_with_empty_assistant(self):
+        turns = rank._rows_to_turns([{"role": "user", "content": "在吗"}])
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(turns[0]["user"], "在吗")
+        self.assertEqual(turns[0]["assistant"], "")
+        self.assertEqual(turns[0]["day"], 0)
+
+    def test_backfill_distills_in_batches_by_ingest_every(self):
+        # 6 轮（12 条归档）；setUp 里 INGEST_EVERY=2 → 三批，batch_id 按区间定。
+        rows = []
+        for i in range(12):
+            rows.append({"role": "user" if i % 2 == 0 else "assistant",
+                         "content": "第%d句" % i})
+        with mock.patch.object(rank, "distill", return_value=[]) as dist:
+            rank._process("backfill", "web_10001__rem", {"rows": rows})
+        self.assertEqual(dist.call_count, 3)
+        self.assertEqual(dist.call_args_list[0][1]["batch_id"], "batch-1-2-0")
+        self.assertEqual(dist.call_args_list[1][1]["batch_id"], "batch-3-4-0")
+        self.assertEqual(dist.call_args_list[2][1]["batch_id"], "batch-5-6-0")
 
 
 class PastTensePromptTest(unittest.TestCase):

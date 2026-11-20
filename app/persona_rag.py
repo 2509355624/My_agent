@@ -465,16 +465,62 @@ def raw_entries(turns):
     return out
 
 
+def _rows_to_turns(rows):
+    """归档 `[{role, content}]` 配对成提炼用的 turns。
+
+    一轮 = 一条 user + 一条 assistant；role 错乱或缺失时就近容错。归档里
+    没有 day/phase，留 0/空（解析层 day=0 不写天数前缀）。
+    """
+    turns = []
+    pending_user = None
+    n = 0
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        role = str(r.get("role") or "")
+        text = " ".join(str(r.get("content") or "").split())
+        if not text:
+            continue
+        if role == "user":
+            pending_user = text
+        elif role == "assistant":
+            n += 1
+            turns.append({"turn": n, "user": pending_user or "",
+                          "assistant": text, "day": 0, "phase": ""})
+            pending_user = None
+    if pending_user:                      # 末尾落单的用户话，补一轮不丢
+        n += 1
+        turns.append({"turn": n, "user": pending_user, "assistant": "",
+                      "day": 0, "phase": ""})
+    return turns
+
+
+def _backfill_distill(client, coll, line, turns, card_name="角色", custom=None):
+    """把归档轮次按批走提炼，产出 V3 父子块入库；不写旧原话层。
+
+    回填不走过期 epoch 校验（老线没有在途回退）；batch_id 按轮次区间定，
+    重复回填同 id upsert 覆盖，天然幂等。
+    """
+    every = max(1, int(PERSONA_RAG_INGEST_EVERY or 5))
+    for i in range(0, len(turns), every):
+        batch = turns[i:i + every]
+        start = int(batch[0].get("turn") or 0)
+        end = int(batch[-1].get("turn") or 0)
+        batch_id = "batch-%d-%d-0" % (start, end)
+        entries = distill(batch, custom, card_name=card_name,
+                          epoch=0, batch_id=batch_id)
+        if entries:
+            r = client.ingest(coll, _with_line(entries, line))
+            if not r.get("ok"):
+                log.warning("归档回填入库失败 %s：%s", coll, r.get("error"))
+
+
 def schedule_backfill(line, rows_factory):
-    """按线触发一次「归档原文回填」，幂等、后台执行。
+    """按线触发一次「归档提炼回填」，幂等、后台执行。
 
-    原文层是 2026-11-07 才加的，更早的轮次只有提炼摘要；当时入库还截
-    400 字，后来放宽到 900 字，老条目也不会自己变长。这里从**全量归档**
-    把原文补齐/覆盖，所有老线都吃到新预算，不用手工逐条修库。
-
-    只按内容对齐，不按序号：回退/删档会让 RAG 的 turn 编号与归档轮号
-    错位（实测差 29 轮），按序号重建会撞 id，还会把回退掉的对话认成新的。
-    `rows_factory` 用 callable 传，只有真要回填时才读全量归档。
+    归档历史对话配对成轮次后分批走提炼，产出 V3 父子块入库；不写旧原话
+    层。`rows_factory` 用 callable 传，只有真要回填时才读全量归档，不拖
+    聊天这一轮。重复回填同 id upsert 覆盖，天然幂等。
     """
     line = str(line or "").strip()
     if not line or not enabled_for(line):
@@ -1649,14 +1695,18 @@ def _process(kind, line, payload):
         return
     coll = collection_name(line)
     if kind == "backfill":
-        # 老线补原文：只动原文层，提炼事实一条不碰。失败不阻塞后续队列。
+        # V3：归档回填不再写旧原话层，配对成轮次后走提炼，产出父子块。
+        # 失败不阻塞后续队列；无论成败都清掉「已排过」标记，允许下次重排。
         try:
-            if _backfill_raw(client, coll,
-                             (payload or {}).get("rows") or [], line) < 0:
-                with _LOCK:
-                    _BACKFILL_QUEUED.discard(line)
+            turns = _rows_to_turns((payload or {}).get("rows") or [])
+            if turns:
+                _backfill_distill(client, coll, line, turns,
+                                  card_name=str((payload or {}).get(
+                                      "card_name") or "角色"),
+                                  custom=(payload or {}).get("custom"))
         except Exception:                                    # noqa: BLE001
-            log.exception("归档原文回填失败 %s", coll)
+            log.exception("归档回填失败 %s", coll)
+        finally:
             with _LOCK:
                 _BACKFILL_QUEUED.discard(line)
         return
