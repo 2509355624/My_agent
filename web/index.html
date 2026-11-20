@@ -1453,7 +1453,7 @@
         <button class="btn" onclick="window.open('/comic','_blank')" title="漫画工作台：输入需求 → 编剧出剧本 → 逐格渲染换种子 → qwen 加气泡（新标签打开）">漫画</button>
         <button class="btn" onclick="window.open('/moss','_blank')" title="moss 漫画台：一句话剧情 → 编剧写整页分镜 → moss 一次出图，四格小漫画一步到位（新标签打开）">moss 漫画</button>
         <button class="btn" onclick="window.open('/gen','_blank')" title="跑图台：无 AI 裸跑图 —— 左边选渠道、下面写提示词、点生成直接出图（新标签打开）">跑图台</button>
-        <button class="btn" onclick="openFriendPage('/gallery')" title="画廊：群友的作品墙 —— 打开 5175 那台（首次进要填 QQ 收验证码，也可以选游客只读逛）">画廊</button>
+        <button class="btn" onclick="window.open('/gallery','_blank')" title="画廊：本机/内网直连 5174 作品墙，本地免登录（站主身份）；新标签打开">画廊</button>
         <button class="btn" onclick="window.open('/characters','_blank')" title="人设卡池：QQ 角色扮演用的人设卡 —— 外观固定块由代码原样拼在每张画面最前面，保证第 100 张还是同一个人（新标签打开）">角色</button>
         <button class="btn persona-go" onclick="window.open('/persona_admin','_blank')" title="角色扮演查看台：谁玩过、聊了什么 —— 左边列出所有会话（QQ私聊/群聊/网页/游客），点开看完整对话（新标签打开）">扮演记录</button>
         <button class="btn" onclick="window.open('/novel','_blank')" title="小说模式：和一对一角色扮演相互隔离的第三套 —— 世界书 + 编剧裁定 + 第三人称正文，第一版玩法是丧尸末日生存模拟（新标签打开）">小说模式</button>
@@ -1763,44 +1763,6 @@ function openShowcase() {
   }).catch(function() {
     go('/showcase');
   });
-}
-
-// 画廊在 5175 网关（本页是 5174）。隧道重启会换随机域名，
-// 所以和公开展示页一样，每次点击都先问后端要当前地址，别写死上一次的域名。
-// 后端没地址或拿到的不是 https 时，再退回本机 5175。
-function openFriendPage(path) {
-  function localUrl() {
-    const host = location.hostname || '127.0.0.1';
-    const proto = location.protocol === 'https:' ? 'https:' : 'http:';
-    return proto + '//' + host + ':5175' + path;
-  }
-  const win = window.open('about:blank', '_blank');
-  if (!win) {
-    window.location.href = localUrl();
-    return;
-  }
-  function go(url) {
-    try { win.location.replace(url); }
-    catch (e) { window.location.href = url; }
-  }
-  function localFallback() {
-    go(localUrl());
-  }
-  fetch('/api/friend_url', {
-    cache: 'no-store',
-    headers: { 'Accept': 'application/json' }
-  }).then(function(r) {
-    return r.ok ? r.json() : null;
-  }).then(function(d) {
-    let target = null;
-    if (d && d.ok && typeof d.url === 'string') {
-      try {
-        const u = new URL(d.url);
-        if (u.protocol === 'https:') target = u.origin + path;
-      } catch (e) {}
-    }
-    target ? go(target) : localFallback();
-  }).catch(localFallback);
 }
 
 function toggleSidebar() {
