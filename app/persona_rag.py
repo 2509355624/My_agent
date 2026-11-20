@@ -258,6 +258,59 @@ def pending_for(line):
         return dict(rec) if isinstance(rec, dict) else {}
 
 
+def _with_line(entries, line):
+    """入库前给每条条目 metadata 补上所属线键（2026-11-20 加固）。
+
+    老库条目没有这个字段，反查归属时只能靠 collection 名猜哈希；新入库
+    带上 line，以后串库/清档能直接从条目元数据认出它属于哪条线。
+    """
+    line = str(line or "").strip()
+    if not line:
+        return entries
+    for e in entries or []:
+        if not isinstance(e, dict):
+            continue
+        md = e.get("metadata")
+        if isinstance(md, dict):
+            md.setdefault("line", line)
+    return entries
+
+
+# ── 待执行删除任务持久化（2026-11-20 加固）──────────────────────────────
+#
+# 以前 drop/forget 只丢进内存 queue.Queue，进程在后台消费前重启，任务就
+# 丢了——表现为「状态和历史删干净了，向量库留一个空壳/残留库」。这里把
+# 待执行的 drop 记进 pending 文件的 `_ops` 列表，worker 成功后摘除；warm
+# 启动时回放没执行完的操作。forget 是单批回退、重启丢失影响小，暂不持久化。
+
+def _ops_load(data=None):
+    data = data if data is not None else _pending_load()
+    ops = data.get("_ops")
+    return ops if isinstance(ops, list) else []
+
+
+def _op_add(op, line):
+    with _PENDING_LOCK:
+        data = _pending_load()
+        ops = _ops_load(data)
+        if not any(x.get("op") == op and x.get("line") == line for x in ops):
+            ops.append({"op": op, "line": str(line or "")})
+            data["_ops"] = ops
+            _pending_save(data)
+
+
+def _op_done(op, line):
+    with _PENDING_LOCK:
+        data = _pending_load()
+        ops = _ops_load(data)
+        new = [x for x in ops
+               if not (x.get("op") == op and x.get("line") == line)]
+        if len(new) != len(ops):
+            data["_ops"] = new
+            _pending_save(data)
+
+
+
 def _epoch(rec):
     """这条线的回退代次。回退批次时 +1，旧的 distill 结果据此作废。"""
     try:
@@ -409,7 +462,7 @@ def schedule_backfill(line, rows_factory):
     _enqueue("backfill", line, {"rows": rows})
 
 
-def _backfill_raw(client, coll, rows):
+def _backfill_raw(client, coll, rows, line=""):
     """把归档里的每条原话补成/覆盖成 900 字全文，返回实际写入条数。
 
     已有 raw 条目用**它原来的 id** upsert 覆盖（400 字截断的那批原地变长，
@@ -473,7 +526,7 @@ def _backfill_raw(client, coll, rows):
         todo.append({"id": eid, "content": content, "metadata": md})
     written = 0
     for s in range(0, len(todo), _BACKFILL_BATCH):
-        r = client.ingest(coll, todo[s:s + _BACKFILL_BATCH])
+        r = client.ingest(coll, _with_line(todo[s:s + _BACKFILL_BATCH], line))
         if not r.get("ok"):
             log.warning("回填写库失败 %s：%s", coll, r.get("error"))
             # 负数让调用方清掉「已排过」标记，下轮重排；已写入的那几批
@@ -564,6 +617,7 @@ def drop_line(line):
             _pending_save(data)
     with _LOCK:
         _BLOCKED.add(line)
+    _op_add("drop", line)          # 持久化：重启后 warm 回放，避免删库任务丢失
     _enqueue("drop", line)
 
 
@@ -647,6 +701,69 @@ def _text_sim(a, b):
     Ab, Bb = _bigrams(a), _bigrams(b)
     bi = len(Ab & Bb) / float(len(Ab | Bb)) if (Ab and Bb) else 0.0
     return 0.6 * uni + 0.4 * bi
+
+
+# ── 时效裁决 / 遗忘清理（2026-11-20）──────────────────────────────────
+#
+# 召回侧：同一主题被后续批次更新后，旧版本不该再端上桌（旧约定、旧状态
+# 反复出现会把已经演过去的事又拉回来）。只在原子事实之间做新旧压制，
+# 锚点（只发生一次）、批次叙事、原话层都不参与。
+#
+# 遗忘侧：后台扫描老化/被覆盖的条目。当前 daemon 没有 metadata 更新接口，
+# 记不了命中频次，所以只能按「年龄（day/turn）+ 类型 + 同主题覆盖」判，
+# 不做命中次数遗忘。默认 dry-run：只记候选日志不真删，阈值确认后再放开。
+_STALE_SIM = 0.42                 # 高于此值视为同一主题的新旧两版
+_RAW_KEEP_BATCHES = 6             # 原话层保留最近几批（一批约 5 轮）
+_FORGET_DRY_RUN = True            # True=只扫描记录候选；False=真删
+
+
+def _meta(doc):
+    m = (doc or {}).get("metadata")
+    return m if isinstance(m, dict) else {}
+
+
+def _age_key(doc):
+    """条目新旧排序键：先游戏天数，再批次末轮次；缺失按 0（最老）。"""
+    m = _meta(doc)
+    def _int(v):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return 0
+    return (_int(m.get("day")), _int(m.get("turn_end") or m.get("turn")))
+
+
+def _is_fact(doc):
+    return _meta(doc).get("kind") == "fact"
+
+
+def _superseded_dedupe(docs, sim=_STALE_SIM):
+    """同主题事实只留较新的一条；其余类型原样保留。
+
+    两条 fact 文本相似度达到 `sim` 判为同一主题的新旧两版，按 day/turn
+    留新剔旧。相似度闸值比 MMR 的 dup(0.30) 高，宁可漏压也不误删不同侧面。
+    """
+    if not docs:
+        return []
+    facts = [d for d in docs if _is_fact(d)]
+    kept_facts = []
+    for d in facts:
+        dup_with = None
+        for i, k in enumerate(kept_facts):
+            if _text_sim(d.get("content") or d.get("text") or "",
+                         k.get("content") or k.get("text") or "") >= sim:
+                dup_with = i
+                break
+        if dup_with is None:
+            kept_facts.append(d)
+            continue
+        k = kept_facts[dup_with]
+        # 保留较新的一条；同年龄时保留先召回（相关性更高）的那条。
+        if _age_key(d) > _age_key(k):
+            kept_facts[dup_with] = d
+    kept_ids = {str(d.get("id") or "") for d in kept_facts}
+    out = [d for d in docs if not _is_fact(d) or str(d.get("id") or "") in kept_ids]
+    return out
 
 
 _ANCHOR_RE = re.compile(
@@ -810,8 +927,9 @@ def retrieve(line, query, k=None, day=None):
         if r and r.get("ok"):
             out = [d for d in (r.get("docs") or [])
                    if str((d.get("metadata") or {}).get("kind") or "") in
-                   ("batch", "fact")]
+                   ("", "batch", "fact")]
             if out:
+                out = _superseded_dedupe(out)
                 log.info("[回忆] %s 按第 %d 天命中 %d 条（query=%r）",
                          line, day_q, len(out), query[:40])
                 return _rerank_before_mmr(out, kk_out, query)
@@ -841,6 +959,8 @@ def retrieve(line, query, k=None, day=None):
         merged = recent + [d for d in out
                            if str(d.get("id") or "") not in seen]
         out = merged[:12]
+    # 时效裁决：同主题旧版事实被新版覆盖，不重复端上桌。
+    out = _superseded_dedupe(out)
     log.info("[回忆] %s 命中 %d 条（query=%r，阈值=%.2f，时间问法=%s）",
              line, len(out), query[:40], limit, time_q)
     return _rerank_before_mmr(out, kk_out, query)
@@ -953,6 +1073,30 @@ def _rank_merged(docs, limit):
             seen.add(key)
         out.append(d)
     return out[:max(1, int(limit))]
+
+
+# RRF（Reciprocal Rank Fusion）融合常数（2026-11-20 纯向量双查询）。
+# 标准 k=60：位次越靠前贡献越大，k 压住第一名和后面名次的分差，避免一路
+# 的绝对距离尺度压过另一路。
+_RRF_K = 60
+
+
+def _rrf_merge(lists, rrf_k=_RRF_K):
+    """多路排名按位次融合，不看各路绝对距离。
+
+    纯向量双查询（消解短语 + 用户原话）各召回一路：两路 embedding 分布
+    不同，直接拼接会让某一路的距离尺度压过另一路。RRF 只用各路内部排名，
+    score = Σ 1/(k + rank)；同一条在多路都靠前就排前面，只在一路出现也有
+    基础分。id 为空的条目用对象身份兜底，保证不会互相覆盖。
+    """
+    scores, holder = {}, {}
+    for lst in lists:
+        for rank, d in enumerate(lst or []):
+            eid = str((d or {}).get("id") or "") or id(d)
+            scores[eid] = scores.get(eid, 0.0) + 1.0 / (rrf_k + rank + 1)
+            holder.setdefault(eid, d)
+    return [holder[eid] for eid, _ in
+            sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))]
 
 
 def _trace_doc(doc, source):
@@ -1080,7 +1224,7 @@ def _raw_block(docs, trace=None):
 
 
 def build_block(line, query, k=None, day=None, context="", trace=None,
-                extra_lines=(), max_hits=None):
+                extra_lines=(), max_hits=None, query_raw=""):
     """拼成能直接塞进最后一条玩家消息的一段；没命中返回空串。
 
     `extra_lines`（2026-11-15）：额外的只读库。展示页用「母本知识库 +
@@ -1126,7 +1270,14 @@ def build_block(line, query, k=None, day=None, context="", trace=None,
                 pooled.append(d)
         return _rank_merged(pooled, RAW_BLOCK_ITEMS)
 
-    docs = _rec(query)
+    # 纯向量双查询（2026-11-20）：消解短语一路、用户原话一路，RRF 按位次
+    # 融合。两路文本相同（memory_query 空退回原话）时只查一路，不重复烧
+    # embedding；原话层补细节仍走单路 query，不参与这次融合。
+    docs_lists = [_rec(query)]
+    qr = str(query_raw or "").strip()
+    if qr and qr != str(query or "").strip():
+        docs_lists.append(_rec(qr))
+    docs = _rrf_merge(docs_lists)
     if max_hits:
         docs = docs[:max_hits]
     # 锚点（第一次/初夜/关系确认…）不看距离，直接排最前，见 `_anchor_docs`。
@@ -1144,6 +1295,8 @@ def build_block(line, query, k=None, day=None, context="", trace=None,
         trace.clear()
         trace.update({
             "query": str(query or ""),
+            "query_raw": qr,
+            "dual_query": len(docs_lists) > 1,
             "context_query": str(context or ""),
             "hit_count": len(docs),
             "hits": [_trace_doc(d, "distilled") for d in docs],
@@ -1187,6 +1340,146 @@ def build_block(line, query, k=None, day=None, context="", trace=None,
     return out
 
 
+def _recover_persisted_ops(client):
+    """重启后回放没执行完的 drop；库已不存在就直接摘除待办。"""
+    with _PENDING_LOCK:
+        ops = list(_ops_load())
+    for op in ops:
+        if op.get("op") != "drop":
+            continue
+        ln = str(op.get("line") or "")
+        if not ln:
+            continue
+        coll = collection_name(ln)
+        listed = client.list_kb().get("collections") or []
+        if coll not in listed:
+            _op_done("drop", ln)
+            continue
+        r = client.delete_kb(coll)
+        if r.get("ok"):
+            with _LOCK:
+                _BLOCKED.discard(ln)
+            _op_done("drop", ln)
+        else:
+            log.warning("重启回放清库失败 %s", coll)
+
+
+def _purge_shells(client):
+    """删掉 count=0 的空壳 collection（2026-11-20 清理加固）。"""
+    r = client.list_kb()
+    if not r.get("ok"):
+        return
+    counts = r.get("counts") or {}
+    for name in r.get("collections") or []:
+        try:
+            if int(counts.get(name) or 0) == 0:
+                client.delete_kb(name)
+        except Exception:                                    # noqa: BLE001
+            log.warning("空壳清理失败 %s", name)
+
+
+def _stale_fact_ids(facts, sim=_STALE_SIM):
+    """被更新版本覆盖的旧 fact id 列表（与 `_superseded_dedupe` 同源规则）。"""
+    kept = []
+    stale = []
+    for d in facts:
+        hit = None
+        for i, k in enumerate(kept):
+            if _text_sim(d.get("content") or d.get("text") or "",
+                         k.get("content") or k.get("text") or "") >= sim:
+                hit = i
+                break
+        if hit is None:
+            kept.append(d)
+            continue
+        k = kept[hit]
+        if _age_key(d) > _age_key(k):
+            stale.append(str(k.get("id") or ""))
+            kept[hit] = d
+        else:
+            stale.append(str(d.get("id") or ""))
+    return [x for x in stale if x]
+
+
+def _scan_stale(client, coll, line, dry_run=None):
+    """扫描一条线库里的老化/被覆盖条目；返回删除条数（dry-run 返回候选数）。
+
+    规则（保守，宁可漏删不误删）：
+      · anchor / batch 永不自动删——锚点是只发生一次的节点，批次叙事是经过存档；
+      · raw 原话：只保留最近 `_RAW_KEEP_BATCHES` 批（一批 INGEST_EVERY 轮），
+        更早的细节入候选；
+      · fact：与更新 fact 同主题重复的旧版入候选（偏好/承诺不按年龄单独删）。
+
+    `dry_run` 默认取模块级 `_FORGET_DRY_RUN`：True 只记候选日志不真删；
+    False 才走 `delete_entries`。当前 daemon 没有 metadata 更新接口，记不了
+    命中频次，所以这一轮遗忘只按年龄 + 覆盖判，不做命中次数淘汰。
+    """
+    if dry_run is None:
+        dry_run = _FORGET_DRY_RUN
+    try:
+        r = client.list_entries(coll, timeout=PERSONA_RAG_TIMEOUT)
+    except Exception:                                        # noqa: BLE001
+        log.exception("遗忘扫描读取失败 %s", coll)
+        return 0
+    entries = r.get("entries") or []
+    if not entries:
+        return 0
+    facts, raws = [], []
+    for e in entries:
+        kind = str(_meta(e).get("kind") or "")
+        if kind == "fact":
+            facts.append(e)
+        elif kind == "raw":
+            raws.append(e)
+    stale_facts = _stale_fact_ids(facts)
+    # 原话老化：按轮次排序，保留最近 N 批（一批 INGEST_EVERY 轮），更早的入候选。
+    def _turn(e):
+        try:
+            return int(_meta(e).get("turn") or 0)
+        except (TypeError, ValueError):
+            return 0
+    keep_n = _RAW_KEEP_BATCHES * max(1, int(PERSONA_RAG_INGEST_EVERY or 5))
+    keep_turns = sorted({_turn(e) for e in raws})[-keep_n:]
+    keep_set = set(keep_turns)
+    stale_raws = []
+    for e in raws:
+        if _turn(e) not in keep_set:
+            eid = str(e.get("id") or "")
+            if eid:
+                stale_raws.append(eid)
+    stale_ids = [x for x in dict.fromkeys(stale_facts + stale_raws) if x]
+    if not stale_ids:
+        return 0
+    if dry_run:
+        log.info("[遗忘·dry-run] %s 候选 %d 条（fact 覆盖 %d，raw 老化 %d）",
+                 line, len(stale_ids), len(stale_facts), len(stale_raws))
+        return len(stale_ids)
+    try:
+        r = client.delete_entries(coll, stale_ids)
+        n = r.get("deleted") if isinstance(r, dict) else r
+        log.info("[遗忘] %s 删除 %d 条老化/被覆盖条目", line, n or 0)
+        return int(n or 0)
+    except Exception:                                        # noqa: BLE001
+        log.exception("遗忘清理失败 %s", coll)
+        return 0
+
+
+def _scan_all_stale(client):
+    """warm 时遍历待提炼缓冲里出现过的真人线，逐库跑遗忘扫描。
+
+    母本知识库不经过 remember、不在 pending 键里，天然不会被扫到；扫描器
+    内部也只认本库 source。周期化定期扫描留待后续，本轮只在启动时扫一轮。
+    """
+    with _PENDING_LOCK:
+        data = _pending_load()
+    lines = [k for k in data if k != "_ops" and isinstance(k, str)]
+    for ln in lines:
+        try:
+            _scan_stale(client, collection_name(ln), ln)
+        except Exception:                                    # noqa: BLE001
+            log.warning("遗忘扫描失败 %s", ln)
+
+
 def _run():
     while True:
         kind, line, payload = _QUEUE.get()
@@ -1218,13 +1511,16 @@ def _process(kind, line, payload):
                     _BACKFILL_QUEUED.discard(line)
             return
     if kind == "warm":
+        _recover_persisted_ops(client)
+        _purge_shells(client)
+        _scan_all_stale(client)
         return
     coll = collection_name(line)
     if kind == "backfill":
         # 老线补原文：只动原文层，提炼事实一条不碰。失败不阻塞后续队列。
         try:
             if _backfill_raw(client, coll,
-                             (payload or {}).get("rows") or []) < 0:
+                             (payload or {}).get("rows") or [], line) < 0:
                 with _LOCK:
                     _BACKFILL_QUEUED.discard(line)
         except Exception:                                    # noqa: BLE001
@@ -1246,7 +1542,7 @@ def _process(kind, line, payload):
         # 提炼连续失败两次会整批丢弃，但原话已经落地，细节不会一起没掉。
         raws = raw_entries(turns)
         if raws:
-            rr = client.ingest(coll, raws)
+            rr = client.ingest(coll, _with_line(raws, line))
             if not rr.get("ok"):
                 log.warning("原话入库失败 %s：%s", coll, rr.get("error"))
         entries = distill(turns, custom, card_name=card_name,
@@ -1266,7 +1562,7 @@ def _process(kind, line, payload):
         if epoch != _current_epoch(line):
             log.info("记忆批次在提炼期间被回退，丢弃 %s（epoch=%d）", line, epoch)
             return
-        r = client.ingest(coll, entries)
+        r = client.ingest(coll, _with_line(entries, line))
         if not r.get("ok"):
             log.warning("记忆入库失败 %s：%s", coll, r.get("error"))
         return
@@ -1275,6 +1571,7 @@ def _process(kind, line, payload):
         if r.get("ok"):
             with _LOCK:
                 _BLOCKED.discard(line)
+            _op_done("drop", line)
         else:
             log.warning("记忆清库失败 %s：%s", coll, r.get("error"))
         return

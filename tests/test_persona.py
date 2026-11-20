@@ -1218,7 +1218,8 @@ class IntentTest(unittest.TestCase):
             ' "stance": "装傻"}')
         extra = got[2]
         self.assertEqual(sorted(extra),
-                         ["addressed", "facts", "finish", "items", "secret"])
+                         ["addressed", "facts", "finish", "items",
+                          "memory_query", "need_memory", "secret"])
         self.assertEqual(extra["facts"], ["两杯奶茶", "钥匙放在桌上"])
         self.assertTrue(extra["secret"])
         self.assertTrue(extra["addressed"])
@@ -1508,7 +1509,8 @@ class StateBehaviorTest(unittest.TestCase):
             "persona_mode": "屈服", "lead": "act", "hook": "大腿开始磨",
             "facts": ["两杯奶茶"], "secret": True, "addressed": False})
         self.assertEqual(sorted(info),
-                         ["addressed", "facts", "finish", "items", "secret"])
+                         ["addressed", "facts", "finish", "items",
+                          "memory_query", "need_memory", "secret"])
         self.assertEqual(info["facts"], ["两杯奶茶"])
         self.assertTrue(info["secret"])
         self.assertFalse(info["addressed"])
@@ -4169,6 +4171,36 @@ class BgTransparencyTest(unittest.TestCase):
             m = re.search(r"background:\s*rgba\([^)]*?,\s*([0-9.]+)\)", line)
             if m:
                 self.assertLessEqual(float(m.group(1)), 0.60, line.strip())
+
+class MemoryQueryTest(unittest.TestCase):
+    """查询优化（2026-11-20）：编剧同一次调用判要不要翻旧库 + 消解检索串。"""
+
+    def test_defaults_when_missing(self):
+        self.assertEqual(persona._memory_fields(None),
+                         {"need_memory": True, "memory_query": ""})
+        self.assertEqual(persona._memory_fields({}),
+                         {"need_memory": True, "memory_query": ""})
+
+    def test_parses_bool_and_query(self):
+        f = persona._memory_fields(
+            {"need_memory": "false", "memory_query": "上次送她的项链"})
+        self.assertFalse(f["need_memory"])
+        self.assertEqual(f["memory_query"], "上次送她的项链")
+        f2 = persona._memory_fields({"need_memory": 0})
+        self.assertFalse(f2["need_memory"])
+
+    def test_director_fields_carry_memory(self):
+        d = persona._director_fields(
+            {"need_memory": True, "memory_query": "初中同桌的名字"})
+        self.assertTrue(d["need_memory"])
+        self.assertEqual(d["memory_query"], "初中同桌的名字")
+
+    def test_all_judge_prompts_declare_fields(self):
+        for tpl in (persona._INTENT_PROMPT, persona._SCORE_PROMPT,
+                    persona._SCORE_PROMPT_V2):
+            self.assertIn("need_memory", tpl)
+            self.assertIn("memory_query", tpl)
+
 
 if __name__ == "__main__":
     unittest.main()

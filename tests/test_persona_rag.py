@@ -5,6 +5,7 @@
   · 一人一角一线一个 collection；
   · 清空存档只删当前这一条线，并且连待提炼缓冲一起清。
 """
+import io
 import json
 import os
 import queue
@@ -26,6 +27,8 @@ class FakeClient:
         self.deleted_entries = []
         self.ingested = []
         self.searched = []
+        self.collections = set()
+        self.empty = set()
         self.ready = True
 
     def is_ready(self):
@@ -34,6 +37,11 @@ class FakeClient:
     def start(self):
         return True
 
+    def list_kb(self):
+        return {"ok": True, "collections": list(self.collections),
+                "counts": {c: (0 if c in self.empty else 1)
+                           for c in self.collections}}
+
     def search(self, coll, query, k=4, timeout=30, allow_start=True,
                where=None):
         self.searched.append((coll, query, k, where))
@@ -41,6 +49,7 @@ class FakeClient:
 
     def ingest(self, coll, entries):
         self.ingested.append((coll, entries))
+        self.collections.add(coll)
         return {"ok": True, "count": len(entries)}
 
     def list_entries(self, coll, timeout=30):
@@ -48,11 +57,17 @@ class FakeClient:
 
     def delete_kb(self, coll):
         self.deleted.append(coll)
+        self.collections.discard(coll)
         return {"ok": True, "deleted": True}
 
     def delete_entry(self, coll, entry_id):
         self.deleted_entries.append((coll, entry_id))
         return {"ok": True, "deleted": 1}
+
+    def delete_entries(self, coll, entry_ids):
+        for eid in entry_ids:
+            self.deleted_entries.append((coll, eid))
+        return {"ok": True, "deleted": len(entry_ids)}
 
 
 class RagBase(unittest.TestCase):
@@ -387,6 +402,43 @@ class DropTest(RagBase):
             rank.remember("web_10001__rem", "一句", "一答", None)
             rank.drop_line("web_10001__rem")
         self.assertEqual(rank.pending_for("web_10001__rem"), {})
+
+    def test_drop_persists_op_and_clears_after_process(self):
+        with mock.patch.object(rank, "_ensure_worker"):
+            rank.drop_line("web_10001__rem")
+        with io.open(self.pending_path, encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertTrue(any(x["op"] == "drop" and x["line"] == "web_10001__rem"
+                            for x in data.get("_ops", [])))
+        kind, line, payload = rank._QUEUE.get_nowait()
+        rank._process(kind, line, payload)
+        with io.open(self.pending_path, encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertNotIn("web_10001__rem",
+                         [x.get("line") for x in data.get("_ops", [])])
+
+    def test_recover_replays_persisted_drop(self):
+        coll = rank.collection_name("web_10001__rem")
+        self.client.collections.add(coll)
+        rank._op_add("drop", "web_10001__rem")
+        rank._recover_persisted_ops(self.client)
+        self.assertIn(coll, self.client.deleted)
+        with io.open(self.pending_path, encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertNotIn("web_10001__rem",
+                         [x.get("line") for x in data.get("_ops", [])])
+
+    def test_with_line_tags_metadata(self):
+        entries = [{"id": "1", "content": "x", "metadata": {"kind": "fact"}}]
+        rank._with_line(entries, "web_10001__rem")
+        self.assertEqual(entries[0]["metadata"]["line"], "web_10001__rem")
+
+    def test_purge_shells_removes_empty_collection(self):
+        shell = rank.collection_name("web_10001__shell")
+        self.client.collections.add(shell)
+        self.client.empty.add(shell)
+        rank._purge_shells(self.client)
+        self.assertIn(shell, self.client.deleted)
 
 
 class EraseHookTest(unittest.TestCase):
@@ -750,3 +802,157 @@ class ExtraLinesTest(unittest.TestCase):
         trace = {}
         rank.build_block("line-a", "问", trace=trace)
         self.assertEqual(trace["hit_count"], 4)
+
+    def test_dual_query_runs_both_when_raw_differs(self):
+        """消解短语与原话不同 → 两路向量召回，RRF 融合。"""
+        calls = []
+
+        def fake_retrieve(line, query, k=None, day=None):
+            calls.append(query)
+            return [{"id": "x", "content": "事实",
+                     "metadata": {"kind": "fact"}}]
+
+        patches = self._patch(retrieve=fake_retrieve)
+        for item in patches:
+            item.start()
+            self.addCleanup(item.stop)
+        trace = {}
+        rank.build_block("line-a", "消解后的短语", trace=trace,
+                         query_raw="用户原话")
+        self.assertEqual(calls, ["消解后的短语", "用户原话"])
+        self.assertTrue(trace["dual_query"])
+
+    def test_single_query_when_raw_identical(self):
+        """两路文本相同（memory_query 空退回原话）→ 只查一路，不重复烧。"""
+        calls = []
+
+        def fake_retrieve(line, query, k=None, day=None):
+            calls.append(query)
+            return [{"id": "x", "content": "事实",
+                     "metadata": {"kind": "fact"}}]
+
+        patches = self._patch(retrieve=fake_retrieve)
+        for item in patches:
+            item.start()
+            self.addCleanup(item.stop)
+        trace = {}
+        rank.build_block("line-a", "用户原话", trace=trace, query_raw="用户原话")
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(trace["dual_query"])
+
+
+class RrfMergeTest(unittest.TestCase):
+    """RRF 位次融合（2026-11-20）：多路去重，多路命中的排前面。"""
+
+    @staticmethod
+    def _doc(eid):
+        return {"id": eid, "content": eid, "metadata": {"kind": "fact"}}
+
+    def test_dedup_and_favors_multi_hit(self):
+        l1 = [self._doc("a"), self._doc("b"), self._doc("c")]
+        l2 = [self._doc("b"), self._doc("d"), self._doc("a")]
+        out = rank._rrf_merge([l1, l2])
+        ids = [d["id"] for d in out]
+        self.assertEqual(len(ids), 4)
+        self.assertEqual(set(ids), {"a", "b", "c", "d"})
+        # 两路都命中的 a、b 排在只命中一路的 c、d 前面
+        self.assertIn(ids.index("a"), (0, 1))
+        self.assertIn(ids.index("b"), (0, 1))
+
+    def test_single_list_keeps_order(self):
+        out = rank._rrf_merge([[self._doc("x"), self._doc("y")]])
+        self.assertEqual([d["id"] for d in out], ["x", "y"])
+
+    def test_empty_lists(self):
+        self.assertEqual(rank._rrf_merge([]), [])
+        self.assertEqual(rank._rrf_merge([[], []]), [])
+
+
+class StaleDedupeTest(unittest.TestCase):
+    """时效裁决（2026-11-20）：同主题事实只留较新的一条。"""
+
+    @staticmethod
+    def _fact(fid, content, day, turn):
+        return {"id": fid, "content": content,
+                "metadata": {"kind": "fact", "day": day,
+                             "turn_start": turn, "turn_end": turn}}
+
+    def test_older_duplicate_fact_is_dropped(self):
+        old = self._fact("f1", "用户：喜欢草莓蛋糕。", 1, 5)
+        new = self._fact("f2", "用户：很喜欢草莓蛋糕，每次都要点。", 4, 20)
+        out = rank._superseded_dedupe([old, new])
+        ids = [d["id"] for d in out]
+        self.assertIn("f2", ids)
+        self.assertNotIn("f1", ids)
+
+    def test_distinct_facts_kept(self):
+        a = self._fact("f1", "用户：养了一只橘猫叫大福。", 1, 5)
+        b = self._fact("f2", "用户：周末喜欢去海边散步。", 2, 10)
+        out = rank._superseded_dedupe([a, b])
+        self.assertEqual({d["id"] for d in out}, {"f1", "f2"})
+
+    def test_anchor_batch_raw_not_touched(self):
+        anchor = {"id": "a1", "content": "第一次在卧室。",
+                  "metadata": {"kind": "anchor"}}
+        batch = {"id": "b1", "content": "【第1天】经过。",
+                 "metadata": {"kind": "batch"}}
+        raw = {"id": "raw-1-u", "content": "用户：原话。",
+               "metadata": {"kind": "raw"}}
+        out = rank._superseded_dedupe([anchor, batch, raw])
+        self.assertEqual([d["id"] for d in out], ["a1", "b1", "raw-1-u"])
+
+
+class ForgetScanTest(RagBase):
+    """遗忘扫描：fact 旧版覆盖 + 超龄原话；锚点/批次/近期原话受保护。"""
+
+    def setUp(self):
+        super().setUp()
+        self._keep = rank._RAW_KEEP_BATCHES
+        rank._RAW_KEEP_BATCHES = 1      # 一批 2 轮（INGEST_EVERY=2），只留最近 2 轮
+
+    def tearDown(self):
+        rank._RAW_KEEP_BATCHES = self._keep
+        super().tearDown()
+
+    def _seed(self):
+        self.client.entries = [
+            {"id": "anchor-1", "content": "第一次。",
+             "metadata": {"kind": "anchor", "day": 1, "turn_start": 3,
+                          "turn_end": 3}},
+            {"id": "batch-1", "content": "经过。",
+             "metadata": {"kind": "batch", "day": 1, "turn_start": 3,
+                          "turn_end": 5}},
+            {"id": "f1", "content": "用户：喜欢草莓蛋糕。",
+             "metadata": {"kind": "fact", "day": 1, "turn_start": 3,
+                          "turn_end": 5}},
+            {"id": "f2", "content": "用户：很喜欢草莓蛋糕，每次都点。",
+             "metadata": {"kind": "fact", "day": 4, "turn_start": 18,
+                          "turn_end": 20}},
+            {"id": "raw-1-u", "content": "最旧原话",
+             "metadata": {"kind": "raw", "turn": 1}},
+            {"id": "raw-2-u", "content": "旧原话",
+             "metadata": {"kind": "raw", "turn": 2}},
+            {"id": "raw-3-u", "content": "近原话",
+             "metadata": {"kind": "raw", "turn": 3}},
+            {"id": "raw-25-u", "content": "最新原话",
+             "metadata": {"kind": "raw", "turn": 25}},
+        ]
+
+    def test_dry_run_lists_candidates_without_deleting(self):
+        self._seed()
+        n = rank._scan_stale(self.client, "coll", "web_x", dry_run=True)
+        self.assertGreaterEqual(n, 1)
+        self.assertEqual(self.client.deleted_entries, [])
+
+    def test_real_delete_keeps_protected_and_recent(self):
+        self._seed()
+        rank._scan_stale(self.client, "coll", "web_x", dry_run=False)
+        deleted = {eid for _, eid in self.client.deleted_entries}
+        self.assertIn("f1", deleted)        # 旧版 fact 被覆盖
+        self.assertIn("raw-1-u", deleted)   # 超龄原话
+        self.assertIn("raw-2-u", deleted)
+        self.assertNotIn("f2", deleted)
+        self.assertNotIn("raw-3-u", deleted)
+        self.assertNotIn("raw-25-u", deleted)
+        self.assertNotIn("anchor-1", deleted)
+        self.assertNotIn("batch-1", deleted)

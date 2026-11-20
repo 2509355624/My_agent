@@ -4286,28 +4286,6 @@ def _visible_user_text(segments, fallback=""):
     return "\n".join(parts)
 
 
-def _rag_context(hist, rounds=2):
-    """给 RAG 的「最近几轮上下文」（2026-11-06）。
-
-    只取用户可见话 + 她的正文，压成短串。短句「你还记得昨天吗」单独去检索
-    语义太弱；带上最近两轮，能把「昨天在哪、和谁、发生了什么」带出来。
-    """
-    rows = [m for m in (hist or []) if isinstance(m, dict)]
-    parts = []
-    for m in rows[-(max(1, int(rounds or 1)) * 2):]:
-        if m.get("role") == "user":
-            # 用户消息优先用分段里的「说/做」；心里话和剧情方向不拿去检索。
-            text = _visible_user_text(m.get("seg"), m.get("content"))
-            who = "用户"
-        else:
-            text, _tail = _split_meta(str(m.get("content") or ""))
-            who = "她"
-        text = re.sub(r"\s{2,}", " ", text.replace("\r", "")).strip()
-        if text:
-            parts.append("%s：%s" % (who, text[:80]))
-    return " / ".join(parts)
-
-
 def _pronoun_to_name(content, name):
     """历史示范里的「她」换成卡名（2026-11-07 二改）。
 
@@ -4487,7 +4465,9 @@ _INTENT_PROMPT = """判断下面这句话**在干什么**。只输出一个 JSON
   "addressed": true,
   "secret": false,
   "facts": ["这一幕已经有的东西，一样一条"],
-  "items": {"use": [], "gain": []}
+  "items": {"use": [], "gain": []},
+  "need_memory": true,
+  "memory_query": "消解后的简短检索短语；不需要时留空"
 }
 
 类别：
@@ -4521,6 +4501,15 @@ items：这一轮有没有东西进出她手里（没有就留空数组）。
   gain 只记**真的递到你手上**的；她给你的私人物品一定记，kind 填 keepsake。
   （可选的道具 list：%(item_keys)s）
 
+need_memory：这一句要不要翻你们**更早以前**的旧事（第一次、之前某件事、
+旧约定、旧称呼、旧人旧物）。
+  - 最近几轮刚发生、就在眼前的事，下面「最近发生过什么」里已经有了，填 false。
+  - 只是当下闲聊、调情、推进这一拍，不依赖任何旧事，填 false。
+  - 提到「上次/昨天/以前/你还记得/当时说好的」，或要认出一个旧人、旧物、
+    旧地点，填 true。
+memory_query：need_memory 为 true 时，把代词（他/她/上次/那个）换成具体所指，
+  写成一个简短名词短语去检索（不要整句、不要抒情）；false 时留空。
+
 【最近发生过什么】（供你判断语境；不要复述、不要改动）
 %(recent)s
 
@@ -4529,6 +4518,25 @@ items：这一轮有没有东西进出她手里（没有就留空数组）。
 
 角色是谁：%(who)s
 他这一轮说的：%(said)s"""
+
+
+def _memory_fields(d):
+    """从第一段 JSON 里取「要不要翻旧库 + 消解后的检索短语」（2026-11-20）。
+
+    复用同一次编剧调用，不新增 API 轮次。`need_memory` 缺省按 True——
+    判挂/字段缺失时退化成现状（这一轮照常查库），不让回忆层比改动前更差。
+    `memory_query` 是编剧基于最近上下文做过指代消解、补全后的短检索串；
+    为空时调用方退回用户原话。
+    """
+    if not isinstance(d, dict):
+        return {"need_memory": True, "memory_query": ""}
+    mem = d.get("need_memory", True)
+    if isinstance(mem, str):
+        mem = mem.strip().lower() not in ("false", "0", "no", "否", "不")
+    else:
+        mem = bool(mem)
+    q = str(d.get("memory_query") or "").strip()[:120]
+    return {"need_memory": mem, "memory_query": q}
 
 
 def _director_fields(d):
@@ -4562,6 +4570,8 @@ def _director_fields(d):
         "finish": _norm_finish(d.get("finish")),
         # 道具（2026-11-08）：v1 / 自由模式也走这条路，透传出去。
         "items": d.get("items") if isinstance(d.get("items"), dict) else None,
+        # 要不要翻旧库 + 消解后的检索短语（2026-11-20 查询优化）。
+        **_memory_fields(d),
     }
 
 
@@ -4959,7 +4969,9 @@ _SCORE_PROMPT = """判断下面这句话**在干什么**，并给这句话对你
   "note": "不超过15个字",
   "facts": ["这一幕已经有的东西，一样一条"],
   "addressed": true,
-  "secret": false
+  "secret": false,
+  "need_memory": true,
+  "memory_query": "消解后的简短检索短语；不需要时留空"
 }
 
 intent（这句话在干什么）：
@@ -5189,6 +5201,16 @@ plan（**到这一拍仍然有效**的约定）：这轮新说定的写成一句
 
 secret（他这一句里有没有没说出口的心里话）：有就 true，没有 false。
   只判有没有，不用写内容——他也不需要你替他补。
+
+need_memory：这一句要不要翻你们**更早以前**的旧事（第一次、之前某件事、
+旧约定、旧称呼、旧人旧物）。
+  - 最近几轮刚发生、就在眼前的事，下面「最近发生过什么」里已经有了，填 false。
+  - 只是当下闲聊、调情、推进这一拍，不依赖任何旧事，填 false。
+  - 提到「上次/昨天/以前/你还记得/当时说好的」，或要认出一个旧人、旧物、
+    旧地点，填 true。
+memory_query：need_memory 为 true 时，把代词（他/她/上次/那个）换成具体所指，
+  写成一个简短名词短语去检索（不要整句、不要抒情）；false 时留空。
+
 【最近发生过什么】（只作语境，不要拆它；要拆的是最后「他这一轮说的」那句）
 %(history)s
 
@@ -5265,6 +5287,8 @@ _SCORE_PROMPT_V2 = """你在给一段校园/日常恋爱角色扮演做「编剧
   "facts": ["这一幕已经有的东西，一样一条"],
   "addressed": true,
   "secret": false,
+  "need_memory": true,
+  "memory_query": "消解后的简短检索短语；不需要时留空",
   "time": "none | overnight",
   "phase": "",
   "plan": "",
@@ -5332,6 +5356,15 @@ secret：他这一句里有没有没说出口的心里话。有就 true，没有
 
 facts：这一幕已经摆到眼前的东西，一样一条，按他写的顺序。
   %(facts_guide)s
+
+need_memory：这一句要不要翻你们**更早以前**的旧事（第一次、之前某件事、
+旧约定、旧称呼、旧人旧物）。
+  - 最近几轮刚发生、就在眼前的事，上下文里已经有了，填 false。
+  - 只是当下闲聊、调情、推进这一拍，不依赖任何旧事，填 false。
+  - 提到「上次/昨天/以前/你还记得/当时说好的」，或要认出一个旧人、旧物、
+    旧地点，填 true。
+memory_query：need_memory 为 true 时，把代词（他/她/上次/那个）换成具体所指，
+  写成一个简短名词短语去检索（不要整句、不要抒情）；false 时留空。
 
 ## items：道具（只在真的有东西进出时才填）
 
@@ -5514,6 +5547,9 @@ def _judge_v2(card, said, state="", line_key="", gameday=None,
         "delta", "turn_type", "reason", "contact", "confess", "finish",
         "yandere", "proposal", "accept", "refused_confession", "facts",
         "addressed", "secret", "time", "phase", "plan", "place")}
+    # 要不要翻旧库 + 消解后的检索短语（2026-11-20）：settle 不认识这两个键，
+    # 原样忽略，只供主流程决定查不查库、拿什么串去查。
+    score.update(_memory_fields(d))
     # adult（2026-11-08）：身体这条线。**原样透传，不在这里净化**——
     # 结算器 affection_v2_adult.apply 负责 clamp/闸门/回落/去重，
     # 这里多改一处就多一个离线口径。
@@ -6439,11 +6475,21 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         man_segs, "" if man.get("thought") else text)
     rblock = ""
     if rag_on:
-        try:
-            rblock = persona_rag.build_block(
-                key, visible, day=day_before, context=_rag_context(hist))
-        except Exception:                                # noqa: BLE001
-            log.exception("回忆注入失败 %s", key)
+        # 查询优化（2026-11-20）：查不查库由同一次编剧调用判出——最近几轮
+        # 上下文里已经有的事、纯当下推进的闲聊不翻库；提到旧事/旧人/旧约才查。
+        # 检索串用编剧做过指代消解的 memory_query，缺省退回用户原话；不再把
+        # 最近两轮压成的上下文短串拿去做向量查询（语义混杂、捞弱相关）。
+        need_mem = extras.get("need_memory", True)
+        if isinstance(need_mem, str):
+            need_mem = need_mem.strip().lower() not in (
+                "false", "0", "no", "否", "不")
+        mem_q = str(extras.get("memory_query") or "").strip() or visible
+        if need_mem:
+            try:
+                rblock = persona_rag.build_block(
+                    key, mem_q, day=day_before, query_raw=visible)
+            except Exception:                            # noqa: BLE001
+                log.exception("回忆注入失败 %s", key)
     # 攻略模式结算（2026-11-03）：分数落账 → 按档位往主提示词里注入关系块。
     # 没打出分（score 为 None）也照走 settle——按 +0 记账，档位注入照常。
     preg_event = None
