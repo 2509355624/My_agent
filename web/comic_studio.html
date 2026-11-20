@@ -249,6 +249,15 @@
       这个渠道没有的东西（比如没有 LoRA 链、只有一段采样）不会显示。
     </div>
     <div id="loraRows"></div>
+    <div class="row" id="charLoraRow" style="display:none;margin-bottom:10px;align-items:center">
+      <span style="color:var(--text-dim);font-size:12px">角色 LoRA</span>
+      <select id="characterLora" style="width:260px;max-width:46vw" onchange="saveCharacterLora()"
+              title="整本共用：选中后每格场景图都会自动挂这个角色 LoRA，并把她的 identity/trigger 拼进提示词。不选 = 不指定，按原提示词出图。">
+      </select>
+      <span style="color:var(--text-dim);font-size:12px">整本共用 · 选一次就记住</span>
+      <span class="spacer" style="flex:1"></span>
+      <span id="charLoraMsg" style="color:var(--text-dim);font-size:12px"></span>
+    </div>
     <div id="loraDefaultRow" style="display:none;margin-bottom:8px">
       <button class="btn small" onclick="saveLoraToTemplate()">存为模板默认</button>
       <span class="hint" style="margin-left:8px">写回 moss 模板，QQ 侧和另外两个台一起变</span>
@@ -322,6 +331,9 @@
     <div id="jobbar">
       <div class="bar-row">
         <span id="jobbarText"></span>
+        <button class="btn small" id="btnResume" onclick="resumeJob()"
+                style="display:none"
+                title="沿用上次那批的范围和参数，只补没跑完的格">↻ 继续上次任务</button>
         <button class="btn small danger" id="btnAbort" onclick="abortAll()"
                 title="停掉这一批：正在画的那张立刻停、排队中的不再画；已经出好的图全部保留">⏹ 中断全部</button>
       </div>
@@ -391,6 +403,8 @@ function setBusy(b, phase) {
   // 唯独中断必须是能点的（否则跑起来就停不下来了）。
   const abortBtn = document.getElementById('btnAbort');
   if (abortBtn) abortBtn.style.display = b ? '' : 'none';
+  const resumeBtn = document.getElementById('btnResume');
+  if (resumeBtn && b) resumeBtn.style.display = 'none';
   if (b) { bar.style.display = 'block'; bar.classList.remove('err');
            document.getElementById('jobbarText').textContent =
              '⏳ 正在' + (phase === 'bubble' ? '加气泡' : '渲染场景图') + '……页面每 2 秒自动刷新'; }
@@ -1092,7 +1106,8 @@ async function saveScript(andRun) {
     if (!andRun) { toast('剧本已保存'); return; }
     const excl = document.getElementById('exclusiveOn').checked;
     const d = await api('/api/comic/start', {task: TASK, scene_skill: channel(),
-                                             exclusive: excl});
+                                             exclusive: excl,
+                                             character_lora: characterLoraKey()});
     if (excl) document.getElementById('exclusiveOn').checked = false;   // 推完自动取消
     setBusy(true, 'scene');
     toast(d.exclusive
@@ -1117,7 +1132,8 @@ async function rerunAll() {
   const label = btn.textContent;
   btn.disabled = true; btn.textContent = '⏳ 提交中…';
   try {
-    const d = await api('/api/comic/rerun', {task: TASK, scene_skill: channel()});
+    const d = await api('/api/comic/rerun', {task: TASK, scene_skill: channel(),
+                                             character_lora: characterLoraKey()});
     setBusy(true, 'scene');
     toast('已重跑 ' + d.panels + ' 格（' + d.scene_skill + '）');
     refresh(); poll();
@@ -1148,6 +1164,24 @@ async function abortAll() {
     if (d.dropped) bits.push('摘掉排队 ' + d.dropped + ' 张');
     if (d.running) bits.push('正在画的 ' + d.running + ' 张已通知停下');
     toast('已中断' + (bits.length ? '：' + bits.join('，') : '') + '——等几秒就能改参数重跑');
+    refresh();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+async function resumeJob() {
+  if (!TASK) return;
+  const btn = document.getElementById('btnResume');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ 继续中…';
+  try {
+    const d = await api('/api/comic/resume', {task: TASK});
+    toast('已继续上次的' + (d.phase === 'bubble' ? '加气泡' : '底图') + '任务，只补没跑完的格');
     refresh();
   } catch (e) {
     toast(e.message, true);
@@ -1230,10 +1264,82 @@ async function loadRenderOpts(force) {
       document.getElementById('renderSkillName').textContent = d.skill;
     }
     fillRenderForm(d.opts, d.resources, d.caps);
+    fillCharacterLora(d.characters, d.character_lora);
     document.getElementById('renderMsg').textContent = _renderStateMsg(d);
   } catch (e) {
     document.getElementById('renderMsg').textContent = '参数加载失败：' + e.message;
   }
+}
+
+// ── 角色 LoRA（2026-11-19）─────────────────────────────────
+// 任务级选择，整本共用。后端只列「这个渠道白名单里有、文件也在」的角色；
+// 非 anima 渠道返回空列表 → 整行隐藏。空值 = 不指定，不触发自动判定。
+let _characters = [];
+
+function fillCharacterLora(list, current) {
+  const row = document.getElementById('charLoraRow');
+  const sel = document.getElementById('characterLora');
+  if (!row || !sel) return;
+  _characters = list || [];
+  const show = !!TASK && curMode() === 'script' && _characters.length > 0;
+  if (!_characters.length) {
+    row.style.display = 'none';
+    sel.innerHTML = '';
+    return;
+  }
+  const current_ = current || '';
+  const groups = {};
+  _characters.forEach(c => {
+    const g = c.category || '其他';
+    (groups[g] = groups[g] || []).push(c);
+  });
+  let h = '<option value="">不指定（按原提示词）</option>';
+  Object.keys(groups).sort().forEach(g => {
+    h += '<optgroup label="' + esc(g) + '">';
+    groups[g].forEach(c => {
+      h += '<option value="' + esc(c.key) + '"'
+        + (c.key === current_ ? ' selected' : '') + '>'
+        + esc(c.name) + '（' + esc(c.key) + '）</option>';
+    });
+    h += '</optgroup>';
+  });
+  // 换了渠道后旧选择可能不在这个渠道的白名单里：留一项显示出来，别静默
+  // 变成「不指定」——用户会以为自己选的还在，实际跑的是没挂 LoRA 的图。
+  if (current_ && !_characters.some(c => c.key === current_)) {
+    h += '<option value="' + esc(current_) + '" selected>'
+      + esc(current_) + '（当前渠道不可用）</option>';
+  }
+  sel.innerHTML = h;
+  sel.value = current_;
+  row.style.display = show ? '' : 'none';
+  const msg = document.getElementById('charLoraMsg');
+  if (msg) {
+    const hit = _characters.find(c => c.key === current_);
+    msg.textContent = hit ? ('已挂载：' + hit.name) : '';
+  }
+}
+
+function characterLoraKey() {
+  const row = document.getElementById('charLoraRow');
+  const sel = document.getElementById('characterLora');
+  // 行隐藏（写真模式 / 非 anima 渠道）时返回 undefined：请求体里这个字段会被
+  // 省略，后端保持 state.json 原值，换回 anima 渠道时选择还在。
+  if (!row || !sel || row.style.display === 'none') return undefined;
+  return sel.value || '';
+}
+
+async function saveCharacterLora() {
+  if (!TASK) return;
+  const key = characterLoraKey();
+  try {
+    const d = await api('/api/comic/character',
+                        {task: TASK, skill: channel(), character_lora: key});
+    const hit = (_characters || []).find(c => c.key === d.character_lora);
+    const msg = document.getElementById('charLoraMsg');
+    if (msg) msg.textContent = hit ? ('已挂载：' + hit.name) : '';
+    toast(key ? ('角色 LoRA：' + (hit ? hit.name : key) + '（整本生效）')
+              : '角色 LoRA 已清空（按原提示词出图）');
+  } catch (e) { toast(e.message, true); }
 }
 
 function _pick(id, label, list, val, w) {
@@ -1845,10 +1951,19 @@ async function refresh() {
   // ComfyUI 重启回来（comic._require_comfy 现在最多等 120 秒）。不写出来的话
   // 两种情况在界面上长得一模一样，用户只会以为卡死了。
   const barText = document.getElementById('jobbarText');
+  const resumeBtn = document.getElementById('btnResume');
+  const canResume = !!(d.resume && d.resume.can_resume && !d.running);
+  if (resumeBtn) resumeBtn.style.display = canResume ? '' : 'none';
   if (d.job_error) {
     bar.style.display = 'block';
     bar.classList.add('err');
-    barText.textContent = '✗ 后台任务失败：' + d.job_error;
+    barText.textContent = '✗ 后台任务失败：' + d.job_error
+      + (canResume ? '（可点右侧「继续上次任务」只补没跑完的格）' : '');
+  } else if (canResume) {
+    bar.style.display = 'block';
+    bar.classList.add('err');
+    barText.textContent = '⚠ 上次任务被服务重启中断，没跑完的格已经停下；'
+      + '点右侧「继续上次任务」按原范围补跑';
   } else if (d.comfy === false) {
     bar.style.display = 'block';
     bar.classList.add('err');
@@ -1895,7 +2010,14 @@ function zipGuard() {
   return true;
 }
 
-function poll() { clearTimeout(TIMER); TIMER = setTimeout(async () => { await refresh(); poll(); }, 2000); }
+function poll() {
+  clearTimeout(TIMER);
+  TIMER = setTimeout(async () => {
+    try { await refresh(); }
+    catch (e) { console.warn('漫画状态刷新失败，2 秒后重试', e); }
+    finally { poll(); }
+  }, 2000);
+}
 
 // 刷新页面后把上次的任务接回来（2026-10-18）：TASK 存 localStorage，脚本正文
 // 走 /api/comic/script_text 取回（纯写真任务没有 script.md，抛错就当没有）。
@@ -2098,6 +2220,10 @@ function applyMode() {
   const silver = !p && ['free', 'third'].indexOf(povMode()) >= 0;
   document.getElementById('fixPanel').style.display =
     (!p && !silver && document.getElementById('fixPanel').innerHTML.trim()) ? 'block' : 'none';
+  // 角色 LoRA 只属于剧本任务：切到生图模式（写真）时整行收起，免得用户
+  // 以为选了会对写真生效（写真渲染走 portrait.py，不读这个字段）。
+  const cRow = document.getElementById('charLoraRow');
+  if (cRow) cRow.style.display = (!p && !!TASK && _characters.length) ? '' : 'none';
   document.getElementById('btnRefix').style.display = silver ? 'none' : '';
   // 槽位卡装的是漫画格；「接上一集」只对剧本有意义。生图模式下一并收起。
   document.getElementById('slotCard').style.display = p ? 'none' : '';

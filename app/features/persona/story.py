@@ -1,7 +1,11 @@
-"""【故事到现在】：把 gameday、账本和约定排成一条因果线。
+"""【故事到现在】：把 gameday 和账本排成一条因果线。
 
 纯文本重组，不新增信息、不调模型：时间来自 gameday，已经发生来自
-`event` + 账本「你的事 / 她的事」，还没完成来自 `plan` +「约定」。
+`event` + 账本「你的事 / 她的事」。
+
+2026-11-19：不再把「约定与未完成」当发展线注入。用户实测这一节会把
+「裙摆上那道划痕」这种一次性细节写成待办，演员每轮都去回收，剧情变成
+反复提同一件小事。明确承诺改由 RAG 批次叙事和最近 12 条原文承接。
 """
 
 import re
@@ -60,23 +64,20 @@ def _shares_phrase(a, b, thr=0.35):
 
 
 def story_line(gd, note=""):
-    """【故事到现在】——时间、已经发生的事、还没完成的事，排成一条线。
+    """【故事到现在】——时间 + 已经发生的事，排成一条线。
 
-    任一部分缺失就跳过；全空返回空串。跨天时让模型对照事实自己判断
-    约定做到没做到，代码只报「账本记着」。
+    任一部分缺失就跳过；全空返回空串。只报已经发生的事实，不再输出账本
+    里的「约定与未完成」；当天的事件/约定由 `_gameday_block` 负责，这里
+    不重复。这一拍怎么接由写作 AI 自己看最近原文判断。
     """
     gd = gd if isinstance(gd, dict) else {}
     day = _as_int(gd.get("day"), 0, 0, 99999)
     phase = str(gd.get("phase") or "").strip()
     place = str(gd.get("place") or "").strip()
-    event = str(gd.get("event") or "").strip()
-    plan = str(gd.get("plan") or "").strip()
-    plan_day = _as_int(gd.get("plan_day"), 0, 0, 99999)
 
     ledger = _ledger_fix_pronouns(note) if note else ""
     done = (_clip_items(_ledger_section(ledger, "你的事"), 3, 60)
             + _clip_items(_ledger_section(ledger, "她的事"), 3, 60))
-    todo = _clip_items(_ledger_section(ledger, "约定"), 4, 50)
 
     parts = []
     if day:
@@ -86,30 +87,12 @@ def story_line(gd, note=""):
         if place:
             stamp += " · " + place
         parts.append("时间：" + stamp)
-    if event:
-        if event.startswith("已经办完："):
-            parts.append("今天已经办完：" + event[len("已经办完："):])
-        else:
-            parts.append("今天：" + event)
     if done:
         parts.append("已经发生：" + "；".join(done))
-    if plan:
-        if plan_day and plan_day > day:
-            when = "（约在第 %d 天）" % plan_day
-        elif plan_day:
-            when = "（第 %d 天约的，那天已经过了）" % plan_day
-        else:
-            when = ""
-        todo = [t for t in todo if not _shares_phrase(plan, t)]
-        todo = [plan + when] + todo
-    if todo:
-        parts.append("账本里还记着的约定：" + "；".join(todo[:5]))
     if not parts:
         return ""
     body = "\n".join(parts)
     if len(body) > STORY_MAX_CHARS:
         body = body[:STORY_MAX_CHARS].rstrip("；，、") + "…"
     return ("【故事到现在】\n" + body
-            + "\n已经办完的事就是过去了；约定做到没做到，对照上面的事实和"
-              "刚才的对话自己判断，做过的事留在昨天。"
-              "这一拍接着眼前正在发生的事往下写。")
+            + "\n已经发生的事就是过去了；这一拍接着眼前正在发生的事往下写。")

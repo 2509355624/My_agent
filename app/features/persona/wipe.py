@@ -80,13 +80,22 @@ def erase(session_key):
         return None
     ent.update({"note": "", "turns": 0, "mood": "", "intensity": 0, "state": "",
                 "intro": ""})     # 开场导读一起清：下一屏要按新起点重铺
+    # 只清 note/turns 是不够的：`turn_total` 还挂在旧线上，存档列表会
+    # 继续显示「21 轮」；`note_due` 还停在 5，下一轮立刻触发一次旧账
+    # 压缩；`gameday` 还停在旧日期。清空存档 = 这条线的记忆全部归零。
+    for k in ("turn_total", "note_due", "note_at", "gameday", "gameday_prev",
+              "mood_prev", "preg_prev", "outfit"):
+        ent.pop(k, None)
     pregnancy.clear(ent)
     state = svc._load_state()
     state[line] = ent
     if line != session_key:
         # 输入是 base：base 上的副本也刷新，管理页/状态查询别显示旧小记
         state[session_key] = dict(ent)
-    svc._save_state(state)
+    keys = [line] if line == session_key else [line, session_key]
+    # `turn_total` 的合并规则是「只许前进」；不把旧键从盘上 drop 掉，
+    # 刚归零的 0 会被旧值顶回去，存档列表还显示旧轮次。
+    svc._save_state(state, deleted=keys)
     log.info("存档已删除：%s（保留角色 %s）", session_key, ent.get("card"))
     return name
 
@@ -118,3 +127,50 @@ def wipe(session_key):
             "你们的聊天记录、好感、关系进度、成就、连续天数全部清掉了，"
             "一切回到这张卡的最初。\n"
             "她还在这儿 —— 想继续就跟她说话，想换人发「#角色名」。")
+
+
+def wipe_slot(session_key):
+    """删一个存档槽：把这条线的东西**全部**清掉，不留旧记忆。
+
+    2026-11-19 用户报：删存档后开新对话，第一轮里却出现旧存档的
+    「晚饭 / 红酒 / 洗澡 / 第二天」。查到 `/api/persona/slot_wipe`
+    只 `pop` 了 `persona_sessions.json` 里的状态条目，历史文件、归档
+    文件和 RAG collection 都还在；新档复用同一个线键，旧内容就被
+    重新读回来了。
+
+    这里不依赖状态条目是否还在：文件按路径删，RAG 按线键 drop，
+    好感按线键重置，最后再 `pop` 状态。三样都清，才算真的删档。
+    """
+    from app.features.persona import service as svc
+
+    line = svc.resolve_line(session_key)
+
+    # 1) 历史 + 归档：按路径直接删；删不掉就记日志，不让删档卡住。
+    for maker in (svc._hist_path, svc._archive_path):
+        try:
+            path = maker(line)
+            if path and os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            log.exception("删存档时清文件失败 %s", line)
+
+    # 2) RAG：按线键删整个 collection；入队是异步的，route 这边不等待。
+    try:
+        persona_rag.drop_line(line)
+    except Exception:                                    # noqa: BLE001
+        log.exception("删存档时清回忆库失败 %s", line)
+
+    # 3) 好感：回到这张卡的起点；万一这条线已经没了，wipe_numbers 自己会返回 None。
+    try:
+        affection.wipe_numbers(line)
+    except Exception:                                    # noqa: BLE001
+        log.exception("删存档时清好感失败 %s", line)
+
+    # 4) 状态条目：整条 pop 掉，存档列表才会显示「空存档」。
+    state = svc._load_state()
+    state.pop(line, None)
+    # 不传 deleted 的话，`_save_state` 会把盘上刚 pop 掉的键合并回来，
+    # 删档等于没删（2026-11-19 实测：删完新开，旧 note 又回来）。
+    svc._save_state(state, deleted=[line])
+    log.info("存档槽已删除：%s", line)
+    return line

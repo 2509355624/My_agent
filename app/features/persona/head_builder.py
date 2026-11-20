@@ -97,20 +97,18 @@ def build(card, session_key, sender, cname, note="", state="", intimate=True,
     if vexample and not intimate and not str(session_key or "").startswith("group_"):
         parts.append("## 她说话的短示范（只学语气，不抄内容）\n\n"
                      + writing_style.format_examples(vexample))
-    # 2026-11-19：范文放在契约之后，先给规则、再给成品。用户要的是
-    # 「1 万字规范原样保留，后面跟一段真实范文当笔调锚点」——放在契约前
-    # 会被后面的规则淹没，放在契约后才是生成前最后读到的成品。
-    # 私聊才拼，群聊多人在场不适用这套双人节奏。
+    # 2026-11-19：范文段停用。写法全部落在 writing_guide.py 的「告诉 AI
+    # 怎么做」里，不再注入本机存档回合 / 改前改后（那是已驳回的坏写法）。
+    # prompt_example() 仍保留空实现，调用方 import 不用改。
+    # 契约和档位照拼——它们才是每轮真正生效的写法规则。
     parts.append((_CONTRACT if intimate else _CONTRACT_NO_INTIMATE).replace(
         "{NAME}", cname))
     sty = writing_style.head_style(mode)
     if sty:
         parts.append(sty)
-    if not str(session_key or "").startswith("group_"):
-        parts.append(writing_examples.prompt_example())
-        # 范文把契约末尾的人称提醒推远了；这里把同一句再钉一次，
-        # 保证生成前最后读到的仍是「你 / 她」的指代规则。
-        parts.append("## 生成前最后一句\n\n"
+    # 契约末尾已经强调了人称；这里把同一句再钉一次，保证生成前最后读到的
+    # 仍是「你 / 她」的指代规则。
+    parts.append("## 生成前最后一句\n\n"
                      "对面那个人是「你」，她的念头里也一样；指代写具体；"
                      "主语能省就省。")
     if str(session_key or "").startswith("group_"):

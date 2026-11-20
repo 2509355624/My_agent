@@ -4267,6 +4267,21 @@ class AbortBatchTest(_Base):
             self.assertEqual(image_jobs.wait_done("pid", 5, abort=threading.Event()),
                              {"outputs": {}})
 
+    def test_comic_watch_raises_gone_without_waiting_full_timeout(self):
+        """漫画批次等图时探活：ComfyUI 中途没了就立刻抛 ComfyGone。
+
+        现场（2026-11-18）：ComfyUI 重启窗口里点一键加气泡，旧等待逻辑会
+        先耗满 180 秒才去探活；一本 10 格每格都这么耗，半小时后回来还没图。
+        这里要求它按探测间隔发现掉线，而不是等总超时。
+        """
+        with mock.patch.object(image_jobs, "POLL_INTERVAL", 0), \
+                mock.patch.object(image_jobs, "COMFY_GONE_PROBE", 0), \
+                mock.patch.object(image_jobs, "poll_once", return_value=None), \
+                mock.patch.object(image_jobs, "_comfy_up", return_value=False):
+            with self.assertRaises(image_jobs.ComfyGone):
+                image_jobs.wait_done("pid", timeout=60, watch_comfy=True)
+
+
 
 class ComicBatchRestartLimitTest(unittest.TestCase):
     """漫画批量不该被「同渠道连画 2 张」管着（2026-10-22 修）。

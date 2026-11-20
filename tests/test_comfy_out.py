@@ -10,6 +10,7 @@
 """
 
 import os
+import tempfile
 import unittest
 
 from app.features.image import comfy_out
@@ -69,6 +70,61 @@ class BodyTest(unittest.TestCase):
     def test_depth_is_capped(self):
         job = self._job(None, None, "s", out_dir="a/b/c/d/e/f")
         self.assertEqual(comfy_out.body_for(job).count("/"), 3)
+
+
+class PruneSamePanelRunsTest(unittest.TestCase):
+    """qwen 重画一格时，output 里同格的旧序号图不能继续堆着。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = self.tmp.name
+
+    def _touch(self, rel):
+        path = os.path.join(self.root, *rel.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(b"png")
+        return path
+
+    def test_keeps_new_run_and_removes_older_runs_of_the_same_panel(self):
+        body = "web/漫画_C1/qwen_image_v1"
+        self._touch(body + "/QwenI2I_04_00001_.png")
+        self._touch(body + "/QwenI2I_04_00002_.png")
+        keep = self._touch(body + "/QwenI2I_04_00003_.png")
+        self._touch(body + "/QwenI2I_05_00001_.png")
+
+        removed = comfy_out.prune_same_panel_runs(
+            body + "/QwenI2I_04_00003_.png", "04", root=self.root)
+
+        self.assertEqual(sorted(removed),
+                         ["QwenI2I_04_00001_.png", "QwenI2I_04_00002_.png"])
+        self.assertTrue(os.path.isfile(keep))
+        self.assertTrue(os.path.isfile(os.path.join(
+            self.root, *body.split("/"), "QwenI2I_05_00001_.png")))
+
+    def test_missing_output_root_is_a_noop(self):
+        rel = "web/漫画_C1/qwen_image_v1/QwenI2I_04_00001_.png"
+        self.assertEqual(comfy_out.prune_same_panel_runs(
+            rel, "04", root=os.path.join(self.root, "missing")), [])
+
+    def test_orphan_panel_outputs_are_removed_but_unstamped_manual_runs_stay(self):
+        body = "web/漫画_C1/qwen_image_v1"
+        self._touch(body + "/QwenI2I_01_00001_.png")
+        self._touch(body + "/QwenI2I_01_00002_.png")
+        self._touch(body + "/QwenI2I_02_00001_.png")
+        self._touch(body + "/QwenI2I_11_00001_.png")
+        self._touch(body + "/QwenI2I_00009_.png")      # 没格号的手工图
+
+        removed = comfy_out.prune_orphan_panel_runs(
+            body, {"01", "02"}, root=self.root)
+
+        self.assertEqual(sorted(removed), [
+            "QwenI2I_01_00001_.png", "QwenI2I_11_00001_.png"])
+        self.assertTrue(os.path.isfile(os.path.join(
+            self.root, *body.split("/"), "QwenI2I_01_00002_.png")))
+        self.assertTrue(os.path.isfile(os.path.join(
+            self.root, *body.split("/"), "QwenI2I_00009_.png")))
 
 
 class StampTest(unittest.TestCase):

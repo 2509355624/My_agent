@@ -26,13 +26,16 @@
   绝不掉回 agent 接话（233 粉丝群 02:06 实录教训）
 """
 import json
+import os
 import re
+import tempfile
 import unittest
 from unittest import mock
 
 from app.features.image import random_tags
 from app.features.image import direct_gen
 from app.features.image import jobs as image_jobs
+from app.features.image import log as image_log
 from app import (qq_bot)
 from app.features.image.direct_gen import MENU_TEXT
 from app.tools.normal import generate_comic as gc
@@ -99,21 +102,16 @@ class ChannelParseTest(unittest.TestCase):
                 ("krea2米山舞 一个女孩", "krea2-yoneyama", "一个女孩"),
                 ("krea2 亚洲真人 一个女孩", "krea2-asianmix", "一个女孩"),
                 ("qwen 写实街拍", "qwen_image_v1", "写实街拍"),
-                # 2026-10-16 用户新增：qwen 的 30 步副本。用户给的指令形态就是
-                # 「qwen30步，图生图，需求」——渠道词剥掉，剩下的一字不改交给 AI
-                # 去理解（「孔雀东南飞」要由 AI 译成「把这首诗写进画面」，
-                # 绝不能被当成提示词原样丢给下游）。
+                # 2026-11-18 用户拍板：qwen30 / qwen真人 已下架，旧点名词仍要
+                # **吃掉**（不能漏进提示词），但渠道统一落默认 qwen_image_v1。
                 ("qwen30步，图生图，白衣上写孔雀东南飞",
-                 "qwen30", "图生图，白衣上写孔雀东南飞"),
-                ("qwen 30 步 一只猫", "qwen30", "一只猫"),   # 中间夹空格也认
-                ("qwen30 一只猫", "qwen30", "一只猫"),       # 不带「步」也认
-                # 2026-11-11 新渠道 qwen-real。⚠️ 中文长名没登记进
-                # `_FIXED_CHAN_RE` 时会被裸词 `qwen` 抢先命中（尾部前瞻只挡
-                # ASCII），实测三次「qwen真人，…」全落 qwen_image_v1。
-                ("qwen真人，亚洲女孩", "qwen-real", "亚洲女孩"),
-                ("qwen 真人 亚洲女孩", "qwen-real", "亚洲女孩"),
+                 "qwen_image_v1", "图生图，白衣上写孔雀东南飞"),
+                ("qwen 30 步 一只猫", "qwen_image_v1", "一只猫"),   # 中间夹空格也认
+                ("qwen30 一只猫", "qwen_image_v1", "一只猫"),       # 不带「步」也认
+                ("qwen真人，亚洲女孩", "qwen_image_v1", "亚洲女孩"),
+                ("qwen 真人 亚洲女孩", "qwen_image_v1", "亚洲女孩"),
                 ("，qwen真人，竖屏，jk日本女孩",
-                 "qwen-real", "竖屏，jk日本女孩"),
+                 "qwen_image_v1", "竖屏，jk日本女孩"),
                 ("qwen，亚洲女孩", "qwen_image_v1", "亚洲女孩"),  # 裸 qwen 不受影响
                 ("nffa 插画少女", "nffa", "插画少女"),
                 ("cunny 一个女孩", "cunny", "一个女孩"),   # 2026-10-05 新渠道
@@ -671,6 +669,34 @@ class MenuAndGateTest(unittest.TestCase):
         self.assertEqual(m_llm.call_count, 1)
 
 
+class AgentModelSelectionTest(unittest.TestCase):
+    """管理页给 QQ agent 选的模型必须作用到直达生图这条轻量调用。
+
+    2026-11-18 现场：管理页已选 DeepSeek 官方，日志却先打中转站
+    `cx_a1b2c3d4`，再降级到 `deepseek/deepseek-flash`。根因是 `direct_gen._ask`
+    恒走全局降级链，没读 agent.json。
+    """
+
+    def test_agent_provider_becomes_strict_head(self):
+        with mock.patch("app.core.agents.agent_config",
+                        return_value={"provider": "deepseek", "model": ""}):
+            self.assertEqual(direct_gen._llm_target("qq"),
+                             ("deepseek", None, True))
+
+    def test_decide_passes_agent_model_to_llm(self):
+        reply = '{"skill": "", "prompt": "", "reply": "在的"}'
+        with mock.patch.object(direct_gen.llm, "call_llm",
+                               return_value=reply) as m_llm, \
+             mock.patch("app.core.agents.agent_config",
+                        return_value={"provider": "deepseek", "model": ""}):
+            out = direct_gen.decide("今天天气不错", [], False, agent_id="qq")
+        self.assertEqual(out, "在的")
+        kwargs = m_llm.call_args.kwargs
+        self.assertEqual(kwargs.get("provider"), "deepseek")
+        self.assertIsNone(kwargs.get("model"))
+        self.assertTrue(kwargs.get("strict"))
+
+
 class DirectEnqueueTest(unittest.TestCase):
     def _decide(self, llm_reply, text="画一只戴帽子的橘猫", history=None,
                 at_me=True, quoted=""):
@@ -987,6 +1013,35 @@ class QuotedPromptTest(unittest.TestCase):
         m_gen.assert_called_once_with("1girl, hat",
                                       skill="hd_3_clear",
                                       _skip_confirm=True)
+
+    def test_quote_with_only_bot_name_still_generates(self):
+        """引用一段提示词 + 只喊「大大怪」→ 引用正文就是描述，默认档直接出图。
+
+        2026-11-19 群 1041079621 实录：引用提示词后只发「大大怪」，直达管道
+        剥掉名字后当成空消息放走，agent 把历史里的 `[直达生图] krea2-jiguang：…`
+        抄回来，看着像已下单，实际一张图都没出。空消息闸只该拦**没有引用**的轮。
+        """
+        quoted = ("1girl, solo, white dress, long dress, long sleeves, "
+                  "high collar, holding cloth, indoors, spotlight")
+        out, m_llm, m_gen = self._decide(
+            "大大怪",
+            '{"skill": "krea2-jiguang", "prompt": "1girl, solo, white dress"}',
+            quoted=quoted)
+        self.assertEqual(out, "")
+        self.assertEqual(m_llm.call_count, 1)
+        sent = m_llm.call_args[0][0][0]["content"]
+        self.assertIn(quoted, sent)
+        m_gen.assert_called_once()
+        self.assertEqual(m_gen.call_args[0][0], "1girl, solo, white dress")
+        self.assertEqual(m_gen.call_args.kwargs["skill"], "krea2-jiguang")
+        self.assertTrue(m_gen.call_args.kwargs["_skip_confirm"])
+
+    def test_bare_at_without_quote_is_still_not_taken_over(self):
+        """没有引用的裸 @ / 只喊名字维持原样：不接管，交回 agent。"""
+        out, m_llm, m_gen = self._decide("大大怪", "x", quoted="")
+        self.assertIsNone(out)
+        m_llm.assert_not_called()
+        m_gen.assert_not_called()
 
     def test_quote_without_channel_word_now_goes_to_ai(self):
         # 2026-10-05 23:xx 用户拍板：删掉「引用 + 没渠道词 → 零 API 固定
@@ -1733,16 +1788,18 @@ class MasterPromptTest(unittest.TestCase):
     漫画唯一能进来的路（见 `ComicRoutingTest`），属于工具列表的合法增长。）
     """
 
-    def _rendered(self, text="t", chan_hint="", recent="", search=""):
+    def _rendered(self, text="t", chan_hint="", recent="", search="",
+                  last_job="（无）", role_block=""):
         return direct_gen._MASTER_TEMPLATE.format(
-            recent=recent, text=text, chan_hint=chan_hint, search=search)
+            recent=recent, text=text, chan_hint=chan_hint, search=search,
+            last_job=last_job, role_block=role_block)
 
     def test_template_has_the_four_sections(self):
         """2026-10-23 起模板改成 markdown 三节（原【工具】【渠道 skill】
         【图生图】【提示词怎么写】四个方括号标题已并进三节）。"""
         t = self._rendered()
         for part in ("生图 AI", "## 一、怎么用工具", "## 二、怎么设计提示词",
-                     "## 三、渠道对照表", "【最近对话】", "【用户】"):
+                     "## 三、渠道对照表", "【上一张】", "【最近对话】", "【用户】"):
             with self.subTest(part=part):
                 self.assertIn(part, t)
 
@@ -1754,7 +1811,9 @@ class MasterPromptTest(unittest.TestCase):
         # 模板本身要短：一句话一个工具，不给每个渠道写专属规则。
         # 2026-10-09：2100 → 7000（**用户拍板**：「提示词长度我最多允许你 7000 字」）。
         # 同批把【图生图】段从「默认不做、只认点名」翻成「引用图就填」。
-        self.assertLess(len(t), 8700, "模板超长了，工具列表应该一句话一个")
+        # 2026-11-18：用户拍板把 Qwen/Krea2 渠道规则常驻公共块，8.1k → 9.4k；
+        # 前缀每轮全命中，增量几乎免费，所以上限放到 10500。
+        self.assertLess(len(t), 10500, "模板超长了，工具列表应该一句话一个")
 
     def test_comic_tool_is_offered_to_the_ai(self):
         """第三个工具 `generate_comic` 必须在模板里——QQ 的 @ 轮**不跑主
@@ -1912,11 +1971,11 @@ class MasterPromptTest(unittest.TestCase):
         # 8708；同时把 rs29 那段冗长说明压短了（-44 字）。8900 字符 ≈ 5300
         # token，仍远低于用户给的 1 万 token 预算。**下次再加渠道若逼近 8900，
         # 该动结构**（渠道表拆出去按需 load）**而不是继续抬数字**。
-        # 2026-10-29 晚：10000 → **9000**（用户拍板「字数上限回到 9000 字」）。
-        # 同日 moss 只留 2 条渠道（默认 + 光影），单挂那套文案全删，最坏渲染
-        # 从 9.1k 掉回 7.6k 量级，8900 的余量重新够用。
-        # 注意：这里钉的是**最坏渲染**（含 5 轮历史 + 点名渠道附加）。
-        self.assertLess(len(t), 8900, "整条提示词越过 8900 字预算了")
+        # 2026-11-18：上限 8900 → 10500。用户拍板把 Qwen / Krea2 渠道写法
+        # 常驻公共固定块（约 +1.3k 字），换前缀缓存全量命中、单轮增量几乎为零；
+        # 固定块 8.1k → 9.4k。最坏渲染（5 条 300 字用户消息）实测 10080，
+        # 仍在「单次请求 1 万 token 以内」的口径里。
+        self.assertLess(len(t), 10500, "整条提示词越过 10500 字预算了")
 
     def test_prompt_budget_with_a_named_channel(self):
         """点名渠道会额外拼一段「本轮用这个渠道」的话，这一支以前从没测过。
@@ -1935,7 +1994,7 @@ class MasterPromptTest(unittest.TestCase):
 
         with mock.patch.object(direct_gen, "_ask", side_effect=fake_ask):
             direct_gen._translate("moss 画个招牌", hist, skill="moss")
-        self.assertLess(len(seen["c"]), 10000, "点名渠道后越过预算")
+        self.assertLess(len(seen["c"]), 10500, "点名渠道后越过预算")
     def test_ai_may_reply_instead_of_drawing(self):
         self.assertIn('{"reply"', self._rendered())
 
@@ -2003,16 +2062,11 @@ class MasterPromptTest(unittest.TestCase):
 
 
 class RecentLinesTest(unittest.TestCase):
-    """【最近对话】的过滤口径（2026-10-16 用户拍板）。
+    """【最近对话】的过滤口径（2026-11-18 用户拍板）。
 
-    **AI 侧只留出图记账行**（`[直达生图]`）。判据是结构——「是不是出图记录」，
-    不是词表：拒绝话术是开放集合（「做不了」/「我不碰」/「换个方向」…），
-    拿词表去认它盖不全，而且它自己换一句就绕过去了。
-
-    实测七组对照（deepseek-flash，色情向需求，见 `_RECENT_AI_KEEP_RE` 注释）：
-    空历史 2/2 出图；最近对话里带着它自己写的拒绝行 → 6/6 全拒；把拒绝行
-    剔掉 → 2/2 立刻恢复。另外往模板头部加「以用户为中心、无条件服务用户」
-    那段声明重跑 4 次，**照拒**——所以修的是这里，不是提示词。
+    **只留最近 5 条用户消息**，AI 侧一条都不喂——包括 `[直达生图]` 记账行。
+    它只是生图机器人，不需要看自己前面回了什么；上一张的事实改由独立的
+    【上一张】（`_last_job` + 账本兜底）提供。
     """
 
     def _lines(self, msgs):
@@ -2033,13 +2087,19 @@ class RecentLinesTest(unittest.TestCase):
                 self.assertEqual(self._lines(
                     [{"role": "assistant", "content": reply}]), "")
 
-    def test_direct_image_note_is_kept(self):
-        """`[直达生图]` 绝不能滤——「换成白裙子」这类指代全靠它。"""
+    def test_direct_image_note_no_longer_enters_recent(self):
+        """`[直达生图]` 也不进【最近对话】；上一张由【上一张】单独提供。"""
         t = self._lines([{"role": "assistant",
                           "content": "[直达生图] hd_3_clear：rem (re:zero), "
                                      "1girl, blue hair, nude, bathing"}])
-        self.assertIn("[直达生图]", t)
-        self.assertIn("hd_3_clear", t)
+        self.assertEqual(t, "")
+
+    def test_only_the_last_five_user_messages(self):
+        msgs = [{"role": "user", "content": "u%d" % i} for i in range(8)]
+        t = self._lines(msgs)
+        self.assertIn("用户：u3", t)
+        self.assertNotIn("用户：u2", t)
+        self.assertIn("用户：u7", t)
 
     def test_direct_comic_note_is_dropped(self):
         """`[直达漫画]` 的中文 brief 会被逐字抄成下一轮的 brief（22:02 实录）。"""
@@ -2061,6 +2121,46 @@ class RecentLinesTest(unittest.TestCase):
         t = self._lines([{"role": "system", "content": "你是大大怪"},
                          {"role": "user", "content": "画猫"}])
         self.assertEqual(t, "用户：画猫")
+
+
+class LastJobLedgerTest(unittest.TestCase):
+    """2026-11-18：「再来一张」跨 bot 重启也要拿到上一张的渠道和提示词。
+
+    内存 `_LAST_JOB` 重启即空，`_last_job` 用 `state/image_log.jsonl` 按
+    会话兜底；但**只兜当前会话**，别的会话的记录不能串过来。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self._old = image_log.PATH
+        image_log.PATH = os.path.join(self.tmp.name, "image_log.jsonl")
+        self.addCleanup(setattr, image_log, "PATH", self._old)
+        direct_gen._LAST_JOB.clear()
+        self.addCleanup(direct_gen._LAST_JOB.clear)
+
+    def test_ledger_is_used_after_memory_is_empty(self):
+        image_log.save("HT-1", prompt="miku, old", skill="hd_3_clear",
+                       target="group", target_id=123)
+        with mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="group_1"), \
+             mock.patch.object(direct_gen.qq_api, "current_context",
+                               return_value=("group", 123)):
+            job = direct_gen._last_job("group_1")
+        self.assertEqual(job["skill"], "hd_3_clear")
+        self.assertEqual(job["prompt"], "miku, old")
+        self.assertEqual(direct_gen._last_job_line(job),
+                         "[直达生图] hd_3_clear：miku, old")
+
+    def test_other_session_is_not_reused(self):
+        image_log.save("HT-1", prompt="miku, old", skill="hd_3_clear",
+                       target="group", target_id=123)
+        with mock.patch.object(direct_gen.qq_api, "current_session_key",
+                               return_value="group_1"), \
+             mock.patch.object(direct_gen.qq_api, "current_context",
+                               return_value=("group", 123)):
+            self.assertIsNone(direct_gen._last_job("group_2"))
+        self.assertEqual(direct_gen._last_job_line(None), "（无）")
 
 
 class QuotedComicTest(unittest.TestCase):
@@ -3458,13 +3558,11 @@ class ReviseChannelListTest(unittest.TestCase):
 
 
 class Qwen30ChannelTest(unittest.TestCase):
-    """2026-10-16 用户新增渠道 `qwen30`（指令形态「qwen30步，图生图，需求」）。
+    """`qwen30` 已于 2026-11-18 对外下架（能力并进默认 qwen_image_v1）。
 
-    它是 `qwen_image_v1` 的**高步数副本**：两条骨架都有（文生图 + 图生图），
-    除 `steps` 外参数照抄。用户明确拍板「qwen30步，没有说图生图，就是 qwen30步
-    的文生图」——所以文生图那条也得真能用（30 步），不是占位文件。
-
-    ⚠️ 只读文件，不出图。
+    ⚠️ 只读文件，不出图。下面三条钉的是「下架后的兼容口径」：旧点名词仍要
+    被代码吃掉、不能漏进提示词，但渠道统一落 `qwen_image_v1`，且不再出现在
+    可出图清单 / 图生图白名单里。
     """
 
     def _load(self, name):
@@ -3504,27 +3602,22 @@ class Qwen30ChannelTest(unittest.TestCase):
                     if n["class_type"] == "UnetLoaderGGUF"]
             self.assertEqual(unet, ["qwen-image-2.1-UC-Q4_K_M.gguf"])
 
-    def test_i2i_is_whitelisted(self):
-        """不在 `_I2I_SKILLS` 里的话，垫图会被静默降级成文生图、丢掉源图。"""
-        self.assertIn("qwen30", gi._I2I_SKILLS)
+    def test_i2i_is_not_whitelisted(self):
+        """2026-11-18 qwen30 下架：不在 `_I2I_SKILLS`，旧词映射到默认 qwen。"""
+        self.assertNotIn("qwen30", gi._I2I_SKILLS)
+        self.assertEqual(direct_gen._FIXED_CHAN_MAP.get("qwen30步"),
+                         "qwen_image_v1")
 
-    def test_timeout_is_the_qwen_tier(self):
-        self.assertEqual(image_jobs.task_timeout("qwen30"), 220)
+    def test_channel_is_no_longer_allowed(self):
+        self.assertNotIn("qwen30", direct_gen._allowed_skills())
+        # 旧点名词仍要能被吃掉（不然「qwen30步」会漏进提示词），但落默认渠道。
+        self.assertEqual(_pc("qwen30步 一只猫")[0], "qwen_image_v1")
 
-    def test_channel_is_allowed_and_seed_capable(self):
-        self.assertIn("qwen30", direct_gen._allowed_skills())
-        self.assertTrue(direct_gen._LOCAL_SEED_SKILL_RE.match("qwen30"))
-
-    def test_both_templates_list_the_channel(self):
-        """两份模板都要登记——漏一份模型就不认识这个词（规范两份是历史坑）。
-
-        同理，`qwen30` 也必须出现在 `_FIXED_CHAN_MAP`：模型那一路只是兜底，
-        **代码点名才是确定性的那条**。
-        """
+    def test_both_templates_mention_the_delisting(self):
+        """两份模板都写明「qwen30 已下架」——模型才不会把它当可用渠道。"""
         for name in ("_MASTER_TEMPLATE", "_REVISE_TEMPLATE"):
             with self.subTest(template=name):
                 self.assertIn("qwen30", getattr(direct_gen, name))
-        self.assertEqual(direct_gen._FIXED_CHAN_MAP.get("qwen30步"), "qwen30")
 
 
 class MossPlainChannelTest(unittest.TestCase):
@@ -3840,7 +3933,8 @@ class SearchHookTest(unittest.TestCase):
     def test_template_still_renders_without_search(self):
         """老路必须原样能跑：没有 search 槽的调用方不该炸。"""
         out = direct_gen._MASTER_TEMPLATE.format(
-            recent="", text="t", chan_hint="", search="")
+            recent="", text="t", chan_hint="", search="",
+            last_job="（无）", role_block="")
         self.assertIn("【用户】", out)
 
 

@@ -64,6 +64,18 @@ _PROMPT_MAX = 10000              # 提示词长度上限（2026-11-13 用户要 
 # 封面缩略图浏览器缓存时长（秒）。封面很少变，immutable + 长 max-age 让浏览器
 # 刷新不重下；改名覆盖时文件 mtime 变 → ETag 变 → 自动重新拉，不会吃旧图。
 COVER_MAX_AGE = 86400            # 1 天
+RUNBENCH_LIST_MAX_AGE = 300        # 跑图台渠道/预设列表 5 分钟，浏览器本地缓存
+
+
+def _cached_json(payload, max_age=RUNBENCH_LIST_MAX_AGE):
+    """跑图台列表走浏览器缓存：同一 URL 5 分钟内不再打服务端。
+
+    渠道和预设不常变，但封面可能换；5 分钟足够短，换封面后刷新一次就能看到。
+    `private` 是给带 k 令牌的 check 用的，避免被共享缓存串号。
+    """
+    resp = jsonify(payload)
+    resp.headers["Cache-Control"] = "private, max-age=%d" % int(max_age)
+    return resp
 
 # 进程内任务表：tag -> {token, kind, name, prompt, state, error, ts}
 # kind = "channel"（官方渠道）| "preset"（我的预设）
@@ -159,18 +171,18 @@ def api_check():
     if k is None:
         return parsed
     target, target_id = parsed
-    return jsonify({"ok": True, "target": target,
-                    "channels": _channel_rows(),
-                    "presets": _preset_rows(),
-                    "prompt_max": _PROMPT_MAX})
+    return _cached_json({"ok": True, "target": target,
+                         "channels": _channel_rows(),
+                         "presets": _preset_rows(),
+                         "prompt_max": _PROMPT_MAX})
 
 
 @bp.route("/api/runbench/list", methods=["GET"])
 def api_list():
     """免令牌版列表（官方渠道 + 预设）。跑图台页面用，不涉及出图。"""
-    return jsonify({"ok": True,
-                    "channels": _channel_rows(),
-                    "presets": _preset_rows()})
+    return _cached_json({"ok": True,
+                         "channels": _channel_rows(),
+                         "presets": _preset_rows()})
 
 
 @bp.route("/api/runbench/gen", methods=["POST"])

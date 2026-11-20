@@ -34,6 +34,11 @@ import os
 import re
 import subprocess
 
+try:                                                # psutil 是可选依赖
+    import psutil
+except ImportError:                                  # pragma: no cover
+    psutil = None
+
 from app.config import (COMFYUI_LAUNCH_ARGS, COMFYUI_PYTHON,
                         COMFYUI_ROOT, COMFYUI_URL)
 
@@ -82,6 +87,40 @@ def command():
 def cwd():
     """启动时的工作目录（ComfyUI 以自己目录为根找 models/ user/）。"""
     return COMFYUI_ROOT
+
+
+def process_pids():
+    """当前机器上属于这个 ComfyUI 实例的所有 PID（父+子）。
+
+    为什么要这个：ComfyUI 启动要几十秒，端口没起来之前 `pid_on_port()` 是
+    None。如果控制台/看门狗/QQ 机器人在这个窗口期各自再拉一次，就会出现两套
+    `main.py` 抢 8188：一套占住端口，另一套卡在启动里，界面显示“已停止”，
+    用户反复点重启，控制台窗口就跟着反复闪。这里按**完整的 main.py 路径**
+    认进程，不按 `python.exe` 名字认——机器人自己也是 python。
+    """
+    if psutil is None or not COMFYUI_ROOT:
+        return []
+    target = os.path.normcase(os.path.normpath(os.path.abspath(
+        os.path.join(COMFYUI_ROOT, "main.py"))))
+    pids = []
+    try:
+        for proc in psutil.process_iter(["pid", "cmdline"]):
+            if proc.pid == os.getpid():
+                continue
+            cmd = proc.info.get("cmdline") or []
+            for token in cmd:
+                if not token or "main.py" not in str(token).lower():
+                    continue
+                try:
+                    if os.path.normcase(os.path.normpath(
+                            os.path.abspath(str(token)))) == target:
+                        pids.append(int(proc.pid))
+                        break
+                except (OSError, ValueError):
+                    continue
+    except Exception:                                    # noqa: BLE001
+        log.warning("枚举 ComfyUI 进程失败", exc_info=True)
+    return pids
 
 
 def env():

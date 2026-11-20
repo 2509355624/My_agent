@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
-"""完整写作示范块：真实回合、改前/改后、接入点。"""
+"""范文段已停用：写法全部由 writing_guide.py 告诉 AI 怎么做。
 
-import re
+旧的「本机存档真实回合 + 改前改后」是已驳回的写法，不再注入系统头。
+这里守两件事：范文接口保持空、系统头不再出现范文块。
+"""
+
 import unittest
 
 from app.features.persona import service as persona
@@ -19,41 +22,30 @@ def _card():
 
 
 class WritingExampleTest(unittest.TestCase):
-    def test_example_is_long_enough_to_be_real_prose(self):
-        """约 4,900 字的真实回合 + 改前/改后，不是角色卡开场白。"""
-        self.assertGreaterEqual(len(writing_examples.EXAMPLE), 4500)
-        self.assertLessEqual(len(writing_examples.EXAMPLE), 5500)
+    def test_example_interface_is_empty(self):
+        """范文停用后两个入口都返回空串，调用方 import 不用改。"""
+        self.assertEqual(writing_examples.EXAMPLE if hasattr(
+            writing_examples, "EXAMPLE") else "", "")
+        self.assertEqual(writing_examples.full_example(), "")
+        self.assertEqual(writing_examples.prompt_example(), "")
 
-    def test_example_is_turn_based_not_first_message(self):
-        text = writing_examples.EXAMPLE
-        self.assertIn("## 真实回合示范", text)
-        self.assertIn("玩家：", text)
-        self.assertIn("角色：", text)
-        self.assertIn("## 改前 / 改后", text)
-        self.assertNotIn("first_mes", writing_examples.__doc__)
-        self.assertIn("真实回合", writing_examples.__doc__)
-        self.assertIn("examples.md", writing_examples.__doc__)
+    def test_no_bad_example_sources_in_module(self):
+        self.assertNotIn("改前 / 改后", writing_examples.__doc__)
+        self.assertNotIn("真实回合", writing_examples.__doc__)
 
-    def test_prompt_example_has_no_he_pronoun(self):
-        """存档原文可以保留她的心声「他听见了」；送模型前必须纠成「你」。"""
-        self.assertEqual(writing_examples.prompt_example().count("他"), 0)
-        self.assertIn("你听见了", writing_examples.prompt_example())
+    def test_build_head_has_no_example_block(self):
+        for key in ("private_1", "group_123"):
+            head = persona.build_head(_card(), key, "张三")
+            self.assertNotIn("## 完整示范", head)
+            self.assertNotIn("## 真实回合示范", head)
 
-    def test_block_has_header_and_body_once(self):
-        block = writing_examples.full_example()
-        self.assertTrue(block.startswith("## 完整示范"))
-        self.assertIn(writing_examples.EXAMPLE, block)
-        self.assertEqual(block.count("## 完整示范"), 1)
-
-    def test_build_head_injects_block_once(self):
+    def test_build_head_keeps_the_writing_guide(self):
+        """范文走了，规则还在：写法说明仍进每一轮。"""
         head = persona.build_head(_card(), "private_1", "张三")
-        self.assertIn("## 完整示范", head)
-        self.assertEqual(head.count("## 完整示范"), 1)
-        self.assertIn(writing_examples.prompt_example(), head)
-
-    def test_group_head_does_not_take_the_private_example(self):
-        head = persona.build_head(_card(), "group_123", "张三")
-        self.assertNotIn("## 完整示范", head)
+        self.assertIn("## 写这一轮", head)
+        self.assertIn("从上一轮接着写", head)
+        self.assertIn("玩家只说一句话", head)
+        self.assertIn("一段连着的剧情", head)
 
 
 if __name__ == "__main__":

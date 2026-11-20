@@ -97,6 +97,7 @@ footer{display:flex;justify-content:space-between;gap:12px;color:var(--muted);fo
       <p id="summary" class="summary">连接中</p>
     </div>
     <div class="head-actions">
+      <button id="restart-console" type="button" title="只重启 5177 控制台，不碰其它服务">重启控制台</button>
       <button id="restart-all" type="button">全部重启</button>
     </div>
   </header>
@@ -115,7 +116,9 @@ const grid = document.getElementById('grid');
 const summary = document.getElementById('summary');
 const updated = document.getElementById('updated');
 const restartAll = document.getElementById('restart-all');
+const restartConsole = document.getElementById('restart-console');
 let inFlight = false;
+let panelRestarting = false;
 
 function esc(value) {
   return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
@@ -166,7 +169,7 @@ function render(data) {
 }
 
 async function getStatus() {
-  if (inFlight) return;
+  if (inFlight || panelRestarting) return;
   inFlight = true;
   try {
     const r = await fetch('/api/status', {headers: {'X-Control-Token': TOKEN}});
@@ -209,6 +212,45 @@ restartAll.addEventListener('click', async function () {
     summary.textContent = '操作失败：' + e.message;
   } finally {
     setTimeout(function () { restartAll.disabled = false; }, 1200);
+  }
+});
+
+async function waitForConsole() {
+  let sawDown = false;
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    await new Promise(function (resolve) { setTimeout(resolve, 350); });
+    try {
+      const r = await fetch('/health', {cache: 'no-store'});
+      if (r.ok) {
+        if (sawDown) {
+          location.reload();
+          return;
+        }
+      } else {
+        sawDown = true;
+      }
+    } catch (e) {
+      sawDown = true;
+    }
+  }
+  throw new Error('控制台未在 20 秒内恢复');
+}
+
+restartConsole.addEventListener('click', async function () {
+  restartConsole.disabled = true;
+  panelRestarting = true;
+  summary.textContent = '控制台重启中，等待恢复…';
+  try {
+    const r = await fetch('/api/panel/restart', {
+      method: 'POST', headers: {'X-Control-Token': TOKEN}
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    await waitForConsole();
+  } catch (e) {
+    panelRestarting = false;
+    restartConsole.disabled = false;
+    summary.textContent = '控制台重启失败：' + e.message;
   }
 });
 

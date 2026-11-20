@@ -1444,6 +1444,25 @@ class SegmentTest(unittest.TestCase):
         self.assertEqual(out[0]["content"], "旧原话")
         self.assertIn("她听不见", out[1]["content"])
 
+    def test_history_seg_drops_scene_duty_but_current_keeps_it(self):
+        """场景职责系统头已有一份：历史分段消息不再重复带，当前轮照带。
+
+        2026-11-19：历史里带 seg 的每条都拼一份 _SCENE_DUTY（818 token），
+        最近12条有2条 = 白烧约1636 token 未命中。
+        """
+        hist = [{"role": "user", "content": "原文",
+                 "seg": [{"who": "用户", "type": "说", "text": "我走了。"}],
+                 "addressed": True}]
+        old = persona._render_hist(hist)[0]["content"]
+        self.assertIn("我走了。", old)
+        self.assertIn("用户 · 说（你听得见）", old)  # 分段结构仍在
+        self.assertNotIn("用叙述演出来", old)   # 场景职责已剥离
+        # 当前轮默认仍带
+        cur = persona.render_user_block(
+            [{"who": "用户", "type": "说", "text": "我走了。"}],
+            True, "我走了。")
+        self.assertIn("用叙述演出来", cur)
+
     def test_history_keeps_seg_through_trim(self):
         hist = [{"role": "user", "content": "原文",
                  "seg": [{"who": "用户", "type": "想", "text": "心里话"}]}]
@@ -1482,7 +1501,7 @@ class DirectorBlockTest(unittest.TestCase):
 
 
 class LedgerTest(unittest.TestCase):
-    """B：Markdown 六节账本（2026-11-05）。"""
+    """B：Markdown 五节账本（2026-11-19 去掉「约定与未完成」）。"""
 
     LEDGER = (
         "## 关系\n- 你叫她学妹\n\n"
@@ -1493,7 +1512,7 @@ class LedgerTest(unittest.TestCase):
         "## 日常与场景\n- 住在学校附近"
     )
 
-    def test_prompt_names_all_six_sections(self):
+    def test_prompt_names_all_five_sections(self):
         for key in persona._LEDGER_SECTIONS:
             self.assertIn(key, persona._NOTE_PROMPT, key)
 
@@ -2042,7 +2061,7 @@ class NoteBudgetTest(unittest.TestCase):
         或者只写一句概括。
         """
         p = persona._NOTE_PROMPT
-        for word in ("重点保留这些", "不要写这些", "关系进展", "答应过什么"):
+        for word in ("重点保留这些", "不要写这些", "关系进展", "发生过什么要紧的事"):
             self.assertIn(word, p, word)
 
     def test_token_cost_stays_near_image_generation(self):
@@ -2261,24 +2280,28 @@ class NovelCraftContractTest(unittest.TestCase):
         for w in ("不许", "不能", "禁止", "必须", "算不合格", "缺一段都不行",
                   "两条硬规矩", "不许用「他」"):
             self.assertNotIn(w, c, "契约正文里还在用禁令词：%s" % w)
-        self.assertLessEqual(c.count("不要"), 1)
+        self.assertLessEqual(c.replace("要不要", "").count("不要"), 1)
 
-    def test_contract_teaches_novel_craft(self):
-        """新写作规范（30% 规则 + 70% 示例）要真的进每一轮提示词。"""
+    def test_contract_teaches_how_to_write(self):
+        """写法规则要真的进每一轮提示词：按输入结构分层 + 上下文连贯。"""
         c = persona._CONTRACT
-        for phrase in ("## 写作规范（DeepSeek 小说去 AI 味）",
-                       "配比：约 30% 规则，70% 示例",
-                       "## 一、规则", "## 二、示例",
-                       "### 示例 1 · 日常短答", "### 示例 51 · 早上",
-                       "不设下限", "一段只写一个变化"):
-            self.assertIn(phrase, c, "写作规范漏了：%s" % phrase)
+        for phrase in ("## 写这一轮", "玩家只说一句话", "一个动作",
+                       "一段连着的剧情", "从上一轮接着写",
+                       "不设下限", "不设上限", "信息量"):
+            self.assertIn(phrase, c, "写法规则漏了：%s" % phrase)
+        # 旧的「去 AI 味」负面框架与配比元注释已移除。
+        self.assertNotIn("配比：约 30% 规则，70% 示例", c)
+        self.assertNotIn("AI 味通常从三个地方来", c)
 
     def test_scene_section_exists(self):
-        """「一拍的结构」四件事：想要 / 挡住 / 变了 / 留口子。"""
+        """输入分层写法在位，停笔点规则在位；旧的四步结构退场。"""
         c = persona._CONTRACT
-        for phrase in ("### 3. 一拍的结构", "她想要什么",
-                       "什么挡着她", "哪里变了", "留什么口子"):
-            self.assertIn(phrase, c)
+        self.assertNotIn("### 3. 一拍的结构", c)
+        self.assertNotIn("她想要什么", c)
+        self.assertNotIn("什么挡着她", c)
+        self.assertNotIn("留什么口子", c)
+        self.assertIn("一段只写一个变化", c)
+        self.assertIn("不按清单逐条补齐", c)
         self.assertNotIn("想看下一拍", c)
         self.assertNotIn("悬着的那一下", c)
 
@@ -2300,12 +2323,13 @@ class NovelCraftContractTest(unittest.TestCase):
         self.assertNotIn("这一轮要有变化", head)
 
     def test_craft_reaches_every_turn_including_non_intimate(self):
-        """笔法写在契约里，日常轮（不带亲密指导）也要吃到。"""
+        """写法规则写在契约里，日常轮（不带亲密指导）也要吃到。"""
         head = persona.build_head({"name": "x", "systemPrompt": "y"},
                                   "private_1", "", intimate=False)
-        self.assertIn("## 写作规范（DeepSeek 小说去 AI 味）", head)
-        self.assertIn("### 示例 1 · 日常短答", head)
-        self.assertIn("## 写作规范", head)
+        self.assertIn("## 写这一轮", head)
+        self.assertIn("从上一轮接着写", head)
+        self.assertIn("## 称呼与「你」", head)
+        self.assertNotIn("## 完整示范", head)
         self.assertNotIn("## 正文：写一段小说", head)
 
     def test_history_keeps_a_full_long_reply(self):
@@ -3071,12 +3095,13 @@ class GameDayTest(PersonaBase):
         persona._apply_gameday(line, {"time": "none"})
         self.assertEqual(self._gday()["plan"], "去市场买菜")
 
-    def test_block_shows_day_plan_and_soft_curfew(self):
+    def test_block_shows_day_without_plan_and_soft_curfew(self):
         line = persona.resolve_line(self.KEY)
         persona._apply_gameday(line, {"time": "none", "plan": "去游乐场"})
         blk = persona._gameday_block(self._gday())
         self.assertIn("第 0 天", blk)
-        self.assertIn("去游乐场", blk)
+        self.assertNotIn("去游乐场", blk)
+        self.assertNotIn("登记过的约定", blk)
         for _ in range(30):                        # 超过 _DAY_TURNS_SOFT
             persona._apply_gameday(line, {"time": "none"})
         self.assertIn("天色不早", persona._gameday_block(self._gday()))
@@ -3656,6 +3681,24 @@ class ManualRunTurnTest(PersonaBase):
         self.assertIn("想让她主动", actor)   # 心里话现在给写作 AI 看
         self.assertIn("她听不见", actor)
 
+    def test_half_drop_note_keeps_causal_line_but_not_big_block(self):
+        """2026-11-19「半删小记」：【之前的事】整块不进主链路消息，
+        但 story_line 仍从账本抽因果线，balance 由压缩记忆(RAG batch)接。
+        """
+        import inspect
+        src = inspect.getsource(persona.run_turn)
+        # 主链路不再把 _note_block 拼进 dyn_parts（整份 1298 token 已删）
+        self.assertNotIn("dyn_parts.append(nb)", src)
+        self.assertNotIn("nb = svc._note_block(note)", src)
+        # 但账本仍在 state 里滚动：story_line 从账本抽「你的事 / 她的事」
+        ledger = ("## 你的事\n- 你叫她画兔子。\n\n"
+                  "## 她的事\n- 她画完了兔子。")
+        causal = persona.story_line({"day": 2, "phase": "上午"}, ledger)
+        self.assertIn("故事到现在", causal)
+        self.assertIn("她画完了兔子", causal)
+        # judge 的 ledger 也照旧从账本来
+        self.assertIn("她画完了兔子", persona._judge_ledger(ledger))
+
     def test_plot_reaches_director_block_and_tail(self):
         """剧情推进同时落在 user 块、导演条、近因位；心理活动原文仍不泄露。"""
         seen = []
@@ -3883,10 +3926,10 @@ class StoryLineTest(unittest.TestCase):
         for bad in ("不能", "不许", "不要", "禁止", "必须"):
             self.assertNotIn(bad, out)
 
-    def test_story_line_skips_missing_sections(self):
+    def test_story_line_does_not_repeat_event(self):
         out = persona.story_line({"day": 7, "event": "已经办完：去旧书市"}, "")
         self.assertIn("时间：第 7 天", out)
-        self.assertIn("今天已经办完：去旧书市", out)
+        self.assertNotIn("今天已经办完", out)
         self.assertNotIn("已经发生：", out)
         self.assertNotIn("还没完成：", out)
 
@@ -3945,12 +3988,12 @@ class CrossDayFactTest(unittest.TestCase):
         self.assertNotIn("那天已经过了", out)
         self.assertNotIn("还没完成：", out)
 
-    def test_gameday_block_never_asserts_plan_is_pending(self):
+    def test_gameday_block_never_injects_plan(self):
         blk = persona._gameday_block(
             {"day": 4, "plan": "买风筝", "plan_day": 3})
-        self.assertNotIn("就说今天", blk)
-        self.assertNotIn("挂着的约定", blk)
-        self.assertIn("那天已经过了", blk)
+        self.assertNotIn("买风筝", blk)
+        self.assertNotIn("登记过的约定", blk)
+        self.assertNotIn("那天已经过了", blk)
         for bad in ("不要", "不许", "不能", "禁止"):
             self.assertNotIn(bad, blk)
 
@@ -3986,20 +4029,25 @@ class CrossDayFactTest(unittest.TestCase):
         self.assertIn("现在是第 3 天", blk)
         self.assertIn("从眼前正在发生的动作起笔", blk)
 
-    def test_note_prompt_asks_for_only_open_items(self):
+    def test_note_prompt_has_no_open_items(self):
         p = persona._NOTE_PROMPT
         self.assertIn("%(day_facts)s", p)
         self.assertIn("【系统结算的事实】", p)
-        self.assertIn("这一节只留到此刻确实还没做的事", p)
-        self.assertIn("完成的从「约定」里移走", p)
+        self.assertNotIn("约定与未完成", p)
+        self.assertNotIn("这一节只留到此刻确实还没做的事", p)
+        self.assertNotIn("完成的从「约定」里移走", p)
+        self.assertNotIn("约定 5", p)
 
-    def test_settled_day_facts_reports_done_and_stale_plan(self):
+    def test_settled_day_facts_reports_done_without_plan(self):
         out = persona._settled_day_facts(
-            {"day": 3, "phase": "早晨", "event": "已经办完：去旧书市",
+            {"day": 3, "phase": "早晨", "place": "旧书市",
+             "event": "已经办完：去旧书市",
              "plan": "买风筝", "plan_day": 2})
+        self.assertIn("游戏内第 3 天 · 早晨", out)
+        self.assertIn("所在地：旧书市", out)
         self.assertIn("今天已经办完：去旧书市", out)
-        self.assertIn("约的那天已经过了", out)
-        self.assertIn("以【最近发生的】对话为准", out)
+        self.assertNotIn("买风筝", out)
+        self.assertNotIn("约定", out)
 
     def test_settled_day_facts_reads_legacy_event_as_done(self):
         out = persona._settled_day_facts(
@@ -4013,10 +4061,12 @@ class ReplayContract20261108Test(unittest.TestCase):
     def test_contract_new_rules(self):
         c = persona._CONTRACT
         for s in ("她只知道这一刻站在她眼前能看见、能听见的",
+                  "你这一轮写进正文的动作和位置，不属于“没跟着去过”的部分",
+                  "不要把你退回到门口、门外或上一个地点",
                   "这件事能走到哪一步", "半路被挡下来不是失败",
-                  "## 写作规范（DeepSeek 小说去 AI 味）",
-                  "### 3. 一拍的结构", "什么挡着她", "哪里变了",
-                  "结尾停在动作、声音或物件上", "〔心声〕"):
+                  "## 写这一轮", "从上一轮接着写", "那是这一轮该停下的位置",
+                  "一段只写一个变化", "不按清单逐条补齐",
+                  "一句里一个修饰就够", "〔心声〕"):
             self.assertIn(s, c)
         for s in ("想看下一拍", "悬着的那一下", "收得干干净净",
                   # 旧写法必须彻底退场，否则两条相反的指令会打架
@@ -4028,7 +4078,9 @@ class ReplayContract20261108Test(unittest.TestCase):
         d = persona._SCENE_DUTY
         self.assertIn("用叙述演出来", d)
         self.assertIn("只接不重念", d)
-        self.assertIn("顺序按你写的来", d)
+        self.assertIn("动作和话可以交错", d)
+        self.assertIn("不必把每个动作按顺序补齐", d)
+        self.assertNotIn("顺序按你写的来", d)
         self.assertIn("她不会点破", d)
         self.assertIn("〔心声〕", d)
 

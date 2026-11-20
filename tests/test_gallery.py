@@ -373,6 +373,26 @@ class ApiTest(_Base):
         r = self.c.get("/api/gal/list?qq=10001")
         self.assertEqual(r.status_code, 403)
 
+    def test_local_trusted_opens_as_owner_without_token(self):
+        # 本机 / 内网直连 5174：免内部 token，按站主身份进画廊。
+        r = self.c.get("/api/gal/me",
+                       headers={"Host": "127.0.0.1:%d" % gallery_api.AGENT_PORT})
+        self.assertEqual(r.status_code, 200)
+        d = self.j(r)
+        self.assertTrue(d["owner"])
+        self.assertEqual(d["alias"], "站长")
+
+    def test_local_trusted_rejected_with_tunnel_header(self):
+        # 带 Cloudflare 隧道头 = 公网进来，不能因 Host 像本机就放行。
+        r = self.c.get("/api/gal/me", headers={
+            "Host": "127.0.0.1:5174", "CF-Connecting-IP": "1.2.3.4"})
+        self.assertEqual(r.status_code, 403)
+
+    def test_local_trusted_rejected_on_friend_port(self):
+        # 5175 反代端口不算本地可信，仍走 token 校验。
+        r = self.c.get("/api/gal/me", headers={"Host": "127.0.0.1:5175"})
+        self.assertEqual(r.status_code, 403)
+
     def test_owner_flag(self):
         self.assertTrue(self.j(self.c.get("/api/gal/me?qq=10001", headers=self.h))["owner"])
         self.assertFalse(self.j(self.c.get("/api/gal/me?qq=20002", headers=self.h))["owner"])

@@ -99,6 +99,22 @@ class CharLoraTest(unittest.TestCase):
     def test_missing_file_skips_entry(self):
         self._start([dict(ENTRY, file="不存在的文件.safetensors")])
         self.assertIsNone(char_loras.match("anima-line", "sunna"))
+        self.assertEqual(char_loras.list_for("anima-line"), [])
+
+    def test_list_for_only_lists_usable_entries(self):
+        """网页下拉只列「渠道认 + 文件在」的角色，且同一 key 只留一条。"""
+        dup = dict(ENTRY, file="不存在的文件.safetensors")
+        self._start([ENTRY, dup, dict(ENTRY, key="other", name="另一个人")])
+        got = char_loras.list_for("anima-line")
+        self.assertEqual([c["key"] for c in got], ["sunna", "other"])
+        self.assertEqual(got[0]["name"], "苏娜")
+
+    def test_available_rejects_missing_or_other_channel(self):
+        self._start([ENTRY], skills=("anima-line", "silver"))
+        self.assertEqual(char_loras.available("sunna", "anima-line")["key"],
+                         "sunna")
+        self.assertIsNone(char_loras.available("sunna", "_anima_random"))
+        self.assertIsNone(char_loras.available("没这个人", "anima-line"))
 
     def test_no_index_or_bad_json_is_noop(self):
         self._start()                                   # 不写索引

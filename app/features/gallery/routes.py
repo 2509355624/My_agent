@@ -32,7 +32,8 @@ from flask import Blueprint, jsonify, request, send_file
 
 from app.gateways import friend_auth
 from app.features.gallery import folder_picker, gallery
-from app.config import GALLERY_OWNER_QQ
+from app.core.admin_access import LOCAL_ADDRS, is_lan_addr
+from app.config import GALLERY_OWNER_QQ, AGENT_PORT
 
 log = logging.getLogger("gallery_api")
 
@@ -88,7 +89,30 @@ def _img(path):
 
 # ─── 公共小件 ────────────────────────────────────────────
 
+def _local_trusted():
+    """5174 本机 / 局域网直连是否可信（管理端场景）。
+
+    必须**同时**满足：没带 5175 反代的 `X-Friend-Token`、没带 Cloudflare
+    隧道的 `CF-Connecting-IP` / `CF-Ray`、Host 是本机端口、来源地址是回环
+    或私网段。5175 网关与公网隧道一律走下面的 token 校验，不能靠 Host 头
+    绕过。口径和 `persona.routes._local_owner_qq()` 保持一致。
+    """
+    if request.headers.get("X-Friend-Token"):
+        return False
+    if request.headers.get("CF-Connecting-IP") or request.headers.get("CF-Ray"):
+        return False
+    host = str(request.host or "").lower()
+    if not host.endswith(":%s" % AGENT_PORT):
+        return False
+    addr = request.remote_addr or ""
+    return addr in LOCAL_ADDRS or is_lan_addr(addr)
+
+
 def _guard():
+    # 本机 / 内网管理端直连：免内部 token，按站主身份放行。公网群友仍由
+    # 5175 带 `X-Friend-Token` 转发，走下面的密钥校验。
+    if _local_trusted():
+        return None
     try:
         good = friend_auth.secret()
     except Exception:
@@ -101,6 +125,10 @@ def _guard():
 
 
 def _qq():
+    # 本地可信直连固定按站主身份，忽略请求里传来的别的 QQ（管理端不该以
+    # 游客或他人身份进画廊）。
+    if _local_trusted():
+        return str(GALLERY_OWNER_QQ or "") or None
     qq = str(request.args.get("qq") or "").strip()
     if not qq:
         body = request.get_json(silent=True) or {}

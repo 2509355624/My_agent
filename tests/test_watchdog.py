@@ -670,7 +670,8 @@ class ComfyuiRestartCommandTest(TestCase):
                                "D:/AI/confyui_env/Scripts/python.exe"), \
              mock.patch.object(comfy_launch, "COMFYUI_ROOT", "D:/AI/ComfyUI_v037"), \
              mock.patch.object(comfy_launch, "COMFYUI_LAUNCH_ARGS",
-                               "--listen 127.0.0.1 --port 8188 --enable-cors-header *"):
+                               "--listen 127.0.0.1 --port 8188 --enable-cors-header *"), \
+             mock.patch.object(comfy_launch, "process_pids", return_value=[]):
             self.assertTrue(wd._trigger_comfy_restart())
         fake.run.assert_called_once_with(
             ["taskkill", "/F", "/T", "/PID", "1234"],

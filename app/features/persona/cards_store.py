@@ -113,6 +113,10 @@ def _norm_card(c):
         # 一块。抽象规则让模型「推导」怎么写，示例让它「照着学」——后者
         # 稳得多。**空着就跳过**，不强制每张卡都填。
         "exampleDialogue": str(c.get("exampleDialogue") or "").strip(),
+        # 卡级声口（2026-11-18 试点）：不是性格标签，是「她怎么说话」。
+        # 只给日常轮拼；亲密轮不注入（未成年原作的卡尤其不能借这块加强性暗示）。
+        "voiceAnchor": str(c.get("voiceAnchor") or "").strip(),
+        "voiceExample": str(c.get("voiceExample") or "").strip(),
         "appearancePrompt": str(c.get("appearancePrompt") or "").strip(),
         "outfitPrompt": str(c.get("outfitPrompt") or "").strip(),
         # 角色 LoRA（2026-11-08）：卡上写死的角色库 key。给了就硬挂，

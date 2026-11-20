@@ -206,3 +206,19 @@ class LedgerTest(unittest.TestCase):
         image_log.PATH = os.path.join(blocker, "sub", "image_log.jsonl")
         image_log.save("HT-20261001-081132-772", prompt="x")   # 不许抛
         self.assertIsNone(image_log.lookup("HT-20261001-081132-772"))
+
+    def test_latest_for_session(self):
+        """按 target + target_id 取最后一条——给「再来一张」跨重启兜底。"""
+        image_log.save("HT-1", prompt="p1", skill="hd_3_clear",
+                       target="private", target_id=123)
+        image_log.save("HT-2", prompt="p2", skill="qwen_image_v1",
+                       target="private", target_id=123)
+        image_log.save("HT-3", prompt="p3", skill="silver",
+                       target="group", target_id=456)
+        row = image_log.latest_for("private", 123)
+        self.assertEqual(row["tag"], "HT-2")
+        self.assertEqual(row["prompt"], "p2")
+        # target_id 统一按字符串比：适配层给 int、账本存 str 也要对上
+        self.assertEqual(image_log.latest_for("private", "123")["tag"], "HT-2")
+        self.assertIsNone(image_log.latest_for("private", 999))
+        self.assertIsNone(image_log.latest_for("group", ""))

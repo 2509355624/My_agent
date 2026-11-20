@@ -26,9 +26,11 @@ from flask import Blueprint, Response, jsonify, request, send_file
 from app.features.persona import billing as persona_billing
 from app.features.persona import writing_style
 from app.core import usage
+from app.core.admin_access import LOCAL_ADDRS, is_lan_addr
 from app.gateways import friend_auth
 from app.integrations import llm
 from app.features.persona import service as persona
+from app.features.persona import voice as persona_voice
 from app import (config)
 from app.features.chat import background as chat_bg
 
@@ -149,6 +151,45 @@ def persona_models_api():
         "default": config.PERSONA_MODEL_DEFAULT,
         "current": cur.get("id") or "",
     })
+
+
+@bp.route("/api/persona/tts/cards")
+def persona_tts_cards():
+    """哪些角色卡接了语音（前端据此决定要不要显示「语音」按钮）。
+
+    只读配置，不探活 3060；服务没开时按钮仍可点，点了才降级提示，
+    避免每次打开角色页都去打一次内网健康检查。
+    """
+    return jsonify({"ok": True, "cards": list(persona_voice.voice_card_ids())})
+
+
+@bp.route("/api/persona/tts", methods=["POST"])
+def persona_tts():
+    """把一条回复里「引号内的台词」合成 WAV（2026-11-18）。
+
+    只认 `config/voice.json` 里登记过的角色；没登记直接 404，前端静默跳过。
+    抽不到引号台词（整段都是旁白/心理）返回 204，不生成空音频。
+    语音服务挂掉返回 503，调用方必须降级，不能影响聊天主链路。
+    """
+    body = request.get_json(silent=True) or {}
+    card_id = str(body.get("card_id") or "").strip()
+    text = str(body.get("text") or "")
+    if not card_id or not text.strip():
+        return jsonify({"ok": False, "error": "缺少角色或文本"}), 400
+    if not persona_voice.profile_for_card(card_id):
+        return jsonify({"ok": False, "error": "这个角色没有接语音"}), 404
+
+    speech = persona_voice.extract_dialogue(text)
+    if not speech:
+        return Response(status=204)
+
+    try:
+        wav = persona_voice.synthesize(card_id, speech)
+    except persona_voice.VoiceUnavailable as exc:
+        log.warning("[persona] 语音合成失败 card=%s：%s", card_id, exc)
+        return jsonify({"ok": False, "error": str(exc)}), 503
+    return Response(wav, mimetype="audio/wav",
+                    headers={"Cache-Control": "no-store"})
 
 
 @bp.route("/api/persona/billing")
@@ -296,6 +337,32 @@ def _pic_map_drop_tail(key, dropped, total):
             log.exception("回退图片映射清理失败 %s", key)
 
 
+def _local_owner_qq():
+    """5174 本机/局域网直连：直接按站主身份，不再弹登录。
+
+    只认 **5174 端口**，且必须没有 5175 反代的 `X-Friend-Token`、没有
+    Cloudflare 隧道的 `CF-Connecting-IP` / `CF-Ray`：
+      · 5174 本机 localhost、127.0.0.1 → 站主
+      · 同网段 192.168.x.x:5174 → 站主（用户 2026-11-19 确认）
+      · 5175 / 公网隧道 → 保持原来的登录/游客逻辑，不能靠 Host 头绕过
+    """
+    owner = str(getattr(config, "GALLERY_OWNER_QQ", "") or "").strip()
+    if not owner:
+        return ""
+    if request.headers.get("X-Friend-Token"):
+        return ""
+    if (request.headers.get("CF-Connecting-IP")
+            or request.headers.get("CF-Ray")):
+        return ""
+    host = str(request.host or "").lower()
+    if not host.endswith(":5174"):
+        return ""
+    addr = request.remote_addr or ""
+    if addr in LOCAL_ADDRS or is_lan_addr(addr):
+        return owner
+    return ""
+
+
 def _qq():
     """取当前用户。跟 `gallery_api._qq()` 同一套口径：query 或 body 里带。
 
@@ -314,7 +381,9 @@ def _qq():
             request.cookies.get(friend_auth.COOKIE_NAME))
     except Exception:                              # noqa: BLE001
         ck = None
-    return ck or ""
+    # 5174 本机/局域网直连没有登录态时，按站主身份兜底；5175/隧道已在
+    # `_local_owner_qq()` 里排除，不会因为反代 Host 看起来像本机就放行。
+    return ck or _local_owner_qq()
 
 
 def _guest_id():
@@ -630,6 +699,10 @@ def get_session():
     start, rows, total = persona.history_page(key)
     msgs = _msgs_from(rows, start)
 
+    # 2026-11-19：落盘的状态偶尔没跟上（真机右栏心情/状态 `--`），
+    # 用最近一条回复的元数据兜底；有落盘值仍以落盘为准。
+    _b, _sc, fb_mood, fb_intensity, fb_state = persona.last_turn_meta(key)
+
     aff = _aff_status(key)
     # 状态行跟着「她说的最后一句话」走（2026-11-04）：刷新后历史里没有
     # 每轮的 aff 快照，手机端就整条状态凭空消失。只把**当前**状态挂到
@@ -647,9 +720,9 @@ def get_session():
         "charName": persona.char_name(card, "", key),
         "note": str(ent.get("note") or ""),
         "intro": str(ent.get("intro") or ""),
-        "state": str(ent.get("state") or ""),
-        "mood": str(ent.get("mood") or ""),
-        "intensity": int(ent.get("intensity") or 0),
+        "state": str(ent.get("state") or fb_state or ""),
+        "mood": str(ent.get("mood") or fb_mood or ""),
+        "intensity": int(ent.get("intensity") or fb_intensity or 0),
         "turns": persona.turn_total(key),
         "messages": msgs,
         "total": total,                 # 归档总条数（前端翻页的游标上限）
@@ -660,6 +733,8 @@ def get_session():
         "preg": persona.pregnancy_status(key),
         "role": "member",
         "rolled_back": bool(ent.get("rollback_done")),
+        # 出图渠道：整个账号共用，前端弹窗右上角直接显示上次用的那个。
+        "shotSkill": persona.shot_pref(who),
         # 还没回答的「射在哪里」（2026-11-06）：刷新/断线后前端靠它重弹，
         # 不然高潮值都扣了、正文却永远缺一块。
         "pending": persona.pending_finish(key),
@@ -1050,10 +1125,10 @@ def slot_wipe_api():
     slot = max(0, min(persona.SLOT_MAX - 1, slot))        # noqa: SLF001
     base = _key(who)
     key = persona._card_key_slot(base, card["id"], slot)  # noqa: SLF001
-    st = persona._load_state()                            # noqa: SLF001
-    if key in st:
-        st.pop(key, None)
-        persona._save_state(st)                           # noqa: SLF001
+    # 只 pop 状态条目是不够的：历史/归档/RAG 都还挂在同一个线键上，
+    # 下次在同一个槽新开对话就会把旧内容读回来（2026-11-19 实测）。
+    persona.wipe_slot(key)                                 # noqa: SLF001
+    _pic_map_clear(key)                                   # 出图映射跟着删
     # 删的正好是当前在用的槽 → base 退回「没在演」，免得继续写进一个空档
     try:
         ent = persona._entry(base) or {}                  # noqa: SLF001
@@ -1061,7 +1136,9 @@ def slot_wipe_api():
                 and int(ent.get("slot") or 0) == slot):
             st2 = persona._load_state()                   # noqa: SLF001
             st2.pop(base, None)
-            persona._save_state(st2)                      # noqa: SLF001
+            # 不传 deleted，`_save_state` 会把盘上的 base 合并回来，
+            # 删完仍然是「正在演这个空槽」。
+            persona._save_state(st2, deleted=[base])       # noqa: SLF001
     except (TypeError, ValueError):
         pass
     return jsonify({"ok": True, "slot": slot})
@@ -1782,6 +1859,28 @@ def _img_rel(f):
     return "/".join(x for x in str(f or "").replace("\\", "/").split("/") if x)
 
 
+@bp.route("/api/persona/shot_pref", methods=["POST"])
+def shot_pref_api():
+    """记住/清除账号级默认出图渠道（2026-11-19）。
+
+    选渠道时就落盘，而不是等出图成功——用户选完又取消画幅，下次仍应沿用
+    这次的选择。空 skill = 恢复默认 silver。
+    """
+    role, who, _token = _who()
+    if role == "guest":
+        return jsonify({"ok": False, "error": "体验版不能设置出图渠道"}), 403
+    body = request.get_json(silent=True) or {}
+    skill = str(body.get("skill") or "").strip()
+    if skill:
+        from app.features.image import routes as gen_api
+        if skill not in {str(c.get("id") or "") for c in gen_api.channels()
+                         if not c.get("cloud")}:
+            return jsonify({"ok": False,
+                            "error": "没有「%s」这个生图渠道" % skill}), 400
+    persona.set_shot_pref(who, skill)
+    return jsonify({"ok": True, "skill": skill})
+
+
 @bp.route("/api/persona/shot", methods=["POST"])
 def shot():
     """「出图」→ `persona.SHOT_SKILL`（silver）单张 CG，竖屏/横屏可选。
@@ -1794,11 +1893,12 @@ def shot():
     - 失败：`{"error": 原因}`
     前端轮询 `/api/persona/shot_status?n=<行号>` 拿结果。
 
-    body: {msgIndex?, orient?}
+    body: {msgIndex?, orient?, skill?}
       - `msgIndex` 指定画哪一条回复：**归档行号**（每条回复下面的按钮传它）
       - 不传 = 画最后一轮
       - `orient`：`wide` 横屏（网页背景用）/ `tall` 竖屏（手机、默认）。
         缺省竖屏——手机端不传也是对的，网页端由前端弹窗显式给。
+      - `skill`：指定本次出图渠道；不传就用账号上次记的，再没有就是 silver。
     """
     body = request.get_json(silent=True) or {}
     idx = body.get("msgIndex")
@@ -1826,12 +1926,33 @@ def shot():
     if card is None:
         return jsonify({"ok": False, "error": "还没选角色"}), 400
 
+    # 出图渠道（2026-11-19）：不传 = 用账号上次选过的；都没有 = silver。
+    # 画面词已经是英文定稿，这里只换「用哪套工作流出图」，不经过跑图台的
+    # 中文需求翻译，避免把画面行再翻一遍。
+    skill = str(body.get("skill") or "").strip()
+    if skill:
+        from app.features.image import routes as gen_api
+        valid = {str(c.get("id") or "") for c in gen_api.channels()
+                 if not c.get("cloud")}
+        if skill not in valid:
+            return jsonify({"ok": False,
+                            "error": "没有「%s」这个生图渠道" % skill}), 400
+        persona.set_shot_pref(who, skill)
+    else:
+        skill = persona.shot_pref(who)
+        if skill:
+            from app.features.image import routes as gen_api
+            if skill not in {str(c.get("id") or "") for c in gen_api.channels()
+                             if not c.get("cloud")}:
+                skill = ""                    # 渠道下架了，退回默认
+
     if idx is None:
         idx = max(0, persona.archive_len(key) - 1)
 
-    # 先验画面：没有「画面：」行就直接拒绝（用户拍板不做 LLM 兜底翻译），
-    # 别让后台线程白排一趟队。
-    if not persona.shot_scene(key, idx):
+    # 先取画面：正常轮次直接返回；模型只写了 `画面：` 空标签的旧轮，在这里
+    # 用那一轮正文补一行（2026-11-19 真机），补不出来才拒绝，别让后台线程白排。
+    scene = persona.ensure_shot_scene(key, idx)
+    if not scene:
         return jsonify({"ok": False,
                         "error": "这一轮没有可画的画面"}), 400
 
@@ -1841,7 +1962,9 @@ def shot():
     def _work():
         try:
             name, note = persona.draw_shot(card, key, msg_index=idx,
-                                           landscape=landscape)
+                                           landscape=landscape,
+                                           skill=skill or None,
+                                           scene=scene)
         except Exception:                          # noqa: BLE001
             log.exception("网页出图异常 %s", key)
             name, note = "", "出图这步出了岔子，再试一次"
@@ -1852,6 +1975,7 @@ def shot():
     threading.Thread(target=_work, daemon=True, name="persona-shot").start()
     return jsonify({"ok": True, "msgIndex": idx, "orient":
                     "wide" if landscape else "tall",
+                    "skill": skill or persona.SHOT_SKILL,
                     "reply": "在画了，%s，几十秒。"
                              % ("横屏单图" if landscape else "竖屏单图")})
 

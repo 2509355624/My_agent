@@ -113,6 +113,43 @@ class GuestIdTest(GuestBase):
             self.assertEqual(guest.check_id(v), "", v)
 
 
+class LocalOwnerTest(GuestBase):
+    """5174 本机/局域网直连不再逼登录（2026-11-19）。"""
+
+    def _session(self, **kwargs):
+        return self.c.get("/api/persona/session", **kwargs).get_json()
+
+    def test_loopback_5174_is_owner(self):
+        with mock.patch.object(persona_api.config, "GALLERY_OWNER_QQ", "10001"):
+            d = self._session(
+                headers={"Host": "127.0.0.1:5174"},
+                environ_base={"REMOTE_ADDR": "127.0.0.1"})
+        self.assertEqual(d["role"], "member")
+
+    def test_lan_5174_is_owner(self):
+        with mock.patch.object(persona_api.config, "GALLERY_OWNER_QQ", "10001"):
+            d = self._session(
+                headers={"Host": "192.168.1.50:5174"},
+                environ_base={"REMOTE_ADDR": "192.168.1.20"})
+        self.assertEqual(d["role"], "member")
+
+    def test_5175_proxy_stays_guest(self):
+        with mock.patch.object(persona_api.config, "GALLERY_OWNER_QQ", "10001"):
+            d = self._session(
+                headers={"Host": "127.0.0.1:5174",
+                         "X-Friend-Token": "proxy-token"},
+                environ_base={"REMOTE_ADDR": "127.0.0.1"})
+        self.assertEqual(d["role"], "guest")
+
+    def test_tunnel_stays_guest(self):
+        with mock.patch.object(persona_api.config, "GALLERY_OWNER_QQ", "10001"):
+            d = self._session(
+                headers={"Host": "127.0.0.1:5174",
+                         "CF-Connecting-IP": "1.2.3.4"},
+                environ_base={"REMOTE_ADDR": "127.0.0.1"})
+        self.assertEqual(d["role"], "guest")
+
+
 class GuestLimitTest(GuestBase):
 
     def test_fresh_guest_has_full_quota(self):

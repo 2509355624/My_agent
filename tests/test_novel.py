@@ -1317,24 +1317,23 @@ class WiringTest(unittest.TestCase):
         self.assertNotIn("prefers-color-scheme", self.html,
                          "persona 是固定黑底，小说页不该自带亮暗双主题")
 
-    def test_persona_page_has_the_novel_entry(self):
-        """用户反馈「没看到入口」：入口必须在角色扮演页里常驻可见。
+    def test_novel_entry_moved_to_gallery_more(self):
+        """2026-11-19：小说模式入口从角色扮演页顶栏挪到画廊「更多」菜单。
 
-        2026-11-12 上架 5175 后改成相对地址：5174 和 5175 各自都有 /novel，
-        按端口改写会把公网访客送到不存在的 127.0.0.1:5174。
+        角色扮演页顶栏按钮紧挨手机端「状态」按钮，用户频繁误触；入口改放
+        画廊的更多菜单（和角色扮演 / 漫画工作台并列），角色端彻底隐藏。
         """
         p = _read(os.path.join(ROOT, "web", "persona.html"))
-        self.assertIn('id="btnNovel"', p)
-        self.assertIn('href="/novel"', p)
-        self.assertIn("小说模式", p)
-        self.assertIn("function bindNovelLink()", p)
-        self.assertIn('a.href = "/novel"', p)
-        self.assertNotIn(':5174/novel', p,
-                         "上架 5175 后不能再按端口跳本机，公网访客会吃死链")
-        self.assertNotIn('if (!local) { a.style.display = "none"', p,
-                         "公网访客不该再被整个藏掉")
-        self.assertNotIn('id="btnNovel" style="display:none', p,
-                         "入口不许被样式藏起来")
+        self.assertNotIn('id="btnNovel"', p,
+                         "角色扮演页不该再有小说模式按钮（手机端误触）")
+        self.assertNotIn("function bindNovelLink()", p)
+        g = _read(os.path.join(ROOT, "web", "gallery.html"))
+        self.assertIn('id="moreMenu"', g, "画廊要有更多菜单")
+        self.assertIn('<a class="menu-item" href="/novel">小说模式</a>', g,
+                      "小说模式入口要进画廊更多菜单")
+        # 与角色扮演 / 漫画工作台并列，作为第三套模式入口
+        self.assertIn('<a class="menu-item" href="/persona">角色扮演</a>', g)
+        self.assertIn('<a class="menu-item" href="/comic">漫画工作台</a>', g)
 
     def test_engine_reuses_the_1v1_kernel_without_the_state_bars(self):
         """2026-11-12 站主纠正「别从 0 造轮子」：小说复用扮演内核。
@@ -2458,7 +2457,7 @@ class CustomSplitAndAdultTest(NovelBase):
 
 
 class NovelWritingSkillTest(NovelBase):
-    """小说模式的笔法注入（2026-11-12）。
+    """小说模式的笔法注入（2026-11-19 换成正派去 AI 味规范）。
 
     用户定位：小说面向用户自己，没有状态轴可以判——所以**不做任何条件
     判断**，常驻层每轮全给。角色扮演那边按轴挑段，是因为那边知道「她到
@@ -2466,37 +2465,32 @@ class NovelWritingSkillTest(NovelBase):
     """
 
     def test_block_is_substantial(self):
-        """原来小说一条规范都没有；现在要给到和角色扮演同量级。"""
+        """规则约三成、示例约七成，总量要够撑起一套笔法。"""
         from app.features.novel import novel_writing
         blk = novel_writing.block()
         self.assertGreater(len(blk), 2000, "笔法规范太短，等于没给")
         self.assertLessEqual(len(blk), novel_writing.MAX_CHARS + 200)
 
-    def test_carries_deai_word_list(self):
-        """禁用词表是最直接见效的一块。"""
+    def test_carries_deai_rules_and_examples(self):
+        """新版靠「具体动作 + 真实范文」去 AI 味，不靠一张禁用词表。"""
         from app.features.novel import novel_writing
         blk = novel_writing.block()
-        self.assertIn("禁用词", blk)
-        self.assertIn("微微", blk)
-        self.assertIn("仿佛", blk)
+        self.assertIn("AI 味", blk)
+        self.assertIn("落笔十条", blk)
+        self.assertIn("情绪落在身体和物件上", blk)
+        self.assertIn("完整第三人称场景", blk)
 
     def test_carries_human_techniques(self):
         from app.features.novel import novel_writing
         blk = novel_writing.block()
-        self.assertIn("技法", blk)
-        self.assertTrue("人味技法" in blk or "节奏法则" in blk)
+        self.assertIn("先让人做事，再让人说话", blk)
+        self.assertIn("对话留半句", blk)
 
-    def test_adult_techniques_are_always_on(self):
-        """成人技法常驻，**不按亲密程度挑**——小说没有那个维度可判。"""
+    def test_guide_is_static_and_param_free(self):
+        """小说没有状态轴：guide() 不吃任何入参，也不按状态挑段。"""
         from app.features.novel import novel_writing
-        used = novel_writing._CACHE.get("used") or []
-        blk = novel_writing.guide()
-        self.assertTrue(blk, "规范必须能切出来")
-        # 配方里成人那一块存在且不依赖任何入参
-        titles = [row[0] for row in novel_writing._PLAN]
-        self.assertIn("成人场景的写法", titles)
-        # guide() 不接受任何状态参数——这是设计，不是漏写
         import inspect
+        self.assertTrue(novel_writing.guide(), "规范必须能装出来")
         sig = inspect.signature(novel_writing.guide)
         self.assertEqual(len(sig.parameters), 0,
                          "小说规范不该按状态挑段")
@@ -2509,7 +2503,6 @@ class NovelWritingSkillTest(NovelBase):
 
     def test_writer_head_carries_it_director_does_not(self):
         """编剧只出裁定、不写正文，拿不到笔法规范。"""
-        import tempfile
         from app.features.novel import novel
         w = {"player": {"name": "林决", "identity": "实习医生",
                         "identity_desc": "刚来三个月"},
@@ -2528,10 +2521,15 @@ class NovelWritingSkillTest(NovelBase):
              "rules": ["不能离岗"]}
         self.assertEqual(novel._head(w, False), novel._head(w, False))
 
-    def test_slice_missing_marker_returns_empty_not_raise(self):
-        """规范文件缺失不该让正文写不出来。"""
+    def test_no_longer_depends_on_skill_file_slices(self):
+        """旧版切 `skills/writing` 的路径算错了，guide() 一直是空串。
+
+        新版把规则和真实范文内嵌，不再读文件；这里钉住这个设计。
+        """
         from app.features.novel import novel_writing
-        self.assertEqual(novel_writing._slice("不存在的文件.md", "", "", 100), "")
+        self.assertFalse(hasattr(novel_writing, "_slice"),
+                         "小说规范不该再依赖文件切片")
+        self.assertIn("最后一个鼓点", novel_writing._SAMPLE)
 
 
 

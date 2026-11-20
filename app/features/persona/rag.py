@@ -633,6 +633,134 @@ def _recent_docs_uncached(line, batches=3, limit=12):
     return out[:limit]
 
 
+_MEMORY_BLOCK_CACHE = {}
+_MEMORY_BLOCK_TTL = 30
+
+
+def memory_block(line, batches=12, budget=3600):
+    """把最近几批「批次叙事」压成一块常驻的压缩记忆。
+
+    复用 RAG 已有的「每 5 轮一批」摘要，不另起一套压缩链路：
+    - 12 批 = 最近约 60 轮，每批 200~300 字，总预算 3600 字；
+    - 只取 `kind=batch` 的批次叙事，不取原子事实/锚点/原文；
+    - 带 30 秒缓存，新批次入库后最多半分钟就能出现；
+    - RAG 没 ready 时返回空串，不阻塞这一轮回复。
+
+    这是给写作 AI 的**背景**，不是待办清单：冲突时以最近 12 条原文为准，
+    旧细节等这一拍自然用到再出现。
+    """
+    line = str(line or "").strip()
+    if not line or not enabled_for(line):
+        return ""
+    key = (line, int(batches or 1), int(budget or 1))
+    row = _MEMORY_BLOCK_CACHE.get(key)
+    if row and time.time() - row[0] < _MEMORY_BLOCK_TTL:
+        return row[1]
+
+    client = _client()
+    if not client.is_ready() or not hasattr(client, "list_entries"):
+        return ""
+    try:
+        r = client.list_entries(collection_name(line),
+                                timeout=PERSONA_RAG_TIMEOUT)
+    except Exception:                                    # noqa: BLE001
+        log.exception("压缩记忆读取失败 %s", line)
+        return ""
+    batch_rows, raw_rows = [], []
+    for e in (r.get("entries") or []):
+        meta = e.get("metadata") or {}
+        content = " ".join(str(e.get("content") or "").split())
+        if not content:
+            continue
+        kind = str(meta.get("kind") or "")
+        if kind == "batch":
+            try:
+                start = int(meta.get("turn_start") or 0)
+                end = int(meta.get("turn_end") or 0)
+            except (TypeError, ValueError):
+                start, end = 0, 0
+            batch_rows.append((start, end, content))
+        elif kind == "raw":
+            # 有些老会话只有原文层，没有批次摘要（提炼器连续失败时就是
+            # 这样）。这时不能返回空串，否则「压缩记忆」等于没接上。
+            try:
+                turn = int(meta.get("turn") or 0)
+            except (TypeError, ValueError):
+                turn = 0
+            role = str(meta.get("role") or "")
+            if not role:
+                role = "user" if "用户说" in content else "assistant"
+            if turn and role in ("user", "assistant"):
+                raw_rows.append((turn, role, content))
+
+    if batch_rows:
+        rows = sorted(batch_rows, key=lambda x: (x[0], x[1]))
+        rows = rows[-max(1, int(batches or 1)):]
+        header = "压缩记忆（每 5 轮一块，最近 %d 块 / 约 %d 轮）"
+    else:
+        rows = _raw_memory_blocks(raw_rows, batches)
+        header = "压缩记忆（原文摘录，每 5 轮一块，最近 %d 块 / 约 %d 轮）"
+
+    lines, used = [], 0
+    for _start, _end, content in rows:
+        if len(content) > 320:
+            content = content[:320].rstrip("。；，、") + "…"
+        item = "- " + content
+        if used + len(item) + 1 > int(budget or 1):
+            break
+        lines.append(item)
+        used += len(item) + 1
+    if not lines:
+        return ""
+    text = (
+        "【%s】\n%s\n"
+        "（这是旧剧情的压缩记录，只作背景。当前这一拍以最近 12 条原文和"
+        "本轮用户消息为准；两边冲突时听最近的原文。旧细节等这一拍自然"
+        "用到再出现，不把压缩记忆里的一句话当成这一轮必须回收的线索。）"
+        % (header % (len(lines), len(lines) * 5), "\n".join(lines))
+    )
+    _MEMORY_BLOCK_CACHE[key] = (time.time(), text)
+    return text
+
+
+def _raw_memory_blocks(rows, batches=12):
+    """没有批次摘要时，把已入库的原文按 5 轮一块压成背景。
+
+    只做「按轮分组 + 截断」，不再调一次模型；这是兜底，不是新的摘要链路。
+    同一轮同一角色可能因回填留下多条，保留最长的那条，避免重复。
+    """
+    by_turn = {}
+    for turn, role, content in rows:
+        slot = by_turn.setdefault(turn, {})
+        if len(content) > len(slot.get(role) or ""):
+            slot[role] = content
+    turns = sorted(by_turn)[-max(1, int(batches or 1)) * 5:]
+    blocks = []
+    for i in range(0, len(turns), 5):
+        chunk = turns[i:i + 5]
+        parts = []
+        for t in chunk:
+            slot = by_turn.get(t) or {}
+            # 兜底只取玩家的原话：她的回复里常有一整段氛围白描，或把
+            # 「裙摆划痕」这类一次性细节写成「明天要重描」，直接搬进记忆
+            # 会重新变成贯穿线索。她的动作/反应留给最近 12 条原文。
+            for role, label in (("user", "用户"),):
+                text = str(slot.get(role) or "").strip()
+                if not text:
+                    continue
+                # 原文条目自带「第N天 用户说：/ 她：」前缀，这里去掉，
+                # 换成当前块统一的「用户：/ 她：」，免得一层套一层。
+                text = re.sub(
+                    r"^(?:第\d+天(?:·[^\s：]+)?\s+)?(?:用户说|她)[：:]\s*",
+                    "", text)
+                if text:
+                    parts.append("%s：%s" % (label, text))
+        content = " ".join(parts)
+        if content:
+            blocks.append((chunk[0], chunk[-1], content))
+    return blocks[-max(1, int(batches or 1)):]
+
+
 def _bigrams(text):
     """字符 bigram 集合。中文里「她做了早餐」和「早餐是她做的」重叠率很高，
     比词袋稳（没有分词器也能跑）。"""

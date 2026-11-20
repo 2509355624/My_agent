@@ -306,6 +306,39 @@ class TwoPassBubbleTest(unittest.TestCase):
         self.assertIn("尾巴指向画面中女生", self.submits[0])
 
 
+class PruneOrphanFinalsTest(unittest.TestCase):
+    """成品目录只能有当前剧本的格；raw 底图不受这个限制。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        script = os.path.join(self.tmp.name, "script.md")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write("## 01\n画面: one\n气泡: 一\n\n## 02\n画面: two\n气泡: 二\n")
+        meta, panels = comic.parse_script(script)
+        self.task = comic.Task(script, meta, panels)
+
+    def _touch(self, rel):
+        path = os.path.join(self.task.dir, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(b"png")
+
+    def test_final_for_removed_panels_is_deleted(self):
+        self._touch("final/01_final.png")
+        self._touch("final/02_final.png")
+        self._touch("final/03_final.png")
+        self._touch("raw/03_raw.png")
+
+        removed = comic._prune_orphan_finals(self.task)
+
+        self.assertEqual(removed, ["03_final.png"])
+        self.assertTrue(os.path.exists(self.task.final_path(self.task.panels[0])))
+        self.assertTrue(os.path.exists(self.task.final_path(self.task.panels[1])))
+        self.assertTrue(os.path.exists(os.path.join(
+            self.task.raw_dir, "03_raw.png")), "raw 不能被清")
+
+
 class ManualRenderTest(unittest.TestCase):
     """render_manual：手动改字。
 
@@ -792,8 +825,10 @@ class WriterMultiLabelValidateTest(unittest.TestCase):
 class QwenI2iParamsTest(unittest.TestCase):
     """qwen 图生图工作流的固定参数。
 
-    这份工作流是**共用**的：漫画「加气泡」「手动修复」「手动改字」走的都是它，
-    QQ 生图的 qwen 渠道也是它——所以这里改的是全局效果，不只是漫画。
+    这份工作流是**漫画专用**：「加气泡」「手动修复」「手动改字」走的都是它。
+    2026-11-18 起 QQ 生图的 qwen 渠道改用独立骨架 `workflow_i2i_qq.json`
+    （1248 面积档 / 真人 LoRA / denoise 1.0），不再共用这份；这里的参数
+    （25 步 / denoise 1 / 不加 LoRA / resolution 1024）必须保持，别被 QQ 口径带走。
 
     步数两轮：2026-10-11 先 12 → 18（用户手动改字时亲眼看出 12 步重画的字糊），
     同一晚又拍板 → **25**。25 不是拍的，是查证出来的：Qwen-Image 2.1 的官方

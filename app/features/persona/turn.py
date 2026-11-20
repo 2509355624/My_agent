@@ -4,8 +4,59 @@ import logging
 
 from app.features.persona import state_inject
 from app.features.persona.judge_fields import resolve_rag
+from app.features.persona.ledger_text import _ledger_fix_pronouns, _ledger_ok
 
 log = logging.getLogger("persona")
+
+
+def _note_for_prompt(ent, note, min_turns=5):
+    """小记能不能进提示词：不是账本、或轮次撑不起它的长度，就不进。
+
+    2026-11-19 实测：一条只有 1 轮（`turn_total=1`）的新线，状态里挂着
+    1000 字旧散文小记，里面已经写完了「晚饭 → 红酒 → 洗澡 → 第二天」。
+    演员把这段旧事当成本轮场景提示，用户只问「要一起吃晚饭吗」，
+    它却扩写了一整晚。小记是压缩记忆，不是本轮剧本；不满足这两个条件
+    就按空处理，宁可不记，也不拿旧线残片把这一拍带跑。
+    """
+    raw = str(note or "").strip()
+    if not raw:
+        return ""
+    if not _ledger_ok(_ledger_fix_pronouns(raw)):
+        return ""
+    try:
+        total = int((ent or {}).get("turn_total") or 0)
+    except (TypeError, ValueError):
+        total = 0
+    if total < int(min_turns or 0):
+        # 小记每 5 轮才压一次；不到 5 轮就有小记，只能是旧线残留。
+        # 不看长度：1 轮就不该有「之前的事」，哪怕它只有两行。
+        return ""
+    return raw
+
+
+
+def intimate_for_intent(intent):
+    """只有真正判成亲密（或分类失败）才拼亲密写法。
+
+    2026-11-18：以前 neutral 也算 True，日常闲聊每轮都背 1,900 字
+    「台词可以碎 / 每句台词之间隔两行 / 节奏慢快停」——模型把正常对话也写成
+    一段一顿。neutral 是日常，先不拼；真拐进亲密，编剧下一轮会判 intimate。
+    """
+    return intent in (None, "", "intimate")
+
+
+def _model_messages(head, model_hist, user_block, memory=""):
+    """拼写作 AI 的消息序列：角色卡/规范 → 压缩记忆 → 最近 12 条 → 本轮。
+
+    压缩记忆单独一条 system，放在最近原文之前：它是**背景**，不是这一拍
+    的待办；贴着生成点会抢走注意力（2026-11-19 用户实测）。
+    """
+    msgs = [{"role": "system", "content": head}]
+    if memory:
+        msgs.append({"role": "system", "content": memory})
+    msgs.extend(model_hist or [])
+    msgs.append({"role": "user", "content": user_block})
+    return msgs
 
 
 def run_turn(session_key, text, target, sender="", sender_uin="",
@@ -80,7 +131,14 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
             svc.log.exception("原文回填排程失败 %s", key)
 
     ent = svc._entry(key) or {}
-    note = str(ent.get("note") or "")
+    note_raw = str(ent.get("note") or "")
+    note = _note_for_prompt(ent, note_raw, svc.NOTE_EVERY_TURNS)
+    if note_raw and not note:
+        # 旧线残留的小记不再进提示词，也不再查这条线的旧 RAG：这一轮
+        # 是新存档的第一轮，旧记忆不该以任何形式抢戏。
+        svc.log.warning("小记与轮次不符，按空处理 %s（%s 轮 / %d 字）",
+                        key, ent.get("turn_total"), len(note_raw))
+        rag_on = False
     prev_state = str(ent.get("state") or "")
     # 当前穿着（2026-11-09）：独立固化的英文串，本轮要作为事实递给演员。
     # 首轮还没有，就让它按角色卡自己定一身，这一轮交回来后开始固化。
@@ -155,10 +213,11 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
             finish = "outside"
         else:
             finish = "none"
-    # 亲密场景那 1,284 字只在该用的时候拼（2026-11-03）。
-    # 判不出来（intent 为空）时按 True 走——宁可多发，不要因为分类失败让
-    # 亲密场景写得干巴巴。`neutral` 也带上，它随时可能拐到亲密去。
-    intimate = intent in (None, "", "intimate", "neutral")
+    # 亲密场景那 1,900 字只在该用的时候拼（2026-11-03）。
+    # 2026-11-18：neutral 不再算亲密——日常闲聊每轮背「台词可以碎 / 每句
+    # 台词之间隔两行 / 慢快停」，模型会把正常对话也写成一段一顿。分类失败
+    # （intent 为空/None）仍按 True 走，避免因为分类失败让亲密戏写干。
+    intimate = intimate_for_intent(intent)
     head = svc.build_head(card, session_key, sender, note, prev_state,
                       intimate=intimate, mode=mode, dynamic=False)
     # 缓存 Phase B：逐轮恒定的写法说明并进 system 头（稳定前缀）吃命中，
@@ -167,9 +226,14 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     # 缓存优化 Phase A（2026-11-10）：所有逐轮变化的内容不再进 system 头，
     # 改攒进 `dyn_parts`，最后统一贴到末尾玩家消息，保住 head 的前缀缓存。
     dyn_parts = []
-    nb = svc._note_block(note)
-    if nb:
-        dyn_parts.append(nb)
+    # 2026-11-19「半删小记」：【之前的事】整块（实测 1298 token）不再注入。
+    # 它和最近 12 条原文高度重复——小记每 5 轮压的就是这几轮的事，等于
+    # 同一批事实付两遍未命中的钱。远期交给每 5 轮一批的压缩记忆（RAG batch，
+    # 按 turn 排序拼、每轮命中直到下批入队），近期的因果线由下面的
+    # `story_line()` 继续从账本抽「你的事 / 她的事」各 3 条承接，judge 的
+    # ledger 也照旧——只砍这一份纯重复的块。
+    # 账本本身仍在 state 里滚动更新（压缩、story_line、judge 都要用），
+    # 这里只是不把它整块塞给写作 AI。
     sb = svc._state_block(prev_state)
     if sb:
         dyn_parts.append(sb)
@@ -204,6 +268,15 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     if rag_on:
         svc.log.info("[回忆路由] %s rag=%s block=%d字",
                      key, rag_mode, len(rblock))
+    # 压缩长记忆（2026-11-19）：复用 RAG 已有的「每 5 轮一批」批次叙事，
+    # 取最近 12 批（约 60 轮）排在最近 12 条原文**之前**（见 `_model_messages`）。
+    # 它只作背景，冲突时以最近原文为准；不新增压缩链路，也不改编剧。
+    mem = ""
+    if rag_on:
+        try:
+            mem = svc.persona_rag.memory_block(key)
+        except Exception:                                # noqa: BLE001
+            svc.log.exception("压缩记忆注入失败 %s", key)
     # 攻略模式结算（2026-11-03）：分数落账 → 按档位往主提示词里注入关系块。
     # 没打出分（score 为 None）也照走 settle——按 +0 记账，档位注入照常。
     preg_event = None
@@ -459,6 +532,10 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         user_fallback = "" if man.get("thought") else said
     user_block = svc.render_user_block(segments, addressed, fallback=user_fallback,
                                    remind=False)
+    # 压缩记忆不并进这一轮的用户消息：它要排在最近 12 条原文**之前**，
+    # 让模型先看旧背景、再看最近原文、最后落到这一句；否则旧细节会贴着
+    # 生成点，反而比眼前这场戏更显眼（2026-11-19 用户实测「划痕」贯穿）。
+    # 具体拼接见下面 `_model_messages`。
     # 近因位（2026-11-07）：所有组装路径统一用 `svc.writing_style.tail()`，把最
     # 要紧的一句放在历史之后、生成之前。并进最后一条玩家消息，消息角色序列
     # 不变（不插中途 system，免得打断历史里带三行元数据的格式 few-shot）。
@@ -538,8 +615,7 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
     model_hist = svc._render_hist(
         svc.trim(raw_hist), name=svc.char_name(card, key=key),
         alias=str((card or {}).get("name") or ""))
-    msgs = ([{"role": "system", "content": head}] + model_hist
-            + [{"role": "user", "content": user_block}])
+    msgs = _model_messages(head, model_hist, user_block, mem)
     try:
         raw = svc._llm_call(msgs, temperature=svc.TEMPERATURE)
     except svc.llm.PersonaChainExhausted:
@@ -559,6 +635,13 @@ def run_turn(session_key, text, target, sender="", sender_uin="",
         # 但**不重跑**：重跑一次未必更好，还白烧一轮。
         svc.log.warning("扮演轮空回复 %s", key)
         return svc.Turn("（我这会儿有点卡，你再说一句？）", "")
+    # 画面行空 = 模型只交了标签、没写英文提示词。前端会显示「没有可画的画面」，
+    # 这里补一行再落历史；只在「确实写了空标签」这一种失败上多花一次小调用。
+    if not str(scene or "").strip() and svc._SCENE_RE.search(raw):
+        scene = svc.repair_scene(card, key, reply, outfit=outfit, state=state)
+        if scene:
+            raw = svc.set_scene(raw, scene)
+            svc.log.info("补写画面行 %s：%s", key, scene[:80])
 
     # 女生主动表白（2026-11-08）：第一段正常回完之后，本轮结算的表达到了
     # 满值、感情线也到了「认准你了」，再让演员补一段把话说出口。

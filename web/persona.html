@@ -447,10 +447,24 @@
   .orientModal.on { display: flex; }
   .orientSheet { width: min(420px, 100%); background: var(--bg-elev);
     border: 1px solid var(--border); border-radius: 16px; padding: 18px;
-    box-shadow: 0 18px 60px rgba(0,0,0,.55); }
+    box-shadow: 0 18px 60px rgba(0,0,0,.55); position: relative; }
+  .orientTop { display: flex; align-items: flex-start; gap: 12px;
+    margin-bottom: 10px; }
+  .orientTop > div { min-width: 0; flex: 1; }
   .orientSheet .ot { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
   .orientSheet .oh { font-size: 12px; color: var(--text-mute);
-    margin-bottom: 14px; line-height: 1.6; }
+    line-height: 1.6; }
+  .orientTop .oh { margin-bottom: 0; }
+  /* 右上角「自定义渠道」：默认渠道记在整个账号，下一轮直接沿用；
+     这里只负责换渠道，不承担出图动作。 */
+  .orientChanBtn { flex: none; padding: 8px 10px; border-radius: 10px;
+    background: var(--accent); border: 1px solid var(--accent); color: #fff;
+    font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+    white-space: nowrap; box-shadow: 0 4px 14px rgba(124,92,255,.35); }
+  .orientChanBtn:hover { filter: brightness(1.08); }
+  .orientChanLine { font-size: 12px; color: var(--text-mute);
+    margin: -2px 0 12px; line-height: 1.6; }
+  .orientChanLine b { color: var(--text); font-weight: 500; }
   .orientPick { display: flex; gap: 10px; }
   .orientPick button { flex: 1; padding: 13px 8px; border-radius: 12px;
     background: var(--bg-input); border: 1px solid var(--border);
@@ -465,6 +479,72 @@
   .orientPick .od { font-size: 11px; color: var(--text-mute); display: block;
     margin-top: 3px; }
   .orientCancel { margin-top: 12px; width: 100%; }
+
+  /* 选渠道：只复用跑图台的渠道卡片（封面/中文名/简介），不搬它的
+     提示词输入、历史、推 QQ。点卡片只换渠道，真正出图仍回到画幅弹窗。 */
+  .chanModal { display: none; position: fixed; inset: 0; z-index: 260;
+    background: rgba(0,0,0,.78); padding: 18px; align-items: center;
+    justify-content: center; }
+  .chanModal.on { display: flex; }
+  .chanSheet { width: min(760px, 100%); max-height: min(86vh, 720px);
+    display: flex; flex-direction: column; background: var(--bg-elev);
+    border: 1px solid var(--border); border-radius: 16px; padding: 16px;
+    box-shadow: 0 18px 60px rgba(0,0,0,.55); }
+  .chanHead { display: flex; align-items: flex-start; gap: 12px;
+    margin-bottom: 12px; }
+  .chanHead .ct { font-size: 15px; font-weight: 600; }
+  .chanHead .ch { font-size: 12px; color: var(--text-mute); margin-top: 3px;
+    line-height: 1.6; }
+  .chanClose { flex: none; width: 30px; height: 30px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg-input);
+    color: var(--text-dim); font: inherit; font-size: 18px; line-height: 1;
+    cursor: pointer; }
+  .chanClose:hover { color: var(--text); border-color: var(--accent-dim); }
+  .chanGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px; overflow-y: auto; padding: 2px 2px 12px;
+    grid-auto-rows: max-content; align-items: start;
+    flex: 1; min-height: 0; }
+  .chanCard { border: 1px solid var(--border-soft); border-radius: 12px;
+    background: var(--bg-input); overflow: hidden; cursor: pointer;
+    height: max-content; transition: border-color .15s, transform .15s; }
+  .chanCard:hover { border-color: var(--accent-dim); }
+  .chanCard.on { border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent) inset; }
+  /* 没存过封面的渠道不摆一块 3:4 的大空板——手机上两列会被拉成一长条
+     空白。只留名字和简介，卡片压成一行，列表反而好翻。 */
+  .chanCard.noCover { min-height: 64px; }
+  .chanCard.noCover .chanBody { padding: 11px 11px 12px; }
+  .chanCard.noCover .nm { font-size: 14px; }
+  .chanCover { aspect-ratio: 3 / 4; background: #171722;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-mute); font-size: 11px; overflow: hidden; }
+  .chanCover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .chanBody { padding: 8px 9px 10px; }
+  .chanBody .nm { font-size: 13px; font-weight: 600; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .chanBody .sm { font-size: 11px; color: var(--text-mute); margin-top: 3px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chanFoot { display: flex; align-items: center; gap: 10px;
+    border-top: 1px solid var(--border-soft); padding-top: 10px; }
+  .chanFoot .sel { flex: 1; min-width: 0; font-size: 12px;
+    color: var(--text-mute); overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .chanReset { flex: none; background: none; border: 0; padding: 4px 2px;
+    color: var(--text-mute); font: inherit; font-size: 11.5px;
+    text-decoration: underline; cursor: pointer; }
+  .chanReset:hover { color: var(--text); }
+  .chanFoot .btn { flex: none; }
+  @media (max-width: 700px) {
+    .chanModal { padding: 0; }
+    .chanSheet { width: 100%; height: 100vh; height: 100dvh;
+      max-height: 100vh; max-height: 100dvh;
+      border-radius: 0; padding: 14px;
+      padding-bottom: max(14px, env(safe-area-inset-bottom));
+      box-sizing: border-box; }
+    .chanGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .orientSheet { padding: 16px; }
+    .orientChanBtn { padding: 7px 9px; font-size: 11.5px; }
+  }
   .cardSheet { width: min(560px, 100%); margin: auto; background: var(--bg-elev);
     border: 1px solid var(--border); border-radius: 16px; padding: 18px;
     box-shadow: 0 18px 60px rgba(0,0,0,.55); }
@@ -1049,8 +1129,6 @@
   @media (max-width: 520px) {
     #btnSkip { padding-left: 9px; padding-right: 9px; font-size: 0; }
     #btnSkip::before { content: "🌙"; font-size: 14px; }
-    /* 小说模式入口别把顶栏挤爆：只压内边距和字号，文字照旧留着。 */
-    #btnNovel { padding-left: 7px; padding-right: 7px; font-size: 11px; }
   }
 
   /* 顶栏的「状态」按钮（2026-11-04 深夜）：默认不显示，只有窄屏
@@ -1201,11 +1279,6 @@
               title="回到聊天">聊天</button>
       <button class="btn sm stats-btn drawer-btn" id="btnStats"
               title="看她现在到哪一步了">状态</button>
-      <!-- 小说模式（2026-11-11 建，2026-11-12 上架 5175）：跟攻略/自由模式
-           并列的第三套，状态、引擎、prompt、页面全独立，这里只放一个入口。
-           5174 和 5175 各自都有 /novel，相对地址两边都指当前这一站。 -->
-      <a class="btn sm" id="btnNovel" href="/novel"
-         title="小说模式：世界书 + 编剧裁定 + 第三人称正文，第一版玩法是丧尸末日">小说模式</a>
       <a class="btn sm" id="btnLogin" style="display:none;text-decoration:none"
          href="/" title="登录后可以无限对话、还能出图">登录</a>
       <span class="quota" id="quota" style="display:none"></span>
@@ -1412,8 +1485,15 @@
      点一下就出图。 -->
 <div class="orientModal" id="orientModal">
   <div class="orientSheet" role="dialog" aria-modal="true" aria-labelledby="orientTitle">
-    <div class="ot" id="orientTitle">这张画成什么画幅？</div>
-    <div class="oh" id="orientHint">手机用竖屏，电脑上想当背景就选横屏。</div>
+    <div class="orientTop">
+      <div>
+        <div class="ot" id="orientTitle">这张画成什么画幅？</div>
+        <div class="oh" id="orientHint">手机用竖屏，电脑上想当背景就选横屏。</div>
+      </div>
+      <!-- 记住上一次用过的渠道；点这里只换渠道，选完回到画幅弹窗。 -->
+      <button type="button" class="orientChanBtn" id="orientChanPick">自定义渠道</button>
+    </div>
+    <div class="orientChanLine">当前渠道：<b id="orientChanName">默认（silver）</b></div>
     <div class="orientPick">
       <button type="button" id="orientWide">
         <span class="os">▬</span><span class="on2">横屏</span>
@@ -1425,6 +1505,27 @@
       </button>
     </div>
     <button class="btn sm orientCancel" id="orientCancel">算了</button>
+  </div>
+</div>
+
+<!-- 选出版图渠道：复用跑图台的渠道卡片（封面 / 中文名 / 简介），
+     但不带它的提示词输入、历史、结果推 QQ。点卡片只换渠道；
+     真正出图仍走画幅弹窗，画面词由写作 AI 当轮给好。 -->
+<div class="chanModal" id="chanModal">
+  <div class="chanSheet" role="dialog" aria-modal="true" aria-labelledby="chanTitle">
+    <div class="chanHead">
+      <div>
+        <div class="ct" id="chanTitle">选一个生图渠道</div>
+        <div class="ch">画面词已经由写作 AI 给好，这里只换渠道。选一次会记住，下次出图默认用它。</div>
+      </div>
+      <button type="button" class="chanClose" id="chanClose" aria-label="关闭">×</button>
+    </div>
+    <div class="chanGrid" id="chanGrid"></div>
+    <div class="chanFoot">
+      <span class="sel" id="chanSel">还没选渠道</span>
+      <button type="button" class="chanReset" id="chanReset">恢复默认</button>
+      <button type="button" class="btn sm" id="chanUse" disabled>设为默认渠道</button>
+    </div>
   </div>
 </div>
 
@@ -1867,6 +1968,21 @@ const QQ = new URLSearchParams(location.search).get("qq") || "";
 // 页面路由挡回 /play（见 friend_app.py 的 _gate）。
 const SOLO = /^\/play(?:\.html)?\/?$/.test(location.pathname);
 let card = null, busy = false, msgs = [];
+// 语音（2026-11-18）：同一时间只播一条；自动朗读只在“新回复”触发，
+// 刷新历史不会把整页旧消息全念一遍。
+const TTS = { audio: null, el: null, url: "", seq: 0, cards: {}, loaded: false,
+              warned: false, unlocked: false, autoplayWarned: false,
+              pendingBtn: null, cardsP: null };
+// 2026-11-18：用户决定停用语音入口。138 字台词要 96–108 秒，整段 600 字
+// 要 6 分钟左右；每一句还各换各的腔调，情绪接不起来。先关 UI，不删后端，
+// 以后想再试只把这里改回 true。
+const TTS_UI = false;
+// 同一句台词合成过一次就不再请求 3060：IndexedDB 存 WAV，内存 Map 做热层。
+// 缓存键是 `cardId|原文`，换角色/换一句不会串音。
+// 0.1 秒静音 WAV；只为让这个元素吃到一次用户手势。
+const TTS_SILENT = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=";
+const TTS_CACHE = { db: null, mem: new Map(), max: 40 };
+
 // 她在这条存档里叫什么（2026-11-09）：服务端 state.char_name 优先，没有才
 // 回落到卡上的 charName / 卡名。改名只影响当前存档，换档各叫各的。
 let CUR_NAME = "";
@@ -1932,18 +2048,6 @@ let AFF = null;          // 攻略模式状态（session/chat 带回来；null=�
       location.href = "/" + q;
     });
   });
-})();
-
-// ── 小说模式入口（2026-11-11 建，2026-11-12 上架 5175）──────
-// 5174 与 5175 各自都有 /novel，直接用相对地址：站主本机、群友走隧道、
-// 手机走局域网，指的都是「当前这一站的 /novel」。旧版按端口把链接改到
-// :5174，公网访客会跳到不存在的本机端口，只能把按钮整个藏掉。
-// 独立游客页（/play）仍不给：小说模式要登录，一轮要跑两次 LLM。
-(function bindNovelLink() {
-  const a = $("btnNovel");
-  if (!a) return;
-  if (SOLO) { a.style.display = "none"; return; }
-  a.href = "/novel";
 })();
 
 // ── 手机视口高度（2026-11-03）────────────────────────────
@@ -2068,6 +2172,8 @@ function pushAssistant(d) {
                           act: d.act || null, fade: d.fade || null },
                         nA === null ? ("a" + Date.now()) : nA);
   $("log").appendChild(row);
+  // 新回复才自动读；历史刷新走 makeRow，不会触发这里。
+  speakReply(d.reply, row._voiceBtn, true);
   markLastAff();
   renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
                 note: $("sNote").textContent, day: d.day,
@@ -2724,6 +2830,293 @@ function fmtDlg(text) {
     '<span class="dlg">$1</span>');
 }
 
+// ── 语音（2026-11-18）─────────────────────────────────
+// 后端按同一套引号规则抽台词；这里只负责「什么时候请求、怎么播」。
+// 芙宁娜/千夏之外的角色不显示按钮，也不自动播。
+function ttsUrl() {
+  let p = "/api/persona/tts";
+  if (SOLO) p = p.replace(/^\/api\/persona\//, "/api/solo/");
+  return p + (p.includes("?") ? "&" : "?") + "qq=" + encodeURIComponent(QQ);
+}
+
+// 浏览器的自动播放策略：聊天页是用户点「发送」后过十几秒才拿到音频，
+// 那时用户手势已经过期，直接 new Audio().play() 会被拦。先在同一次点击/
+// 按键里把同一颗 Audio 元素“解锁”，后面换 src 再 play 就不会被拦。
+function initTtsAudio() {
+  if (TTS.el) return TTS.el;
+  TTS.el = new Audio();
+  TTS.el.preload = "auto";
+  TTS.el.setAttribute("playsinline", "1");
+  return TTS.el;
+}
+
+function unlockTts() {
+  TTS.unlocked = true;
+  // 第一次用户手势就把音频元素点着；之后长台词等 100 秒也靠静音循环
+  // 保活，避免浏览器在等待期间把播放权限收回去。
+  keepTtsAlive();
+}
+
+function keepTtsAlive() {
+  const a = initTtsAudio();
+  try {
+    a.onended = null;
+    a.onerror = null;
+    a._btn = null;
+    a.loop = true;
+    a.muted = true;
+    if (a.src !== TTS_SILENT) a.src = TTS_SILENT;
+    TTS.audio = a;
+    const p = a.play();
+    if (p && p.then) p.catch(() => {});
+  } catch (e) {}
+}
+
+function loadVoiceCards() {
+  if (!TTS_UI) { TTS.loaded = true; return Promise.resolve(); }
+  if (TTS.loaded) return Promise.resolve();
+  if (TTS.cardsP) return TTS.cardsP;
+  TTS.cardsP = (async () => {
+    try {
+      const d = await api("/api/persona/tts/cards");
+      (d.cards || []).forEach(id => { TTS.cards[String(id)] = true; });
+    } catch (e) {
+      // 页面先开、后端还没起来时别把按钮永久判死；首批两张卡兜底。
+      ["furina", "sunna"].forEach(id => { TTS.cards[id] = true; });
+    } finally {
+      TTS.loaded = true;
+      TTS.cardsP = null;
+    }
+  })();
+  return TTS.cardsP;
+}
+
+function hasVoice(cardId) {
+  return !!(TTS_UI && cardId && TTS.cards[String(cardId)]);
+}
+
+// ── 语音缓存（2026-11-18）────────────────────────────────
+// 只按“角色 + 整段回复原文”做键。服务端每次仍会再抽一次引号台词，但
+// 同一句重复点/重复自动播时前端直接拿 WAV，不再打 3060。
+function ttsCacheKey(cardId, text) {
+  return String(cardId || "") + "|" + String(text || "");
+}
+
+function ttsOpenDb() {
+  if (TTS_CACHE.db) return Promise.resolve(TTS_CACHE.db);
+  return new Promise(resolve => {
+    if (!window.indexedDB) { resolve(null); return; }
+    let req;
+    try { req = indexedDB.open("persona-tts-cache", 1); }
+    catch (e) { resolve(null); return; }
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains("audio"))
+        db.createObjectStore("audio");
+    };
+    req.onsuccess = () => { TTS_CACHE.db = req.result; resolve(req.result); };
+    req.onerror = () => resolve(null);
+    req.onblocked = () => resolve(null);
+  });
+}
+
+async function ttsCacheGet(key) {
+  // 热层先查：刚播过的那条不用等 IndexedDB 的异步事务。
+  if (TTS_CACHE.mem.has(key)) {
+    const blob = TTS_CACHE.mem.get(key);
+    TTS_CACHE.mem.delete(key);
+    TTS_CACHE.mem.set(key, blob);
+    return blob;
+  }
+  const db = await ttsOpenDb();
+  if (!db) return null;
+  return new Promise(resolve => {
+    let req;
+    try { req = db.transaction("audio", "readonly").objectStore("audio").get(key); }
+    catch (e) { resolve(null); return; }
+    req.onsuccess = () => {
+      const blob = req.result && req.result.blob;
+      if (blob && blob.size) {
+        TTS_CACHE.mem.set(key, blob);
+        while (TTS_CACHE.mem.size > TTS_CACHE.max)
+          TTS_CACHE.mem.delete(TTS_CACHE.mem.keys().next().value);
+        resolve(blob);
+      } else {
+        resolve(null);
+      }
+    };
+    req.onerror = () => resolve(null);
+  });
+}
+
+async function ttsCachePut(key, blob) {
+  if (!blob || !blob.size) return;
+  TTS_CACHE.mem.set(key, blob);
+  while (TTS_CACHE.mem.size > TTS_CACHE.max)
+    TTS_CACHE.mem.delete(TTS_CACHE.mem.keys().next().value);
+  const db = await ttsOpenDb();
+  if (!db) return;
+  try {
+    const st = db.transaction("audio", "readwrite").objectStore("audio");
+    st.put({ blob: blob, ts: Date.now() }, key);
+    const c = st.count();
+    c.onsuccess = () => {
+      if (c.result <= TTS_CACHE.max) return;
+      const keys = st.getAllKeys();
+      keys.onsuccess = () => {
+        keys.result.slice(0, c.result - TTS_CACHE.max)
+          .forEach(k => st.delete(k));
+      };
+    };
+  } catch (e) {}
+}
+
+function resetVoiceBtn(btn) {
+  if (!btn) return;
+  btn.textContent = "播放语音";
+  btn.disabled = false;
+  btn.title = "点击后合成并自动播放；同一句会走浏览器缓存";
+}
+
+function stopTts() {
+  if (TTS.pendingBtn) {
+    resetVoiceBtn(TTS.pendingBtn);
+    TTS.pendingBtn = null;
+  }
+  const a = TTS.audio;
+  if (a) {
+    const btn = a._btn;
+    try {
+      a.pause();
+      a.currentTime = 0;
+      a.loop = false;
+      a.muted = false;
+      a._btn = null;
+      a.onended = null;
+      a.onerror = null;
+      a.removeAttribute("src");
+      a.load();
+    } catch (e) {}
+    resetVoiceBtn(btn);
+  }
+  if (TTS.url) {
+    try { URL.revokeObjectURL(TTS.url); } catch (e) {}
+  }
+  TTS.url = "";
+  TTS.audio = null;
+}
+
+async function speakReply(text, btn, quiet) {
+  const cid = card && card.id ? String(card.id) : "";
+  if (!cid || !hasVoice(cid)) return;
+  // 再点同一颗按钮 = 停止当前这条。
+  if (TTS.audio && TTS.audio._btn === btn && !TTS.audio.paused) {
+    stopTts();
+    return;
+  }
+  stopTts();
+  const seq = ++TTS.seq;
+  // 从开始等到合成完成可能 100 秒；用静音循环把音频元素保活，
+  // 否则浏览器会在等待期间收回这次点击的播放权限。
+  keepTtsAlive();
+  const cacheKey = ttsCacheKey(cid, text);
+  let blob = await ttsCacheGet(cacheKey);
+  if (seq !== TTS.seq) {
+    if (TTS.pendingBtn === btn) {
+      TTS.pendingBtn = null;
+      resetVoiceBtn(btn);
+    }
+    return;
+  }
+  // 缓存命中就直接播；没命中才显示“合成中”。
+  if (!blob && btn) {
+    btn.textContent = "合成中…";
+    btn.disabled = true;
+    btn.title = "正在合成语音";
+    TTS.pendingBtn = btn;
+  }
+  if (!blob) {
+    let r;
+    try {
+      r = await fetch(ttsUrl(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ card_id: cid, text: String(text || "") })
+      });
+    } catch (e) {
+      if (seq === TTS.seq) {
+        stopTts();
+        if (!quiet && !TTS.warned) {
+          TTS.warned = true;
+          toast("语音服务没开或连不上", true);
+        }
+      }
+      return;
+    }
+    if (seq !== TTS.seq) {
+      if (TTS.pendingBtn === btn) {
+        TTS.pendingBtn = null;
+        resetVoiceBtn(btn);
+      }
+      return;
+    }
+    if (r.status === 204) {
+      stopTts();
+      return;
+    }
+    if (!r.ok) {
+      stopTts();
+      if (!quiet && !TTS.warned) {
+        TTS.warned = true;
+        toast("语音没生成出来", true);
+      }
+      return;
+    }
+    try { blob = await r.blob(); } catch (e) { blob = null; }
+    if (seq !== TTS.seq || !blob || !blob.size) {
+      if (seq === TTS.seq) stopTts();
+      else if (TTS.pendingBtn === btn) {
+        TTS.pendingBtn = null;
+        resetVoiceBtn(btn);
+      }
+      return;
+    }
+    // 先写缓存再播：下一次点同一句不用再等 3060。这里不 await，避免
+    // IndexedDB 事务把播放拖慢；写失败也不影响本次播放。
+    ttsCachePut(cacheKey, blob);
+  }
+  if (TTS.pendingBtn === btn) TTS.pendingBtn = null;
+  TTS.url = URL.createObjectURL(blob);
+  const a = initTtsAudio();
+  try {
+    a.pause();
+    a.currentTime = 0;
+  } catch (e) {}
+  a.loop = false;
+  a.muted = false;
+  a.onended = null;
+  a.onerror = null;
+  a.src = TTS.url;
+  a._btn = btn || null;
+  TTS.audio = a;
+  a.onended = () => { if (TTS.audio === a) stopTts(); };
+  a.onerror = () => { if (TTS.audio === a) stopTts(); };
+  if (btn) {
+    btn.textContent = "停止";
+    btn.disabled = false;
+    btn.title = "再点一次停止朗读";
+  }
+  try {
+    await a.play();
+  } catch (e) {
+    if (TTS.audio === a) stopTts();
+    if (!TTS.autoplayWarned) {
+      TTS.autoplayWarned = true;
+      toast("浏览器拦了自动播放，点这条的「播放语音」按钮再播一次", true);
+    }
+  }
+}
+
 // `id` 是气泡的 DOM 标识：助手那条用**归档行号**（`m.n`，稳定，聊多少轮都不变），
 // 用户那条和「…」占位用临时串（它们不挂图，不需要稳定）。2026-11-04 之前这里
 // 一律用数组下标，历史一压缩整体前移，图就自己跑到最新那条下面了。
@@ -2783,6 +3176,18 @@ function makeRow(m, id) {
     bRe.style.display = m.imageUrl ? "" : "none";
     bRe.onclick = () => shoot(id, bRe, true);
     tools.appendChild(bRe);
+
+    // ★ 语音（2026-11-18）：放在出图/重新生图旁边；只有登记过 profile 的卡
+    // 才显示。点一下等合成，完成后自动播放；同一句会走浏览器缓存。
+    if (card && hasVoice(card.id)) {
+      const bVoice = document.createElement("button");
+      bVoice.className = "tb";
+      bVoice.textContent = "播放语音";
+      bVoice.title = "点击后合成并自动播放；同一句会走浏览器缓存";
+      bVoice.onclick = () => speakReply(m.text, bVoice, false);
+      tools.appendChild(bVoice);
+      row._voiceBtn = bVoice;
+    }
 
     // ★ 回退（2026-11-04）：删掉这轮，好感/天数/心情退回这轮之前。
     // 每条她的回复都带这个按钮，但点了之后只在它是**最新一条**时生效——
@@ -3944,6 +4349,10 @@ async function loadEarlier() {
 }
 
 async function loadSession() {
+  // 语音卡必须先到：历史消息渲染时 makeRow 就靠 TTS.cards 决定要不要
+  // 画「播放语音」按钮。之前和 session 并发发出去，历史先回来时按钮
+  // 会被整批跳过(2026-11-18 用户反馈“看不到按钮”)。
+  await loadVoiceCards();
   // 角色卡列表和会话在同一拍发出去：隧道一个来回就要几秒，串行会白背
   // 一个 RTT。渲染仍排在 session 之后——loadCards 要用 card 高亮当前卡，
   // 提前渲染会丢高亮。这里只把「等请求」并行化，不改任何顺序语义。
@@ -3962,6 +4371,10 @@ async function loadSession() {
     renderQuota();
     INTRO = d.intro || "";     // 后端缓存的开场导读（清空存档后会变空）
     ROLLED_BACK = !!d.rolled_back;
+    // 账号级默认出图渠道（2026-11-19）：后端记住上次用过的；空 = silver。
+    SHOT_SKILL = d.shotSkill || "";
+    updateShotChanLabel();
+    if (SHOT_SKILL) loadShotChannels();   // 把 id 换成中文名（失败就显示 id）
     renderAll(d.messages || []);
     MORE_HIST = !!d.more;      // 归档里还有更早的，往上滚就翻
     renderState(d);
@@ -4619,6 +5032,7 @@ async function deliver(text, isRetry, payload) {
     const row = makeRow(msgs[msgs.length - 1],
                         nA === null ? ("a" + Date.now()) : nA);
     log.appendChild(row);
+    speakReply(d.reply, row._voiceBtn, true);
     markLastAff();          // 数值只留在最新那条上
     renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
                   note: $("sNote").textContent, day: d.day,
@@ -4809,6 +5223,7 @@ async function skipDay(days) {
     pending.remove();
     log.appendChild(makeRow(msgs[msgs.length - 1],
                             nA === null ? ("a" + Date.now()) : nA));
+    speakReply(d.reply, log.lastElementChild._voiceBtn, true);
     markLastAff();
     renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
                   note: $("sNote").textContent, day: d.day,
@@ -4852,6 +5267,7 @@ async function setPhase(phase) {
     pending.remove();
     log.appendChild(makeRow(msgs[msgs.length - 1],
                             nA === null ? ("a" + Date.now()) : nA));
+    speakReply(d.reply, log.lastElementChild._voiceBtn, true);
     markLastAff();
     renderState({ mood: d.mood, intensity: d.intensity, state: d.state,
                   note: $("sNote").textContent, day: d.day, phase: d.phase,
@@ -4884,6 +5300,8 @@ function askOrient() {
     if (!m) { resolve("tall"); return; }        // 老页面没有这块：退回竖屏
     const wide = window.innerWidth > window.innerHeight * 1.15;
     const bw = $("orientWide"), bt = $("orientTall"), bc = $("orientCancel");
+    const cp = $("orientChanPick");
+    updateShotChanLabel();
     if (bw) bw.classList.toggle("rec", wide);
     if (bt) bt.classList.toggle("rec", !wide);
     const hint = $("orientHint");
@@ -4898,11 +5316,17 @@ function askOrient() {
       if (bw) bw.onclick = null;
       if (bt) bt.onclick = null;
       if (bc) bc.onclick = null;
+      if (cp) cp.onclick = null;
       resolve(v);
     }
     if (bw) bw.onclick = function () { done("wide"); };
     if (bt) bt.onclick = function () { done("tall"); };
     if (bc) bc.onclick = function () { done(""); };
+    if (cp) cp.onclick = function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      openShotChannels();
+    };
     m.onclick = function (e) { if (e.target === m) done(""); };
     m.classList.add("on");
   });
@@ -4917,6 +5341,154 @@ function askOrient() {
 let SHOT_PENDING = {};       // n<行号> → true（待出图/在画）
 let SHOT_TICK = 0;           // 已轮询次数（提示文案换着来）
 let SHOT_TIMER = null;
+
+// 出图渠道（2026-11-19）：账号级记住上一次选过的渠道；空 = 默认 silver。
+// 渠道卡片数据复用跑图台的 `/api/runbench/list`（封面 + 中文名 + 简介），
+// 但这里只换渠道，不搬跑图台的提示词输入/历史/推 QQ。
+let SHOT_SKILL = "";
+let SHOT_CHANNELS = null;
+let SHOT_CHAN_NAMES = {};
+let SHOT_PICK = "";
+
+function shotChanName(id) {
+  if (!id) return "默认（silver）";
+  return SHOT_CHAN_NAMES[id] || id;
+}
+
+function updateShotChanLabel() {
+  const nm = $("orientChanName");
+  if (nm) nm.textContent = shotChanName(SHOT_SKILL);
+  const pick = $("orientChanPick");
+  if (pick) pick.textContent = SHOT_SKILL ? "更换渠道" : "自定义渠道";
+}
+
+async function loadShotChannels() {
+  if (SHOT_CHANNELS) return SHOT_CHANNELS;
+  try {
+    const d = await api("/api/runbench/list");
+    // 角色扮演走本地 image_jobs 队列，NAI 云端渠道没有本地文生图工作流；
+    // 列出来点了也画不了，所以只保留 `cloud=false` 的渠道。
+    SHOT_CHANNELS = (d.channels || []).filter(c => !c.cloud);
+    SHOT_CHAN_NAMES = {};
+    for (const c of SHOT_CHANNELS) SHOT_CHAN_NAMES[c.id] = c.label || c.id;
+    updateShotChanLabel();
+  } catch (e) {
+    SHOT_CHANNELS = [];
+    toast("渠道列表加载失败：" + e.message, true);
+  }
+  return SHOT_CHANNELS;
+}
+
+function renderShotChannels() {
+  const grid = $("chanGrid");
+  if (!grid) return;
+  grid.innerHTML = "";
+  const rows = SHOT_CHANNELS || [];
+  if (!rows.length) {
+    grid.innerHTML = '<div class="h-empty">一个渠道都没有</div>';
+    return;
+  }
+  for (const c of rows) {
+    const el = document.createElement("div");
+    el.className = "chanCard" + (c.id === SHOT_PICK ? " on" : "");
+    el.dataset.id = c.id;
+    if (c.has_cover && c.cover) {
+      const cov = document.createElement("div");
+      cov.className = "chanCover";
+      const im = document.createElement("img");
+      im.src = c.cover;
+      im.alt = "";
+      // 2026-11-19：渠道卡一次渲染 40+ 张，旧版 eager 会在弹层打开时
+      // 全量抢网络/解码，页面内存吃紧时直接卡成几秒。改 lazy 后只载
+      // 弹层里看得见的那几张；滚动到哪再补哪。封面本身走浏览器缓存。
+      im.loading = "lazy";
+      im.decoding = "async";
+      im.onerror = function () {
+        im.remove();
+        cov.remove();
+        el.classList.add("noCover");
+      };
+      cov.appendChild(im);
+      el.appendChild(cov);
+    } else {
+      el.classList.add("noCover");
+    }
+    const body = document.createElement("div");
+    body.className = "chanBody";
+    const nm = document.createElement("div");
+    nm.className = "nm";
+    nm.textContent = c.label || c.id;
+    body.appendChild(nm);
+    if (c.summary) {
+      const sm = document.createElement("div");
+      sm.className = "sm";
+      sm.textContent = c.summary;
+      body.appendChild(sm);
+    }
+    el.appendChild(body);
+    el.onclick = function () {
+      SHOT_PICK = c.id;
+      grid.querySelectorAll(".chanCard").forEach(function (x) {
+        x.classList.toggle("on", x.dataset.id === c.id);
+      });
+      const sel = $("chanSel");
+      if (sel) sel.textContent = "已选：" + shotChanName(c.id);
+      const use = $("chanUse");
+      if (use) use.disabled = false;
+    };
+    grid.appendChild(el);
+  }
+}
+
+function openShotChannels() {
+  const m = $("chanModal");
+  if (!m) return;
+  SHOT_PICK = SHOT_SKILL || "";
+  const sel = $("chanSel");
+  if (sel) sel.textContent = SHOT_PICK ? "已选：" + shotChanName(SHOT_PICK) : "还没选渠道";
+  const use = $("chanUse");
+  if (use) use.disabled = !SHOT_PICK;
+  m.classList.add("on");
+  const paint = function () { renderShotChannels(); };
+  if (SHOT_CHANNELS) paint();
+  else { const grid = $("chanGrid"); if (grid) grid.innerHTML = '<div class="h-empty">加载中…</div>'; loadShotChannels().then(paint); }
+}
+
+function closeShotChannels() {
+  const m = $("chanModal");
+  if (m) m.classList.remove("on");
+}
+
+async function useShotChannel() {
+  if (!SHOT_PICK) return;
+  const id = SHOT_PICK;
+  const use = $("chanUse");
+  if (use) use.disabled = true;
+  try {
+    await post("/api/persona/shot_pref", { skill: id });
+    SHOT_SKILL = id;
+    updateShotChanLabel();
+    closeShotChannels();
+    toast("已设为默认：" + shotChanName(SHOT_SKILL) + "，下次出图直接用它");
+  } catch (e) {
+    toast("没存上：" + e.message, true);
+  } finally {
+    if (use) use.disabled = false;
+  }
+}
+
+async function resetShotChannel() {
+  try {
+    await post("/api/persona/shot_pref", { skill: "" });
+    SHOT_SKILL = "";
+    SHOT_PICK = "";
+    updateShotChanLabel();
+    closeShotChannels();
+    toast("已恢复默认渠道 silver");
+  } catch (e) {
+    toast("没存上：" + e.message, true);
+  }
+}
 
 function shotTimerTick() {
   SHOT_TICK++;
@@ -4973,10 +5545,18 @@ async function shoot(n, btn, isRegen) {
   if (!orient) return;                          // 「算了」
   const wide = orient === "wide";
   if (btn) btn.disabled = true;
-  setPicPending(n, wide ? "在画了，横屏单图" : "在画了，竖屏单图");
+  setPicPending(n, "正在生图：" + shotChanName(SHOT_SKILL)
+                 + " · " + (wide ? "横屏" : "竖屏"));
   try {
-    // 告诉后端「画哪一条」「什么画幅」——不传 msgIndex 就是最后一轮
-    await post("/api/persona/shot", { msgIndex: n, orient: orient });
+    // 告诉后端「画哪一条」「什么画幅」「哪个渠道」——不传 msgIndex 就是最后一轮。
+    // 渠道由前端带上上一次的选择；后端会记住，下一轮 session 再回给页面。
+    const body = { msgIndex: n, orient: orient };
+    if (SHOT_SKILL) body.skill = SHOT_SKILL;
+    const r = await post("/api/persona/shot", body);
+    if (r && r.skill) {
+      SHOT_SKILL = (r.skill === "silver") ? "" : r.skill;
+      updateShotChanLabel();
+    }
     // 记进待出图集合，交给全局单一定时器去查状态（不再自己开循环轮询）
     SHOT_PENDING[n] = true;
     startShotTimer();
@@ -6130,7 +6710,24 @@ $("billDays").onchange = loadBill;
 $("billMask").addEventListener("click", e => {
   if (e.target === $("billMask")) closeBill();
 });
+["pointerdown", "keydown", "touchstart"].forEach(ev => {
+  document.addEventListener(ev, unlockTts, { once: true, passive: true });
+});
 
+(function bindShotChannelModal() {
+  var close = document.getElementById("chanClose");
+  var use = document.getElementById("chanUse");
+  var reset = document.getElementById("chanReset");
+  var m = document.getElementById("chanModal");
+  if (close) close.addEventListener("click", closeShotChannels);
+  if (use) use.addEventListener("click", useShotChannel);
+  if (reset) reset.addEventListener("click", resetShotChannel);
+  if (m) m.addEventListener("click", function (e) {
+    if (e.target === m) closeShotChannels();
+  });
+})();
+
+loadVoiceCards();
 loadSession();
 </script>
 

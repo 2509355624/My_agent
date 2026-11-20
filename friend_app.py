@@ -988,13 +988,17 @@ def proxy_raglab(sub):
 
 @app.route("/api/persona/<path:sub>", methods=["GET", "POST", "DELETE"])
 def proxy_persona(sub):
-    return _forward("/api/persona", sub, allow_guest=True)
+    # 语音合成在 3060 上要跑 100 秒上下；默认 60 秒会在 5175 先掐断，
+    # 5174 还在生成，群友侧只会看到 502。只把 tts 这条放长。
+    return _forward("/api/persona", sub, allow_guest=True,
+                    post_timeout=300 if sub == "tts" else 60)
 
 
 @app.route("/api/solo/<path:sub>", methods=["GET", "POST", "DELETE"])
 def proxy_solo(sub):
     """独立游客页专用：一律游客，哪怕浏览器里带着登录 cookie。"""
-    return _forward("/api/persona", sub, allow_guest=True, force_guest=True)
+    return _forward("/api/persona", sub, allow_guest=True, force_guest=True,
+                    post_timeout=300 if sub == "tts" else 60)
 
 
 # ─── 角色扮演的漫画图（2026-11-03）──────────────────────

@@ -5,11 +5,15 @@ from app.features.persona.prompts import _SCENE_DUTY
 
 
 def render_user_block(segments, addressed=True, fallback="", remind=False,
-                      name=""):
+                      name="", scene_duty=True):
     """分段渲染；没有分段就退回原文。
 
     「想」要带内容并标明她听不见；原文在有分段时也完整补上，避免动作和
     语气被摘要吃掉。`remind` 只在当前轮加统一尾注。
+
+    `scene_duty`（2026-11-19）：这一份场景职责规则系统头里已有一份，
+    当前轮要带（默认 True）；历史分段消息渲染时传 False，避免每条历史
+    各带一份 818 token 的重复规则、每轮按未命中重付。
     """
     if not segments:
         body = str(fallback or "")
@@ -17,19 +21,19 @@ def render_user_block(segments, addressed=True, fallback="", remind=False,
         if remind and stripped:
             return stripped + "\n" + writing_style.tail(name=name)
         if "\n" in stripped:
-            return ("【玩家这一轮写的主输入框原文】\n"
-                    "这是**他这一拍要做什么**，不是已经发生的旁白，是给你的指令。"
-                    "里面可能混着三种东西：\n"
-                    "· **他要做的动作**——走过去、伸手、拉起来、摘下帽子、抱住……\n"
-                    "· **他说的话**——带「」『』的，或者明显是冲着人说的那一句；\n"
-                    "· **他心里想的**——写了「心想」「心里」「暗想」的，她看不见。\n"
-                    "\n"
-                    "**换行是他自己分的段**，按行读，别合并。\n"
-                    "**没有引号的句子不要一律当成台词**：句子里只要有一个明确的动作"
-                    "（走、站、坐、拿、拉、抱、推、摘、递……），那个动作就是「做」，"
-                    "要写进正文。真正的台词只有那种「冲着人说、没有动作」的句子。\n\n"
-                    + body
-                    + "\n\n" + _SCENE_DUTY)
+            block = ("【玩家这一轮写的主输入框原文】\n"
+                     "这是**他这一拍要做什么**，不是已经发生的旁白，是给你的指令。"
+                     "里面可能混着三种东西：\n"
+                     "· **他要做的动作**——走过去、伸手、拉起来、摘下帽子、抱住……\n"
+                     "· **他说的话**——带「」『』的，或者明显是冲着人说的那一句；\n"
+                     "· **他心里想的**——写了「心想」「心里」「暗想」的，她看不见。\n"
+                     "\n"
+                     "**换行是他自己分的段**，按行读，别合并。\n"
+                     "**没有引号的句子不要一律当成台词**：句子里只要有一个明确的动作"
+                     "（走、站、坐、拿、拉、抱、推、摘、递……），那个动作就是「做」，"
+                     "要写进正文。真正的台词只有那种「冲着人说、没有动作」的句子。\n\n"
+                     + body)
+            return block + ("\n\n" + _SCENE_DUTY if scene_duty else "")
         return fallback
     lines = ["【这一轮你收到的（按发生顺序）】"]
     for seg in segments:
@@ -73,7 +77,8 @@ def render_user_block(segments, addressed=True, fallback="", remind=False,
         lines.append("（这段里的「我」= 玩家本人，不是你；原文里的动作都是玩家做的。）")
         lines.append(str(fallback).strip())
     lines.append("")
-    lines.append(_SCENE_DUTY)
+    if scene_duty:
+        lines.append(_SCENE_DUTY)
     if remind:
         lines.append(writing_style.tail(name=name))
     return "\n".join(lines)

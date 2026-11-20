@@ -235,6 +235,11 @@ ARCHIVED_SKILLS = tuple(
     # 「渠道串号」就是这么来的：归档 = list_skills 不吐它 = QQ 的
     # _allowed_skills 里没有 = direct_gen 认不出 = 静默降级成默认档。
     + ["moss", "moss8", "moss50", "moss_page"]
+    # 2026-11-18 用户拍板：Qwen 统一到默认 qwen_image_v1（25 步 / 1024×1536 /
+    # 真人 LoRA / 2x，i2i denoise 1.0）。qwen-hd / qwen30 / qwen-real 对外下架，
+    # 目录留在磁盘上但不再出现在任何技能/渠道清单；旧点名词在 direct_gen 里
+    # 映射到默认 qwen。
+    + ["qwen-hd", "qwen30", "qwen-real"]
 )
 
 

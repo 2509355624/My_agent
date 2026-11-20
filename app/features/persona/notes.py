@@ -95,11 +95,12 @@ def _note_convo(session_key, st):
 
 
 def _settled_day_facts(gd):
-    """给账本压缩器的「系统结算事实」清单：只报事实，不下结论。
+    """给账本压缩器的「系统结算事实」清单：只报客观时间、地点和已完成的事。
 
-    2026-11-10 用户报「昨天约好的事已经做完了，第二天她还当没做」。
-    根子在压缩器只看得见旧账本 + 最近对话，看不到这里结算过的天数、
-    已办完的事和约定的日期，于是把做过的约定一代代抄回待办节。
+    2026-11-19 用户拍板撤掉「约定与未完成」：`plan` 是系统/裁判对“还欠着
+    什么”的二次判断，不是原文事实；它被压缩器写成待办后，演员会一轮轮
+    回收，反而把上下文搅乱。这里不再把 `plan` 喂给压缩器，也不要求它判断
+    “兑现没兑现”。已完成的事仍然作为事实给它，用来把过去写进账本。
     """
     from app.features.persona import service as svc
 
@@ -116,26 +117,17 @@ def _settled_day_facts(gd):
     elif ev.startswith("约定："):
         # 23213a7 之前生成的老存档：那句「约定：「X」」本来就是兑现记录。
         facts.append("今天已经办完：" + ev[len("约定："):].strip("「」"))
-    pl = str(gd.get("plan") or "").strip()
-    if pl:
-        pd = svc._as_int(gd.get("plan_day"), 0, 0, 99999)
-        facts.append("系统登记过的约定：%s%s"
-                     % (pl, ("（约在第 %d 天）" % pd) if pd else ""))
-        if pd and pd <= day:
-            facts.append("约的那天已经过了；做没做过以最近对话为准。")
-    else:
-        facts.append("系统里目前没有登记在册的约定。")
-    facts.append("约定是否已经兑现，以【最近发生的】对话为准，系统登记只作参考。")
     return "\n".join("- " + f for f in facts)
 
 
 def compress_note(session_key):
     """把旧账本 + 上次存档以来的对话合并成一份 ≤1000 字的 Markdown 账本。
 
-    2026-11-05 改：从「一段散文」改成「六个固定小节」。原来每次压缩都是拿
+    2026-11-05 改：从「一段散文」改成固定小节。原来每次压缩都是拿
     「上一版摘要 + 最近 12 条」重写，聊到一百轮等于把最早的事摘要了二十遍，
     每遍丢一点。现在给旧账本一个明确的形状，并要求「还成立的条目原样抄」，
     只让模型改变化的部分——代际退化会小很多。
+    2026-11-19：去掉「约定与未完成」，只留五节已发生的事实。
     """
     from app.features.persona import service as svc
 
@@ -146,16 +138,19 @@ def compress_note(session_key):
     # 旧账本先纠人称再交给压缩器（2026-11-06）：不让「他」以「原样抄」的形式
     # 传给下一版，否则坏账本会永久自复制。
     old = svc._ledger_fix_pronouns(st.get("note") or "").strip()
+    if old and not svc._ledger_ok(old):
+        # 旧版散文小记不能当账本底稿：它不是分节事实，而是一段可被
+        # 反复扩写的叙事。拿它当「原样抄」的底，旧事会一代代复制下去。
+        log.info("旧小记不是分节账本，丢弃重建 %s", session_key)
+        old = ""
     hist, arch_len = _note_convo(session_key, st)
     if not hist:
         return False
     convo = "\n".join(
         "%s：%s" % ("女主角" if m["role"] == "assistant" else "玩家", m["content"])
         for m in hist)
-    # 跨天事实（2026-11-10）：压缩器以前只看得见「旧账本 + 最近对话」，
-    # 看不到系统结算的「今天已经办完 / 约定约在第几天」，又要求旧条目原样抄，
-    # 于是把已经做完的约定一代代抄回待办节。这里只把**事实**列给它，
-    # 做没做完由它对照对话自己判断，代码不替它下结论。
+    # 跨天事实（2026-11-19）：只给压缩器客观时间和地点，以及系统已结算的
+    # 「今天已经办完」；不再给 `plan`，也不让它判断约定兑现没兑现。
     gd = st.get("gameday") if isinstance(st.get("gameday"), dict) else {}
     prompt = svc._NOTE_PROMPT % {
         "soft": svc.NOTE_SOFT,

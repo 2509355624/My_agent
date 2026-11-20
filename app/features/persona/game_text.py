@@ -96,18 +96,9 @@ def _gameday_block(gd, new_day=False):
                          % done)
         else:
             lines.append("今天的事：%s。把它化进今天的动作和对白里。" % event)
-    plan = str(gd.get("plan") or "").strip()
-    if plan:
-        pd = gd.get("plan_day") or 0
-        if pd and pd > day:
-            when = "（约在第 %d 天）" % pd
-        elif pd:
-            when = "（第 %d 天约的，那天已经过了）" % pd
-        else:
-            when = ""
-        lines.append("登记过的约定：%s%s。做没做过以刚才的对话为准，"
-                     "做过的事已经留在昨天；这一拍接着眼前写。"
-                     % (plan, when))
+    # 2026-11-19 用户拍板：未完成的事不再进写作提示词。`plan` 是系统/
+    # 裁判的二次判断，写进去会被演员当成每轮必须回收的待办；让它留在
+    # 存档里做跨天结算即可。这里不输出任何“登记过的约定”。
     if int(gd.get("turns_today") or 0) >= _DAY_TURNS_SOFT:
         lines.append("这一天已经过了很久，天色不早了。这一拍可以从容收住，"
                      "眼前正在发生的事也可以接着往下演。")

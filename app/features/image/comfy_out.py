@@ -154,6 +154,32 @@ def describe(job):
     return body_for(job) or "output 根目录"
 
 
+def local_output_path(rel, root=None):
+    """相对路径 → ComfyUI output 目录里的绝对路径（**不要求文件已存在**）。
+
+    和 `local_output_file` 共用同一套越界校验；后者只负责「文件真的在盘上」
+    这一层，方便取图。重画回收旧产物时，旧文件是存在的、新文件刚落盘，都走
+    这里算路径，免得两处各写一份 `..` / 盘符判断。
+    """
+    if root is None:
+        from app.config import COMFYUI_OUTPUT_DIR
+        root = COMFYUI_OUTPUT_DIR
+    root = (root or "").strip()
+    if not root:
+        return None
+    parts = [x for x in str(rel or "").replace("\\", "/").split("/") if x]
+    if not parts or ".." in parts:
+        return None
+    root_abs = os.path.abspath(root)
+    path = os.path.abspath(os.path.join(root_abs, *parts))
+    try:
+        if os.path.commonpath([path, root_abs]) != root_abs:   # 越界
+            return None
+    except ValueError:              # 不同盘符时 commonpath 会抛
+        return None
+    return path
+
+
 def local_output_file(rel, root=None):
     """相对路径 → ComfyUI output 目录里的真实文件；没有就返回 None。
 
@@ -173,20 +199,95 @@ def local_output_file(rel, root=None):
     `root` 不传就按 `app.config.COMFYUI_OUTPUT_DIR`；`main` 侧显式传它自己的
     模块级变量，好让既有测试照旧 patch 而不用改一圈。
     """
-    if root is None:
-        from app.config import COMFYUI_OUTPUT_DIR
-        root = COMFYUI_OUTPUT_DIR
-    root = (root or "").strip()
-    if not root:
-        return None
-    parts = [x for x in str(rel or "").replace("\\", "/").split("/") if x]
-    if not parts or ".." in parts:
-        return None
-    root_abs = os.path.abspath(root)
-    path = os.path.abspath(os.path.join(root_abs, *parts))
+    path = local_output_path(rel, root)
+    return path if path and os.path.isfile(path) else None
+
+
+def prune_orphan_panel_runs(body, keep_panels, root=None):
+    """收敛任务目录里的格产物：不在剧本的整格删，在剧本的只留最新一张。
+
+    `keep_panels` 是当前剧本的格号集合。文件名按 `_stamp_panel_no` 的约定解析
+    `<前缀>_<格号>_<序号>_.png`；没有格号的老手工图不动，其他渠道目录也不动。
+    同一格留序号最大的那张（split 两遍时就是第二遍的成品），旧的删掉。
+    """
+    probe = local_output_path(str(body or "").strip("/") + "/_probe", root)
+    if not probe:
+        return []
+    directory = os.path.dirname(probe)
+    keep = {str(n).strip().zfill(2) for n in (keep_panels or [])}
+    removed = []
+    kept_runs = {}
     try:
-        if os.path.commonpath([path, root_abs]) != root_abs:   # 越界
-            return None
-    except ValueError:              # 不同盘符时 commonpath 会抛
-        return None
-    return path if os.path.isfile(path) else None
+        names = os.listdir(directory)
+    except OSError:
+        return removed
+    for f in names:
+        if not f.lower().endswith(".png"):
+            continue
+        m = re.match(r"^.*_(\d+)_(\d+)_?\.png$", f, re.I)
+        if not m:
+            continue                         # 没有格号的老图，不碰
+        panel = m.group(1).zfill(2)
+        path = os.path.join(directory, f)
+        if panel not in keep:
+            try:
+                os.remove(path)
+                removed.append(f)
+            except OSError:
+                pass
+            continue
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            mtime = 0
+        kept_runs.setdefault(panel, []).append((int(m.group(2)), mtime, f))
+    for runs in kept_runs.values():
+        best = max(runs, key=lambda x: (x[0], x[1]))[2]
+        for _, _, f in runs:
+            if f == best:
+                continue
+            try:
+                os.remove(os.path.join(directory, f))
+                removed.append(f)
+            except OSError:
+                pass
+    return removed
+
+
+def prune_same_panel_runs(rel, panel_no, root=None):
+    """删掉同一格在 ComfyUI output 里的历史运行图，只留 `rel` 这一张。
+
+    漫画「从底图重画」一格时，`SaveImage` 每次都会追加全局序号：
+    `QwenI2I_04_00001_.png` → `QwenI2I_04_00002_.png`。成品 `final/<格号>_final.png`
+    是覆盖的，但 output 目录会一格攒出多张，用户看到的就是「重画后图越来越多」。
+    这里按 `<前缀>_<格号>_` 只清同格旧图，不碰其他格，也不碰 raw 底图。
+
+    只在**新图成功落盘后**调用；清不掉时返回空列表，不影响主流程。
+    """
+    keep = local_output_path(rel, root)
+    if not keep or not os.path.isfile(keep):
+        return []
+    name = os.path.basename(keep)
+    token = ("_%02d_" % int(panel_no)
+             if str(panel_no).isdigit() else "_%s_" % str(panel_no))
+    idx = name.find(token)
+    if idx < 0:
+        return []
+    prefix = name[:idx] + token          # `QwenI2I_04_`
+    directory = os.path.dirname(keep)
+    removed = []
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return removed
+    for f in names:
+        if f == name or not f.lower().endswith(".png"):
+            continue
+        if not f.startswith(prefix):
+            continue
+        try:
+            os.remove(os.path.join(directory, f))
+            removed.append(f)
+        except OSError:
+            pass
+    return removed

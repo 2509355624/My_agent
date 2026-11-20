@@ -94,7 +94,7 @@ class GuideTest(unittest.TestCase):
         """前中期只给「停/差一点/身体泄露」，不给器官用词表。"""
         got = ws.guide(_state(corrupt=60, excite=40))
         self.assertIn("差一点", got)
-        self.assertIn("每段至少一个「停」", got)
+        self.assertIn("一场安排一到两处「停」", got)
         self.assertNotIn("用词纪律", got)
         self.assertNotIn("器官命名温度阶梯", got)
 

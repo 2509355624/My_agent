@@ -272,7 +272,11 @@ def judge_v2(card, said, state="", line_key="", gameday=None,
                       if str(state or "").strip() else "",
         "said": str(said or "")[:2000],
         "history": svc._judge_recent(history),
-        "ledger": _judge_ledger(note),
+        # 2026-11-19：长期账本只给开头 300 字。编剧判的是这一轮状态怎么变，
+        # 最近 6 条原文 + 画像 recent + 状态数值已经覆盖语境；整本小记
+        # （实测约 926 字 / 1244 token）每轮按未命中重付，省不下。
+        # 只在这里截，不动 _judge_ledger 默认（v1 / 自由模式照旧看全本）。
+        "ledger": _judge_ledger(str(note or "")[:300]),
         "facts_guide": _FACTS_GUIDE,
     }
     try:

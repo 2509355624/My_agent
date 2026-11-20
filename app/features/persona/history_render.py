@@ -30,6 +30,6 @@ def render_hist(hist, name="", alias=""):
             content = pronoun_to_name(content, name)
         if m.get("role") == "user" and m.get("seg"):
             content = render_user_block(m["seg"], m.get("addressed", True),
-                                        fallback=content)
+                                        fallback=content, scene_duty=False)
         out.append({"role": m.get("role"), "content": content})
     return out

@@ -1629,7 +1629,8 @@ class SessionRunner:
         direct_reply = (None if borrowed
                         else direct_gen.decide(own_text, history, voluntary,
                                                data_urls=data_urls or None,
-                                               at_me=at_me))
+                                               at_me=at_me,
+                                               agent_id=QQ_AGENT_ID))
         if direct_reply is not None:
             try:
                 if direct_reply:

@@ -143,6 +143,7 @@ class InjectionTest(_Base):
         self.task.raw_path.return_value = os.path.join(self.task.raw_dir,
                                                       "01_raw.png")
         self.task._rel.return_value = "raw/01_raw.png"
+        self.task.character_lora = ""
 
     def test_scene_prompt_appends_without_writing_back(self):
         self.assertEqual(comic.scene_prompt(self.p),
@@ -150,8 +151,8 @@ class InjectionTest(_Base):
         self.assertEqual(self.p.scene, "1girl, smile")
 
     def test_local_comfyui_workflow_gets_the_suffix(self):
-        with mock.patch.object(comic.generate_image, "build_t2i_workflow",
-                               return_value={"x": 1}) as bw, \
+        with mock.patch.object(comic.generate_image, "build_t2i_workflow_parts",
+                               return_value=({"x": 1}, "GLOBAL_EXTRA_PROMPT")) as bw, \
              mock.patch.object(comic.comic_render_opts, "load",
                                return_value={}), \
              mock.patch.object(comic.comic_render_opts, "apply",
@@ -162,6 +163,24 @@ class InjectionTest(_Base):
             comic._scene_wf(self.task, self.p, "anima-line")
         self.assertEqual(bw.call_args[0][1], "1girl, smile, GLOBAL_EXTRA")
         self.assertEqual(self.p.scene, "1girl, smile")
+
+    def test_scene_wf_passes_selected_character_lora_key(self):
+        """任务里选了角色 LoRA → 必须等参数卡套完再插 char_loras。"""
+        self.task.character_lora = "chinatsu"
+        with mock.patch.object(comic.generate_image, "build_t2i_workflow_parts",
+                               return_value=({"x": 1}, "GLOBAL_EXTRA_PROMPT")), \
+             mock.patch.object(comic.comic_render_opts, "load",
+                               return_value={}), \
+             mock.patch.object(comic.comic_render_opts, "apply",
+                               side_effect=lambda wf, opts: wf), \
+             mock.patch.object(comic.comic_render_opts, "describe",
+                               return_value=""), \
+             mock.patch("app.features.image.char_loras.apply",
+                        side_effect=lambda skill, prompt, wf, key="":
+                        (dict(wf, char_lora=key), prompt + " sunna")) as ca, \
+             mock.patch.object(comic, "_new_seed", return_value=42):
+            comic._scene_wf(self.task, self.p, "anima-line")
+        self.assertEqual(ca.call_args.kwargs.get("key"), "chinatsu")
 
     def test_nai_cloud_gets_the_suffix(self):
         with mock.patch.object(comic.image_jobs, "NAI_SKILLS",
@@ -175,8 +194,8 @@ class InjectionTest(_Base):
 
     def test_empty_suffix_keeps_old_behaviour(self):
         comic_prompt_suffix.save("")
-        with mock.patch.object(comic.generate_image, "build_t2i_workflow",
-                               return_value={"x": 1}) as bw, \
+        with mock.patch.object(comic.generate_image, "build_t2i_workflow_parts",
+                               return_value=({"x": 1}, "BASE_PROMPT")) as bw, \
              mock.patch.object(comic.comic_render_opts, "load",
                                return_value={}), \
              mock.patch.object(comic.comic_render_opts, "apply",
@@ -191,7 +210,7 @@ class InjectionTest(_Base):
         """账本里的 prompt 只记编剧原文，不跟着后缀变（enqueue 的语义）。"""
         with open(os.path.join(_ROOT, "app", "features", "comic", "comic.py"), encoding="utf-8") as f:
             src = f.read()
-        self.assertIn("build_t2i_workflow(scene_skill, scene_prompt(p), seed)", src)
+        self.assertIn("build_t2i_workflow_parts(\n        scene_skill, prompt, seed", src)
         self.assertIn("_submit_nai(scene_prompt(p), scene_skill)", src)
         self.assertIn("_submit_timed(wf, scene_skill, p.scene, seed", src)
         self.assertIn("job = _submit(wf, scene_skill, p.scene, seed", src)

@@ -943,6 +943,42 @@ class ComicRenderOptsApiTest(unittest.TestCase):
         self.assertEqual(d["opts"]["base"]["sampler_name"], "er_sde")
         self.assertEqual(d["resources"]["loras"], self.res["loras"])
 
+    def test_character_lora_is_listed_and_roundtrips(self):
+        """角色 LoRA：render_opts 带候选 + 本任务当前值；保存后 GET 能读回。"""
+        with open(os.path.join(self.dir, "state.json"), "w", encoding="utf-8") as f:
+            json.dump({"scene_skill": "anima-line", "panels": {}}, f)
+        d = self.c.get("/api/comic/render_opts?task=" + self.NAME).get_json()
+        self.assertGreater(len(d["characters"]), 0)
+        self.assertIn("chinatsu", [c["key"] for c in d["characters"]])
+
+        r = self.c.post("/api/comic/character", json={
+            "task": self.NAME, "skill": "anima-line",
+            "character_lora": "chinatsu"})
+        self.assertTrue(r.get_json()["ok"], r.get_json())
+        d = self.c.get("/api/comic/render_opts?task=" + self.NAME).get_json()
+        self.assertEqual(d["character_lora"], "chinatsu")
+
+    def test_unknown_character_lora_is_400(self):
+        with open(os.path.join(self.dir, "state.json"), "w", encoding="utf-8") as f:
+            json.dump({"scene_skill": "anima-line", "panels": {}}, f)
+        r = self.c.post("/api/comic/character", json={
+            "task": self.NAME, "skill": "anima-line",
+            "character_lora": "no_such_character"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_start_persists_character_lora_for_the_run(self):
+        """确认开跑时把角色 LoRA 一起写进 state.json，后台线程才会用到。"""
+        with open(os.path.join(self.dir, "state.json"), "w", encoding="utf-8") as f:
+            json.dump({"scene_skill": "anima-line", "panels": {}}, f)
+        with mock.patch.object(comic_api, "_spawn", return_value=True):
+            r = self.c.post("/api/comic/start", json={
+                "task": self.NAME, "scene_skill": "anima-line",
+                "exclusive": False, "character_lora": "chinatsu"})
+        self.assertTrue(r.get_json()["ok"], r.get_json())
+        with open(os.path.join(self.dir, "state.json"), encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(data.get("character_lora"), "chinatsu")
+
     def test_get_unknown_task_is_404(self):
         r = self.c.get("/api/comic/render_opts?task=C99990101-99")
         self.assertEqual(r.status_code, 404)
@@ -1336,6 +1372,14 @@ class MarkPendingFailedTest(unittest.TestCase):
         self.assertIsNone(ps["02"]["error"])
         self.assertEqual("rendered", ps["02"]["state"])
 
+    def test_bubble_failure_marks_only_rendered_panels(self):
+        """加气泡阶段崩掉：待加气泡的格要落错误，别让页面一直显示「待加气泡」。"""
+        comic_api._mark_stage_failed(self.path, "rendered")(SystemExit("炸了"))
+        ps = self._panels()
+        self.assertIn("炸了", ps["02"]["error"])
+        self.assertIsNone(ps["01"]["error"])
+        self.assertIsNone(ps["03"]["error"])
+
 
 class SpawnOnErrorTest(unittest.TestCase):
     """`_spawn` 要在 SystemExit 上先记错误、再调收尾回调。"""
@@ -1466,7 +1510,7 @@ class RerenderChannelTest(unittest.TestCase):
         def _run(*a, **kw):
             self.calls.append(kw)
 
-        def _spawn(path, phase, fn, on_error=None, finish=None):
+        def _spawn(path, phase, fn, on_error=None, finish=None, meta=None):
             fn()                       # 同步跑，测试里不真起线程
             return True
 

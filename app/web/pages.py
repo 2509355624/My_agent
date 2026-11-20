@@ -138,3 +138,9 @@ def output_page():
 def characters_page():
     """人设卡池：QQ 角色扮演用的人设卡（见 app/persona.py）。"""
     return send_from_directory(WEB_DIR, "characters.html")
+
+@bp.route("/gallery")
+def gallery_page():
+    """作品墙。本机 / 内网管理端直连 5174 打开，后端按站主身份免登录；
+    公网群友仍走 5175 隧道带 token。"""
+    return send_from_directory(WEB_DIR, "gallery.html")

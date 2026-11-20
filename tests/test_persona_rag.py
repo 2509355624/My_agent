@@ -16,6 +16,7 @@ import app.core.agents as agents
 import app.integrations.llm as llm
 from app.features.persona import service as persona
 from app.features.persona import rag as rank
+from app.features.persona import turn as turn_mod
 
 
 class FakeClient:
@@ -75,6 +76,7 @@ class RagBase(unittest.TestCase):
         rank._WORKER = None
         rank._pending_path = lambda: self.pending_path
         rank._RECENT_CACHE.clear()
+        rank._MEMORY_BLOCK_CACHE.clear()
         self.addCleanup(self._restore)
 
     def _restore(self):
@@ -96,6 +98,82 @@ class CollectionTest(RagBase):
 
     def test_hash_does_not_leak_qq(self):
         self.assertNotIn("10001", rank.collection_name("web_10001__rem"))
+
+
+class MemoryBlockTest(RagBase):
+    def _entry(self, bid, start, end, content, kind="batch"):
+        return {
+            "id": bid,
+            "content": content,
+            "metadata": {
+                "kind": kind,
+                "turn_start": start,
+                "turn_end": end,
+                "source": rank._SOURCE,
+            },
+        }
+
+    def test_uses_recent_batches_only(self):
+        self.client.entries = [
+            self._entry("b1", 1, 5, "【第1天】第一批旧事。"),
+            self._entry("b2", 6, 10, "【第1天】第二批。"),
+            self._entry("b3", 11, 15, "【第2天】第三批。"),
+            self._entry("f1", 11, 15, "用户：这是一条原子事实。", "fact"),
+        ]
+        out = rank.memory_block("web_10001__rem", batches=2)
+        self.assertIn("【压缩记忆", out)
+        self.assertIn("第2天", out)
+        self.assertIn("第三批", out)
+        self.assertIn("第二批", out)
+        # 只取最近 2 批，最早的 b1 不进；原子事实不进。
+        self.assertNotIn("第一批旧事", out)
+        self.assertNotIn("原子事实", out)
+
+    def test_empty_when_no_batches_or_not_ready(self):
+        self.assertEqual(rank.memory_block("web_10001__rem"), "")
+        self.client.entries = [self._entry("b1", 1, 5, "【第1天】有。")]
+        self.client.ready = False
+        self.assertEqual(rank.memory_block("web_10001__rem"), "")
+
+    def test_falls_back_to_raw_blocks_when_no_batch_summary(self):
+        """老会话只有原文层时不能返回空串，要按 5 轮一块兜底。"""
+        self.client.entries = []
+        for t in range(1, 13):
+            self.client.entries.append(self._entry(
+                "raw-%d-u" % t, 0, 0,
+                "第1天 用户说：第%d轮用户的话。" % t, kind="raw"))
+            self.client.entries.append(self._entry(
+                "raw-%d-a" % t, 0, 0,
+                "第1天 她：第%d轮她的回复。" % t, kind="raw"))
+        for i, e in enumerate(self.client.entries):
+            e["metadata"]["turn"] = i // 2 + 1
+            e["metadata"]["role"] = "user" if i % 2 == 0 else "assistant"
+        out = rank.memory_block("web_10001__rem", batches=2)
+        self.assertIn("原文摘录", out)
+        self.assertIn("用户：第6轮用户的话", out)
+        self.assertIn("用户：第10轮用户的话", out)
+        # 兜底只取玩家原话，不把她整段氛围白描搬进记忆。
+        self.assertNotIn("她的回复", out)
+        # 只取最近 2 块（约 10 轮），最早的第 1 轮不进。
+        self.assertNotIn("第1轮用户的话", out)
+
+
+class MemoryMessageOrderTest(unittest.TestCase):
+    def test_memory_sits_between_head_and_recent_history(self):
+        msgs = turn_mod._model_messages(
+            "head", [{"role": "user", "content": "最近原文"}],
+            "本轮原话", "【压缩记忆】旧事")
+        self.assertEqual([m["role"] for m in msgs],
+                         ["system", "system", "user", "user"])
+        self.assertEqual(msgs[1]["content"], "【压缩记忆】旧事")
+        self.assertEqual(msgs[2]["content"], "最近原文")
+        self.assertEqual(msgs[3]["content"], "本轮原话")
+
+    def test_no_memory_keeps_original_sequence(self):
+        msgs = turn_mod._model_messages(
+            "head", [{"role": "user", "content": "最近原文"}], "本轮原话")
+        self.assertEqual([m["role"] for m in msgs],
+                         ["system", "user", "user"])
 
 
 class RememberTest(RagBase):

@@ -174,26 +174,77 @@ def entry_by_key(key, skill=None):
     return hits[0]
 
 
+def _channel_ok(skill, entry):
+    """渠道白名单：这个角色的 `channels` 里有没有当前渠道。
+
+    2026-11-13 ANIMA 随心配（`_anima_random`）是 anima 架构的随机版，底模和
+    角色 LoRA 都是同一批 anima 文件，所以它等价于 anima 架构——channels 里
+    写了任一 anima 渠道就视为在随心配下也有效。
+    """
+    chans = entry.get("channels") or []
+    allowed = _LORA_SKILLS_ANIMA if skill == "_anima_random" else (skill,)
+    return not chans or any(c in allowed for c in chans)
+
+
+def _file_ok(entry):
+    return bool(_find_file(entry.get("file") or ""))
+
+
 def _accept(skill, entry):
     """渠道白名单 + LoRA 文件存在性：两条都过才装填，否则 None。"""
     if not entry:
         return None
-    chans = entry.get("channels") or []
-    # ANIMA 随心配（2026-11-13）是 anima 架构的**随机版**：底模就是 anima 池里的
-    # 那几个（miaomiaoRealskin_anima13 等），角色 LoRA 也是同一批 anima 架构
-    # 文件。所以它等价于 anima 架构——channels 里写了任一 anima 渠道，就视为
-    # 在随心配下也有效。这样不用把 67 条角色的 channels 各加一遍 `_anima_random`
-    # （那是「同一条角色、同一个文件」的重复声明，容易改漏）。
-    allowed = _LORA_SKILLS_ANIMA if skill == "_anima_random" else (skill,)
-    if chans and not any(c in allowed for c in chans):
+    if not _channel_ok(skill, entry):
         log.info("角色 %s 不在渠道 %s 的白名单里，跳过",
                  entry.get("key"), skill)
         return None
-    if not _find_file(entry.get("file") or ""):
+    if not _file_ok(entry):
         log.warning("角色 LoRA 文件不在 loras 目录，跳过装填：%s（%s）",
                     entry.get("key") or "?", entry.get("file"))
         return None
     return entry
+
+
+def available(key, skill):
+    """按 key + 渠道取一条**当前真的能挂**的条目；给网页下拉/API 校验用。
+
+    和 `entry_by_key` 的差别：这里顺手把渠道白名单、文件存在性都核了，返回
+    None 就表示「选了也挂不上」，调用方可以据此提示，而不是等出图时静默跳过。
+    """
+    if skill not in CHAR_LORA_SKILLS:
+        return None
+    entry = entry_by_key(key, skill)
+    if not entry or not _channel_ok(skill, entry) or not _file_ok(entry):
+        return None
+    return entry
+
+
+def list_for(skill):
+    """某渠道当前可选的角色 LoRA（网页漫画台的「角色 LoRA」下拉用）。
+
+    只列**渠道认、文件也在**的条目；同一个 key 在公共库里可能有多条
+    （anima / SDXL 各一份），按 key 去重，保留第一条能用的。不排序、不打日志，
+    没配就返回空列表——下拉退化成「不指定」。
+    """
+    if skill not in CHAR_LORA_SKILLS:
+        return []
+    seen, out = set(), []
+    for c in entries(skill):
+        key = str(c.get("key") or "").strip()
+        if not key or key in seen:
+            continue
+        if not _channel_ok(skill, c) or not _file_ok(c):
+            continue
+        seen.add(key)
+        out.append({
+            "key": key,
+            "name": str(c.get("name") or key),
+            "category": str(c.get("category") or ""),
+            "file": str(c.get("file") or ""),
+            "trigger": str(c.get("trigger") or ""),
+            "strength": c.get("strength", 0.8),
+        })
+    return out
 
 
 def match(skill, prompt):

@@ -117,39 +117,28 @@ def shot_outfit(session_key, msg_index=None):
 
 
 def draw_shot(card, session_key, msg_index=None, reply_to="", on_submit=None,
-              landscape=False):
+              landscape=False, skill=None, scene=None):
     from app.features.persona import service as svc
 
-    """「出图」→ `svc.SHOT_SKILL`（silver）单张 CG，默认**竖屏**。
+    """「出图」→ 默认 `svc.SHOT_SKILL`（silver）单张 CG，竖屏/横屏可选。
 
-    2026-11-09 用户拍板：默认渠道从 anima-2s 换回 `silver`，**横屏竖屏同一条**。
-    `landscape=True`（网页背景用）走 `image_jobs.landscape_workflow()` 把尺寸
-    节点宽高对调，不是新渠道，采样/LoRA 全都不动。
-
-    横屏唯一的实测坑：提示词里写「两个人并排」会被画成两个女孩（
-    `two people standing side by side` → 双胞胎式同款浴衣）。要「一起看」的
-    意思，靠 POV 那只手表达，别在提示词里数人数。
-
-    返回 `(文件名, note)`：note 非空 = 没画出来及**真实原因**（2026-11-08：
-    排队满 / 没在线 / 生成超时 / 跑完没图，各自说各自的）。**阻塞**几十秒，
-    调用方放后台线程。和 moss 漫画共用同一套画面提取（`_shot_parts`），
-    但不经编剧——画面行本来就是给生图写的英文定稿，直接拼角色外观串用。
-
-    引用内容（`extra`）在单张路径里**不参与**：画面行是权威，冲突时以它为准；
-    没有画面行时按拍板直接拒绝，不拿中文引用原文硬喂给 CLIP。
+    2026-11-19：网页「出图」可以临时指定渠道（`skill`），走同一套 `svc.draw`，
+    画面词仍是写作 AI 给的英文定稿，不经过跑图台的中文需求转译。
+    `scene` 可由调用方先补写；不传则自己取（空标签会走 `ensure_shot_scene` 补）。
     """
-    scene = svc.shot_scene(session_key, msg_index)
+    scene = (scene or "").strip() or svc.ensure_shot_scene(session_key, msg_index)
     if not scene:
         return "", "这一轮没有可画的画面"
+    chan = str(skill or "").strip() or svc.SHOT_SKILL
     # 排查用（2026-11-05）：线上反馈「出图还是六格漫画」。这条日志把
     # **实际用的渠道和画幅**打出来，一眼就能分辨是代码没生效（进程跑着旧
     # 版本 → 没有这行）还是走了别的入口（这行有但渠道不是 svc.SHOT_SKILL）。
     outfit = shot_outfit(session_key, msg_index)
     svc.log.info("扮演出图：渠道=%s 画幅=%s 行号=%s 画面=%s 服饰=%s",
-             svc.SHOT_SKILL, "横屏" if landscape else "竖屏", msg_index,
+             chan, "横屏" if landscape else "竖屏", msg_index,
              scene[:60], outfit[:60])
     name = svc.draw(scene, card, session_key, reply_to=reply_to,
-                skill=svc.SHOT_SKILL, landscape=bool(landscape),
+                skill=chan, landscape=bool(landscape),
                 outfit=outfit, on_submit=on_submit)
     if not name:
         # 真实原因在 thread-local 上（svc.draw 的返回值十几个调用方都当字符串用，

@@ -63,11 +63,12 @@ def _clip_note(text, limit=1000):
     return "\n".join(head) + "\n……\n" + "\n".join(tail)
 
 
-# 账本的六个固定小节（2026-11-05）。顺序也是注入顺序：关系 → 你做的事 →
-# 她做的事 → 约定 → 忌讳 → 日常。标题不要求一字不差，只要包含关键词就算
-# 这一节在——模型偶尔会给标题补半句解释，不能因此把整份账本判废。
+# 账本的五个固定小节（2026-11-19 去掉「约定与未完成」）。顺序也是注入顺序：
+# 关系 → 你做的事 → 她做的事 → 忌讳 → 日常。标题不要求一字不差，只要包含
+# 关键词就算这一节在——模型偶尔会给标题补半句解释，不能因此把整份账本判废。
 # 2026-11-06：「我的事」改成「她的事」——账本统一第三人称，和正文同一套指代。
-_LEDGER_SECTIONS = ("关系", "你的事", "她的事", "约定", "忌讳", "日常")
+# 旧账本里的「约定」节仍能通过 `_ledger_ok`，但注入前由 `drop_ledger_section` 丢掉。
+_LEDGER_SECTIONS = ("关系", "你的事", "她的事", "忌讳", "日常")
 
 # 账本里指代玩家的第三人称（2026-11-06 用户报「上下文算他的」）。
 # 「其他 / 他们 / 他人」不是指代对方，不算违规。
@@ -119,12 +120,42 @@ def _ledger_ok(text):
     return hit >= 4
 
 
+def drop_ledger_section(text, key):
+    """从注入用的账本里去掉某一节，原文不动。
+
+    2026-11-19：用户报「裙摆上那道划痕」被当成约定，连续多轮贯穿正文。
+    「约定与未完成」这一节会把一次性细节写成待办，演员每轮都去回收它，
+    剧情就变成反复提同一件小事。新账本已经不再生成这一节；这里保留删除
+    动作，只为兼容旧存档里残留的「约定」，**注入给写作 AI 的副本**不再带它。
+    """
+    s = str(text or "")
+    if not s.strip() or "#" not in s:
+        return s
+    blocks, cur = [], []
+    for line in s.splitlines():
+        if re.match(r"^[ \t]*#{1,3}[ \t]*", line) and cur:
+            blocks.append(cur)
+            cur = [line]
+        else:
+            cur.append(line)
+    if cur:
+        blocks.append(cur)
+    out = []
+    for b in blocks:
+        head = b[0].strip()
+        if re.match(r"^#{1,3}[ \t]*", head) and str(key or "") in head:
+            continue
+        out.extend(b)
+    return "\n".join(out).strip()
+
+
+
 def _clip_ledger(text, limit=1000):
     """账本超长时**按小节截**，不按开头/结尾截。
 
-    `_clip_note` 是给散文用的（保头保尾、丢中间）。账本的中间是「他的事 /
-    我的事 / 约定」，丢哪一节都会让下一轮失忆，所以这里按节平分预算，
-    每节内部再按句收尾，**六个标题都留着**。
+    `_clip_note` 是给散文用的（保头保尾、丢中间）。账本的中间是「你的事 /
+    她的事 / 忌讳 / 日常」，丢哪一节都会让下一轮失忆，所以这里按节平分预算，
+    每节内部再按句收尾，**所有已有标题都留着**。
     """
     s = str(text or "").strip()
     if len(s) <= limit:

@@ -412,6 +412,9 @@
     <div id="jobbar">
       <div class="bar-row">
         <span id="jobbarText"></span>
+        <button class="btn small" id="btnResume" onclick="resumeJob()"
+                style="display:none"
+                title="沿用上次那批的范围和参数，只补没跑完的格">↻ 继续上次任务</button>
         <button class="btn small danger" id="btnAbort" onclick="abortAll()"
                 title="停掉这一批：正在画的那张立刻停、排队中的不再画；已经出好的图全部保留">⏹ 中断全部</button>
       </div>
@@ -498,6 +501,8 @@ function setBusy(b, phase) {
   // 唯独中断必须是能点的（否则跑起来就停不下来了）。
   const abortBtn = document.getElementById('btnAbort');
   if (abortBtn) abortBtn.style.display = b ? '' : 'none';
+  const resumeBtn = document.getElementById('btnResume');
+  if (resumeBtn && b) resumeBtn.style.display = 'none';
   if (b) { bar.style.display = 'block'; bar.classList.remove('err');
            document.getElementById('jobbarText').textContent =
              '⏳ 正在' + (phase === 'bubble' ? '加气泡' : '渲染场景图') + '……页面每 2 秒自动刷新'; }
@@ -1265,6 +1270,24 @@ async function abortAll() {
   }
 }
 
+async function resumeJob() {
+  if (!TASK) return;
+  const btn = document.getElementById('btnResume');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ 继续中…';
+  try {
+    const d = await api('/api/comic/resume', {task: TASK});
+    toast('已继续上次的' + (d.phase === 'bubble' ? '加气泡' : '底图') + '任务，只补没跑完的格');
+    refresh();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
 // ── 渲染参数卡（按渠道能力渲染：1/2 段采样 · LoRA 链 · 分辨率 · 放大）──────
 // 三档取值：任务 render.json > 全局默认 > 该渠道模板（后端 comic_render_opts.load
 // 里叠好）。卡片**常显**——没有任务时显示的是全局默认/模板值，新任务开工前就能调。
@@ -1954,10 +1977,19 @@ async function refresh() {
   // ComfyUI 重启回来（comic._require_comfy 现在最多等 120 秒）。不写出来的话
   // 两种情况在界面上长得一模一样，用户只会以为卡死了。
   const barText = document.getElementById('jobbarText');
+  const resumeBtn = document.getElementById('btnResume');
+  const canResume = !!(d.resume && d.resume.can_resume && !d.running);
+  if (resumeBtn) resumeBtn.style.display = canResume ? '' : 'none';
   if (d.job_error) {
     bar.style.display = 'block';
     bar.classList.add('err');
-    barText.textContent = '✗ 后台任务失败：' + d.job_error;
+    barText.textContent = '✗ 后台任务失败：' + d.job_error
+      + (canResume ? '（可点右侧「继续上次任务」只补没跑完的格）' : '');
+  } else if (canResume) {
+    bar.style.display = 'block';
+    bar.classList.add('err');
+    barText.textContent = '⚠ 上次任务被服务重启中断，没跑完的格已经停下；'
+      + '点右侧「继续上次任务」按原范围补跑';
   } else if (d.comfy === false) {
     bar.style.display = 'block';
     bar.classList.add('err');
@@ -2004,7 +2036,14 @@ function zipGuard() {
   return true;
 }
 
-function poll() { clearTimeout(TIMER); TIMER = setTimeout(async () => { await refresh(); poll(); }, 2000); }
+function poll() {
+  clearTimeout(TIMER);
+  TIMER = setTimeout(async () => {
+    try { await refresh(); }
+    catch (e) { console.warn('漫画状态刷新失败，2 秒后重试', e); }
+    finally { poll(); }
+  }, 2000);
+}
 
 // 刷新页面后把上次的任务接回来（2026-10-18）：TASK 存 localStorage，脚本正文
 // 走 /api/comic/script_text 取回（纯写真任务没有 script.md，抛错就当没有）。

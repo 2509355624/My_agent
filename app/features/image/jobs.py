@@ -1757,25 +1757,38 @@ def _comfy_pid_by_port():
 
 
 def _kill_comfy(pid):
-    """强杀一个 PID。返回是否已发出终止信号。
+    """强杀一个 ComfyUI 进程树。返回是否已发出终止信号。
 
-    Windows 上 `os.kill(pid, SIGTERM)` 直接走 `TerminateProcess`——**不给它跑
-    atexit / KeyboardInterrupt**。对假死进程正合适：它连信号循环都进不去，
-    别指望它自己优雅退出。taskkill 是第二手，以防 os.kill 被策略拦。
+    Windows 上 `os.kill(pid, SIGTERM)` 直接走 `TerminateProcess`，只杀父进程；
+    ComfyUI 的 python 子进程会残留并继续占着 8188。所以先 taskkill `/T`，
+    失败再退回 os.kill。
     """
+    try:
+        result = subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            capture_output=True, timeout=30,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        if result.returncode == 0:
+            return True
+    except Exception as exc:
+        log.warning("taskkill %d 没成（%s），改用 os.kill", pid, exc)
     try:
         os.kill(pid, signal.SIGTERM)
         return True
     except Exception as exc:
-        log.warning("os.kill(%d) 没成（%s），改用 taskkill", pid, exc)
-    try:
-        subprocess.run(["taskkill", "/F", "/PID", str(pid)],
-                       capture_output=True, timeout=15,
-                       creationflags=subprocess.CREATE_NO_WINDOW)
-        return True
-    except Exception:
-        log.error("taskkill %d 也失败，放弃强杀", pid, exc_info=True)
-        return False
+        log.error("os.kill %d 也失败，放弃强杀：%s", pid, exc)
+    return False
+
+
+def _wait_comfy_port(timeout):
+    """等 8188 自己开出来（已有实例正在启动时用）。"""
+    deadline = time.time() + max(1, float(timeout))
+    while time.time() < deadline:
+        if _comfy_pid_by_port() is not None:
+            return True
+        time.sleep(0.5)
+    return False
 
 
 def _force_restart_comfy(timeout=COMFY_RESTART_WAIT):
@@ -1805,11 +1818,25 @@ def _force_restart_comfy(timeout=COMFY_RESTART_WAIT):
         _COMFY.last_restart_try = time.time()
 
     old = _comfy_pid_by_port()
+    existing = comfy_launch.process_pids()
+    if old is None and existing:
+        # 端口还没起来，但进程已经在了：说明另一路（控制台/看门狗/QQ 机器人）
+        # 正在拉，不能再拉一套去抢 8188。等它自己开端口。
+        log.info("ComfyUI 已有进程 %s 正在启动，跳过重复拉起", existing)
+        return _wait_comfy_port(timeout)
     if old is None:
-        log.warning("8188 上没有 LISTENING 进程，跳过强杀，直接拉一个新的")
+        log.warning("%d 端口上没有 LISTENING 进程，跳过强杀，直接拉一个新的",
+                    _comfy_port())
     else:
-        log.warning("强制重启 ComfyUI：杀掉假死进程 PID %d", old)
-        if not _kill_comfy(old):
+        # 可能有“占着端口的实例 + 还在启动的重复实例”，全部按树杀掉，
+        # 否则杀掉端口 owner 后，启动中的那套会继续抢 8188。
+        targets = list(dict.fromkeys(existing + [old]))
+        log.warning("强制重启 ComfyUI：杀掉进程树 %s", targets)
+        killed = False
+        for pid in targets:
+            if pid != os.getpid() and _kill_comfy(pid):
+                killed = True
+        if not killed:
             return False
         # 等端口真的交出去。不等就拉新进程的话，它会 bind 失败自己退掉，
         # 白杀一次还把旧状态一起丢了。
@@ -1819,7 +1846,7 @@ def _force_restart_comfy(timeout=COMFY_RESTART_WAIT):
                 break
             time.sleep(0.5)
         else:
-            log.error("杀了 %d 但 20 秒后 8188 仍被占着，放弃", old)
+            log.error("杀了 %s 但 20 秒后 8188 仍被占着，放弃", targets)
             return False
 
     stream = comfy_launch.log_stream()
@@ -2152,10 +2179,22 @@ def process(job):
         # 替身）没有这个属性；Mock 上取属性什么都拿得到、`is_set()` 还是真值，
         # 不认类型的话每一张都会立刻被判成"已中断"。
         _abort_ev = getattr(job, "cancel", None)
+        # 漫画批次要盯 ComfyUI 是否中途掉线：一本 10 格串行，每格等满 180 秒
+        # 再判死会把整本拖成半小时。QQ / 网页单张保持原样，少一次探活。
+        _watch = getattr(job, "batch", "") == "comic"
         if isinstance(_abort_ev, threading.Event):
-            entry = wait_done(job.prompt_id, task_timeout(job), abort=_abort_ev)
+            if _watch:
+                entry = wait_done(job.prompt_id, task_timeout(job),
+                                  abort=_abort_ev, watch_comfy=True)
+            else:
+                entry = wait_done(job.prompt_id, task_timeout(job),
+                                  abort=_abort_ev)
         else:
-            entry = wait_done(job.prompt_id, task_timeout(job))
+            if _watch:
+                entry = wait_done(job.prompt_id, task_timeout(job),
+                                  watch_comfy=True)
+            else:
+                entry = wait_done(job.prompt_id, task_timeout(job))
     except Cancelled as exc:
         # 用户点「中断全部」（2026-10-22）：定向中断掉 ComfyUI 里这一张，等它
         # 退场，直接收工。**不走下面超时那条路**——那条会判「状态不对」然后
@@ -2164,6 +2203,22 @@ def process(job):
         _wait_comfy_idle()
         job.error = exc
         log.info("已中断正在画的那张（%s %s）", job.skill or "?", job.tag or "")
+        return
+    except ComfyGone as exc:
+        # 等图期间 ComfyUI 重启：先把这张的账本清掉，再等它回来重画同一张。
+        # 不做 `_abort`：进程都离线了，/interrupt 只会再等一轮超时。漫画
+        # 批次只重试一次，避免 ComfyUI 反复崩时一本 10 格无限拖。
+        _ledger_done(job)
+        comfy_progress.forget(job.prompt_id)
+        if _watch and getattr(job, "comfy_gone_retries", 0) < 1:
+            job.comfy_gone_retries = getattr(job, "comfy_gone_retries", 0) + 1
+            log.warning("等图时 ComfyUI 掉线，等它回来重画这张（%s %s）",
+                        job.skill or "?", job.tag or "")
+            if wait_comfy_up():
+                return process(job)
+        job.error = exc
+        if not quiet:
+            _notice(job)
         return
     except TooSlow as exc:
         # 每步都在换页：不是「画得慢」，是 ComfyUI 的内存被吃干了（`/free` 只把
@@ -2529,6 +2584,9 @@ def comfy_up(timeout=3):
 # 「永远排队」。这里给一个等待窗口：它一活就继续提交，不用用户盯着手动再点。
 # 上限走 config（.env 可覆盖），间隔是本模块的轮询粒度。
 COMFY_PROBE_GAP = 2
+# 等图期间探活的间隔（秒）。漫画批次专用：ComfyUI 重启窗口只有十几秒，
+# 但旧逻辑要等满 180 秒总超时才发现；10 秒一次能把“整格白等”缩到十几秒。
+COMFY_GONE_PROBE = 10
 
 
 def wait_comfy_up(limit=None, gap=COMFY_PROBE_GAP):
@@ -2839,16 +2897,23 @@ def poll_once(prompt_id):
     return None
 
 
-def wait_done(prompt_id, timeout=None, abort=None):
+def wait_done(prompt_id, timeout=None, abort=None, watch_comfy=False):
     """轮询等到出图，返回 history entry；超时抛 TimeoutError。
 
     `abort` 是一个 `threading.Event`（Job.cancel）：每轮询一次看一眼，置位就
     抛 `Cancelled`，**不**当成超时——两者后续处理完全不同：超时要先判断
     ComfyUI 死没死、再决定要不要重启；中断是我们自己停的，定向 /interrupt
     收工就行（2026-10-22，漫画台「中断全部」）。
+
+    `watch_comfy`：漫画批次专用。ComfyUI 重启时 `/history` 会连不上，旧逻辑
+    只 `poll_once` 返回 None，然后一直等到总超时（180s）才探活；一本 10 格
+    每格都这么耗，就是用户看到的「半小时后回来还没图」。开着它时按
+    `COMFY_GONE_PROBE` 探 `/system_stats`，掉了立刻抛 `ComfyGone`，让
+    `process` 去等它回来再重画这一张，而不是把整格判死。
     """
     limit = timeout if timeout and timeout > 0 else TASK_TIMEOUT
     start = time.time()
+    last_probe = start
     strikes = 0                 # 连续几次读到「太慢」
     while time.time() - start < limit:
         if abort is not None and abort.is_set():
@@ -2857,6 +2922,10 @@ def wait_done(prompt_id, timeout=None, abort=None):
         if entry is not None:
             comfy_progress.forget(prompt_id)
             return entry
+        if watch_comfy and time.time() - last_probe >= COMFY_GONE_PROBE:
+            last_probe = time.time()
+            if not _comfy_up():
+                raise ComfyGone()
         # 采样降级检测：拿不到读数就一直是 None，那就当成没有这个功能。
         sit = comfy_progress.sit(prompt_id)
         if sit is not None:

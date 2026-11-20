@@ -50,17 +50,14 @@ log = logging.getLogger("generate_image")
 #   1. 本文件末尾的工具描述与 `source_image` / `prompt` 参数说明；
 #   2. `agent_prompt._TOOL_HINTS` 的 generate_image 条目；
 #   3. `direct_gen._MASTER_TEMPLATE` / `_REVISE_TEMPLATE` 的【图生图】段。
-# 文案口径（2026-10-11 再翻转）：**明说「图生图」才填 `source_image`**——
-# 「图生图 / 垫图 / 照着画 / 照这张画 / 复刻 / 参考这张的构图 / 只改一处、
-# 其余原样」这些才算垫图信号；那张图会被当构图条件喂进去、锁住构图重画
-# （silver / silver-hd / 高清三档有骨架）。
-# **引用 / 附图 + 只提需求（换装 / 换发色 / 改动作 /「要全身照」这类补充）
-# → 不垫**：那是「照这张改词重画」——拿那张图当初的提示词把新需求并进去、
-# **沿用原渠道文生图重画**。
-# 上一版（2026-10-10）「引用 / 附图 + 要画就填」**已作废**，起因是 233 群实录：
-# 「anima 写实，要全身照，脚趾露出」+1 条引用 → 模型垫了图 → `anima-real`
-# 没有 i2i 骨架 → 弹「不支持图生图」，而对方要的就是重画一张。
-# 只有「只改一处、其余原样」那条路依旧只给 qwen 系。
+# 文案口径（2026-11-18 最终版）：**引用图 + 明确指向这张图改局部**才填
+# `source_image`——「换掉这件衣服 / 去掉眼镜 / 手指改成 5 个 / 修某个局部」
+# 都算；渠道优先沿用原渠道（有 i2i 骨架才留：qwen 系、krea2-jiguang），
+# 没有骨架或查不到原渠道就落 qwen_image_v1。
+# **引用图 + 要另一张画面（换姿势 / 换角度 / 要全身照 / 重画一版）→ 不垫**：
+# 拿那张图当初的提示词把新需求并进去、沿用原渠道文生图重画。
+# **没有引用图、只说「换成白裙子」→ 同样是改提示词文生图，不是图生图。**
+# 模糊指令交给 AI 判断，代码不写关键词闸门。
 #
 # ⚠️ 动漫档（`anima_*` / `hd_*`）的**垫图重绘**仍然**已经从文案里撤掉**：不是后端
 # 关了（`_I2I_SKILLS` 照旧放行，真传了照样能跑），而是用户口径「Anima 改图最差劲，
@@ -106,17 +103,29 @@ _I2I_LLLITE_SKILLS = ("silver", "silver-hd") + tuple(
     "hd_3_" + s for s in _I2I_STYLES)
 
 _I2I_SKILLS = (_I2I_ANIMA_SKILLS + _I2I_LLLITE_SKILLS
-               + ("qwen_image_v1", "qwen-hd", "qwen-charsheet",
-                  "qwen-restore",
-                  # 2026-10-16 用户新增：qwen 的 30 步副本（同款手写 i2i 骨架，
-                  # 只把 steps 25 → 30）。不加进来会走下面的「没有 i2i 骨架 →
-                  # 降级文生图」，白白丢掉用户引用的那张原图。
-                  "qwen30"))
+               + ("qwen_image_v1", "qwen-charsheet", "qwen-restore",
+                  # 2026-11-18 用户拍板：krea2 只给极光做**同渠道图生图试点**。
+                  # 其余 krea2 目录没有 workflow_i2i.json，填了会自动退回文生图。
+                  "krea2-jiguang"))
+               # ⚠️ qwen-hd / qwen30 已于 2026-11-18 对外下架（旧点名词在
+               # direct_gen 里映射到默认 qwen_image_v1），不再留在这张表里。
 
 # ① 一段的重绘强度。**不给模型调**——它一调就会以为「调低 = 只微调」，
 # 而对方要的是「照这张重画一张」。0.6 是实测既保得住构图、又出得来细节的位置。
-# （qwen 那条不吃这个数：它的 latent 是空的，denoise 只能是 1，见上。）
+#
+# 2026-11-18 实测修正：Qwen 2.1 的 `TextEncodeQwenImage21` 第三个输出是
+# **全零 latent**（参考图走 `reference_latents` + 视觉 token，不进 latent）。
+# 在这个零 latent 上给 denoise 0.85，实测出的是平铺动物/风景废图——不是「保留
+# 原图」，而是从「半噪声的灰图」起跑。所以 Qwen 必须 denoise 1.0，和官方口径
+# 一致；要保构图/服装质感靠 prompt 把物理细节写清楚，不靠降 denoise。
+# 其余渠道仍走 `I2I_DENOISE`（源图 VAEEncode 的真实重绘）。
+# 漫画加气泡用另一个 `workflow_i2i.json`（denoise 1、不加 LoRA），两套互不影响。
 I2I_DENOISE = 0.6
+I2I_DENOISE_BY_SKILL = {"qwen_image_v1": 1.0}
+
+
+def _i2i_denoise(skill):
+    return I2I_DENOISE_BY_SKILL.get(skill, I2I_DENOISE)
 
 # ─── 图生图的触发判据：交 AI，代码不判（2026-10-06 拆闸）────────
 #
@@ -811,12 +820,17 @@ def _canvas_long_side(workflow):
     无关**。不缩的话：垫一张小图，高清档出来还是小图，「高清」就名不副实；垫一张
     4000×3000 的大图，一段的 latent 会被撑到爆显存。
 
-    画布就写在**文生图骨架**的 `EmptyLatentImage` 里（图生图骨架把它删了，换成
-    LoadImage + VAEEncode），所以这里读的是同一个 skill 目录的 `workflow.json`——
-    不另立元数据，也就不会跟骨架走散。
+    画布就写在**文生图骨架**的 `EmptyLatentImage` / `EmptySD3LatentImage`
+    里（图生图骨架把它删了，换成 LoadImage + VAEEncode），所以这里读的是同一个
+    skill 目录的 `workflow.json`——不另立元数据，也就不会跟骨架走散。
+
+    2026-11-18：Qwen 2.1 用的是 `EmptySD3LatentImage`（1024×1536），以前只认
+    `EmptyLatentImage` → 读不出画布 → 落回 MAX_SIDE 1216。一并认之后，Qwen
+    图生图的源图会缩到 1536 长边，再由 `TextEncodeQwenImage21.resolution=1248`
+    归到约 1024×1536 的面积档（不是 1536²，别再把节点值当宽高）。
     """
     for node in (workflow or {}).values():
-        if node.get("class_type") == "EmptyLatentImage":
+        if node.get("class_type") in ("EmptyLatentImage", "EmptySD3LatentImage"):
             ins = node.get("inputs") or {}
             try:
                 return max(int(ins.get("width", 0)), int(ins.get("height", 0)))
@@ -870,20 +884,24 @@ def _apply_i2i_placeholders(workflow, uploaded, denoise_txt):
     return workflow
 
 
-def build_t2i_workflow(skill, prompt, seed, user_text="", key=""):
-    """按渠道模板 + 提示词 + 种子构建**文生图**工作流 dict。
+def build_t2i_workflow_parts(skill, prompt, seed, user_text="", key="",
+                             apply_character=True):
+    """建工作流的中间态：返回 `(workflow, prompt)`，**不填提示词/种子占位符**。
 
-    供 worker 的「随机口令被拦静默重抽」用（image_jobs.process）。skill 不
-    存在或没有工作流返回 None（重抽路径拿到 None 就放弃重试，走兜底话术）。
+    2026-11-19 漫画台的角色 LoRA 要用：渲染参数卡会重建 LoRA 链，角色节点
+    必须先套参数、再插进链头，最后才把追加了 trigger/identity 的提示词填回
+    占位符。顺序错了参数卡会把角色节点冲掉。
     """
     sd = load_skill(skill)
     if not sd or not sd["workflow"]:
-        return None
+        return None, prompt
     # nai5 触发词（2026-10-28）：moss 挂了 nai5 槽时按模板状态拼前缀。
     # 这里不知道调用方会不会显式关槽（跑图台），所以一律按模板拼，
     # 显式关的场景由 gen_api._run 里 strip_nai5_prefix 剥掉。
     from app.features.image import lora_slots
     prompt = lora_slots.nai5_prefix(skill) + prompt
+    if not apply_character:
+        return sd["workflow"], prompt
     # 角色 LoRA（2026-11-04）：prompt 里点名了库里的角色 → 模板副本插一个
     # 角色 LoRA 节点、触发词追加进提示词。没命中零干预；文件缺失时
     # match 返回 None（宁可角色不像，不能整单报 value_not_in_list）。
@@ -893,8 +911,21 @@ def build_t2i_workflow(skill, prompt, seed, user_text="", key=""):
     # 多一次延迟和一次调用；卡上已经知道她是谁了，没必要再问一遍。
     wf, prompt = char_loras.apply(skill, prompt, sd["workflow"],
                                   user_text=user_text, key=key)
-    return apply_prompt_placeholders(json.dumps(wf),
-                                     prompt, seed)
+    return wf, prompt
+
+
+def build_t2i_workflow(skill, prompt, seed, user_text="", key=""):
+    """按渠道模板 + 提示词 + 种子构建**文生图**工作流 dict。
+
+    供 worker 的「随机口令被拦静默重抽」用（image_jobs.process）。skill 不
+    存在或没有工作流返回 None（重抽路径拿到 None 就放弃重试，走兜底话术）。
+    """
+    wf, prompt = build_t2i_workflow_parts(skill, prompt, seed,
+                                          user_text=user_text, key=key)
+    if wf is None:
+        return None
+    return apply_prompt_placeholders(json.dumps(wf), prompt, seed)
+
 
 
 def _generate_image(prompt, skill=None, lora=None, source_image="",
@@ -1086,23 +1117,19 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
             log.info("拦下重复生图（NAI）：%s %s 已有一张同参数的图在途",
                      target, target_id)
             return _DUPLICATE_NOTE
-        # 二次确认闸（2026-10-04）：QQ 轮拦下发确认卡，对方回「好」才真入队。
-        from app.features.chat import confirm_gate
-        gate = confirm_gate.intercept("nai", skill=skill, prompt=prompt,
-                                      intent=intent, nai_i2i=nai_i2i,
-                                      skip_confirm=_skip_confirm)
-        if gate is not None:
-            return gate
+        # 2026-11-18 用户拍板：生图不再二次确认。用户给需求 → 直接入队，
+        # 不再回「即将画什么，回复好才跑」。`confirm_gate` 仍留给其它链路用。
         return _enqueue_nai(prompt, target, target_id, nai_i2i, intent, skill)
 
     # 垫图（图生图）= **模型传没传 `source_image`**，代码不判原话（2026-10-06
     # 拆掉了这里的 `_i2i_gate`，见文件开头的留档）。什么时候该传写在下面两处文案：
     # 本文件末尾的工具描述与 `source_image` 参数说明、`agent_prompt._TOOL_HINTS`。
     #
-    # 口径（2026-10-11 再翻转）：**明说「图生图」才填**——那张图会当构图条件
-    # 喂进去、锁住构图重画（silver / silver-hd / 高清三档都有骨架）。
-    # 引用 / 附图 + 只是提需求 → **不填**，走「照这张改词重画」（文生图）。
-    # 只有「只改一处、其余原样」那条编辑路才配 qwen 系。
+    # 口径（2026-11-18 最终版）：**引用图 + 明确指向这张图改局部才填**——
+    # 那张图会当构图条件喂进去；渠道优先沿用原渠道（有 i2i 骨架才留：
+    # qwen 系、krea2-jiguang），否则落 qwen_image_v1。
+    # 引用图 + 要另一张画面（换姿势 / 换角度 / 重画）→ **不填**，照这张改词重画。
+    # 没有引用图、只说「换成白裙子」也是文生图。
     # ⚠️ 这条边界只写在文案里（三处，见文件开头），代码不扫原话判。
 
     # 没点名 skill 时的默认渠道：文生图照旧 T2I_DEFAULT_SKILL。execute_tool 是 fn(**args)，
@@ -1178,11 +1205,14 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
         source_image = ""
         is_i2i = False
     if is_i2i:
-        # 重绘档吃这个数；qwen 的骨架里 denoise 写死 1、没有 `__DENOISE__`
-        # 可替（见模块开头②），所以这里对它是个空操作。
-        denoise_txt = "%.2f" % I2I_DENOISE
-        i2i = load_workflow(
-            os.path.join(skill_data["path"], "workflow_i2i.json"))
+        # 每个渠道的重绘强度；Qwen 1.0（零 latent 架构，0.85 会出平铺废图），其余 0.6。
+        denoise_txt = "%.2f" % _i2i_denoise(skill)
+        # 2026-11-18：Qwen 的 QQ 生图用独立骨架（1248 面积档 ≈1024×1536 /
+        # 真人 LoRA / `__DENOISE__`）；`workflow_i2i.json` 留给漫画加气泡，
+        # 保持 denoise 1，避免「改衣服」和「加气泡」互相污染。
+        _wf_name = ("workflow_i2i_qq.json" if skill == "qwen_image_v1"
+                    else "workflow_i2i.json")
+        i2i = load_workflow(os.path.join(skill_data["path"], _wf_name))
         if not i2i:
             return "错误: Skill '" + skill + "' 没有图生图工作流"
         try:
@@ -1192,10 +1222,10 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
             # 缩到本档画布的长边（不是 comfy_src 默认的 1216）：图生图的出图
             # 尺寸就是「这一步缩出来的尺寸 × 二段放大倍率」，所以高清档必须
             # 按自己的画布缩，否则垫图出来的还是源图那个大小。
-            # qwen 那一档不受这个尺寸影响：它的文生图骨架是 EmptySD3LatentImage，
-            # `_canvas_long_side` 读不出画布 → 落回 MAX_SIDE，而出图尺寸最终由
-            # 骨架里 `resolution` 那个面积档决定——这一步对它只是归一化
-            # （EXIF 方向 / 透明通道 / 8 的倍数），不是定尺寸。
+            # qwen 也按自己的文生图画布缩（2026-11-18 起 `_canvas_long_side`
+            # 认 EmptySD3LatentImage → 1536）；节点 `resolution=1248` 再把参考图
+            # 归到约 1024×1536 的面积档。1536² 会撑爆 16G 内存，实测直接重启。
+            # 这一步仍负责归一化：EXIF 方向 / 透明通道 / 8 的倍数。
             fitted, _size = comfy_src.fit(
                 raw, max_side=_canvas_long_side(skill_data["workflow"])
                 or comfy_src.MAX_SIDE)
@@ -1322,20 +1352,9 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
         log.info("拦下重复生图：%s %s 已有一张同参数的图在途，不再排第二张",
                  target, target_id)
         return _DUPLICATE_NOTE
-    # 二次确认闸（2026-10-04）：QQ 轮拦下发确认卡（渠道/种子/提示词全文），
-    # 对方回「好」由 confirm_gate 原样入队；网页端放行。放在所有守卫之后、
-    # 入队之前——存下的就是最终参数，确认后不需要重算任何东西。
-    from app.features.chat import confirm_gate
-    gate = confirm_gate.intercept("comfy", skill=skill, prompt=prompt, seed=seed,
-                                  intent=intent, workflow=workflow,
-                                  note=source_note,
-                                  skip_confirm=_skip_confirm,
-                                  i2i_src=i2i_src, i2i_name=uploaded)
-    if gate is not None:
-        return gate
-    # prompt 一路带到队列里，只为出图后记账本（编号 → 提示词）；出图用的是
-    # 上面填好的 workflow。seed 同样一路带到底：发图那行 caption 要贴它、
-    # 账本要存它（见 image_jobs._caption / image_log.save）。
+    # 2026-11-18 用户拍板：生图不再二次确认。原先这里拦一张确认卡、对方回
+    # 「好」才入队；现在用户给需求就直接排，回执由 `_qq_receipt` 直发。
+    # 只删这一步，`direct_gen` 管道和 `[直达生图]` 记账行都不动。
     job, reason = image_jobs.enqueue(target, target_id, workflow, skill,
                                      prompt=prompt, intent=intent, seed=seed,
                                      resample_fn=resample_fn,
@@ -1553,22 +1572,14 @@ tool = {
                   "为它换成 hd_ 只是白等 30 秒、白吃显存，画质并不会更好\n"
                   "  判据就一句：**带数字、带「档」字或说 anima = 换档；只是形容词 = 别动。**\n"
                   "【三个备选渠道都是「点名才用」，别主动推荐、别当默认】\n"
-                  "- **qwen_image_v1**（通义，1024×1536，**慢：一张 40 秒~1 分钟**）："
+                  "- **qwen_image_v1**（通义，1024×1536，**慢：一张 1~2 分钟**）："
                   "要**写实照片感**（真人摄影 / 商品图 / 场景照）、或提示词是**一长段自然语言描述**时才用。"
+                  "统一 25 步 / 1024×1536 / 真人 LoRA / 2x（2048×3072）；"
+                  "图生图走 `workflow_i2i_qq.json`，`resolution=1248`（≈1024×1536 面积档）/ denoise 1.0（Qwen 参考图不进 latent，"
+                  "0.85 会出平铺废图，别再调低）。"
                   "它的 prompt 写**完整主谓宾的自然语言句子**，不写标签堆、不写负面词、不传 lora；只出单张，要多个变体分多次调用。"
-                  "它（和它的 4x 版 qwen-hd）是**「只改一处、其余原样」那条编辑路**"
-                  "（见下面【要「只改一处、其余原样」→ qwen 系两条】）\n"
-                  "- **qwen-hd**（qwen 的 4x 超清版，1024×1536 → **4096×6144**）："
-                  "**只在用户明说「qwen-hd」或「qwen 超清」时传**，否则一律用 qwen。"
-                  "比 qwen 更慢、单张更大，别主动推荐、别在群里连刷。"
-                  "文生图/图生图**都支持**（它的图生图骨架同样只换了放大，出图一样是 4x）；"
-                  "说「qwen 超清 图生图」= 它 + `source_image=1`\n"
-                  "- **qwen30**（qwen 的30步副本，其余一致）：**只说「qwen30步」才传**"
-                  "（要刻长文字或更细精修，比 qwen 更慢）；文生图与图生图都支持"
-                  "（「qwen30步 图生图」= 它 + `source_image=1`），prompt 写法同 qwen_image_v1。\n"
-                  "- **qwen-real**（qwen真人，qwen 默认档挂 asianMix 真人 LoRA，"
-                  "步数/画布/采样与 qwen 完全一致）：**只说「qwen真人」才传**，"
-                  "没配 i2i，传 source_image 会丢参考图；prompt 写法同 qwen_image_v1。\n"
+                  "2026-11-18 起 `qwen-hd` / `qwen30` / `qwen-real` 对外下架，"
+                  "旧说法也一律落到这条，不再有 4x / 30 步 / 单独的真人档。\n"
                   "- **moss-qunyou**（MOSS 5B，**出字最准**，**25 步约 74 秒** / "
                   "1024×1536）：说「moss」"
                   "就传它（8 步 / 50 步两档 2026-10-28 已下架，老说法一律落到这里），"
@@ -1618,7 +1629,7 @@ tool = {
                   "**silver / silver-hd 有锁构图骨架**（`source_image` 能用，出图仍是本档画布）；"
                   "`jank` 是文生图专用、没有图生图骨架。"
                   "prompt 照常写标签式英文、不传 lora 就用工作流里那套现成的；"
-                  "要「只改一处、其余原样」的编辑走 qwen_image_v1 / qwen-hd。\n"
+                  "要「只改一处、其余原样」的编辑走 qwen_image_v1（krea2 里只有极光有 i2i）。\n"
                   "⚠️ `silver` 还常见作**发色词**（silver hair / 银发）——用户说「银发」"
                   "是在描述画面，不是点名渠道，别因为句子里有 silver 就传 skill；"
                   "但**默认本来就走 silver**，「银发的 X」直接写进 prompt、不传 skill 就行。\n\n"
@@ -1649,7 +1660,7 @@ tool = {
                   "（如 \"x.safetensors:0.8,y.safetensors:0.5\"），文件名要完整（.safetensors 结尾），"
                   "写错会返回可用清单。传了就完全接管本次 lora，每个渠道 2 个槽，没填满的自动关闭——"
                   "**nffa 也一样是 2 个槽**（画风 + 描边），对它传 lora 会把画风顶掉、画的就不是那个味了。\n\n"
-                  "【引用图片：明说「图生图」才垫】**引用 / 附图本身不等于要垫图**——"
+                  "【引用图片：指向这张图改局部才垫】**引用 / 附图本身不等于要垫图**——"
                   "看他说的话里有没有「照着这张画」的意思：\n"
                   " ① **明说要照着那张画**（「图生图 / 垫图 / 照着画 / 照这张画 / 复刻 / "
                   "参考这张的构图」）→ **才传 `source_image=1`**；"
@@ -1657,24 +1668,28 @@ tool = {
                   "（图生图只走 qwen 系，silver 系只是能垫）："
                   "那张图会被当成构图条件喂进去，出图是**重画的**、尺寸仍是本档画布，"
                   "prompt 照常写完整画面描述，不是写改动指令。\n"
-                  " ② **只是提需求 / 补充要求**（换装 / 换发色 / 改动作 /"
-                  "「要全身照」「脚趾露出」这类）→ **不传 `source_image`**：这是「照这张改词重画」，"
-                  "不是图生图。先拿那张图当初的提示词（自家图走账本、别人发的图就看画面反推）、"
-                  "把新需求并进去，**再用那张图当初的渠道**文生图重画（他没点名换渠道就别换）。\n"
+                  " ② **引用图 + 明确指向这张图改局部**（换装 / 换发色 / 去掉眼镜 / "
+                  "手指改成 5 个 / 修某个局部）→ **传 `source_image=1`**，这是图生图："
+                  "渠道优先沿用原渠道（原渠道有 i2i 骨架才留：qwen 系、krea2-jiguang），"
+                  "没有骨架或查不到原渠道就配 `qwen_image_v1`。"
+                  "prompt 写清改动后的物理细节（材质、织法、褶皱、光泽、接触阴影）和要保留的部分。\n"
+                  " ③ **引用图 + 要另一张画面**（换姿势 / 换角度 / 改景别 / 要全身照 / "
+                  "重画一版 / 同样感觉再来一张）→ **不传 `source_image`**："
+                  "拿那张图当初的提示词把新需求并进去，再用原渠道文生图重画。\n"
                   " **只是让你看图点评 / 反推提示词 / 问这图什么来头 → 不传 `source_image`**，直接回话。\n"
-                  " ⚠️ `jank` / `nffa` / `cunny` / `miao` / `krea2-*` / `sd` **没有图生图骨架**，"
-                  "别给它们传 `source_image`（传了会自动退回文生图、白等一轮）。\n\n"
-                  "【要「只改一处、其余原样」→ qwen 系两条：qwen_image_v1（2x）/ qwen-hd（4x 超清）】"
+                  " ⚠️ `jank` / `nffa` / `cunny` / `miao` / `sd` 与 **krea2 系里除极光外**的渠道"
+                  "**没有图生图骨架**，别给它们传 `source_image`（传了会自动退回文生图、白等一轮）。\n\n"
+                  "【要「只改一处、其余原样」→ qwen_image_v1；krea2 只有极光有 i2i】"
                   "对方**明说「qwen 图生图」+ 要改什么**时走这条。"
                   "`source_image` 填 1 = 垫**本轮出现的那张图**"
                   "（优先取对方引用的；他没引用就取他自己刚发的；两样都没有就垫不了，让他把图发出来再 @ 你一次）。\n"
-                  "- 传法：`skill=qwen_image_v1` + `source_image=1`（默认），或明说「qwen 超清 / qwen超清 / qwen-hd」时"
-                  "换成 `skill=qwen-hd`；prompt 只写**一句改动指令**"
-                  "（祈使句：改哪里→改成什么，末尾补 keep everything else exactly the same），"
-                  "**不要把整张图重新描述一遍**（那等于给模型一堆「这里也可以改」的许可）。"
+                  "- 传法：`skill=qwen_image_v1` + `source_image=1`；2026-11-18 起 qwen-hd / "
+                  "qwen30 / qwen真人 已下架，旧说法也落这一条（25 步 / 1248 面积档 / denoise 1.0 / 2x）。"
+                  "prompt 写清改动后的物理细节（材质、织法、褶皱、光泽、接触阴影），"
+                  "末尾补 keep everything else exactly the same；别只写一句换装指令。"
                   "一次只交代一处改动最稳，要改三件事就分三次调用。\n"
-                  "- **慢：一张 1~2 分钟**（silver 系 20~50 秒），所以它是点名才走的渠道，不是改图的默认做法"
-                  "（2026-10-02 用户明确：「不要让 AI 默认就用 qwen，太耗时」）。\n"
+                  "- **慢：一张 1~2 分钟**。只有「引用图 + 明确指向这张图改局部」才走；"
+                  "没有引用图、只是说「换成白裙子」是改提示词重新文生图，不要垫图。\n"
                   "- **动漫档（`anima_*` / `hd_*`）的垫图重绘已经从用法里撤掉**"
                   "（2026-10-06 用户拍板：「Anima 的图生图没有 Qwen 好用，图生图只需要一个 Qwen 的途径」）。"
                   "那 12 个渠道 2026-10-07 已被屏蔽，模型连名字都看不到。\n"
@@ -1711,8 +1726,8 @@ tool = {
             "skill": {"type": "string", "description": _skill_param_desc()},
             "lora": {"type": "string", "description": "可选，用户点名换 lora 时才传。「文件名:强度」逗号分隔，如 `x.safetensors:0.8,y.safetensors:0.5`，文件名要完整（.safetensors 结尾），每个渠道 2 个槽"},
             "preset": {"type": "string", "description": "群友自己存的 LoRA 组合，`zdy-` 开头的令牌（如 `zdy-光影`）。**原话里出现 `zdy-xxx` 就把整个词原样填进来**，不改写、不拆开、不要往 `lora` 里抄——它是一整套槽位，工具会按说话人查库并套用。查不到会返回可用的名字，照转告用户即可。传了 preset 就不用传 lora（预设优先）。"},
-            "source_image": {"type": "string", "description": "参考图：填 1 = 用本轮出现的那张图（优先取对方引用的，其次他自己刚发的；两样都没有会报错）。\n**明说「图生图」才填**（「图生图 / 垫图 / 照着画 / 照这张画 / 复刻 / 参考这张的构图 / 只改一处、其余原样」）——那张图会被当成构图条件喂进去、**锁住构图**，出图仍是重画的、尺寸仍是本档画布，**渠道沿用它点名的或原渠道，两样都没有就配 `skill=qwen_image_v1`**（图生图只走 qwen 系，silver / silver-hd / 高清三档只是能垫）。prompt 照常写完整画面描述，不是写改动指令。\n**引用 / 附图 + 只是提需求（换装 / 换发色 /「要全身照」这类）→ 不传**：那是「照这张改词重画」——拿那张图当初的提示词把新需求并进去、**沿用原渠道文生图重画**。\n**只是让你看图点评 / 反推提示词 / 问这图什么来头 → 不传。**\n要「**只改一处、其余原样**」的编辑才配 `skill=qwen_image_v1`（参考图编辑，只改那一句交代的地方、其余原样；慢，一张 1~2 分钟），prompt 只写**一句改动指令**；明说「qwen 超清」时换 `qwen-hd`，说「qwen30步」时换 `qwen30`。\n要「**修图**」（去糊 / 去噪 / 修清楚，**把这张图本身修好、不是重画**）配 `skill=qwen-restore`（用户明说「qwen修复」才用；~175 秒），prompt 可留空。\n`jank` / `nffa` / `cunny` / `miao` / `krea2-*` / `sd` 没有骨架，别给它们传（传了会自动退回文生图、白等一轮）。skill=nai 也支持垫图（云端）。动漫档（anima_* / hd_*）的**垫图重绘**骨架还在，但**用法上已撤掉**，别再拿它当图生图渠道。本机渠道的重绘强度是定死的，传 denoise 也没用。"},
-            "seed": {"type": "integer", "description": "生图种子，**只在对方点名要「用某个种子重画 / 换提示词再来一张」时才传**，平时一律不传（不传=随机）。范围 0 ~ 4294967295 的整数，填错格式/超界会直接报错，别猜。种子会跟着编号印在图那行 caption 上（`编号 · 分辨率 · 渠道 · seed 数字`），对方引用那条消息时能一起带回来。⚠️ 同一个种子只有配**同样的提示词 + 同样的渠道 + 同样的 lora**才画得出同一张图（改提示词重画=构图大体在、细节变）；动漫渠道是两段采样、两段共用这一个种子，所以只有这一个数。**只有本机渠道认**（hd_* / qwen_image_v1 / qwen30 / image_gen_v1 / krea2-* / nffa / moss），skill=nai 传了会被拒；image_gen_v1 一次出多张时第 k 张 = 这个数 + k - 1"}
+            "source_image": {"type": "string", "description": "参考图：填 1 = 用本轮出现的那张图（优先取对方引用的，其次他自己刚发的；两样都没有会报错）。\n**引用图 + 明确指向这张图改局部才填**（「换掉这件衣服 / 去掉眼镜 / 手指改成 5 个 / 修某个局部」）——那张图会被当成编辑源图喂进去，**渠道优先沿用原渠道（原渠道有 i2i 骨架才留：qwen 系、krea2-jiguang），没有骨架或查不到原渠道就配 `skill=qwen_image_v1`**。prompt 要写清改动后的物理细节和要保留的部分。\n**引用图 + 要另一张画面（换姿势 / 换角度 / 改景别 /「要全身照」/ 重画一版）→ 不传**：那是「照这张改词重画」——拿那张图当初的提示词把新需求并进去、**沿用原渠道文生图重画**。**没有引用图、只说「换成白裙子」也是文生图，不是图生图。**\n**只是让你看图点评 / 反推提示词 / 问这图什么来头 → 不传。**\n要「**只改一处、其余原样**」的编辑才配 `skill=qwen_image_v1`（参考图编辑，只改那一处、其余原样；慢，一张 1~2 分钟，25 步 / 1536 面积档 / denoise 1.0 / 2x），prompt 写清改动后的物理细节；2026-11-18 起 qwen-hd / qwen30 / qwen真人 已下架，旧说法也落这一条。\n要「**修图**」（去糊 / 去噪 / 修清楚，**把这张图本身修好、不是重画**）配 `skill=qwen-restore`（用户明说「qwen修复」才用；~175 秒），prompt 可留空。\n`jank` / `nffa` / `cunny` / `miao` / `sd` 与 **krea2 系里除极光外**的渠道没有骨架，别给它们传（传了会自动退回文生图、白等一轮）。skill=nai 也支持垫图（云端）。动漫档（anima_* / hd_*）的**垫图重绘**骨架还在，但**用法上已撤掉**，别再拿它当图生图渠道。本机渠道的重绘强度是定死的，传 denoise 也没用。"},
+            "seed": {"type": "integer", "description": "生图种子，**只在对方点名要「用某个种子重画 / 换提示词再来一张」时才传**，平时一律不传（不传=随机）。范围 0 ~ 4294967295 的整数，填错格式/超界会直接报错，别猜。种子会跟着编号印在图那行 caption 上（`编号 · 分辨率 · 渠道 · seed 数字`），对方引用那条消息时能一起带回来。⚠️ 同一个种子只有配**同样的提示词 + 同样的渠道 + 同样的 lora**才画得出同一张图（改提示词重画=构图大体在、细节变）；动漫渠道是两段采样、两段共用这一个种子，所以只有这一个数。**只有本机渠道认**（hd_* / qwen_image_v1 / image_gen_v1 / krea2-* / nffa / moss），skill=nai 传了会被拒；image_gen_v1 一次出多张时第 k 张 = 这个数 + k - 1"}
         },
         "required": ["prompt"]
     }

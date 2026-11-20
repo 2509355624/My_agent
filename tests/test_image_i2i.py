@@ -388,27 +388,28 @@ class I2IWorkflowShapeTest(unittest.TestCase):
         return wf
 
     def test_the_whitelist_is_redraw_plus_lllite_plus_qwen(self):
-        """白名单 = 12 个重绘档 + 6 个锁构图档 + qwen 四个编辑/修复档，共 23。
+        """白名单 = 12 个重绘档 + 6 个锁构图档 + qwen 三个编辑/修复档 + 极光 i2i。
 
-        `qwen30`（2026-10-16 用户新增的 30 步副本）骨架与 `qwen_image_v1`
-        同款（手写件、denoise 写死 1），所以归在 qwen 那一组。
+        2026-11-18 用户拍板：qwen-hd / qwen30 已下架，不再进白名单；
+        krea2 系只给 `krea2-jiguang` 做同渠道图生图试点，所以是 22 条。
         """
         self.assertEqual(len(gi._I2I_ANIMA_SKILLS), 12)
         self.assertEqual(len(gi._I2I_LLLITE_SKILLS), 6)
         self.assertEqual(
             gi._I2I_SKILLS,
             gi._I2I_ANIMA_SKILLS + gi._I2I_LLLITE_SKILLS
-            + ("qwen_image_v1", "qwen-hd", "qwen-charsheet", "qwen-restore",
-               "qwen30"))
-        self.assertEqual(len(gi._I2I_SKILLS), 23)
+            + ("qwen_image_v1", "qwen-charsheet", "qwen-restore",
+               "krea2-jiguang"))
+        self.assertEqual(len(gi._I2I_SKILLS), 22)
         # 两组机制不许重叠：同一份骨架不可能既删 EmptyLatentImage 又留着它
         self.assertEqual(
             set(gi._I2I_ANIMA_SKILLS) & set(gi._I2I_LLLITE_SKILLS), set())
         for skill in ("anima_clear", "anima_curvy", "hd_fast_clear",
-                      "hd_2_curvy", "qwen_image_v1", "qwen-hd",
+                      "hd_2_curvy", "qwen_image_v1", "krea2-jiguang",
                       "qwen-charsheet", "qwen-restore"):
             self.assertIn(skill, gi._I2I_SKILLS)
-        for skill in ("krea2", "image_gen_v1", "nffa", "miao", "cunny"):
+        for skill in ("krea2", "krea2-mingyin", "qwen-hd", "qwen30",
+                      "image_gen_v1", "nffa", "miao", "cunny"):
             self.assertNotIn(skill, gi._I2I_SKILLS)
 
     def test_all_twelve_have_the_i2i_shape(self):
@@ -450,37 +451,55 @@ class I2IWorkflowShapeTest(unittest.TestCase):
                                  "没有唯一的一段 KSampler 吃 VAEEncode 的 latent")
 
     def test_qwen_edit_skeleton_is_a_different_shape(self):
-        """qwen / qwen-hd 的骨架**不是**「LoadImage → VAEEncode」那一套，也不吃 `__DENOISE__`。
+        """qwen 的**漫画加气泡骨架**（`workflow_i2i.json`）不是重绘那一套。
 
         参考图进的是 `TextEncodeQwenImage21`（视觉 token + reference_latents），
         latent 由那个节点的第三个输出给出——**空** latent。所以 denoise 必须写死
         1：给 0.6 等于在全零 latent 上半重绘，参考图的位置信息直接被搅乱。
-        骨架里要是留着 `__DENOISE__`，运行时会把重绘档那个 0.6 灌进来。
-        qwen-hd 只是把末尾放大换成 4x，骨架形状跟 qwen_image_v1 完全一致。
+        2026-11-18 起 QQ 生图改用 `workflow_i2i_qq.json`（1536 / LoRA / denoise 1.0），
+        这份原文件留给漫画加气泡，**必须保持 denoise 1、不加 LoRA**。
         """
-        for skill in ("qwen_image_v1", "qwen-hd"):
-            with self.subTest(skill=skill):
-                wf = self._load(skill)
-                kinds = [n["class_type"] for n in wf.values()]
-                self.assertEqual(kinds.count("LoadImage"), 1)
-                self.assertEqual(kinds.count("TextEncodeQwenImage21"), 1)
-                self.assertNotIn("VAEEncode", kinds)
-                self.assertNotIn("EmptyLatentImage", kinds)
-                self.assertNotIn("EmptySD3LatentImage", kinds)
-                self.assertEqual(kinds.count("KSampler"), 1)
-                self.assertNotIn("__DENOISE__", json.dumps(wf))
-                load = [nid for nid, n in wf.items()
-                        if n["class_type"] == "LoadImage"][0]
-                self.assertEqual(wf[load]["inputs"]["image"], "__SOURCE_IMAGE__")
-                enc = [nid for nid, n in wf.items()
-                       if n["class_type"] == "TextEncodeQwenImage21"][0]
-                self.assertEqual(wf[enc]["inputs"]["images.image_1"], [load, 0])
-                ks = [n for n in wf.values()
-                      if n["class_type"] == "KSampler"][0]["inputs"]
-                self.assertEqual(ks["latent_image"], [enc, 2])
-                self.assertEqual(ks["positive"], [enc, 0])
-                self.assertEqual(ks["negative"], [enc, 1])
-                self.assertEqual(ks["denoise"], 1)
+        skill = "qwen_image_v1"
+        wf = self._load(skill)
+        kinds = [n["class_type"] for n in wf.values()]
+        self.assertEqual(kinds.count("LoadImage"), 1)
+        self.assertEqual(kinds.count("TextEncodeQwenImage21"), 1)
+        self.assertNotIn("VAEEncode", kinds)
+        self.assertNotIn("EmptyLatentImage", kinds)
+        self.assertNotIn("EmptySD3LatentImage", kinds)
+        self.assertEqual(kinds.count("KSampler"), 1)
+        self.assertNotIn("__DENOISE__", json.dumps(wf))
+        self.assertNotIn("LoraLoaderModelOnly", kinds)
+        load = [nid for nid, n in wf.items()
+                if n["class_type"] == "LoadImage"][0]
+        self.assertEqual(wf[load]["inputs"]["image"], "__SOURCE_IMAGE__")
+        enc = [nid for nid, n in wf.items()
+               if n["class_type"] == "TextEncodeQwenImage21"][0]
+        self.assertEqual(wf[enc]["inputs"]["images.image_1"], [load, 0])
+        ks = [n for n in wf.values()
+              if n["class_type"] == "KSampler"][0]["inputs"]
+        self.assertEqual(ks["latent_image"], [enc, 2])
+        self.assertEqual(ks["positive"], [enc, 0])
+        self.assertEqual(ks["negative"], [enc, 1])
+        self.assertEqual(ks["denoise"], 1)
+
+    def test_qwen_qq_i2i_skeleton_uses_new_params(self):
+        """QQ 生图的 qwen i2i：1248 面积档 / 25 步 / 真人 LoRA / `__DENOISE__` / 2x。"""
+        wf = load_workflow(os.path.join(
+            SKILLS, "qwen_image_v1", "workflow_i2i_qq.json"))
+        self.assertIsNotNone(wf)
+        enc = [n for n in wf.values()
+               if n["class_type"] == "TextEncodeQwenImage21"][0]["inputs"]
+        self.assertEqual(enc["resolution"], 1248)
+        lora = [nid for nid, n in wf.items()
+                if n["class_type"] == "LoraLoaderModelOnly"]
+        self.assertEqual(len(lora), 1)
+        ks = [n for n in wf.values()
+              if n["class_type"] == "KSampler"][0]["inputs"]
+        self.assertEqual(ks["steps"], 25)
+        self.assertEqual(ks["model"], [lora[0], 0])
+        self.assertEqual(ks["denoise"], "__DENOISE__")
+        self.assertIn("UpscaleModelLoader", [n["class_type"] for n in wf.values()])
 
     def test_hd_3_is_not_in_the_redraw_group(self):
         """三档**不在重绘组里**——它 2026-10-10 起走的是锁构图那条（见下一个类）。
@@ -494,6 +513,75 @@ class I2IWorkflowShapeTest(unittest.TestCase):
                             "文生图渠道 %s 应该还在" % skill)
             self.assertNotIn(skill, gi._I2I_ANIMA_SKILLS)
             self.assertIn(skill, gi._I2I_LLLITE_SKILLS)
+
+
+class QwenT2IParamsTest(unittest.TestCase):
+    """2026-11-18 Qwen 文生图统一口径：25 步 / 1024×1536 / 真人 LoRA / 2x。"""
+
+    def _wf(self):
+        wf = load_workflow(os.path.join(SKILLS, "qwen_image_v1",
+                                        "workflow.json"))
+        self.assertIsNotNone(wf)
+        return wf
+
+    def test_steps_and_base_resolution(self):
+        wf = self._wf()
+        ks = [n["inputs"] for n in wf.values()
+              if n["class_type"] == "KSampler"][0]
+        self.assertEqual(ks["steps"], 25)
+        self.assertEqual(ks["cfg"], 1.0)
+        latent = [n["inputs"] for n in wf.values()
+                  if n["class_type"] == "EmptySD3LatentImage"][0]
+        self.assertEqual((latent["width"], latent["height"]), (1024, 1536))
+
+    def test_real_lora_is_wired_into_the_sampler(self):
+        wf = self._wf()
+        lora = [nid for nid, n in wf.items()
+                if n["class_type"] == "LoraLoaderModelOnly"]
+        self.assertEqual(len(lora), 1)
+        self.assertEqual(wf[lora[0]]["inputs"]["lora_name"],
+                         "hina_QwenImage2.1_asianMix_Lora_v3.0-rank64.safetensors")
+        ks = [n["inputs"] for n in wf.values()
+              if n["class_type"] == "KSampler"][0]
+        self.assertEqual(ks["model"], [lora[0], 0])
+
+    def test_output_goes_through_2x_upscale(self):
+        wf = self._wf()
+        up = [nid for nid, n in wf.items()
+              if n["class_type"] == "ImageUpscaleWithModel"]
+        self.assertEqual(len(up), 1)
+        save = [n["inputs"] for n in wf.values()
+                if n["class_type"] == "SaveImage"][0]
+        self.assertEqual(save["images"], [up[0], 0])
+
+
+class Krea2JiguangI2IShapeTest(unittest.TestCase):
+    """2026-11-18 krea2 只在极光上加同渠道图生图（其余 krea2 仍只文生图）。"""
+
+    def test_only_jiguang_has_an_i2i_skeleton(self):
+        self.assertTrue(os.path.exists(os.path.join(
+            SKILLS, "krea2-jiguang", "workflow_i2i.json")))
+        for skill in ("krea2-mingyin", "krea2-real", "krea2-general"):
+            self.assertFalse(os.path.exists(os.path.join(
+                SKILLS, skill, "workflow_i2i.json")),
+                "%s 不该有 i2i 骨架" % skill)
+
+    def test_shape_is_redraw_with_placeholders(self):
+        wf = load_workflow(os.path.join(SKILLS, "krea2-jiguang",
+                                        "workflow_i2i.json"))
+        self.assertIsNotNone(wf)
+        kinds = [n["class_type"] for n in wf.values()]
+        self.assertEqual(kinds.count("LoadImage"), 1)
+        self.assertEqual(kinds.count("VAEEncode"), 1)
+        self.assertEqual(kinds.count("KSampler"), 2)
+        self.assertTrue(any(
+            (n.get("inputs") or {}).get("image") == "__SOURCE_IMAGE__"
+            for n in wf.values()))
+        self.assertTrue(any(
+            (n.get("inputs") or {}).get("denoise") == "__DENOISE__"
+            for n in wf.values()))
+        self.assertIn("LatentUpscaleBy", kinds)
+        self.assertIn("UpscaleModelLoader", kinds)
 
 
 class LLLiteI2IShapeTest(unittest.TestCase):
@@ -798,6 +886,21 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
                   and n["inputs"].get("latent_image") == [enc, 0]][0]
         self.assertEqual(wf[stage1]["inputs"]["denoise"], gi.I2I_DENOISE)
 
+    def test_krea2_jiguang_uses_the_global_i2i_denoise(self):
+        """极光 i2i 走全局 0.6，源图缩到它自己的 1216 画布。"""
+        seen = {}
+        p1, p2, p3 = self._feed(seen=seen)
+        with p1, p2, p3:
+            out, wf = self._run(prompt="x", skill="krea2-jiguang",
+                                source_image="1")
+        self.assertIn("任务已提交", out)
+        enc = self._one(wf, "VAEEncode")
+        stage1 = [nid for nid, n in wf.items()
+                  if n["class_type"] == "KSampler"
+                  and n["inputs"].get("latent_image") == [enc, 0]][0]
+        self.assertEqual(wf[stage1]["inputs"]["denoise"], gi.I2I_DENOISE)
+        self.assertEqual(seen["max_side"], 1216)
+
     def test_source_is_scaled_to_the_channels_own_canvas(self):
         """源图缩到**本档画布的长边**，不是 comfy_src 默认的 1216。
 
@@ -942,10 +1045,11 @@ class I2IFlowTest(_I2IRunner, unittest.TestCase):
 class QwenEditFlowTest(_I2IRunner, unittest.TestCase):
     """qwen 的图生图 = **编辑**：源图当参考图进文本编码节点，不是进 latent。
 
-    跟上面那 12 档最要命的区别是 **denoise 必须是 1**：KSampler 吃的是
-    `TextEncodeQwenImage21` 吐出来的**空** latent（形状照第一张参考图），参考图
-    的位置信息全在 conditioning 里。运行时要是把重绘档那个 0.6 灌进去，就等于在
-    一张全零 latent 上做半重绘——构图直接乱掉，改图变成凭空重画。
+    2026-11-18 用户统一口径：QQ 生图走 `workflow_i2i_qq.json`——1248 面积档
+    （≈1024×1536）/ 25 步 / 真人 LoRA / denoise 1.0 / 末尾 2x。denoise 由
+    `I2I_DENOISE_BY_SKILL` 按渠道给，模型传的值一律不认。**1.0 是硬口径**：编解码
+    节点吐的是全零 latent，实测 0.85 会出平铺废图，别按「保留原图」去调低。
+    `resolution` 也别写 1536：实测 16G 内存直接被打爆、ComfyUI 重启。
     """
 
     def _edit(self, **kw):
@@ -982,14 +1086,19 @@ class QwenEditFlowTest(_I2IRunner, unittest.TestCase):
         enc = self._one(wf, "TextEncodeQwenImage21")
         self.assertEqual(wf[enc]["inputs"]["images.image_1"], [load, 0])
 
-    def test_denoise_stays_one(self):
-        """denoise 定死 1，模型传什么都不改——它一调就以为「调低 = 只微调」。"""
-        for kw in ({}, {"denoise": 0.2}, {"denoise": 0.9}):
+    def test_denoise_is_one(self):
+        """Qwen i2i denoise 定死 1.0，模型传什么都不改。
+
+        2026-11-18 实测：`TextEncodeQwenImage21` 的 latent 输出是全零，
+        0.85 在零 latent 起跑会出平铺废图；参考图走 reference_latents，
+        保原样靠 prompt，不靠降 denoise。
+        """
+        for kw in ({}, {"denoise": 0.2}, {"denoise": 0.85}):
             with self.subTest(**kw):
                 _, wf = self._edit(**kw)
                 ks = [n for n in wf.values()
                       if n["class_type"] == "KSampler"][0]
-                self.assertEqual(ks["inputs"]["denoise"], 1)
+                self.assertEqual(ks["inputs"]["denoise"], 1.0)
 
     def test_no_placeholder_survives_the_submit(self):
         """占位符一个都不许带着走：`__DENOISE__` 漏在骨架里会被灌进 0.6。"""
@@ -1006,9 +1115,9 @@ class QwenEditFlowTest(_I2IRunner, unittest.TestCase):
         ks = [n for n in wf.values() if n["class_type"] == "KSampler"][0]
         self.assertEqual(ks["inputs"]["seed"], 12345)
 
-    def test_source_fits_the_default_side_not_a_canvas(self):
-        """源图按 `comfy_src.MAX_SIDE` 归一化：本渠道的骨架没有 EmptyLatentImage，
-        读不出画布长边，落回默认值——出图尺寸由骨架里 `resolution` 那个面积档决定。
+    def test_source_fits_the_qwen_canvas(self):
+        """源图按 Qwen 文生图画布长边缩：`EmptySD3LatentImage` 的 1024×1536
+        → 1536，再由节点 `resolution=1248` 归到约 1024×1536 面积档。
         """
         seen = {}
         p1, p2, p3 = self._feed(seen=seen)
@@ -1016,7 +1125,7 @@ class QwenEditFlowTest(_I2IRunner, unittest.TestCase):
             out, _ = self._run(prompt="x", skill="qwen_image_v1",
                                source_image="1")
         self.assertIn("任务已提交", out)
-        self.assertEqual(seen["max_side"], comfy_src.MAX_SIDE)
+        self.assertEqual(seen["max_side"], 1536)
 
     def test_source_failure_submits_nothing(self):
         """取不到源图就报错，**绝不退回文生图**——改图失败却凭空画一张，

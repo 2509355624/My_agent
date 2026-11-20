@@ -154,6 +154,27 @@ class ServiceManager:
     def _launch(self, spec: ServiceSpec, fail_label: str):
         """起进程并等就绪；启动和重启共用，避免两份几乎一样的代码。"""
         try:
+            # ComfyUI 启动要几十秒；端口起来前不能当成“没进程”再拉一套。
+            # 否则控制台 + 看门狗 + QQ 机器人会各拉一套，互相抢 8188，
+            # 用户看到的就是“一直闪”的 cmd 窗口（2026-11-18 实测）。
+            if spec.id == "comfyui":
+                existing = self._existing_comfy_pids()
+                if existing:
+                    with self._lock:
+                        st = self._states[spec.id]
+                        st.status = "starting"
+                        st.detail = "已有 ComfyUI 进程启动中（PID %s）" % "、".join(
+                            str(pid) for pid in existing[:2])
+                        st.pid = existing[0]
+                        st.started_at = time.time()
+                    status, detail = self._wait_existing(spec, existing)
+                    with self._lock:
+                        self._states[spec.id].status = status
+                        self._states[spec.id].detail = detail
+                        self._states[spec.id].pid = (existing[0]
+                                                     if status == "running" else None)
+                    return
+
             if spec.ensure_qq:
                 self._ensure_qq()
             proc, handles = self._spawn(spec)
@@ -228,6 +249,11 @@ class ServiceManager:
             pid = self._read_pid_file(spec.pid_file)
             if pid:
                 targets.append(pid)
+        # ComfyUI 可能同时存在“端口 owner”和“还在启动、没占端口”的重复实例。
+        # 只杀端口 owner 会留下启动中的那一套，下次又抢 8188。这里把同
+        # main.py 的进程全收进来，按进程树清干净。
+        if spec.id == "comfyui":
+            targets.extend(self._existing_comfy_pids())
         # 无端口、无 PID 文件的（如看门狗）只能按命令行找；否则停止会变成
         # 「没杀旧进程又起一个新的」，两个看门狗一起跑。
         pid = self._effective_pid(spec)
@@ -402,6 +428,26 @@ class ServiceManager:
         if spec.login_port and not self._port_open(spec.login_port):
             parts.append("未登录")
         return " · ".join(parts) if parts else "运行中"
+
+    def _wait_existing(self, spec: ServiceSpec, pids: list[int]) -> tuple[str, str]:
+        """等已经在启动的 ComfyUI 自己把端口开出来；不再重复拉进程。"""
+        deadline = time.time() + spec.start_timeout
+        while time.time() < deadline:
+            if self._port_open(spec.port or 0):
+                return "running", self._detail(spec, pids[0])
+            if not any(self._pid_alive(pid) for pid in pids):
+                return "error", "已有的 ComfyUI 进程已退出"
+            time.sleep(0.5)
+        return "error", "已有 ComfyUI 进程启动超时（端口 %s 未监听）" % spec.port
+
+    @staticmethod
+    def _existing_comfy_pids() -> list[int]:
+        """按 comfy_launch 的完整 main.py 路径找进程，避免误伤其它 python。"""
+        try:
+            from app.features.image import comfy_launch
+            return list(comfy_launch.process_pids() or [])
+        except Exception:                                # noqa: BLE001
+            return []
 
     def _wait_ready(self, spec: ServiceSpec, proc: subprocess.Popen) -> tuple[str, str]:
         deadline = time.time() + spec.start_timeout

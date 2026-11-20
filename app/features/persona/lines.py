@@ -125,7 +125,9 @@ def switch_line(base, card, slot=0):
         st[base]["slot"] = n
     else:
         st[base].pop("slot", None)
-    svc._save_state(st)
+    # base 只是「此刻在演谁」的副本，永远以线键为准；显式 deleted 防止
+    # 盘上的旧 base 把 turn_total 等字段合并回来（删档后显示 193 轮）。
+    svc._save_state(st, deleted=[base])
     return ckey
 
 
@@ -146,6 +148,29 @@ def switch(session_key, card):
     state = svc._load_state()
     old = state.get(session_key)
     if isinstance(old, dict) and str(old.get("card") or "") == card["id"]:
+        # 2026-11-19：这条线「只有 1 轮」却挂着 1000 字旧小记，说明是
+        # 旧版残档/上一条线没清干净。继续保留会把旧事直接喂给第一轮，
+        # 用户看到的是一整晚的晚饭、红酒、洗澡。这里按新线重建，并把
+        # 这条线的旧 RAG collection 一起丢掉。
+        note = str(old.get("note") or "").strip()
+        try:
+            total = int(old.get("turn_total") or 0)
+        except (TypeError, ValueError):
+            total = 0
+        if note and total <= 1 and len(note) > 200:
+            state[session_key] = {"card": card["id"], "note": "", "turns": 0,
+                                  "mood": "", "intensity": 0, "state": ""}
+            # 必须显式 deleted：否则 `_save_state` 的合并会把盘上的旧线
+            # 原样补回来，`turn_total` 也会被「只许前进」顶回旧值。
+            svc._save_state(state, deleted=[session_key])
+            try:
+                from app.features.persona import rag as persona_rag
+                persona_rag.drop_line(session_key)
+            except Exception:                            # noqa: BLE001
+                svc.log.exception("清空旧线回忆库失败 %s", session_key)
+            svc.log.info("旧线残档按新线重建：%s（旧小记 %d 字）",
+                         session_key, len(note))
+            return
         svc.log.info("扮演态回到旧线：%s（保留小记 %d 字 / %s 轮）",
                  session_key, len(str(old.get("note") or "")),
                  old.get("turns"))

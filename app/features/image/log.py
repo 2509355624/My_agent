@@ -164,3 +164,40 @@ def lookup(tag):
         log.warning("生图账本读不出来 %s：%s", PATH, exc)
         return None
     return found
+
+
+def latest_for(target, target_id):
+    """按会话取账本里最后一条生图记录；没有返回 None。
+
+    给 `direct_gen._last_job` 做跨进程兜底用（2026-11-18）：内存里的
+    `_LAST_JOB` 重启即空，但「再来一张」还要拿到上一张的渠道和提示词。
+    只认 target + target_id，不跨会话；target_id 统一按字符串比，避免
+    QQ 适配层给 int、账本存 str 时对不上。
+    """
+    if not target or not target_id:
+        return None
+    found = None
+    try:
+        with _lock:
+            if not os.path.exists(PATH):
+                return None
+            with open(PATH, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not isinstance(row, dict):
+                        continue
+                    if row.get("target") != target:
+                        continue
+                    if str(row.get("target_id")) != str(target_id):
+                        continue
+                    found = row
+    except Exception as exc:
+        log.warning("生图账本按会话读不出来 %s：%s", PATH, exc)
+        return None
+    return found

@@ -4,9 +4,15 @@
 这些测试不启动真实进程；进程托管器用 FakeManager 顶替。
 """
 
+import socket
+import threading
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from app.features.control import launch as launch_module
+from app.features.control import panel as panel_module
 from app.features.control.panel import create_app
 from app.features.control.specs import default_specs, status_color, status_label
 
@@ -126,10 +132,10 @@ class SpecsTest(unittest.TestCase):
         self.assertFalse(specs["watchdog"].autostart)
         self.assertFalse(specs["comfyui"].autostart)
 
-    def test_launcher_is_minimal_and_does_not_use_path_commands(self):
+    def test_launcher_is_minimal_and_restarts_panel_idempotently(self):
         bat = (Path(__file__).resolve().parents[1] / "启动控制台.bat").read_text(
             encoding="utf-8")
-        self.assertIn('start "" "%PYW%" -m app.features.control.panel', bat)
+        self.assertIn('start "" "%PYW%" -m app.features.control.launch', bat)
         self.assertNotIn("netstat", bat.lower())
         self.assertNotIn("findstr", bat.lower())
         self.assertNotIn("timeout", bat.lower())
@@ -201,6 +207,102 @@ class PanelApiTest(unittest.TestCase):
         self.assertIn("test-token", html)
         self.assertIn("服务控制台", html)
         self.assertIn("grid-template-columns: repeat(3", html)
+        self.assertEqual("no-store", r.headers.get("Cache-Control"))
+
+    def test_page_has_a_separate_restart_console_button(self):
+        html = self.client.get("/").get_data(as_text=True)
+        self.assertIn("重启控制台", html)
+        self.assertIn("/api/panel/restart", html)
+
+    def test_restart_console_route_requires_token(self):
+        panel_module._PANEL_RESTARTING = False
+        r = self.client.post("/api/panel/restart")
+        self.assertEqual(401, r.status_code)
+        self.assertFalse(panel_module._PANEL_RESTARTING)
+
+    def test_restart_console_route_spawns_only_a_replacement(self):
+        panel_module._PANEL_RESTARTING = False
+        with patch.object(panel_module, "_spawn_replacement") as spawn, \
+                patch.object(panel_module, "_exit_process") as exit_process:
+            r = self.client.post(
+                "/api/panel/restart",
+                headers={"X-Control-Token": "test-token"},
+            )
+        self.assertEqual(200, r.status_code)
+        self.assertEqual("restarting", r.get_json()["status"])
+        spawn.assert_called_once()
+        panel_module._PANEL_RESTARTING = False
+
+    def test_restart_console_does_not_spawn_twice(self):
+        panel_module._PANEL_RESTARTING = True
+        try:
+            with patch.object(panel_module, "_spawn_replacement") as spawn:
+                r = self.client.post(
+                    "/api/panel/restart",
+                    headers={"X-Control-Token": "test-token"},
+                )
+            self.assertEqual(200, r.status_code)
+            self.assertTrue(r.get_json()["busy"])
+            spawn.assert_not_called()
+        finally:
+            panel_module._PANEL_RESTARTING = False
+
+    def test_replacement_console_does_not_autostart_other_services(self):
+        with patch.object(panel_module.subprocess, "Popen") as popen:
+            panel_module._spawn_replacement()
+        kwargs = popen.call_args.kwargs
+        self.assertEqual("0", kwargs["env"]["CONTROL_AUTOSTART"])
+        self.assertEqual("1", kwargs["env"]["CONTROL_NO_BROWSER"])
+        self.assertEqual("1", kwargs["env"]["CONTROL_WAIT_FREE"])
+
+
+class ControlLaunchTest(unittest.TestCase):
+    def test_existing_panel_is_replaced_without_autostart(self):
+        with patch.object(launch_module, "panel_pid", return_value=13516), \
+                patch.object(launch_module, "spawn_panel") as spawn, \
+                patch.object(launch_module, "_taskkill") as kill, \
+                patch.object(launch_module.logging, "basicConfig"):
+            self.assertEqual(0, launch_module.main())
+        spawn.assert_called_once_with(autostart=False, open_browser=True)
+        kill.assert_called_once_with(13516)
+
+    def test_cold_start_keeps_autostart(self):
+        with patch.object(launch_module, "panel_pid", return_value=None), \
+                patch.object(launch_module, "spawn_panel") as spawn, \
+                patch.object(launch_module.logging, "basicConfig"):
+            self.assertEqual(0, launch_module.main())
+        spawn.assert_called_once_with(autostart=True, open_browser=True)
+
+    def test_taskkill_never_uses_tree_flag(self):
+        with patch.object(launch_module.subprocess, "run") as run:
+            launch_module._taskkill(1234)
+        cmd = run.call_args.args[0]
+        self.assertIn("/PID", cmd)
+        self.assertIn("1234", cmd)
+        self.assertNotIn("/T", cmd)
+
+
+class PanelRestartHelperTest(unittest.TestCase):
+    def test_waits_until_old_console_releases_5177(self):
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen()
+        port = server.getsockname()[1]
+
+        def close_later():
+            time.sleep(0.6)
+            server.close()
+
+        closer = threading.Thread(target=close_later)
+        closer.start()
+        try:
+            self.assertTrue(panel_module._wait_for_port_free(port, timeout=3.0))
+        finally:
+            closer.join(timeout=2.0)
+            try:
+                server.close()
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":

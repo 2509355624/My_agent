@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "base_url": "http://192.168.0.127:17493",
+  "timeout_sec": 240,
+  "model_size": "0.6B",
+  "engine": "qwen",
+  "profiles": {
+    "furina": {
+      "profile_id": "762f8104-9571-43fe-aaa8-45fcefaaa324",
+      "name": "芙宁娜",
+      "language": "zh"
+    },
+    "sunna": {
+      "profile_id": "ef4e352b-347d-4d72-9270-6d19dff4180b",
+      "name": "千夏",
+      "language": "zh"
+    }
+  }
+}

@@ -14,6 +14,8 @@
   GET  /api/comic/status    槽位轮询：剧本 + state.json → 每格状态与图 URL
   GET  /api/comic/render_opts  读这个任务的渲染参数覆盖（render.json）+ ComfyUI 可用清单
   POST /api/comic/render_opts  保存 / 重置（reset=true）渲染参数覆盖
+  GET  /api/comic/characters  某渠道可选的角色 LoRA（网页下拉）
+  POST /api/comic/character   保存本任务的角色 LoRA 选择
   GET  /api/comic/prompt_suffix  读全局附加提示词（所有任务共用一份）
   POST /api/comic/prompt_suffix  写 / 清空全局附加提示词（群友禁用）
   POST /api/comic/rerender  换种子重跑某格（重置该格 → 后台只跑阶段一）
@@ -61,6 +63,7 @@ from flask import (Blueprint, Response, g, jsonify, request, send_file,
 
 from app.features.comic import silver_comic
 from app.features.comic import comic
+from app.features.comic import job_state
 from app.features.comic import agent as comic_agent
 from app.features.image import jobs as image_jobs
 from app.features.comic import quota as comic_quota
@@ -403,6 +406,46 @@ def _skill_for(path, wanted=""):
     return _resolve_skill(path, wanted)
 
 
+def _state_character(path):
+    """任务目录里记着的角色 LoRA key（`state.json` 的 `character_lora`）。
+
+    只读 `state.json`：角色 LoRA 是剧本任务的概念，写真任务（portrait.json）
+    不参与；空串 = 没指定，界面显示「不指定」。
+    """
+    if not path:
+        return ""
+    fp = os.path.join(path, "state.json")
+    if not os.path.isfile(fp):
+        return ""
+    try:
+        with open(fp, "r", encoding="utf-8") as f:
+            data = json.load(f) or {}
+    except (OSError, ValueError, AttributeError):
+        return ""
+    v = data.get("character_lora") if isinstance(data, dict) else None
+    return v.strip() if isinstance(v, str) else ""
+
+
+def _save_task_character(path, key):
+    """把角色 LoRA key 写回 `state.json`（没有 state.json 就不写）。"""
+    key = str(key or "").strip()
+    if not path:
+        return
+    fp = os.path.join(path, "state.json")
+    if not os.path.isfile(fp):
+        return
+    try:
+        with open(fp, "r", encoding="utf-8") as f:
+            data = json.load(f) or {}
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data["character_lora"] = key
+    with open(fp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
 def _save_task_skill(path, skill):
     """把渠道记回任务目录。
 
@@ -531,7 +574,7 @@ def _read_fix_report(path):
         return None
 
 
-def _spawn(path, phase, fn, on_error=None, finish=None):
+def _spawn(path, phase, fn, on_error=None, finish=None, meta=None):
     """起后台线程跑 fn()。同一任务已有线程在跑就拒绝（409 语义）。
 
     `finish` 是这个任务跑完后的收尾动作，由**调用方显式给**，不靠 phase 猜：
@@ -546,13 +589,20 @@ def _spawn(path, phase, fn, on_error=None, finish=None):
     内存 `_JOBS`，state.json 一个字都不动——而 `rerender` / `edit_scene` 进门
     第一件事就是把该格写成 `pending`，于是线程死后那格永远停在 pending，前端
     badge 显示「排队」，看着像卡死（用户 18:46 实报：ComfyUI 重启时点重跑，
-    探活失败，"重启完还在排队"）。收尾由调用方给，因为只有它知道是哪几格。
+    探活失败，"重启完还在排队"）。
+
+    `meta`：给 `job_state` 的续跑参数。线程句柄只活在 5174 进程里，5174 一
+    重启，`_JOBS` 就空了；账本落盘后，第一次 `status` 能明确说「上次被重启
+    中断」并告诉前端能不能续跑，而不是继续显示排队。
     """
     with _JOBS_LOCK:
         running = _JOBS.get(path)
         if running and running.get("phase"):
             return False
         _JOBS[path] = {"phase": phase, "error": None}
+    # 先落 running 再起线程：5174 随时可能被重启，线程还没体面退出前，
+    # 磁盘上必须已经有“这一批是谁、跑到哪”的记录。
+    job_state.begin(path, phase, meta or {})
 
     # 归属要在**请求线程**取：flask.g 是 thread-local，后台 worker 里读不到。
     owner = comic_quota.owner_of(path)
@@ -563,6 +613,7 @@ def _spawn(path, phase, fn, on_error=None, finish=None):
         except BaseException as exc:            # SystemExit 不是 Exception！
             with _JOBS_LOCK:
                 _JOBS[path] = {"phase": None, "error": str(exc)}
+            job_state.fail(path, str(exc) or "后台任务失败")
             comic.log.exception("后台任务失败 %s", path)
             if on_error is not None:
                 try:
@@ -572,6 +623,7 @@ def _spawn(path, phase, fn, on_error=None, finish=None):
             return
         with _JOBS_LOCK:
             _JOBS[path] = {"phase": None, "error": None}
+        job_state.finish(path, "done")
         # 群友任务的收尾由调用方用 finish 指定，默认什么都不做。
         # 单格重跑 / 改词 / 传底图都不再自动发（2026-11-10 用户拍板）。
         if owner and finish == "send":
@@ -606,6 +658,31 @@ def _mark_pending_failed(path, no=None):
         if hit:
             task.save_state()
             comic.log.info("已把 %d 个未跑完的格标成出错（%s）", hit, path)
+    return _apply
+
+
+def _mark_stage_failed(path, stage, no=None):
+    """线程整体挂掉时，把**还没推进到下一阶段**的格标成出错。
+
+    `_mark_pending_failed` 只处理 pending（底图阶段）；加气泡阶段崩掉时，
+    state.json 里那些格停在 `rendered`（有底图、没成品）。如果这里不落盘，
+    页面仍显示「待加气泡」，用户会以为后台还在跑。`stage` 由调用方给：
+      - "pending"  → 一句底图都没出的格
+      - "rendered" → 有底图、还没加气泡的格
+    已完成 `done` 的格不动，避免把已经成品的图标成失败。
+    """
+    def _apply(exc):
+        task = _load_task(path)
+        hit = 0
+        msg = str(exc) or "后台任务失败"
+        for p in task.panels if not no else [p for p in task.panels if p.no == no]:
+            if p.state != stage:
+                continue
+            p.error = msg
+            hit += 1
+        if hit:
+            task.save_state()
+            comic.log.info("已把 %d 个 %s 格标成出错（%s）", hit, stage, path)
     return _apply
 
 
@@ -1017,6 +1094,17 @@ def api_comic_start():
             if deny:
                 return deny
     scene_skill = _skill_for(path, data.get("scene_skill"))
+    # 角色 LoRA（2026-11-19）：请求带了才改；没带就沿用 state.json 里的。
+    # 空串是「显式不指定」，和「没带这个字段」要区分开。
+    if "character_lora" in data:
+        from app.features.image import char_loras
+        key = str(data.get("character_lora") or "").strip()
+        if key and not char_loras.available(key, scene_skill):
+            return jsonify({"ok": False,
+                            "error": "角色 %s 在渠道 %s 下不可用（不在白名单或文件缺失）"
+                                     % (key, scene_skill)}), 400
+        task.character_lora = key
+        _save_task_character(path, key)
     _save_task_skill(path, scene_skill)
     # 独占通道（2026-11-11）：把待跑底图格一次性推上队列，前 comic.EXCLUSIVE_MAX
     # 张登记优先票压后所有已排队任务。站主靠开跑旁的勾选框显式选择；**群友在
@@ -1030,7 +1118,10 @@ def api_comic_start():
     started = _spawn(path, "scene", lambda: comic.run(
         os.path.join(path, "script.md"), silver_only=True,
         scene_skill=scene_skill, exclusive=exclusive), on_error=_mark_pending_failed(path),
-        finish="notify")
+        finish="notify",
+        meta={"kind": "scene", "resumable": True,
+              "scene_skill": scene_skill, "exclusive": exclusive,
+              "only": None, "redo": False, "finish": "notify"})
     if not started:
         return jsonify({"ok": False, "error": "这个任务已经在跑了"}), 409
     # 扣次放在启动成功之后：409 / 404 的调用不该白吃一次机会。
@@ -1059,6 +1150,15 @@ def api_comic_rerun():
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404
     skill = _skill_for(path, data.get("scene_skill"))
+    if "character_lora" in data:
+        from app.features.image import char_loras
+        key = str(data.get("character_lora") or "").strip()
+        if key and not char_loras.available(key, skill):
+            return jsonify({"ok": False,
+                            "error": "角色 %s 在渠道 %s 下不可用（不在白名单或文件缺失）"
+                                     % (key, skill)}), 400
+        task.character_lora = key
+        _save_task_character(path, key)
     _save_task_skill(path, skill)
     # 独占判定与 /start 同一条规则（2026-11-11）：站主看请求、群友在
     # anima-line 渠道自动独占——重跑同样是整本底图批跑，不给优先的话
@@ -1076,7 +1176,10 @@ def api_comic_rerun():
     started = _spawn(path, "scene", lambda: comic.run(
         os.path.join(path, "script.md"), silver_only=True,
         scene_skill=skill, exclusive=exclusive),
-        on_error=_mark_pending_failed(path), finish="notify")
+        on_error=_mark_pending_failed(path), finish="notify",
+        meta={"kind": "scene", "resumable": True,
+              "scene_skill": skill, "exclusive": exclusive,
+              "only": None, "redo": False, "finish": "notify"})
     if not started:
         return jsonify({"ok": False, "error": "这个任务已经在跑了，先中断再重跑"}), 409
     comic.log.info("换渠道重跑 %s：%d 格，渠道 %s%s", os.path.basename(path),
@@ -1127,6 +1230,9 @@ def api_comic_abort():
 
     with _JOBS_LOCK:
         phase = (_JOBS.get(path) or {}).get("phase")
+    # 账本也标成 aborted：否则用户中断后下次 status 会把它当成“服务重启
+    # 中断”，又弹一个“继续上次任务”，等于没听用户的。
+    job_state.abort(path)
     log_line = "中断漫画任务 %s：%s，摘掉队列 %d 张，正在画 %d 张" % (
         os.path.basename(path), "有后台线程" if task_running else "没有后台线程",
         dropped, len(running))
@@ -1162,6 +1268,7 @@ def api_comic_status():
             qq = _qq()
             return jsonify({"ok": True, "task": os.path.basename(path),
                             "title": "", "running": None, "job_error": None,
+                            "resume": None,
                             "queue": image_jobs.queue_depth(),
                             "quota": comic_quota.snapshot(qq) if qq else None,
                             "delivery": comic_delivery.view(path) if qq else None,
@@ -1172,6 +1279,30 @@ def api_comic_status():
         return jsonify({"ok": False, "error": str(exc)}), 404
     with _JOBS_LOCK:
         running = dict(_JOBS.get(path) or {})
+    job_error = running.get("error")
+    resume = None
+    journal = None
+    if not running.get("phase"):
+        # 5174 重启后 _JOBS 是空的，但线程真的已经不在了；job.json 里还写着
+        # running。这里认出来：把格标成出错（不再显示“排队”），并告诉前端
+        # 能不能续跑。只在第一次 status 时改，之后状态就是 interrupted。
+        journal = job_state.read(path)
+        if journal and journal.get("status") == "running":
+            journal = job_state.mark_interrupted(path)
+            meta = journal.get("meta") or {}
+            stage = "rendered" if journal.get("phase") == "bubble" else "pending"
+            no = meta.get("single_no") if meta.get("kind") == "bubble" else None
+            _mark_stage_failed(path, stage, no)(
+                RuntimeError(journal.get("message") or "上次任务被服务重启中断"))
+            task = _load_task(path)
+        if journal and journal.get("status") in ("interrupted", "error"):
+            meta = journal.get("meta") or {}
+            job_error = job_error or journal.get("message")
+            if meta.get("resumable"):
+                resume = {"phase": journal.get("phase"),
+                          "kind": meta.get("kind"),
+                          "can_resume": True,
+                          "message": journal.get("message") or ""}
     panels = []
     for p in task.panels:
         item = {"no": p.no, "state": p.state, "seed": p.seed,
@@ -1219,7 +1350,8 @@ def api_comic_status():
                     "delivery": comic_delivery.view(path) if qq else None,
                     "title": task.meta.get("title", ""),
                     "running": running.get("phase"),
-                    "job_error": running.get("error"),
+                    "job_error": job_error,
+                    "resume": resume,
                     # ComfyUI 在不在（页面顶部那行小字）。在等它重启的时候，
                     # 用户得知道「是在等 ComfyUI」还是「界面卡死了」。
                     "comfy": _comfy_state(),
@@ -1233,6 +1365,56 @@ def api_comic_status():
                     # 那个——刷新页面、切换任务都不会再显示成默认 anima-line。
                     "scene_skill": _resolve_skill(path),
                     "panels": panels})
+
+
+@bp.route("/api/comic/resume", methods=["POST"])
+def api_comic_resume():
+    """继续上次被中断的整批任务（底图 / 加气泡）。
+
+    只认 `job.json` 里 `resumable=true` 的批次。`comic.run` 本来就按 state.json
+    断点续跑：底图只跑 pending，气泡只跑 rendered（done 跳过）。所以恢复不需要
+    保存“跑到第几格”，只需要把当时那批的**范围/参数**原样再交给它。
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        path = _task_dir(data.get("task"))
+        task = _load_task(path)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    journal = job_state.read(path)
+    if not journal or journal.get("status") not in ("interrupted", "error"):
+        return jsonify({"ok": False, "error": "没有可继续的中断任务"}), 400
+    meta = dict(journal.get("meta") or {})
+    if not meta.get("resumable"):
+        return jsonify({"ok": False,
+                        "error": "上次是手动单格任务，参数没存，不能自动续跑；"
+                                 "请重新点那一格"}), 400
+    kind = meta.get("kind")
+    if kind == "scene":
+        skill = meta.get("scene_skill") or _resolve_skill(path)
+        started = _spawn(
+            path, "scene", lambda: comic.run(
+                os.path.join(path, "script.md"), silver_only=True,
+                scene_skill=skill, exclusive=bool(meta.get("exclusive")),
+                only=None, redo=False),
+            on_error=_mark_pending_failed(path),
+            finish=meta.get("finish") or "notify", meta=dict(meta))
+    elif kind == "bubble":
+        only = set(meta.get("only") or []) or None
+        started = _spawn(
+            path, "bubble", lambda: comic.run(
+                os.path.join(path, "script.md"), only=only,
+                redo=bool(meta.get("redo")),
+                split_bubbles=bool(meta.get("split"))),
+            finish=meta.get("finish"),
+            on_error=_mark_stage_failed(path, "rendered", meta.get("single_no")),
+            meta=dict(meta))
+    else:
+        return jsonify({"ok": False, "error": "不认识的任务类型：%s" % kind}), 400
+    if not started:
+        return jsonify({"ok": False, "error": "这个任务已经在跑了"}), 409
+    comic.log.info("继续中断任务 %s：%s", os.path.basename(path), kind)
+    return jsonify({"ok": True, "phase": kind, "panels": len(task.panels)})
 
 
 @bp.route("/api/comic/fix", methods=["POST"])
@@ -1352,6 +1534,38 @@ def _render_resources():
     return out
 
 
+@bp.route("/api/comic/characters", methods=["GET"])
+def api_comic_characters():
+    """某渠道当前可选的角色 LoRA（网页下拉用）。没配/非 anima 渠道 → 空列表。"""
+    from app.features.image import char_loras
+    skill = _skill_for("", request.args.get("skill"))
+    return jsonify({"ok": True, "skill": skill,
+                    "characters": char_loras.list_for(skill)})
+
+
+@bp.route("/api/comic/character", methods=["POST"])
+def api_comic_character():
+    """保存本任务的角色 LoRA 选择（空串 = 不指定）。
+
+    只认这个渠道**真的能挂**的 key：下拉里列的也是这批，直连 API 传个 SDXL
+    角色给 anima 渠道会 400，而不是等到出图时静默跳过。
+    """
+    from app.features.image import char_loras
+    data = request.get_json(silent=True) or {}
+    try:
+        path = _task_dir(data.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    skill = _skill_for(path, data.get("skill"))
+    key = str(data.get("character_lora") or "").strip()
+    if key and not char_loras.available(key, skill):
+        return jsonify({"ok": False,
+                        "error": "角色 %s 在渠道 %s 下不可用（不在白名单或文件缺失）"
+                                 % (key, skill)}), 400
+    _save_task_character(path, key)
+    return jsonify({"ok": True, "skill": skill, "character_lora": key})
+
+
 @bp.route("/api/comic/render_opts", methods=["GET"])
 def api_comic_render_opts_get():
     """这个任务当前的渲染参数 + ComfyUI 可用清单。**不带 task = 只看全局默认**。
@@ -1368,6 +1582,7 @@ def api_comic_render_opts_get():
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 404
     skill = _skill_for(path, request.args.get("skill"))
+    from app.features.image import char_loras
     return jsonify({
         "ok": True,
         "skill": skill,
@@ -1375,6 +1590,10 @@ def api_comic_render_opts_get():
         "caps": comic_render_opts.caps_of(skill),
         "opts": comic_render_opts.load(path, skill),
         "resources": _render_resources(),
+        # 角色 LoRA（2026-11-19）：下拉候选 + 本任务当前选择。非 anima 渠道
+        # 返回空列表，前端整行隐藏。
+        "characters": char_loras.list_for(skill),
+        "character_lora": _state_character(path),
         "saved": bool(path) and os.path.isfile(comic_render_opts.path_of(path, skill)),
         "defaults_saved": comic_render_opts.has_defaults(skill),
     })
@@ -2053,13 +2272,22 @@ def api_comic_bubble():
             def _work():
                 comic.render_bubble(task, panel, split=split, prompt=override)
                 task.save_state()
-            if not _spawn(path, "bubble", _work):
+            if not _spawn(path, "bubble", _work,
+                          on_error=_mark_stage_failed(path, "rendered", no),
+                          meta={"kind": "bubble-manual", "resumable": False,
+                                "single_no": no}):
                 return jsonify({"ok": False, "error": "这个任务已经在跑了"}), 409
             return jsonify({"ok": True, "panels": [no], "split": split,
                             "override": True})
     started = _spawn(path, "bubble", lambda: comic.run(
         os.path.join(path, "script.md"), only=only, redo=redo,
-        split_bubbles=split), finish="send" if no == "all" else None)
+        split_bubbles=split), finish="send" if no == "all" else None,
+        on_error=_mark_stage_failed(path, "rendered",
+                                    None if no == "all" else no),
+        meta={"kind": "bubble", "resumable": True,
+              "only": sorted(only), "redo": redo, "split": split,
+              "finish": "send" if no == "all" else None,
+              "single_no": None if no == "all" else no})
     if not started:
         return jsonify({"ok": False, "error": "这个任务已经在跑了"}), 409
     return jsonify({"ok": True, "panels": sorted(only), "redo": redo,

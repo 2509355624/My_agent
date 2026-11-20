@@ -262,8 +262,17 @@ def _trigger_comfy_restart():
         log.error("取不到 ComfyUI 启动命令（COMFYUI_PYTHON / COMFYUI_ROOT 不对）")
         return False
     old = _comfy_pid_by_port()
-    if old is not None and not _kill_comfy_process(old):
-        return False
+    existing = comfy_launch.process_pids()
+    if old is None and existing:
+        # 端口还没开，但 main.py 已经在启动中：另一路正在拉，别再拉一套。
+        log.info("ComfyUI 已有进程 %s 正在启动，跳过重复拉起", existing)
+        return True
+    targets = list(dict.fromkeys(existing + ([old] if old else [])))
+    for pid in targets:
+        if pid == os.getpid():
+            continue
+        if not _kill_comfy_process(pid):
+            return False
     stream = comfy_launch.log_stream()
     try:
         subprocess.Popen(

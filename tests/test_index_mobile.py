@@ -73,24 +73,14 @@ class IndexMobileHeaderTest(unittest.TestCase):
 
 
 class IndexGalleryEntryTest(unittest.TestCase):
-    def _open_friend_block(self):
+    def test_gallery_entry_opens_local_same_origin(self):
+        # 本机 / 内网管理端直连 5174 开画廊，不再绕公网隧道 / 5175 网关。
+        self.assertIn("window.open('/gallery','_blank')", _html())
+
+    def test_gallery_entry_no_longer_uses_tunnel_helper(self):
         html = _html()
-        block = html[html.index("function openFriendPage(path)"):]
-        return block[:block.index("function toggleSidebar()")]
-
-    def test_gallery_entry_reads_fresh_tunnel_url(self):
-        block = self._open_friend_block()
-        self.assertIn("fetch('/api/friend_url'", block)
-        self.assertIn("cache: 'no-store'", block)
-        self.assertIn("u.origin + path", block)
-
-    def test_gallery_entry_falls_back_to_local_5175(self):
-        block = self._open_friend_block()
-        self.assertIn("':5175' + path", block)
-
-    def test_gallery_entry_no_longer_opens_the_stale_tunnel_directly(self):
-        self.assertNotIn(
-            "window.open(proto + '//' + host + ':5175' + path", _html())
+        self.assertNotIn("openFriendPage", html)
+        self.assertNotIn("':5175' + path", html)
 
 
 if __name__ == "__main__":

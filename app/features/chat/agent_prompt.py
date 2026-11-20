@@ -107,8 +107,8 @@ _BRIEF_PARAM_EXTRA = {
              "一段 10 步 / 二段 5 步；角色扮演里出的图默认就是它）；"
              "点名「anima鬼针草」/「anima肉感」=anima-guizhencao / anima-flesh"
              "（裸「肉感」是画风词，不算点名）、"
-             "点名 qwen/通义=qwen_image_v1、"
-             "点名「qwen真人」=qwen-real（qwen 默认档挂真人 LoRA，只文生图）、"
+             "点名 qwen/通义=qwen_image_v1（2026-11-18 起 qwen-hd / qwen30 / "
+             "qwen真人 已下架，旧说法也落这一条）、"
              "点名 nai=nai、点名 nffa=nffa。",
     # 开头的「垫图 / 图生图」由 `_brief_param_desc` 从真描述的第一句带过来，
     # 这里别再写一遍（写了两遍就成「垫图 / 图生图 垫图/图生图」）。
@@ -220,26 +220,27 @@ _TOOL_HINTS = [
     (("generate_image",),
      "- generate_image 的 prompt 参数必须是英文"),
     (("generate_image",),
-     "- `source_image` **明说「图生图」才传**（「图生图 / 垫图 / 照着画 / 照这张画 / "
-     "复刻 / 参考这张的构图」都算）——那张图会被当成构图条件喂进去、**锁住构图**，"
-     "出图是重画的；**渠道沿用它点名的或原渠道，两样都没有就配 `skill=qwen_image_v1`**"
-     "（图生图只走 qwen 系，silver / silver-hd / 高清三档只是能垫），"
-     "prompt 照常写完整画面描述。"
-     "**引用 / 附图 + 只是提需求（换装 / 换发色 /「要全身照」这类）→ 不传**："
-     "那是「照这张改词重画」——拿那张图当初的提示词把新需求并进去、"
-     "沿用原渠道文生图重画。"
+     "- `source_image` **引用图 + 明确指向这张图改局部才传**"
+     "（「换掉这件衣服 / 去掉眼镜 / 手指改成 5 个 / 修某个局部」都算）——"
+     "那张图会被当成编辑源图；**渠道优先沿用原渠道**"
+     "（有 i2i 骨架才留：qwen 系、krea2-jiguang），没有骨架或查不到原渠道就配 "
+     "`skill=qwen_image_v1`。"
+     "**引用图 + 要另一张画面（换姿势 / 换角度 / 要全身照 / 重画一版）→ 不传**："
+     "拿那张图当初的提示词把新需求并进去、沿用原渠道文生图重画。"
+     "**没有引用图、只说「换成白裙子」也是文生图。**"
      "**只是让你看图点评 / 反推提示词 / 问这图什么来头 → 不传**。"
-     "`jank` / `nffa` / `cunny` / `miao` / `krea2-*` / `sd` 没有骨架，别给它们传"),
+     "`jank` / `nffa` / `cunny` / `miao` / `sd` 与 krea2 系里除极光外的渠道没有骨架，别给它们传"),
     (("generate_image",),
-     "- 要「**只改一处、其余原样**」的编辑走 **qwen 系两条路："
-     "`skill=qwen_image_v1`（2x，默认）/ "
-     "`skill=qwen-hd`（4x 超清，明说「qwen 超清」才用）+ `source_image=1`**，"
-     "prompt **只写一句改动指令**（例：`change her coat to red, keep the pose, "
-     "face and background exactly the same`），**不要把整张图重新描述一遍**，"
-     "一次只改一处最稳。它是参考图编辑——那一处改了、其余原样，这是动漫档做不到的精度。"
-     "**慢：一张 1~2 分钟**（silver 系 20~50 秒），所以只在对方点名时才走。"
+     "- 要「**只改一处、其余原样**」的编辑走 `skill=qwen_image_v1` + "
+     "`source_image=1`；2026-11-18 起没有 qwen 系分档（qwen-hd / qwen30 / "
+     "qwen真人 都已下架，旧说法也落这一条），统一 25 步 / 1248 面积档 / "
+     "denoise 1.0 / 2x（Qwen 参考图不进 latent，降 denoise 会出平铺废图）。"
+     "prompt 要写清改动后的物理细节（材质、织法、褶皱、光泽、接触阴影），"
+     "末尾补 `keep everything else exactly the same`，不要只写一句换装指令，"
+     "一次只改一处最稳。它是参考图编辑——那一处改了、其余原样。"
+     "**慢：一张 1~2 分钟**。"
      "**动漫档（anima_* / hd_*）的垫图重绘已从用法里撤掉**"
-     "（2026-10-06 用户拍板：图生图只要 qwen 系途径，qwen_image_v1 或 qwen-hd），"
+     "（2026-10-06 用户拍板：图生图只要 qwen 系途径），"
      "那 12 个渠道 2026-10-07 已被屏蔽，模型连名字都看不到。"
      "skill=nai / nai_wide（NovelAI 云端，仅限已开通 NAI 的会话）也支持垫图"),
     (("generate_image",),

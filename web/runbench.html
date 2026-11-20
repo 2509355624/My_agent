@@ -194,7 +194,7 @@
     return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]; }); }
 
   function coverHtml(url, has, name, sub){
-    if(has) return '<img loading="lazy" src="'+esc(url)+'" alt="'+esc(name)+'" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\';">'
+    if(has) return '<img loading="lazy" decoding="async" src="'+esc(url)+'" alt="'+esc(name)+'" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\';">'
       + '<div class="ph" style="display:none"><b>'+esc(name)+'</b>'+esc(sub)+'</div>';
     return '<div class="ph"><b>'+esc(name)+'</b>'+esc(sub)+'</div>';
   }

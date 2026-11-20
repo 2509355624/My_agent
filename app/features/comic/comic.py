@@ -775,6 +775,9 @@ class Task:
         # 阶段一渠道（2026-10-19 多渠道）：跟着任务走，存在 state.json 里。
         # 空串 = 这个任务还没定过，调用方回落到 SCENE_SKILL。
         self.scene_skill = ""
+        # 角色 LoRA（2026-11-19）：任务级选择，存 state.json，整本共用。
+        # 空串 = 不指定，交给 build_t2i_workflow 按画面词自动判断。
+        self.character_lora = ""
 
     def raw_path(self, p):
         return os.path.join(self.raw_dir, "%s_raw.png" % p.no)
@@ -798,6 +801,9 @@ class Task:
         sk = str(data.get("scene_skill") or "").strip()
         if sk:
             self.scene_skill = sk
+        # 角色 LoRA 跟着任务走：老 state.json 没这个键 → 保持空串（旧行为）。
+        ck = str(data.get("character_lora") or "").strip()
+        self.character_lora = ck
         for p in self.panels:
             s = saved.get(p.no)
             if not isinstance(s, dict):
@@ -846,6 +852,7 @@ class Task:
             "title": self.meta.get("title", ""),
             "script": os.path.basename(self.script_path),
             "scene_skill": self.scene_skill,
+            "character_lora": self.character_lora,
             "updated": datetime.now().isoformat(timespec="seconds"),
             "panels": {
                 p.no: {
@@ -1090,6 +1097,44 @@ def _publish_file(dst, write):
     return dst
 
 
+def _prune_orphan_finals(task):
+    """成品目录只留当前剧本里存在的格；raw 底图不动。
+
+    剧本删格 / 换格号后，旧的 `<格号>_final.png` 不会自己消失：`/status`
+    只看文件在不在，作品列表也直接数 final 文件，于是用户会看到「剧本 8 格、
+    成品 10 张」。这里按当前 `task.panels` 的格号收一次，raw 不参与。
+    """
+    if not os.path.isdir(task.final_dir):
+        return []
+    keep = {p.no for p in task.panels}
+    removed = []
+    for f in os.listdir(task.final_dir):
+        m = re.match(r"^(\d+)_final\.png$", f, re.I)
+        if not m or m.group(1) in keep:
+            continue
+        try:
+            os.remove(os.path.join(task.final_dir, f))
+            removed.append(f)
+        except OSError as e:
+            log.warning("[comic] 清孤儿成品失败 %s：%s", f, e)
+    if removed:
+        log.info("[comic] 成品目录清掉不在剧本里的格：%s", "、".join(removed))
+    return removed
+
+
+def _prune_orphan_bubble_outputs(task):
+    """qwen 气泡目录里，不在当前剧本的格产物一次清掉；raw 渠道目录不动。"""
+    out = _out_dir_for(task)
+    if not out:
+        return []
+    body = "%s/%s" % (out.strip("/"), BUBBLE_SKILL)
+    removed = comfy_out.prune_orphan_panel_runs(
+        body, {p.no for p in task.panels})
+    if removed:
+        log.info("[comic] 清掉不在剧本里的 qwen 格产物：%s", "、".join(removed))
+    return removed
+
+
 def discard_numbered_images(task_dir, no, kinds=("raw", "final")):
     """换种子重跑前，把这一编号占着的旧图从磁盘上清掉。
 
@@ -1282,10 +1327,24 @@ def _scene_wf(task, p, scene_skill, opts=None):
     if opts is None:
         opts = comic_render_opts.load(task.dir, scene_skill)
     seed = _new_seed()
-    wf = generate_image.build_t2i_workflow(scene_skill, scene_prompt(p), seed)
+    # 角色 LoRA（2026-11-19）：任务级下拉选的 key 直通 char_loras。顺序必须是
+    # **先套渲染参数、再插角色 LoRA、最后填提示词**——render_opts.apply 会重建
+    # LoRA 链，先插角色节点会被它冲掉；而角色 apply 会往提示词追加 trigger/
+    # identity，必须等它跑完再填 __MULTI_PROMPTS__。
+    prompt = scene_prompt(p)
+    wf, prompt = generate_image.build_t2i_workflow_parts(
+        scene_skill, prompt, seed, apply_character=False)
     if wf is None:
         raise RuntimeError("skill %s 没有文生图工作流" % scene_skill)
     wf = comic_render_opts.apply(wf, opts)
+    key = getattr(task, "character_lora", "")
+    if not isinstance(key, str):
+        key = ""
+    key = key.strip()
+    if key:
+        from app.features.image import char_loras
+        wf, prompt = char_loras.apply(scene_skill, prompt, wf, key=key)
+    wf = generate_image.apply_prompt_placeholders(json.dumps(wf), prompt, seed)
     _stamp_panel_no(wf, p.no)              # 保存名带格号，重跑不乱序
     log.info("[格 %s] 场景渲染（%s，seed %s，%s）", p.no, scene_skill, seed,
              comic_render_opts.describe(opts))
@@ -1472,6 +1531,10 @@ def render_bubble(task, p, split=False, prompt=None, abort=None):
         lambda: _submit_timed(wf, BUBBLE_SKILL, prompt, seed, **_kw),
         "[格 %s] 加气泡" % p.no)
     _download(name, task.final_path(p))
+    # 成品是覆盖写；qwen output 那边每次会递增序号，这里只留这一格最新一张。
+    _cleaned = comfy_out.prune_same_panel_runs(name, p.no)
+    if _cleaned:
+        log.info("[格 %s] 清掉 qwen 同格旧产物 %d 张", p.no, len(_cleaned))
     _add_timing(p, "bubble", exec_s, wall_s)
     if split and p.two_bubbles():
         # 有旁白条时它占了右上角，第二个气泡让位到右下角（见 BUBBLE_TEMPLATE_2）
@@ -1486,6 +1549,9 @@ def render_bubble(task, p, split=False, prompt=None, abort=None):
             lambda: _submit_timed(wf2, BUBBLE_SKILL, prompt2, seed2, **_kw),
             "[格 %s] 加第二个气泡" % p.no)
         _download(name2, task.final_path(p))             # 覆盖成两气泡版
+        _cleaned2 = comfy_out.prune_same_panel_runs(name2, p.no)
+        if _cleaned2:
+            log.info("[格 %s] 清掉 qwen 同格旧产物 %d 张", p.no, len(_cleaned2))
         _add_timing(p, "bubble", exec2, wall2)           # 一格里累加第二遍
     p.state = "done"
     p.error = None
@@ -1537,6 +1603,9 @@ def render_manual(task, p, instruction, denoise=I2I_DENOISE):
     tmp = task.final_path(p) + ".tmp"
     _download(name, tmp)
     os.replace(tmp, task.final_path(p))
+    _cleaned = comfy_out.prune_same_panel_runs(name, p.no)
+    if _cleaned:
+        log.info("[格 %s] 清掉 qwen 同格旧产物 %d 张", p.no, len(_cleaned))
     p.state = "done"
     p.error = None
     task.save_state()
@@ -1580,6 +1649,11 @@ def run(script_path, only=None, silver_only=False, redo=False,
 
     task = Task(script_path, meta, panels)
     task.load_state()
+    # 剧本缩格后旧的 final 不会自己消失；先按当前格号收一次，raw 不碰。
+    _prune_orphan_finals(task)
+    if not silver_only:
+        # qwen 气泡层也按当前格号收敛；raw 的 anima-line 目录不在这里。
+        _prune_orphan_bubble_outputs(task)
     # 阶段一渠道（2026-10-19）：显式传 > 任务 state.json 里存的 > 全局默认。
     # 优先级这么排是为了「点某一格重跑」——那条路不传渠道，得接住任务自己的。
     scene_skill = (scene_skill or task.scene_skill or SCENE_SKILL).strip()

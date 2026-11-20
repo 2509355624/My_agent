@@ -258,7 +258,7 @@ from app.features.persona import head_builder
 from app.features.persona import llm_bridge
 from app.features.persona import mood as _mood_store
 from app.features.persona import gameday
-from app.features.persona.wipe import clear, erase as _erase, wipe
+from app.features.persona.wipe import clear, erase as _erase, wipe, wipe_slot
 from app.features.persona.commands import handle_command
 from app.features.persona.gameday import _apply_gameday
 from app.features.persona.finish import (
@@ -421,6 +421,25 @@ SHOT_WORDS = ("出图", "画一张", "画一下", "来张图", "出张图", "画
 
 
 
+def last_turn_meta(session_key):
+    """最近一条回复的 `(正文, 画面, 心情, 强度, 状态)`。
+
+    2026-11-19：状态落盘偶尔没写进 `persona_sessions.json`（真机刷新后
+    右栏心情/状态是 `--`）。网页读会话时用它兜底，不靠落盘那一份。
+    """
+    try:
+        rows = _load_hist(session_key)
+    except Exception:                                    # noqa: BLE001
+        return "", "", "", 0, ""
+    for m in reversed(rows or []):
+        if m.get("role") == "assistant":
+            body, scene, mood, intensity, state = split_turn(
+                str(m.get("content") or ""))
+            if body.strip():
+                return body, scene, mood, intensity, state
+    return "", "", "", 0, ""
+
+
 def shot_scene(session_key, msg_index=None):
     """「出图」这一轮的「画面：」行（英文定稿）。没有就返回空串。
 
@@ -428,6 +447,24 @@ def shot_scene(session_key, msg_index=None):
     翻译——正常轮次的输出契约保证每轮都有画面行，空是极少数边缘情况。
     """
     return _shot_parts(session_key, msg_index)[2]
+
+
+def ensure_shot_scene(session_key, msg_index=None):
+    """点「出图」时取画面行；原文是空标签就按那一轮正文补写一行。
+
+    2026-11-19 真机：模型会交 `画面：` 空标签，旧逻辑直接 400「没有可画的
+    画面」。这里只在点击时补一次，补不出来才返回空，正常轮次零额外调用。
+    """
+    scene = shot_scene(session_key, msg_index)
+    if scene:
+        return scene
+    key = resolve_line(session_key)
+    _user, last_ai, _scene, state = _shot_parts(key, msg_index)
+    if not str(last_ai or "").strip():
+        return ""
+    card = active_card(key)
+    outfit = shot_outfit(key, msg_index)
+    return repair_scene(card, key, last_ai, outfit=outfit, state=state)
 
 
 
@@ -491,6 +528,56 @@ from app.features.persona.ledger_text import (
 # ─── 会话状态 ────────────────────────────────────────
 
 _STATE_PATH = os.path.join(BASE_DIR, "state", "persona_sessions.json")
+# 角色扮演「出图」上次用的渠道：整个账号共用一份，换角色也沿用。
+# 只存渠道 id，不存封面/提示词；提示词每轮由写作 AI 重新给。
+_SHOT_PREF_PATH = os.path.join(BASE_DIR, "state", "persona_shot_prefs.json")
+_SHOT_PREF_LOCK = threading.Lock()
+
+
+def shot_pref(who):
+    """上一个用过的出图渠道；没记过/读不出来就返回空串（走默认 silver）。"""
+    key = str(who or "").strip()
+    if not key:
+        return ""
+    with _SHOT_PREF_LOCK:
+        try:
+            with open(_SHOT_PREF_PATH, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return ""
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get(key) or "").strip()
+
+
+def set_shot_pref(who, skill):
+    """记住这次出图用的渠道；空 skill 表示恢复默认，直接把这条删掉。"""
+    key = str(who or "").strip()
+    if not key:
+        return
+    skill = str(skill or "").strip()
+    with _SHOT_PREF_LOCK:
+        try:
+            with open(_SHOT_PREF_PATH, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        if skill:
+            data[key] = skill
+        else:
+            data.pop(key, None)
+        try:
+            parent = os.path.dirname(_SHOT_PREF_PATH)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            tmp = _SHOT_PREF_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False, indent=2)
+            os.replace(tmp, _SHOT_PREF_PATH)
+        except OSError:
+            log.exception("保存扮演出图渠道失败")
 
 def _state_guard(fn):
     """兼容旧引用：把状态文件的读写串行化。"""
@@ -1041,9 +1128,9 @@ def _rag_context(hist, rounds=2):
 # 「要不要加个鸡蛋」）。读原文的是编剧，所以让它顺手列一张清单；代码只
 # 裁剪和透传，落地交给演员——和 segments / items 同一个分工。
 #
-# 清单还兼一个作用：契约里有「你话里交代的前因，她没跟着去过」，场景义务
-# 又要求「他做的动作要演出来」。玩家写「我把鸡蛋拿出来」时模型会摇摆，
-# 于是把摆好的东西当没发生。这里正面说清「就在这一幕眼前」，不动契约正文。
+# 清单还兼一个作用：契约把「你这一轮写进正文的动作和位置」算作正在发生，
+# 场景义务又要求「他做的动作要演出来」。玩家写「我把鸡蛋拿出来」时模型会
+# 摇摆，于是把摆好的东西当没发生。这里正面说清「就在这一幕眼前」。
 
 
 # ── 射精选择（2026-11-05，用户拍板）────────────────────────
@@ -1102,13 +1189,18 @@ _FINISH_HINT = {
 
 
 
-def _judge_recent(hist):
-    """给第一段看的「最近发生过什么」。只要正文，不要画面/心情/状态三行。"""
+def _judge_recent(hist, limit=6):
+    """给第一段看的「最近发生过什么」。只要正文，不要画面/心情/状态三行。
+
+    2026-11-19：从 10 条收到 6 条（默认）。编剧判的是「这一轮状态怎么变」，
+    最近三来一往（6 条）够用；更长只多吃未命中 token，不提高判断质量。
+    `limit` 留参数是为了老调用/测试仍能显式要更多，不改默认就省钱。
+    """
     rows = [m for m in (hist or []) if isinstance(m, dict)]
     if not rows:
         return "（还没有）"
     lines = []
-    for m in rows[-10:]:
+    for m in rows[-limit:]:
         role = "用户" if m.get("role") == "user" else "助手"
         body = str(m.get("content") or "").strip()
         if m.get("role") == "assistant":
@@ -1381,6 +1473,54 @@ def _brief(text, limit=_RECAP_CHARS):
 
 
 
+
+
+def set_scene(raw, scene):
+    """把「画面：」行替换成新的英文提示词；没有这一行就补在最后。"""
+    body = str(raw or "")
+    line = "画面：" + str(scene or "").strip()
+    if _SCENE_RE.search(body):
+        return _SCENE_RE.sub(line, body, count=1)
+    return body.rstrip() + "\n" + line
+
+
+def repair_scene(card, session_key, reply, outfit="", state=""):
+    """「画面：」行被模型写空时的补写。
+
+    2026-11-19 真机：模型整轮正文写得很完整，但最后只交了 `画面：` 空标签，
+    前端就显示「这一轮没有可画的画面」。这里用一次很小的补写调用，只让它
+    根据这一轮正文补一行英文提示词；成功才替换，失败保持空，不拖慢正常轮次。
+    """
+    body = str(reply or "").strip()
+    if not body:
+        return ""
+    name = char_name(card, "她", key=session_key) if card else "她"
+    prompt = (
+        "你是角色扮演的出图提示词写手。下面是一轮已经写完的正文。\n"
+        "只写这一轮最想定格的 0.5 秒，输出**一行英文图像提示词**，"
+        "不要解释、不要中文、不要引号。\n"
+        "必须包含：景别、她的表情或动作、场景、光照、至少一个道具/环境细节。\n"
+        "镜头是玩家第一人称视角，画面里只有她一个完整的人；"
+        "她冲着玩家做的动作写成 toward the viewer。\n\n"
+        "角色：%s\n当前穿着：%s\n当前状态：%s\n\n正文：\n%s"
+    ) % (name, outfit or "未写明", state or "未写明", body[-1400:])
+    try:
+        got = _llm_call([{"role": "user", "content": prompt}],
+                        temperature=0.7, max_tokens=320) or ""
+    except Exception:                                    # noqa: BLE001
+        log.warning("补写画面行失败 %s", session_key, exc_info=True)
+        return ""
+    got = str(got).strip()
+    got = _strip_refusal(got).strip()
+    # 模型偶尔还是会套一层 ``` 或写「画面：」，能剥就剥。
+    got = re.sub(r"^```[a-zA-Z]*\s*|```$", "", got, flags=re.S).strip()
+    hit = _SCENE_RE.search(got)
+    if hit:
+        got = hit.group(1).strip()
+    got = _clean_scene(got)
+    if not got:
+        return ""
+    return got
 
 
 def _ensure_meta(raw, scene, mood, intensity, state, outfit=""):

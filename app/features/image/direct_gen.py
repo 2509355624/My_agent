@@ -75,7 +75,9 @@ import json
 import logging
 import os
 import re
+import threading
 import time
+from contextlib import contextmanager
 
 from app.features.image import random_tags
 from app.features.qq import trigger
@@ -305,19 +307,13 @@ _INTENT_RE = re.compile(r"画|绘|来张|来一张|来幅|生成.{0,4}图|图.{0
 # 引用正文里的噪音：菜单和生图回执不能当提示词用。
 _NOISE_QUOTE_RE = re.compile(r"HT-\d{8}|任务已提交|生图完成")
 _RECENT_NOISE_RE = re.compile(r"^🎨|任务已提交|生图完成|HT-\d{8}")
-# 自家**出图记账行**（`[直达生图] <渠道>：<prompt>`，落在会话历史里的那一条）。
-# 2026-10-16 用户拍板：给转译调用的【最近对话】**AI 侧只留这一种行**，其余
-# 一律不喂——包括 `[直达漫画] N 格：<中文剧情>` 和**它自己写的任何回话**。
-# 理由（实测七组对照，deepseek-flash，色情向需求）：
-#   空历史 2/2 出图；最近对话里带着它自己的拒绝行 → 6/6 全拒；
-#   把拒绝行剔掉 → 2/2 立刻恢复出图。
-# 也就是说，拒答的**触发源是「它看见自己上一轮拒了」**，跟模板里怎么写、
-# 有没有「以用户为中心」都无关（加那段声明重跑 4 次，照拒）。拒绝话术是
-# 开放集合，拿词表去认它盖不全——所以判据用结构：AI 侧的纯文本回话一律不是
-# 出图记录，一律不喂。顺带修掉 `[直达漫画]` 那条：它的中文 brief 会被逐字
-# 抄成下一轮的 brief（22:02 私聊「krea2 鬼针草，横屏」→ 抄成 silver 漫画）。
-# ⚠️ `[直达生图]` **绝不能滤**：指代（「换成白裙子」这类）全靠它。
-_RECENT_AI_KEEP_RE = re.compile(r"^\[直达生图\]")
+# 2026-11-18 用户拍板：最近对话只留**最近 5 条用户消息**，AI 侧一条都不喂
+# ——它只是生图机器人，不需要看自己前面回了什么。上一张的渠道和提示词
+# 改由独立的【上一张】（`_last_job` + 账本兜底）提供，不再塞进【最近对话】。
+# 历史理由（2026-10-16 实测）：AI 自己的拒绝话术一旦回喂，下一轮会照着继续拒；
+# 所以 AI 侧纯文本回话一律不喂。`[直达漫画]` 的中文 brief 也不能回喂（会被
+# 逐字抄成下一轮 brief）。现在连 `[直达生图]` 也不进最近对话了，指代由
+# 【上一张】负责。
 # 引用块里的**占位符**：图片取不到 url（"​[图片]"）、下载失败（"（图片）"）、
 # get_msg 拉不到被引消息（"[引用的消息无法读取]"——引用机器人自己发的回执
 # 就是这种）。2026-10-05 02:59 实录：占位符被当提示词喂进转译，9B 把最近
@@ -408,19 +404,16 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    "krea2极光单次": "krea2-jiguang-1x",
                    "极光单次": "krea2-jiguang-1x",
                    "krea2-jiguang-1x": "krea2-jiguang-1x",
-                   "qwen": "qwen_image_v1", "qwen-hd": "qwen-hd",
+                   "qwen": "qwen_image_v1",
                    "qwen角色设定表": "qwen-charsheet",
                    "qwen修复": "qwen-restore",
-                   # 2026-10-16 用户新增：qwen 的高步数副本（只把 steps 提到 30，
-                   # 文生图 / 图生图各一支，其余参数照抄 qwen_image_v1）。
-                   # 用户原话：「给我上一个 qwen30 步的图生图，到时候我的指令就是，
-                   # qwen30步，图生图，需求」。`qwen30` 不带「步」也认——归一化后
-                   # （`_fixed_chan` 去空格 + 小写）两种写法都落到这两个 key 上。
-                   "qwen30步": "qwen30", "qwen30": "qwen30",
-                   # 2026-11-11 用户新增：默认 qwen 挂 asianMix 真人 LoRA
-                   # （hina_QwenImage2.1_asianMix_v3.0-rank64），步数等全部照抄
-                   # qwen 默认档；目录名 ASCII，点名词中文。只文生图，没 i2i。
-                   "qwen真人": "qwen-real",
+                   # 2026-11-18 用户拍板「Qwen 统一」：qwen-hd / qwen30 / qwen-real
+                   # 三个对外渠道下架，能力和进默认 qwen_image_v1（25 步、
+                   # 1024×1536、默认真人 LoRA、2x）。旧点名词仍在这里**保底吃掉**
+                   # （不让它们漏进提示词），但全部落到默认档；渠道清单里不再出现。
+                   "qwen-hd": "qwen_image_v1",
+                   "qwen30步": "qwen_image_v1", "qwen30": "qwen_image_v1",
+                   "qwen真人": "qwen_image_v1",
                    "nffa": "nffa", "nai": "nai",
                    "cunny": "cunny", "miao": "miao",
                    # 2026-10-11 新增：anima 的 LoRA 堆叠版（6 条 LoRA + silvermoonmix
@@ -614,9 +607,10 @@ _FIXED_CHAN_RE = re.compile(
     r"|krea2\s*极光"
     r"|qwen\s*角色设定表"
     r"|qwen\s*修复"
-    # ⚠️ 必须排在下面裸词 `qwen` 前面：`qwen30步` 里的 `qwen` 本来被尾部
-    # `(?![0-9A-Za-z_])` 挡住（后面紧跟数字 3），认不出来就会整句交给模型；
-    # 显式认了才稳。`步?` 让「qwen30」也命中。
+    # 2026-11-18：qwen30 / qwen真人 / qwen-hd 已下架，但旧说法还要**吃掉**
+    # （不让「30步」「真人」漏进提示词），映射统一在 `_FIXED_CHAN_MAP` 里落到
+    # 默认 qwen_image_v1。正则仍需排在裸词 `qwen` 前面，理由同旧注释：
+    # `qwen30` 里的 `qwen` 会被尾部前瞻挡住，不显式认就整句交给模型。
     r"|qwen\s*30\s*步?"
     # 2026-11-11 晚补：qwen-real 的中文点名词。⚠️ 必须排在下面裸词 `qwen`
     # 之前——裸 `qwen` 的尾部前瞻 `(?![0-9A-Za-z_])` 只挡 ASCII 字母数字，
@@ -690,13 +684,13 @@ _SKILL_ID_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*[-_][A-Za-z0-9_-]*")
 def _fixed_chan(token, text):
     """固定渠道词 → 渠道 id（与「qwen」→ qwen_image_v1 同一类「认渠道名」逻辑）。
 
-    「qwen 超清 / qwen超清」（用户点名 qwen 的 4x 超清版）统一锁定 qwen-hd；
-    这是用户明说的渠道名，必须认，不是替 AI 拍板意图（prompt / 垫图与否仍由
-    AI 决定）。qwen-hd 也作为字面渠道名直接命中。
+    「qwen 超清 / qwen超清」这类旧点名词仍认，但 2026-11-18 起 qwen-hd
+    已下架，统一落默认 qwen_image_v1（25 步 / 1024×1536 / 真人 LoRA / 2x）。
+    认它只是**为了把旧词从正文里吃掉**，不是替 AI 拍板意图。
     """
     token = re.sub(r"\s+", "", token).lower()
     if token == "qwen" and "超清" in text:
-        return "qwen-hd"
+        return "qwen_image_v1"
     return _FIXED_CHAN_MAP.get(token, token)
 # 中文正则在画风判定里当「命令区边界」用，见 _parse_channel。
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
@@ -1144,8 +1138,7 @@ GUIDE_TEXT = (
     "　anima 2s　同上，一段底模换成 realskin 2.9B · 15+10 步 · 双 er_sde\n"
     "　anima写实　同上，一段底模换成 AnimeReality\n"
     "　anima鬼针草　anima 堆 7 条 LoRA 的混搭 · 2048×3072\n"
-    "　qwen　慢·写实·能在图里写中文字\n"
-    "　qwen-hd　qwen 的 4x 超清 · 4096×6144（更慢更大，别连刷）\n"
+    "　qwen　慢·写实·能在图里写中文字｜25 步 · 1024×1536 · 真人 LoRA · 2x\n"
     "　qwen角色设定表　7 分区 character design sheet（2304×1536 / 16 步）\n"
     "　qwen修复　引用图 → 去糊/去噪修清楚（1536 面积档 / 25 步）\n"
     "　sd　　一次多张，多段用 --- 分隔\n"
@@ -1153,7 +1146,7 @@ GUIDE_TEXT = (
     "　　　　　/ krea2动漫真人 / krea2真人cos / krea2宝可梦\n"
     "　　　　　/ krea2柔光 / krea2奶油 / krea2写实 / krea2通用\n"
     "　　　　　/ krea2铭音 / krea2鬼针草 / krea2铭鬼 / krea2极光\n"
-    "　　　　　（点名要带风格词）\n"
+    "　　　　　（点名要带风格词；极光有图生图）\n"
     "　nffa　　插画感\n"
     "　cunny　超分重渠道 · 单张 2~4 分钟\n"
     "　miao　　皮肤质感滑嫩 · 2x 出 3072×4608\n"
@@ -1234,11 +1227,11 @@ MORE_CHAN_TEXT = (
     "【★anima】anima ｜ 画风加 clear / curvy / gloss / soft\n"
     "　　　　　rs29 = 同 clear，底模换 realskin 2.9（更新版）\n"
     "【★krea2】krea2 ｜ 风格加 米山舞 / 日系 / 亚洲真人 / 动漫真人 / 真人cos / 宝可梦\n"
-    "　　　　　柔光 / 奶油 / 写实 / 通用 / 铭音 / 鬼针草 / 铭鬼 / 极光\n"
-    "【★qwen】qwen\n"
+    "　　　　　柔光 / 奶油 / 写实 / 通用 / 铭音 / 鬼针草 / 铭鬼 / 极光（极光有图生图）\n"
+    "【★qwen】qwen ｜ 25 步 / 1024×1536 / 真人 LoRA / 2x（图生图 1248 面积档 / 2x）\n"
     "【★miao】miao\n"
     "\n"
-    "【其他】moss ｜ moss光影 ｜ silver-hd ｜ qwen-hd ｜ qwen真人\n"
+    "【其他】moss ｜ moss光影 ｜ silver-hd\n"
     "　　　　qwen角色设定表 ｜ qwen修复 ｜ 半厚涂 ｜ sf ｜ anima多图\n"
     "　　　　anima线条 ｜ anima 2s ｜ anima写实 ｜ anima鬼针草 ｜ anima肉感 ｜ jank\n"
     "　　　　sd ｜ nffa ｜ cunny ｜ nai\n"
@@ -1609,6 +1602,49 @@ _REAL_PORTRAIT_RULES = (
 )
 
 
+# ─── 渠道专属写法（2026-11-18 用户拍板常驻公共固定块）────────────────
+# 用户原话：「Qwen 规则和 Krea2 规则作为一个默认注入它会好一些……把 8100 字
+# 变成 1 万字，但 1900 字是命中缓存的，费用并不多。」所以这两段是**固定
+# 前缀**的一部分，不按当轮渠道临时拼——每轮都全量命中缓存，只在正文里
+# 按渠道取用。两段加起来约 980 字（实测 979），别再把单条渠道规则散到模板各处。
+_QWEN_RULES = (
+    "\n【Qwen 专属规则｜走 qwen 时按这段写】\n"
+    "- Qwen 吃**自然语言句子**，不吃 tag 堆。用完整英文句子写清主体、服装、"
+    "动作、镜头、光线；一个句子说一件事，别把 30 个 tag 用逗号串起来。\n"
+    "- 换装不是换一个名词。必须把新衣服的**材质、织法、厚薄、褶皱、光泽、"
+    "缝合线、与身体的接触阴影**写出来，再写「保留脸、发型、姿势、背景」。"
+    "只写 `change her coat to red` 会得到一块贴上去的纯色皮，这就是贴图感的来源。\n"
+    "- 改手 / 改肢体时，写清**解剖关系**和**布料互动**：手从口袋里抽出来时，"
+    "口袋口的布料被带起、指节压在布料上、袖口堆叠在手腕。不要只写 "
+    "`show her hands`。\n"
+    "- 一次只交代一处改动最稳。要改衣服、手势、背景三件事，分三次调用；"
+    "一次全塞进去，Qwen 会平均化，三处都只改一半。\n"
+    "- cfg = 1.0，负面提示不生效，所有约束都写进正向句；"
+    "`photo-realistic` / `realistic` / `8k` / `masterpiece` 是写实人像的负面词，"
+    "别写。\n"
+    "- 默认参数（代码已写死，不用你填）：文生图 25 步 / 1024×1536 / 真人 LoRA / "
+    "2x 放大；图生图 25 步 / 1248 面积档（≈1024×1536）/ **denoise 1.0** / 2x。Qwen 2.1 的参考图"
+    "不进 latent（走 reference_latents），把 denoise 调低只会出平铺废图；"
+    "要保原样就把「保留脸、姿势、背景、光线」写进正向句。\n"
+)
+
+_KREA2_RULES = (
+    "\n【Krea2 专属规则｜走 krea2 时按这段写】\n"
+    "- 英文、**小写**、逗号分隔的标签串；质量词开头："
+    "`masterpiece, best quality, ultra-detailed, absurdres, 1girl, ...`。\n"
+    "- 顺序固定：质量 → 主体 → 服装 → 动作 → 表情 → 镜头 → 光影 → 环境。"
+    "顺序就是权重，别把场景词写到人物前面。\n"
+    "- 极光没有触发词，**不要自己加风格前缀**；krea2 全系不写负面词。\n"
+    "- 换装同样要写织物物理状态：织法、拉伸变形、透光、纤维上的软反射、"
+    "褶皱走向。只写 `white dress` 会得到一块没有布感的白色块。\n"
+    "- krea2 系目前**只有 `krea2-jiguang` 有图生图骨架**（引用极光图 + 明确"
+    "指向这张图改局部时才用）；其余 krea2 仍只文生图，别给它们填 "
+    "`source_image`。\n"
+)
+
+_CHANNEL_RULES = _QWEN_RULES + _KREA2_RULES
+
+
 
 
 # ─── 唯一的一条转译模板（2026-10-05 晚用户拍板重做；2026-10-23 按社群规范重排）──
@@ -1617,7 +1653,8 @@ _REAL_PORTRAIT_RULES = (
 # 用户原话（10-23）：「我们按照社区的来吧，社区教的东西比我们自己总结的好一些。」
 #
 # 结构 = 三节：① 怎么用工具 ② 怎么设计提示词 ③ 渠道对照表，
-# 末尾接 {chan_hint} {search} 【最近对话】 【用户】。
+# 固定块末尾常驻 Qwen / Krea2 写法，再接 {chan_hint} {search} {role_block}
+# 【上一张】{last_job} 【最近对话】{recent} 【用户】{text}。
 #
 # 2026-10-23 重排（用户拍板 B 方案）：
 #   - 画面部分从「六层」换成 booru 社群通用的**八位顺序**（质量词 → 人数 →
@@ -1637,7 +1674,8 @@ _REAL_PORTRAIT_RULES = (
 #   - 标签库资料 `{search}`
 #
 # ⚠️ 正文里的字面大括号一律写双份（`.format()` 只认 chan_hint / search /
-# recent / text 四个占位符）。改完先跑 `test_full_prompt_stays_within_budget`。
+# role_block / last_job / recent / text 六个占位符）。改完先跑
+# `test_full_prompt_stays_within_budget`。
 _MASTER_TEMPLATE = (
     "你是大大怪，一个生图 AI。用户给画面，你写成提示词调工具画出来；"
     "用户聊天、提问、要提示词，你直接回话。\n"
@@ -1704,28 +1742,41 @@ _MASTER_TEMPLATE = (
     "\n"
     "### 再来一张\n"
     "\n"
-    "最近对话里以 `[直达生图]` 开头的行，是上一张图实际用的渠道和提示词。"
-    "用户说「再来一张、换个种子」，照那一行的渠道和词重跑，`seed` 留空让系统换种子。"
-    "要微调时拿那一行当底稿在上面改，原词是最可靠的起点。\n"
+    "【上一张】里是上一张图实际用的渠道和提示词，只当**事实底稿**，不是逐字复刻的命令。\n"
+    "用户说「再来一张、换一张、再来一版」时：保持同一主题、同一角色、同一服装、"
+    "同一场景和风格，**换姿势、换构图或换镜头**（站姿换坐姿、半身换全身、正面换侧身），"
+    "在上一张的词上改写，`seed` 留空让系统换种子。\n"
+    "用户没引用图、直接说「换成白裙子」→ 这是**改提示词重新文生图**，不是图生图："
+    "把上一张词里对应的服装段替换掉，其余保留，渠道沿用上一张。\n"
+    "只有**引用了图、并且明确指向这张图改局部**（「把这张图的衣服换掉 / 去掉眼镜 / "
+    "手指改成 5 个」）才走图生图，见下一节。\n"
     "\n"
     "### 带图轮怎么走\n"
     "\n"
     "1. 用户明说「图生图 / 垫图 / 照着画 / 复刻 / 参考这张的构图」，"
     "`source_image` 填 1，渠道沿用他点名的那个或原渠道，prompt 照常写完整画面描述。\n"
     "\n"
-    "2. 用户引用了图、同时又提需求（换装 / 换发色 / 改动作 / 要全身照），"
-    "`source_image` 留空，这是照这张改词重画：拿那张图当初的提示词把新需求并进去，"
-    "再用原渠道文生图。自家图从账本取原词和原渠道，别人的图看画面反推；"
-    "查不到原渠道时 `skill` 留空。\n"
+    "2. 用户引用了图、并且明确指向这张图改局部（换装 / 换发色 / 去掉眼镜 / "
+    "手指改成 5 个 / 修某个局部）→ `source_image` 填 1，这是图生图。"
+    "渠道优先沿用原渠道（原渠道有 i2i 骨架才留：qwen 系、krea2-jiguang），"
+    "没有骨架或查不到原渠道时填 `qwen_image_v1`。prompt 要写清改完的物理细节"
+    "（材质、织法、褶皱、光泽、接触阴影）和要保留的部分，不能只写一句换装指令。\n"
     "\n"
-    "3. 用户说「qwen 图生图」且只改一处，`source_image` 填 1 配 `qwen_image_v1`"
-    "（原话是「qwen 超清」时换 `qwen-hd`），prompt 只写一句改动指令、末尾补 "
+    "3. 用户引用了图、要的是**另一张画面**（换姿势 / 换角度 / 改景别 / 要全身照 / "
+    "重画一版 / 同样感觉再来一张）→ `source_image` 留空，这是照这张改词重画："
+    "拿那张图当初的提示词把新需求并进去，再用原渠道文生图。"
+    "自家图从账本取原词和原渠道，别人的图看画面反推；查不到原渠道时 `skill` 留空。\n"
+    "\n"
+    "4. 用户说「qwen 图生图」且明确要改局部，`source_image` 填 1 配 `qwen_image_v1`"
+    "（2026-11-18 起没有 qwen-hd / qwen30 分档，统一走默认 25 步 / 1248 面积档 / "
+    "denoise 1.0），prompt 写清改动后的物理细节、末尾补 "
     "`keep everything else exactly the same`。说「qwen修复 / 修清楚 / 去糊」"
     "则是修这张图本身、不是重画：带引用图时代码已经直接入队、轮不到你，"
     "没图时回一句「修复需要先有一张图」。\n"
     "\n"
-    "4. 垫图能力在 silver 系和 qwen 系，silver 有锁构图骨架；jank、nffa、cunny、"
-    "miao、krea2 系、sd、moss 是文生图专用，填了会退回文生图、白等一轮。"
+    "5. 垫图能力在 silver 系、qwen 系，以及 krea2 里**只有极光**（krea2-jiguang）；"
+    "jank、nffa、cunny、miao、其余 krea2 系、sd、moss 是文生图专用，"
+    "填了会退回文生图、白等一轮。"
     "用户只是评价这张图、或只要反推提示词时，`source_image` 留空，本轮不画。\n"
     "\n"
     "5. 本轮一张引用图都没有、用户却明说「图生图 / 垫图」时，回一句"
@@ -1871,11 +1922,7 @@ _MASTER_TEMPLATE = (
     "| nai | `nai` | 点名 nai，或给了画师串 |\n"
     "| nai_wide | `nai_wide` | 点名 nai 且要横向画面 |\n"
     "| qwen、千问、通义 | `qwen_image_v1` | 点名，要写实照片感、要出中文。"
-    "这个渠道 cfg=1.0，负向完全不生效，约束一律写进正向 |\n"
-    "| qwen30步 | `qwen30` | 明说 qwen30步，更慢更精细 |\n"
-    "| qwen真人 | `qwen-real` | 明说 qwen真人：qwen 默认档挂 asianMix 真人 LoRA，"
-    "步数/画布同 qwen；只文生图，垫图别给它 |\n"
-    "| qwen-hd、qwen 超清 | `qwen-hd` | 明说 qwen 超清 |\n"
+    "统一 25 步 / 1024×1536 / 真人 LoRA / 2x；cfg=1.0，负向完全不生效，约束一律写进正向 |\n"
     "| qwen 角色设定表 | `qwen-charsheet` | 要设定表、三视图、表情集，必须配参考图 |\n"
     "| qwen修复 | `qwen-restore` | 要把图本身修清楚，必须配原图 |\n"
     "| sd | `image_gen_v1` | 点名 sd |\n"
@@ -1899,9 +1946,14 @@ _MASTER_TEMPLATE = (
     "光说「krea2」本身不算点名。\n"
     "\n"
     "两点容易混：银发、silver hair 是发色，属于画面内容；画面要出中文时走 moss。\n"
+    # 2026-11-18：Qwen / Krea2 写法常驻固定块，吃前缀缓存；不是按当轮渠道
+    # 临时拼的，所以它必须放在所有动态槽之前。
+    + _CHANNEL_RULES +
     "{chan_hint}"
     "{search}"
     "{role_block}"
+    "\n"
+    "【上一张】\n{last_job}\n"
     "\n"
     "【最近对话】\n{recent}\n"
     "\n"
@@ -1981,8 +2033,9 @@ _REVISE_TEMPLATE = (
     "说「anima线条 / anima 2s / anima写实 / anima鬼针草 / anima肉感」"
     "（四条独立配方，不在画风体系里）；\n"
     "  nai / nai_wide = 说「nai」（画师串和权重语法认这两个）；\n"
-    "  qwen_image_v1 = 说「qwen / 千问 / 通义」；image_gen_v1 = 说「sd」；\n"
-    "  qwen30 = 说「qwen30步」（qwen 的 **30 步**版，其余参数一模一样，更慢）；\n"
+    "  qwen_image_v1 = 说「qwen / 千问 / 通义」（统一 25 步 / 1024×1536 / 真人 LoRA / "
+    "2x；图生图 1248 面积档 / denoise 1.0；qwen-hd / qwen30 / qwen真人 已下架，"
+    "旧说法一律落到这里）；image_gen_v1 = 说「sd」；\n"
     "  krea2-yoneyama / krea2-rella / krea2-asianmix / krea2-anime2real / "
     "krea2-coscandid / krea2-pokemon / krea2-softlight / krea2-creamy / "
     "krea2-real / krea2-general / krea2-mingyin / krea2-guizhencao / "
@@ -2008,7 +2061,6 @@ _REVISE_TEMPLATE = (
     "——光影+nai5+米山舞+光润皮肤，竖版 25 步；老说法 moss光影1/2/3 也归这条）；\n"
     "  jank = 原话明说「jank」才填（用户自定义渠道）。\n"
     "  silver-hd = silver 的 3x 超清版，原话明说「silver-hd」或「silver 超清」才填。\n"
-    "  qwen-hd = qwen 的 4x 超清版，原话明说「qwen-hd」或「qwen 超清」才填。\n"
     "  ⚠️ silver / silver-hd **有锁构图骨架**（见下面【图生图】）；"
     "jank 是文生图专用、没有骨架。"
     "「银发 / silver hair」是画发色、不是点名渠道，别因为它就改填 silver。\n"
@@ -2028,10 +2080,12 @@ _REVISE_TEMPLATE = (
     # 「把眼镜去掉」。这条把自然语言需求系统性误判成「重画」。
     "    · **要保留，只动画面里的一部分**（去掉某样东西 / 加上某样东西 / 换衣服 / "
     "换发色 / 改表情 / 修某个局部）→ **这就是图生图，别改词重画**："
-    "`source_image` 填 1，**skill 填 qwen_image_v1**"
-    "（只有 qwen 系能只动局部；silver 的锁构图是整张重画，会把没让改的地方一起改掉）；"
-    "prompt 只写**一句改动指令**，例 `remove her glasses, keep the pose, face and "
-    "background exactly the same`，**别把整张图重新描述一遍**。"
+    "`source_image` 填 1；**skill 优先沿用原渠道**（原渠道有 i2i 骨架才留："
+    "qwen 系、krea2-jiguang），原渠道没有 i2i 骨架或查不到原渠道时填 "
+    "qwen_image_v1。"
+    "prompt 要写清**改动后的物理细节**：新衣服的材质、织法、褶皱、光泽、"
+    "和身体的接触阴影，以及要保留的脸 / 发型 / 姿势 / 背景；"
+    "只写一句 `change her coat to red` 会得到一块贴上去的纯色皮。"
     "**用户不会说「图生图」这三个字，别等他明说才认。**\n"
     "    · **要的是另一张画面**（换姿势 / 换角度 / 改景别 /「要全身照」/ 重画一版 / "
     "同样感觉的再来一张）→ **不填** `source_image`：构图会变，这才是「照这张改词重画」。"
@@ -2045,17 +2099,16 @@ _REVISE_TEMPLATE = (
     "lighting` / `warm color grade, golden hour` / `night scene, moonlight`），"
     "**不要重新描述画面、不要改人物/构图/姿势/服装**；skill 沿用原渠道、别换。"
     "这类只是「在原提示词上追加或替换一个风格词」，不是重画一张新图。\n"
-    "    · **只换画面里的一处内容、其余不动**（「把长裙换成 JK」「发色改银」"
-    "「把蓝衣服换成红衣服」）→ 也**不填** `source_image`（除非用户明说图生图/"
-    "qwen）：拿原提示词，**只把用户点名的那一处替换掉**，其余 tag 一字不动，"
-    "skill 沿用原渠道、seed 沿用原图，文生图重跑。**别整段重写提示词**——"
-    "用户要改的只是他说的那一个点，其余都是他上一版已经认可、要保住的。\n"
+    "    · **只换画面里的一处内容**（「把长裙换成 JK」「发色改银」「把蓝衣服换成红衣服」）"
+    "**已经包含在上一条里**：引用图 + 明确指向这张图改 = 图生图，`source_image` 填 1；"
+    "别再退回文生图重画。只有**没有引用图**、只凭上一张的文字改词时才是文生图。\n"
     " ③ **明说「qwen 图生图」**（改几处都算）→ `source_image` 填 1，"
     "同时 skill 填 qwen_image_v1"
-    "（明说「qwen 超清 / qwen超清」时填 qwen-hd；"
-    "原话说「qwen30步 图生图」时填 qwen30）、"
-    "prompt 只写**一句改动指令**（例 `change her coat to red, keep the pose, "
-    "face and background exactly the same`），不要把整张图重新描述一遍。\n"
+    "（2026-11-18 起 qwen-hd / qwen30 / qwen真人 已下架，旧说法也落这一条；"
+    "图生图统一 1248 面积档 / denoise 1.0）、"
+    "prompt 要写清**改动后的物理细节**（材质、织法、褶皱、光泽、接触阴影）"
+    "和要保留的部分，末尾补 `keep everything else exactly the same`；"
+    "**别只写一句 `change her coat to red`**——那会得到一块贴上去的纯色皮。\n"
     " ④ **修复**（引用图 + 「qwen修复 / 修复 / 修清楚 / 去糊 / 脸修清楚点」）= "
     "把**这张图本身**修清楚 / 去噪 / 去糊，不是重画 → skill 填 qwen-restore、"
     "`source_image` 填 1，prompt 只写用户额外提的要求（没提就空着）。"
@@ -2069,9 +2122,10 @@ _REVISE_TEMPLATE = (
     "改变」「换个种子重画」）→ **不许留空、不许反问**：prompt 直接填**这张图"
     "完整的画面描述**（自家图用上面「原提示词」那段原词，别人的图按画面写全），"
     "要垫图就照 ① 填 `source_image`。\n"
-    "  ⚠️ jank / nffa / cunny / miao / krea2 系 / sd / moss "
+    "  ⚠️ jank / nffa / cunny / miao / sd / moss 与 **krea2 系里除极光外**的渠道 "
     "**没有图生图骨架**，"
     "别给它们填 `source_image`（填了会自动退回文生图、白等一轮）。"
+    "krea2 系目前只有 `krea2-jiguang` 有 i2i 试点。"
     "只是评价这张图 → **不填**。\n"
     "- {lang}\n"
     # 写实人像通用写法：改图管道**不走** `_MASTER_TEMPLATE`，所以这里也要有
@@ -2079,8 +2133,11 @@ _REVISE_TEMPLATE = (
     # 来路：2026-10-20 22:57 前这里没有任何注入点，群里三条「qwen + 引用图」
     # 产出的 prompt 里连 `A realistic photograph ... photorealistic style`
     # 都出来了——正是这套规则要压掉的写法。
-    + _REAL_PORTRAIT_RULES +
-    "- 禁止权重语法 (tag:1.2)、{{tag}}、::\n"
+    + _REAL_PORTRAIT_RULES
+    # 2026-11-18：改图模板也常驻 Qwen / Krea2 写法——换装、改手势的物理细节
+    # 主要在这条管道上用到，和主模板共用同一份固定文案。
+    + _CHANNEL_RULES
+    + "- 禁止权重语法 (tag:1.2)、{{tag}}、::\n"
     "- 具体角色没把握就写外貌特征+作品名，不要编造不存在的角色名\n"
     # 逃逸口**一直开着**：以前代码扫原话认机制词，认到就换成「必须出 prompt」
     # 那段（`_ESCAPE_FORBIDDEN`，2026-10-06 随图生图硬编码一起删）。现在由模型
@@ -2141,9 +2198,38 @@ def last_direct_desc(session_key):
 
 
 def _last_job(session_key):
+    """上一张图的渠道 + 提示词。先读内存，空了从账本兜底（跨进程重启）。
+
+    2026-11-18 用户要求：「再来一张」跨重启也要能拿到上一张的渠道和提示词。
+    `_LAST_JOB` 是进程内字典，bot 一重启就空；账本 `state/image_log.jsonl`
+    有 target / target_id / skill / prompt，按会话取最后一行即可。
+    """
     with _JOB_LOCK:
         job = _LAST_JOB.get(session_key)
-        return dict(job) if job else None
+        if job:
+            return dict(job)
+    try:
+        # 只给**当前会话**兜底：账本里别的会话的记录不能串过来。
+        if session_key and qq_api.current_session_key() != session_key:
+            return None
+        target, target_id = qq_api.current_context()
+    except Exception:                                  # noqa: BLE001
+        return None
+    if not target or not target_id:
+        return None
+    row = image_log.latest_for(target, target_id)
+    if not row or not row.get("prompt"):
+        return None
+    return {"skill": row.get("skill") or "", "prompt": row.get("prompt") or "",
+            "tag": row.get("tag") or ""}
+
+
+def _last_job_line(job):
+    """【上一张】那一段的渲染；没有上一张就写「（无）」。"""
+    if not job:
+        return "（无）"
+    return "[直达生图] %s：%s" % (job.get("skill") or "默认",
+                                  (job.get("prompt") or "")[:200])
 
 
 def _is_channel_word(tok):
@@ -2210,29 +2296,27 @@ def _strip_own_names(text):
     return t.strip()
 
 
-def _recent_lines(history, limit=10):
-    """会话历史的最近几条，压成「用户：…/AI：…」短行给转译调用看指代。
+def _recent_lines(history, limit=5):
+    """最近 **5 条用户消息**，压成短行给转译调用看指代。
 
-    菜单和生图回执整行滤掉（2026-10-05 用户点名）：不然最近 10 条全是
+    2026-11-18 用户拍板：「最近对话改成 5 条用户消息即可，它只是一个生图
+    机器人，不需要看自己前面回了什么。」所以 **AI 侧一条都不留**——包括
+    `[直达生图]` 记账行。上一张的渠道和提示词改由独立的【上一张】
+    （`last_job` + 账本兜底）提供，见 `_last_job`。
+
+    菜单和生图回执整行滤掉（2026-10-05 用户点名）：不然最近 5 条全是
     「🎨 生图直达…」，指代上下文等于没有。
-
-    AI 侧**只留出图记账行**（2026-10-16 用户拍板，判据与理由见
-    `_RECENT_AI_KEEP_RE`）：纯文本回话不喂——它自己的拒绝话术一旦回喂，
-    下一轮就会照着继续拒。**用户侧照旧全留**。
     """
     lines = []
     for m in history or []:
-        if m.get("role") == "system":
+        if m.get("role") != "user":
             continue
         c = m.get("content")
         if not isinstance(c, str) or not c.strip():
             continue
         if _RECENT_NOISE_RE.search(c):
             continue
-        if m.get("role") != "user" and not _RECENT_AI_KEEP_RE.search(c.strip()):
-            continue
-        who = "用户" if m.get("role") == "user" else "AI"
-        lines.append("%s：%s" % (who, c.strip()[:120]))
+        lines.append("用户：%s" % c.strip()[:120])
     return "\n".join(lines[-limit:])
 
 
@@ -2250,11 +2334,67 @@ def _extract_json(text):
     return data
 
 
+def _llm_target(agent_id):
+    """把 agent 的模型选择解析成 `call_llm` 的 provider/model/strict。
+
+    管理页给 QQ agent 选了 provider，就该连直达生图这条轻量调用也走它——
+    此前这里恒走 `.env` 的全局降级链，页面写着「DeepSeek 官方」、日志却
+    先打中转站，用户看到的「选了官方仍在降级」就是这个缺口。
+
+    只有 agent.json 真写了 provider 才 strict：选了谁就只用谁，连不上不
+    往后降级；没选（沿用全局链）时保持旧行为，空 provider 不改变候选链。
+    """
+    if not agent_id:
+        return None, None, False
+    try:
+        from app.core import agents as agent_store
+        cfg = agent_store.agent_config(agent_id)
+        provider = str(cfg.get("provider") or "").strip() or None
+        model = str(cfg.get("model") or "").strip() or None
+        return provider, model, bool(provider)
+    except Exception:                                  # noqa: BLE001
+        log.warning("[direct] 读取 agent 模型配置失败，回退全局链", exc_info=True)
+        return None, None, False
+
+
+_LLM_TARGETS = threading.local()
+
+
+@contextmanager
+def _llm_scope(provider=None, model=None, strict=False):
+    """当前线程的模型选择作用域。
+
+    `_translate` 内部有多个 `_ask` / 重问调用，逐层传参既啰嗦，也会让
+    `patch.object(direct_gen, "_ask", side_effect=fake_ask)` 这类老用例
+    因多一个关键字参数直接 TypeError。用线程本地作用域，`_ask(content)`
+    的调用形态保持不变，模型选择只在当前这一轮生效、退出即还原。
+    """
+    old = getattr(_LLM_TARGETS, "value", None)
+    _LLM_TARGETS.value = (provider, model, strict)
+    try:
+        yield
+    finally:
+        if old is None:
+            try:
+                del _LLM_TARGETS.value
+            except AttributeError:
+                pass
+        else:
+            _LLM_TARGETS.value = old
+
+
 def _ask(content):
-    """一次 LLM 调用 + 抠 JSON。拿不到有效结果返回 None。"""
+    """一次 LLM 调用 + 抠 JSON。拿不到有效结果返回 None。
+
+    provider/model/strict 由 `_llm_scope` 提供：管理页给 QQ agent 选了模型，
+    直达生图这条轻量调用也走它；没有作用域时才落回全局链。
+    """
+    provider, model, strict = (getattr(_LLM_TARGETS, "value", None)
+                               or (None, None, False))
     try:
         reply = llm.call_llm(
-            [{"role": "user", "content": content}], timeout=30)
+            [{"role": "user", "content": content}], timeout=30,
+            provider=provider, model=model, strict=strict)
     except Exception as e:
         log.warning("[direct] LLM 调用失败：%s", e)
         return None
@@ -2572,11 +2712,25 @@ def _role_key_ok(skill, key):
 
 
 def _translate(text, history, skill=None, weighted=False, no_default=False,
-               doc=None):
+               doc=None, provider=None, model=None, strict=False):
+    """给本轮转译套上 agent 的模型选择，再跑正文。
+
+    正文 `_translate_body` 保持原签名和 `_ask(content)` 单参调用形态，
+    老的 fake_ask / 直接调用用例不会因为多一个关键字参数而失败。
+    """
+    with _llm_scope(provider, model, strict):
+        return _translate_body(text, history, skill=skill, weighted=weighted,
+                               no_default=no_default, doc=doc)
+
+
+def _translate_body(text, history, skill=None, weighted=False, no_default=False,
+                    doc=None):
     """一次 LLM 调用 → 生图任务，或一句聊天回复。**所有提示词都由它产出**。
 
     2026-10-05 晚用户拍板重做：**只有一条模板 `_MASTER_TEMPLATE`**（人设 +
-    工具列表 + 最近对话 + 用户原话），不再按渠道分模板、不再注入渠道专属规则。
+    工具列表 + 最近对话 + 用户原话），不按渠道分模板、不按轮拼渠道规则。
+    2026-11-18 追加：Qwen / Krea2 写法常驻固定块（`_CHANNEL_RULES`），
+    仍是一条模板，只是把「按渠道取用」的说明一起写进公共前缀吃缓存。
     用户原话：「AI 本身就能胜任整个工作，我一直想通过硬编码指令去操控 AI，
     这本身就是错的。」
 
@@ -2648,8 +2802,16 @@ def _translate(text, history, skill=None, weighted=False, no_default=False,
     except Exception:                                  # noqa: BLE001
         log.warning("[direct] 角色库检索异常，候选块留空", exc_info=True)
         role_block = ""
+    # 2026-11-18：上一张的事实单独给【上一张】，最近对话只留 5 条用户消息。
+    # 内存没有就查账本（跨重启兜底）；取不到写「（无）」。
+    prev = None
+    try:
+        prev = _last_job(qq_api.current_session_key())
+    except Exception:                                  # noqa: BLE001
+        log.warning("[direct] 取上一张任务失败，按无处理", exc_info=True)
     content = _MASTER_TEMPLATE.format(
         recent=_recent_lines(history) or "（无）",
+        last_job=_last_job_line(prev),
         text=text,
         search=(_SEARCH_HEADER.format(doc=doc) if doc else ""),
         role_block=role_block,
@@ -2900,7 +3062,8 @@ def _ledger_hit(source):
 _LOCAL_SEED_SKILL_RE = re.compile(r"^(anima_|hd_|qwen_image_v1|qwen30|image_gen_v1|krea2|nffa|cunny|miao|moss)")
 
 
-def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):
+def _revise(text, data_urls, history, channel=None, at_me=False, doc=None,
+            provider=None, model=None, strict=False):
     """改图管道：引用图 + 意见 → 一次调用 → 重跑。
 
     引用带图改图**一律真识图**（2026-10-05 用户拍板）：账本里存的是当时那句
@@ -2971,7 +3134,9 @@ def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):
             # 需求直接在那段文字上改就行，没必要每次都看一眼图。用户原话：
             # 「没有必要每一次用户引用我的生成结果的图片的时候，就一直在识图」。
             # 走**纯文本**调用（`call_llm`，不是 `describe`），零识图开销。
-            return call_llm([{"role": "user", "content": question}])
+            # 模型选择跟 QQ agent（管理页）走，不落回全局降级链。
+            return call_llm([{"role": "user", "content": question}],
+                            provider=provider, model=model, strict=strict)
         # 别人的图：没有账本可依，一律真识图（1 次）。
         # 不指定 provider = 跟识图配置走（.env，现在是 doubao-seed-2.1-turbo）。
         return describe(data_urls[0], prompt=question)
@@ -3086,7 +3251,8 @@ def _revise(text, data_urls, history, channel=None, at_me=False, doc=None):
     return _enqueue(skill, prompt, text, source_image=source_image)
 
 
-def decide(own_text, history, voluntary, data_urls=None, at_me=True):
+def decide(own_text, history, voluntary, data_urls=None, at_me=True,
+           agent_id=None):
     """直达管道入口。返回值：
     - None      ：不接管（总开关关闭 / 主动接话轮 / 裸 @ 空消息 / 转译失败）
     - ""        ：已接管但闭嘴（引用图 + 夸奖这类「不是修改请求」的反推轮，
@@ -3098,6 +3264,9 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     `_translate`（人设 + 工具 + 历史 + 原话），AI 判不了才不接管。用户原话：
     「别人艾特大大怪，大大怪给他一个回复」「正常交流就行了，问一次回一次」。
     """
+    # 模型选择统一由调用方传入的 agent 决定（QQ 传 QQ_AGENT_ID）。放在最前，
+    # 后面所有 `_translate` / `_revise` 共用同一份，不会一条轮里两个模型。
+    provider, model, strict = _llm_target(agent_id)
     text = _strip_own_names(_strip_attribution(own_text))
     # 「横屏 / 横版 / 横图」是出图方向指令，不是画面内容 → 抠掉再给 AI 看
     # （判据在 image_jobs，读的是原话，所以这儿抠掉不影响横屏生效）。
@@ -3183,7 +3352,11 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     if addressed and _MENU_RE.match(text) and not data_urls:
         return MENU_TEXT
     # 裸 @ / 空消息：没内容可判 → 不接管，交回上层。
-    if not text and not data_urls:
+    # 但如果**引用了正文**（「引用一段提示词 + 只喊大大怪」），内容就在引用里，
+    # 不能当空消息放走：放走后 agent 只会把历史里的 `[直达生图]` 行抄回来，
+    # 看着像下单、实际一张图都不出（2026-11-19 群 1041079621 实录）。
+    # 这里让它继续走下面的默认 `_translate`，由 AI 拿引用正文判「照着画 / 回话」。
+    if not text and not data_urls and not quoted:
         return None
     # 只发图、没说话（_IMG_ONLY_RE 把正文归一成空）→ 反推这张图的提示词。
     # 自家图先查账本（零调用最准），别人的图才识图（1 次）。
@@ -3426,7 +3599,7 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
                                 _LOCAL_SEED_SKILL_RE.match(ch)) else None
             return _enqueue(ch, tags, text, seed=seed)
         reply = _revise(text, data_urls, history, channel=ch, at_me=at_me,
-                        doc=doc)
+                        doc=doc, provider=provider, model=model, strict=strict)
         return reply if reply is not None else ""
 
     # ── 成品提示词轮（带 NAI 权号 `::`）：过一次 AI，权号语法一个字不许动 ──
@@ -3445,7 +3618,8 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
             return ("权号串我只看到渠道词，正文是空的。把整段提示词一起发，"
                     "别只有渠道词。")
         data = _translate(body, history, skill=skill, weighted=True,
-                          no_default=True, doc=doc)
+                          no_default=True, doc=doc,
+                          provider=provider, model=model, strict=strict)
         if data and data.get("reply"):
             # 模型判断这串不是下单（比如群里贴串讨论）→ 直接回话，不入队。
             return data["reply"]
@@ -3481,7 +3655,8 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
             # 这两条零转译旁路都已删除）。
             # 转译**不带最近历史**：引用正文是唯一描述来源，历史里有旧 tag
             # 时小模型照抄（负向规则它执行不了，只能断来源）。
-            data = _translate(quoted, [], skill=ch, doc=doc)
+            data = _translate(quoted, [], skill=ch, doc=doc,
+                              provider=provider, model=model, strict=strict)
             if data and data.get("reply"):
                 return data["reply"]
             if data and data.get("comic"):
@@ -3513,7 +3688,8 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
         # 历史（「换成卡通风格 三档」的指代要靠它）。
         src = _quote_merge(quoted, desc)
         hist = [] if quoted.strip() else history
-        data = _translate(src, hist, skill=ch, doc=doc)
+        data = _translate(src, hist, skill=ch, doc=doc,
+                          provider=provider, model=model, strict=strict)
         if data and data.get("reply"):
             # 模型判这轮不是下单（点名了渠道也只是在聊）→ 直接回话。
             return data["reply"]
@@ -3540,7 +3716,8 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True):
     # 默认 = silver 单图（此前是 anima多图 3 张，用户实测画质不行否掉了）。
     # 这个分支原本就在，不用另加判断。
     src = _quote_merge(quoted, text) if quoted.strip() else text
-    data = _translate(src, [] if quoted.strip() else history, doc=doc)
+    data = _translate(src, [] if quoted.strip() else history, doc=doc,
+                      provider=provider, model=model, strict=strict)
     if data and data.get("reply"):
         return data["reply"]
     if data and data.get("comic"):
