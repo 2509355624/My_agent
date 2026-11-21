@@ -216,14 +216,12 @@ def review(spec):
                     warns.append("P%s 格%d 是局部特写却写了身材词，镜头会被拉远" % (n, i + 1))
             elif segs and c:
                 miss = [s for s in segs if s.lower() not in c.lower()]
-                if len(miss) <= 2:
-                    # 只漏一两项（常见是配饰、身材）：脸还在，不算错。
-                    if miss:
-                        warns.append("P%s 格%d 外形串少了 %s（只漏 %d 项，脸没丢）"
-                                     % (n, i + 1, "、".join("「%s」" % m[:20] for m in miss), len(miss)))
-                elif miss:
-                    issues.append(("错", "P%s 格%d 外形串漏项 %s"
-                                   % (n, i + 1, "、".join("「%s」" % m[:28] for m in miss[:2]))))
+                if miss:
+                    # 只报「疑」：autofix 会把整段外形串插回去，落盘稿通常不缺。
+                    # 而且有些漏项是剧情要求（泳池里头发塞进泳帽、头带摘在手里），
+                    # 补回去反而画错——交给人看一眼，不拿它去烧重修。
+                    warns.append("P%s 格%d 外形串少了 %s（autofix 会补，个别可能是剧情要摘掉的）"
+                                 % (n, i + 1, "、".join("「%s」" % m[:20] for m in miss[:3])))
             if words(c) > 110:
                 warns.append("P%s 格%d 单格 %d 词，后半段容易被稀释"
                              % (n, i + 1, words(c)))

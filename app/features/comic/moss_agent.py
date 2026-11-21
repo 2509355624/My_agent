@@ -425,9 +425,14 @@ def _wear_hand_clash(caption):
 
 # 纯局部特写（脸、手、脚）：画面里没有身体，不需要全身外形串。往里塞
 # 「slender small frame / wearing …」，出图只能把镜头拉远成中景。
-# 允许中间夹修饰词：close-up of her **raised** hand / of her **wet** hair。
-_TIGHT = re.compile(r"close[- ]up (?:of|on) her (?:[a-z-]+ ){0,2}(?:face|eyes|mouth|lips"
-                    r"|hand|hands|fingers|wrist|arm|leg|foot|feet|ankle|shoulder|hair|nape)", re.I)
+# 判据本体在 `moss_twopass.TIGHT_CU`——那边的外形串补齐也要用同一条。
+_TIGHT = M.TIGHT_CU
+# 特写里**带脸**的那一类（脸、眼睛、嘴、头发、后颈）。只有这一类才该核对
+# 「还是同一个人」；手、脚、肩的特写里根本没有脸，要求写 hair/eyes 等于
+# 逼它把镜头拉开——2026-11-22 实测便利店：一格「低头数硬币的手」被这条判
+# 死，连修三轮还是红，49.8s 白烧，autofix 之后落盘稿其实是对的。
+_TIGHT_FACE = re.compile(r"close[- ]up (?:of|on) her (?:[a-z-]+ ){0,2}"
+                         r"(?:face|eyes|mouth|lips|head|hair|nape|chin|cheek)", re.I)
 _FACE_WORDS = ("hair", "headband", "bangs", "eye", "face")
 
 
@@ -577,11 +582,13 @@ def audit(js, cap=12):
                 continue
             if _TIGHT.search(cc):
                 # 纯局部特写里没有身体：要求全身外形串等于逼它把镜头拉开。
-                # 只核对脸和头发这一组，其余不查。
-                got = sum(1 for w in _FACE_WORDS if w in cc)
-                if got < 3:
-                    out.append("第%d页：脸/手特写格几乎没写她的脸和头发（%d/5 个要素）——"
-                               "特写只写那一处，但脸得是同一个人" % (n, got))
+                # 带脸的那一类（脸/头发/后颈）才核对「还是同一个人」；
+                # 手、脚、肩的特写连脸都不在画面里，不查这一项。
+                if _TIGHT_FACE.search(cc):
+                    got = sum(1 for w in _FACE_WORDS if w in cc)
+                    if got < 3:
+                        out.append("第%d页：脸特写格几乎没写她的脸和头发（%d/5 个要素）——"
+                                   "脸就在画面里，得是同一个人" % (n, got))
                 continue
             miss = [s for s in girl_segs if s.lower() not in cc]
             if miss:

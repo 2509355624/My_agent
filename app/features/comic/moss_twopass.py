@@ -1111,6 +1111,19 @@ HUE = re.compile(r"\b(red|blue|brown|pink|green|yellow|orange|purple)\b", re.I)
 STYLE_LOCK_KEYS = ("screentone", "monochrome", "inked lineart")
 NEG_SENT = "No speech bubble and no text in this panel."
 
+# 纯局部特写（脸、手、脚）：画面里没有身体，不需要全身外形串。往里塞
+# 「slender small frame / wearing …」，出图只能把镜头拉远成中景。
+# 允许中间夹修饰词：close-up of her **raised** hand / of her **wet** hair。
+# 放这里而不是 `moss_agent`：外形串补齐（autofix）也要用同一条判据——
+# 它原来不分类别地补，把「脚趾特写」也补成整段脸和头带，和提示词、
+# 和 audit 都打架（2026-11-22 实测泳池话题）。`moss_agent` 直接引这一份。
+TIGHT_CU = re.compile(r"close[- ]up (?:of|on) "
+                      r"(?:(?:her|his|the girl['’]?s?|the same girl['’]?s?) )?"
+                      r"(?:[a-z-]+ ){0,2}(?:face|eyes|mouth|lips"
+                      r"|hand|hands|fingers|fingertips|knuckles|toes|wrist|arm|leg"
+                      r"|foot|feet|ankle|shoulder|hair|nape)",
+                      re.I)
+
 
 def _kind(cap):
     """按 caption 判定文字元素类型：气泡 / 男主白边裸字 / 旁白 / 拟声。"""
@@ -1769,6 +1782,12 @@ def autofix(js, cast=None, lines=None, layout=None, scene="", narr="",
         # 2026-11-21 POV：画面里只有女生。绝不把 boy 外形串补进 caption——
         # 补了就等于把男主画进画面。男主只以 pov hands 出现，没有外形串。
         if who == "boy":
+            continue
+        # 纯局部特写不补：一格画的是脚趾 / 手指，塞进「long straight dark hair
+        # with blunt bangs, a wide fluffy headband」只会让出图端把镜头拉开，
+        # 或者把不该出现的东西画进来。提示词 §特写 和 audit 都是这么定的，
+        # 这一步原来没跟上（2026-11-22 泳池话题：脚趾特写被补成整段脸）。
+        if TIGHT_CU.search(low):
             continue
         clauses = [x.strip() for x in cast[who].split(",") if len(x.split()) >= 2]
         if not clauses:

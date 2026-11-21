@@ -55,9 +55,14 @@ TOPICS = [
 # 只用于「展示和统计」，不做准入判断。比 moss_agent._CLOTH 多了和服/浴衣/
 # 牛仔/泳装这些剧情里常见、但检测判据里故意没加的词。
 CLOTH = (r"(?:t-shirt|shirt|tee|blouse|dress|gown|skirt|shorts|pants|jeans|trousers"
-         r"|jacket|cardigan|coat|hoodie|sweater|jumper|uniform|jersey|yukata|kimono"
-         r"|robe|towel|underlayer|tank top|socks|shoes|sandals|slippers|swimsuit"
-         r"|bikini|bra|briefs|underwear|apron)")
+         r"|jacket|cardigan|coat|hoodie|sweatshirt|sweater|jumper|uniform|jersey|yukata"
+         r"|kimono|robe|towel|underlayer|undershirt|tank top|pajama|pyjama|nightgown"
+         r"|socks|shoes|sandals|slippers|swimsuit|bikini|bra|briefs|underwear|apron)")
+
+# 「close-up of the toes / of her hand」这类不带 her 的写法，_TIGHT 匹配不到，
+# 会被当成「没写衣着」——脚趾特写本来就不该写衣服。
+_PART_CU = re.compile(r"close[- ]?up of (?:the|her|his) (?:[a-z]+ ){0,2}"
+                      r"(?:toes|fingertips|fingers|hand|hands|feet|foot|ankle|wrist|sleeve)", re.I)
 
 
 def outfit_bits(caption):
@@ -99,7 +104,7 @@ def check_outfit(spec, name):
         for i, it in enumerate(cells, 1):
             cap = it.get("caption") or ""
             bits = outfit_bits(cap)
-            tight = bool(A._TIGHT.search(cap.lower()))
+            tight = bool(A._TIGHT.search(cap.lower()) or _PART_CU.search(cap))
             lines.append("   格%d %s" % (i, (" ｜ ".join(bits))[:300] or "（没写衣着）"))
             if not bits:
                 # 脸 / 手 / 脚的特写里看不到衣服，不写是对的——硬塞一件反而画错。
