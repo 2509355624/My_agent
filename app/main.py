@@ -45,7 +45,7 @@ from app.config import (AGENT_PORT, WEB_DIR, COMFYUI_URL, MODEL, DOCUMENTS_DIR,
                         VISION_PROMPT_MAX, VISION_PROVIDER, VISION_MODEL,
                         QQ_AGENT_ID, provider_vision,
                         CUSTOM_PROVIDERS_FILE, load_custom_providers,
-                        COMFYUI_OUTPUT_DIR)
+                        COMFYUI_OUTPUT_DIR, WORKSHOP_HTML)
 from app import provider_store
 from app.skills import list_skills, load_skill
 from app import model_catalog
@@ -969,6 +969,44 @@ def comic_works_page():
     走 /api/comic/works，那个接口还会再挡一次群友态（5175 是通配反代）。
     """
     return send_from_directory(WEB_DIR, "comic_works.html")
+
+
+@app.route("/gallery")
+@app.route("/gallery.html")
+def gallery_page():
+    """画廊作品墙：本机/内网直连 5174 打开；身份由 gallery_api 兜底成
+    .env 里的 GALLERY_LOCAL_DEFAULT_QQ。5175 群友页另有同名路由，互不影响。
+    """
+    return send_from_directory(WEB_DIR, "gallery.html")
+
+
+@app.route("/workshop")
+@app.route("/workshop.html")
+@app.route("/workshop/")
+def workshop_page():
+    """提示词工坊（2026-11-21）。
+
+    它本来是 5175 群友页的路由，但两个端口的 `gallery.html` 是同一个文件，
+    菜单里那行 `<a href="/workshop">提示词工坊</a>` 是绝对路径——从 5174 的
+    画廊点进去就落在 5174 上，而这个 Flask 没有这条路由，只能吐默认 404
+    （用户看到的 "The requested URL was not found" 就是它）。
+
+    工坊是纯前端单文件，不读登录态也不调接口，在 5174 同样按公开页处理，
+    内容来自 .env 的 WORKSHOP_HTML；没配就明说没配，不要静默 404。
+    """
+    path = WORKSHOP_HTML
+    if not path or not os.path.isfile(path):
+        return app.response_class(
+            "<!doctype html><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<body style=\"background:#0f1116;color:#dfe3ec;"
+            "font:15px/1.75 system-ui,sans-serif;padding:44px 22px\">"
+            "提示词工坊还没配上。<br>"
+            "<span style=\"color:#7e8699;font-size:13px\">"
+            "在 .env 里加一行 WORKSHOP_HTML=工坊 html 的完整路径，再重启 5174。"
+            "</span></body>",
+            status=404, mimetype="text/html")
+    return send_from_directory(os.path.dirname(path), os.path.basename(path))
 
 
 @app.route("/moss")

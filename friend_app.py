@@ -445,6 +445,7 @@ def _workshop_payload(path):
 
 @app.route("/workshop")
 @app.route("/workshop.html")
+@app.route("/workshop/")
 def workshop_page():
     """提示词工坊。**不登录也能看**（2026-11-01 用户拍板，改掉了当天早些
     时候「登录可见」的版本）。

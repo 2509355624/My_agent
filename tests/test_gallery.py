@@ -356,12 +356,61 @@ class ApiTest(_Base):
         p2 = mock.patch.object(gallery_api, "GALLERY_OWNER_QQ", "10001")
         p2.start()
         self.addCleanup(p2.stop)
+        # 既有用例走纯 5175 token 校验口径：默认关闭本地免登录，
+        # 避免真实 .env 里的 GALLERY_LOCAL_DEFAULT_QQ 混进断言。
+        p3 = mock.patch.object(gallery_api, "GALLERY_LOCAL_DEFAULT_QQ", "")
+        p3.start()
+        self.addCleanup(p3.stop)
 
     def j(self, r):
         return r.get_json()
 
     def test_no_token_is_403(self):
         r = self.c.get("/api/gal/list?qq=10001")
+        self.assertEqual(r.status_code, 403)
+
+    # ── 本机/内网直连免登录（2026-11-20）─────────────────
+
+    def _patch_local_default(self, qq="10001"):
+        p = mock.patch.object(gallery_api, "GALLERY_LOCAL_DEFAULT_QQ", qq)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_local_no_token_uses_default_owner(self):
+        """本机直连不带 token / qq，兜底成默认站主号。"""
+        self._patch_local_default("10001")
+        d = self.j(self.c.get("/api/gal/me"))
+        self.assertTrue(d["ok"])
+        self.assertTrue(d["owner"])
+        self.assertEqual(d["alias"], "站长")
+
+    def test_local_ignores_spoofed_qq(self):
+        """本地直连改地址带别人 qq，身份仍固定默认号，不串到别人存档。"""
+        self._patch_local_default("10001")
+        d = self.j(self.c.get("/api/gal/mine?qq=20002"))
+        self.assertTrue(d["ok"])
+        self.assertEqual(len(d["works"]), 1)        # 站主 mine 含磁盘目录
+        self.assertEqual(d["alias"], "站长")
+
+    def test_token_forward_still_requires_session_qq(self):
+        """带反代 token 的是 5175 转发：不套本地默认号，无 qq 仍按游客。"""
+        self._patch_local_default("10001")
+        d = self.j(self.c.get("/api/gal/list", headers=self.h))
+        self.assertTrue(d["guest"])
+
+    def test_tunnel_header_is_not_local(self):
+        """带隧道头的请求不算本地直连，无 token 仍 403。"""
+        self._patch_local_default("10001")
+        r = self.c.get("/api/gal/list",
+                       headers={"CF-Connecting-IP": "203.0.113.9"})
+        self.assertEqual(r.status_code, 403)
+
+    def test_local_default_disabled_when_empty(self):
+        """默认号留空：本地也不兜底，无 token 仍 403（fail-closed）。"""
+        p = mock.patch.object(gallery_api, "GALLERY_LOCAL_DEFAULT_QQ", "")
+        p.start()
+        self.addCleanup(p.stop)
+        r = self.c.get("/api/gal/list")
         self.assertEqual(r.status_code, 403)
 
     def test_owner_flag(self):

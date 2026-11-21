@@ -919,6 +919,11 @@ GALLERY_ROOTS = _parse_gallery_roots(os.getenv("GALLERY_ROOTS", ""))
 # 留空 = 管理功能整体关闭（宁可关掉也不猜，猜错了等于把删除权限给了别人）。
 GALLERY_OWNER_QQ = os.getenv("GALLERY_OWNER_QQ", "").strip()
 
+# 本机 / 内网直连 5174 打开画廊时免登录，默认落到这个 QQ 身份。
+# 只对「不带反代 token、来自回环/私网、无隧道头」的直连生效；5175 群友页、
+# 隧道/公网请求不享受，仍按各自登录态隔离。留空 = 关闭本地免登录（fail-closed）。
+GALLERY_LOCAL_DEFAULT_QQ = os.getenv("GALLERY_LOCAL_DEFAULT_QQ", "").strip()
+
 # ─── 内置角色卡（2026-11-03 用户要求「创建角色不能动我的默认角色」）──────
 #
 # 这些 id 对应的卡是随项目一起长出来的（改过人设、定过年龄），用户明确说

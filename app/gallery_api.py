@@ -23,6 +23,7 @@
 """
 
 import base64
+import ipaddress
 import logging
 import os
 import time
@@ -31,7 +32,7 @@ from concurrent.futures import ThreadPoolExecutor
 from flask import Blueprint, jsonify, request, send_file
 
 from app import friend_auth, gallery
-from app.config import GALLERY_OWNER_QQ
+from app.config import GALLERY_OWNER_QQ, GALLERY_LOCAL_DEFAULT_QQ
 
 log = logging.getLogger("gallery_api")
 
@@ -85,9 +86,49 @@ def _img(path):
     return resp
 
 
+# ─── 本地可信来源（本机 / 内网直连免登录）─────────────────
+#
+# 隔离口径（2026-11-20）：5175 反代到 5174 时 remote_addr 也是 127.0.0.1，
+# 单看地址分不开「本机浏览器直连」和「群友经 5175 进来」，所以要同时满足：
+#   1. 不带隧道头（CF-Connecting-IP / CF-Ray）——公网隧道进来的双保险；
+#   2. 不带 X-Friend-Token——5175 转发一定硬塞这个头，没带才是直连；
+#   3. 地址是回环或私网段（含内网手机/平板）。
+# 三条都成立才算本地直连；其余请求照旧验 token + 按登录态 qq 隔离。
+_LOCAL_ADDRS = ("127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost")
+
+
+def _is_local_addr(addr):
+    if addr in _LOCAL_ADDRS:
+        return True
+    a = addr[7:] if addr.startswith("::ffff:") else addr
+    try:
+        ip = ipaddress.ip_address(a)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback or ip.is_link_local
+
+
+def _local_trusted():
+    if request.headers.get("CF-Connecting-IP") or request.headers.get("CF-Ray"):
+        return False
+    if request.headers.get("X-Friend-Token"):
+        return False
+    return _is_local_addr(request.remote_addr or "")
+
+
+def _local_default_qq():
+    """本地直连且配了默认号才返回；否则空串走原登录分支。"""
+    if _local_trusted() and GALLERY_LOCAL_DEFAULT_QQ:
+        return GALLERY_LOCAL_DEFAULT_QQ
+    return ""
+
+
 # ─── 公共小件 ────────────────────────────────────────────
 
 def _guard():
+    # 本机/内网直连：免 token，身份由 _qq() 兜底成默认号。
+    if _local_default_qq():
+        return None
     try:
         good = friend_auth.secret()
     except Exception:
@@ -100,6 +141,11 @@ def _guard():
 
 
 def _qq():
+    # 本地直连身份固定为默认号，忽略请求里传来的别的 qq——防止本地页面
+    # 改地址参数串到别人的「我的」和私密条目。
+    local = _local_default_qq()
+    if local:
+        return local
     qq = str(request.args.get("qq") or "").strip()
     if not qq:
         body = request.get_json(silent=True) or {}
