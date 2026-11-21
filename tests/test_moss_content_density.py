@@ -112,18 +112,23 @@ class TestParseRichContent(unittest.TestCase):
 
 
 class TestTextColumns(unittest.TestCase):
+    # 2026-11-21 阈值从 10 抬到 14：多列时模型实测按日漫习惯从右列开始读，
+    # 与要求的「从左往右」相反。常见台词一列到底就不存在左右顺序问题。
     def test_columns_scale_with_length(self):
         self.assertEqual(m._text_columns("短"), 1)
-        self.assertEqual(m._text_columns("十来个字的一句话啊啊啊"), 2)
-        self.assertEqual(m._text_columns("一" * 25), 3)
+        self.assertEqual(m._text_columns("十来个字的一句话啊啊啊啊啊"), 1)   # 13 字，一列到底
+        self.assertEqual(m._text_columns("一" * 20), 2)                   # 15~26 字，两列
+        self.assertEqual(m._text_columns("一" * 30), 3)
 
     def test_bubble_cap_uses_columns(self):
-        cap = m.bubble_cap("十来个字的一句话啊啊啊")
+        cap = m.bubble_cap("一" * 20)
         self.assertIn("2 columns", cap)
+        self.assertIn("LEFT column", cap)      # 句首钉死最左列
 
     def test_boy_text_cap_uses_columns(self):
-        cap = m.boy_text_cap("一" * 25)
+        cap = m.boy_text_cap("一" * 30)
         self.assertIn("3 columns", cap)
+        self.assertIn("LEFT column", cap)
 
     def test_multi_caption_boxes_no_overlap(self):
         cell = list(m.SKELETONS["L4"][0])

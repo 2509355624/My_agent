@@ -1125,17 +1125,26 @@ def _kind(cap):
 
 
 def _text_columns(text):
-    """竖排列数：一列约十个字，长了多给列，最多三列（再多格子放不下）。
+    """竖排列数：一列约十四五个字，长了才多给列，最多三列（再多格子放不下）。
 
-    2026-11-21 放开内容创作后台词不再是 3~8 字碎句，十来字到二十来字都正常，
-    原来的 `<=10 → 1 列，否则 2 列` 会把长句挤成一坨。
+    2026-11-21 第二次收紧：多列时模型实测按日漫习惯从**右**列开始读，
+    与要求的「从左往右」相反（实拍那句「热死了，洗把脸」就是右列先读）。
+    既然一列不存在左右顺序问题，就把阈值抬到 14——常见台词一列到底，
+    只有真长句才排两列。
     """
     n = len(text or "")
-    if n <= 10:
+    if n <= 14:
         return 1
-    if n <= 20:
+    if n <= 26:
         return 2
     return 3
+
+
+CAPTION_BOX = ("Small rectangular caption box in the upper left corner of this panel, "
+               "thin black ink outline, Chinese text written vertically with each "
+               "character stacked top to bottom, the first character at the TOP of the "
+               "LEFT column, reading left to right, no bubble tail, no pointer, "
+               "single caption box only in this panel.")
 
 
 def boy_text_cap(text):
@@ -1150,7 +1159,8 @@ def boy_text_cap(text):
             "thick white outline around every character for legibility, "
             "NO speech bubble, no bubble tail, no pointer tail, no enclosing frame, "
             "Chinese text written vertically with each character stacked top to bottom, "
-            "%d column%s ordered left to right, "
+            "%d column%s, first character of the sentence at the TOP of the LEFT column, "
+            "reading left to right, "
             "compact plain text sized so several can share this panel." %
             (ncol, "" if ncol == 1 else "s"))
 
@@ -1176,7 +1186,8 @@ def bubble_cap(text, who="girl"):
     target = "the boy's" if who == "boy" else "the girl's"
     return ("Vertical rounded speech bubble with a thin black ink outline, "
             "Chinese text written vertically with each character stacked top to bottom, "
-            "%d column%s of text ordered left to right, "
+            "%d column%s, first character of the sentence at the TOP of the LEFT column, "
+            "reading left to right, "
             "short pointer tail pointing toward %s face, "
             "compact bubble sized so several can share this panel." %
             (ncol, "" if ncol == 1 else "s", target))
@@ -1562,9 +1573,7 @@ def autofix(js, cast=None, lines=None, layout=None, scene="", narr="",
         want = [{"text": narr, "cell": narr_cell}]
     want_keys = {norm_text(e["text"]) for e in want}
     line_keys = {norm_text(ln.get("text")) for ln in (lines or [])}
-    cap_caption = ("Small rectangular caption box in the upper left corner of this panel, "
-                   "Chinese text set vertically in columns read left to right, "
-                   "no bubble tail, single caption box only in this panel.")
+    cap_caption = CAPTION_BOX
     # 模型写了的旁白框按 text 认领（同一句只留一个），剧本没有的删掉。
     # 2026-11-21：单 Agent 链路**没有上游剧本**，模型写的旁白就是唯一事实源。
     # `audit_narr=False` 时跳过「剧本没有就删」——否则这一页 5 句旁白会被删成 0 句，

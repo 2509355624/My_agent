@@ -58,9 +58,10 @@ EXAMPLE = {
             "A black-and-white Japanese manga page divided into five panels: one tall "
             "dominant panel filling the right side from top to bottom, a narrow left "
             "column of three small stacked panels, and a thin horizontal establishing "
-            "strip across the very top, all separated by thin white gutters and thick "
-            "black ink borders. Manga page, monochrome, greyscale screentones, inked "
-            "lineart, bold black ink outlines, pen crosshatching. In the dominant right "
+            "strip across the very top, all separated by thin white gutters and a thin "
+            "black ink border around the whole page. Manga page, monochrome, greyscale "
+            "screentones, inked lineart, bold black ink outlines, pen crosshatching. In "
+            "the dominant right "
             "panel, a girl about twelve, slender small frame, long straight dark hair "
             "with soft blunt bangs pulled back by a wide fluffy pale cloth headband, "
             "large round dark eyes, round soft face, faint blush, wearing a plain "
@@ -148,6 +149,7 @@ SYSTEM = """你写黑白日漫整页分镜，直接输出 Layout JSON。输入�
 }
 每页：{"layout": "L0", "scene": "1", "summary": {...}, "items": [...],
         "bbox_coord_space": "abs_centralized", "bbox_format": "yxyx"}
+summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格数核对一遍）。
 
 ════ 一页怎么想 ════
 一页只放一个地点、一个动作。读者翻过这页，要能说出「她刚做了什么」。
@@ -159,7 +161,7 @@ SYSTEM = """你写黑白日漫整页分镜，直接输出 Layout JSON。输入�
 ════ 字（跟着格数走，别让五格页只有一句话） ════
 一格页 0~2 句；两格页 1~3 句；三格页 2~4 句；五格页 3~5 句。
 台词一句一个意思，十来个字，落在说话人自己在的那一格。
-旁白只在「不看字就看不懂这一格」时写一句，写在这一格左上角。
+② 那种方框只写两种东西：不看字就看不懂的信息（几点、在哪、她心里那句话），或者她接下来要做什么。写在这一格左上角。
 单个格子可以完全没有字——特写本身就说清了，就别硬塞；但**整页空得只剩一句**，读者会不知道这一页发生了什么。
 
 ════ 骨架（只有这四种，bbox 整组照抄，一个字符都不许改） ════
@@ -188,7 +190,7 @@ T3 · 三格 · 上大横格 + 下两格（上面一个主画面，下面两处�
 
 ════ summary.caption：一整段英文，连着写完，不分行不标号 ════
 依次写这五样，用逗号句号连起来：
-① 分格：A black-and-white Japanese manga page divided into five panels: one tall dominant panel filling the right side from top to bottom, a narrow left column of three small stacked panels, and a thin horizontal establishing strip across the very top, separated by thin white gutters and thick black ink borders.
+① 分格：A black-and-white Japanese manga page divided into five panels: one tall dominant panel filling the right side from top to bottom, a narrow left column of three small stacked panels, and a thin horizontal establishing strip across the very top, separated by thin white gutters and a thin black ink border around the whole page.
 ② 画风：Manga page, monochrome, greyscale screentones, inked lineart, bold black ink outlines, pen crosshatching.
 ③ 主格：景别 + 她在做什么 + 完整外形串（从 cast 逐字抄，不缩写不调序）+ 构图位置
 ④ 场景：地点 + 时间 + 光源 + 两三个具体物件
@@ -196,16 +198,25 @@ T3 · 三格 · 上大横格 + 下两格（上面一个主画面，下面两处�
    本页还有男主画外话，补 the off-screen boy's words as white-outlined bare text with no bubble；
    整页没有字写 no text and no speech bubbles anywhere on the page.
 全英文，一个汉字都不许有。
+①里的格线永远细：thin white gutters + a thin black ink border。不要写 thick / heavy / bold frame——五页连起来翻，外框粗细一变，页面就会跳。
 
 ════ items ════
 character：这一格画什么 —— 景别 + 定住的姿势 + 该角色完整外形串（原样连续粘贴）+ 结尾固定写
   monochrome greyscale screentone, bold black ink outline, flat shading, no color cast.
 object：空镜或道具 + 结尾固定写 No speech bubble and no text in this panel.
-text：只写容器形状和字的排法，台词内容只进 text 字段。
-  女生的话：Vertical rounded speech bubble with a thin black ink outline, Chinese text written vertically with each character stacked top to bottom, N columns ordered left to right, short pointer tail pointing toward the girl's face, compact bubble.
-  男主画外的话：Boy plain text: bare Chinese dialogue overlaid directly on the panel, thick white outline around every character, NO speech bubble, no bubble tail, no enclosing frame, Chinese text written vertically with each character stacked top to bottom, N columns ordered left to right.
-  旁白：Small rectangular caption box in the upper corner of this panel, Chinese text set vertically in columns read left to right, no bubble tail.
+text：只写容器形状和字的排法，台词内容只进 text 字段。按「谁在说」选容器，不按好不好看选。
+  ① 她本人在这一格画面里开口 → 气泡，尾巴指向她的脸：
+     Vertical rounded speech bubble with a thin black ink outline, Chinese text written vertically with each character stacked top to bottom, N columns, the first column on the left, reading left to right, short pointer tail pointing toward the girl's face, compact bubble.
+  ② 她的心思、她自己的提议、她接下来要做什么 → 方框，无尾巴，不指向任何人：
+     Small rectangular caption box in the upper left corner of this panel, thin black ink outline, Chinese text written vertically with each character stacked top to bottom, N columns, the first column on the left, reading left to right, no bubble tail, no pointer.
+  ③ 只有男主画外的一句话 → 白边裸字，独立成框，绝不进气泡：
+     Boy plain text: bare Chinese dialogue overlaid directly on the panel, thick white outline around every character, NO speech bubble, no bubble tail, no enclosing frame, Chinese text written vertically with each character stacked top to bottom, N columns, the first column on the left, reading left to right.
+
+**归属不能图省事。** 男主裸字只用来放「他对她说的一句话」，一页最多一句，而且必须是在回应她上一格的动作或话。
+凡是「接下来该去做什么」的念头、她自己下的决定、她的感受和判断，一律是她的（用 ②，她在画面里就 ①）。
+把她的心思写成裸字，等于让男主替她做决定——角色就反了，读者也会读错人。
 **多列中文一律从左往右排**：句首落在最左一列，读者按最左列 → 右边列的顺序读（不要说 right to left）。
+**同一格里同时有她的话和我们的话时，必须两个框分开**：气泡带尾巴指向她，裸字放另一侧、不带任何边框。两条不同归属的字绝不许并进同一个气泡。
 每个 label=text 的 item 必须带 text 字段：这句原文，一字不改，不留空。
 
 ════ 文字框 bbox（格 [y0,x0,y1,x1]，h=y1-y0，w=x1-x0，算完取整） ════
@@ -219,8 +230,12 @@ text：只写容器形状和字的排法，台词内容只进 text 字段。
 框离格边至少留 2%。气泡宽度约为格宽的 42%。同一格多句，先说的在上。
 
 ════ 画什么 ════
-镜头就是男主的眼睛：画面里只有女生，可以有两三个女生同框。
-男主是镜头后的人、不入画；需要他的手写 pov hands / disembodied hand，要他的声音用画外裸字。
+镜头就是我们：她冲着镜头做动作——递过来、扔过来、抬眼看过来、把东西推到你面前，动作方向直接朝画面外。
+**整页不许出现任何男性人形**：前景、远景、路人、操场边的其他学生、镜中倒影、门后剪影，全部只画女性。
+远景需要人时写 two or three distant girl figures，写 girl 不写 person/figure/someone。
+我们只以一只手的形式出现：pov hands / disembodied hand，最多两只，且贴画面边缘。
+递、扔、交、接这类动作，**她的手或小臂必须留在画面里**，东西不能自己悬在半空。
+湿、汗、水只用材质词：soaked, translucent, clinging, dark and heavy；不要写 dark patch / black stain / wet spot（会画成一块脏）。
 人物镜头最紧到中近景：medium close-up with head and shoulders in frame。
 只写明暗、材质、网点，不写颜色词。
 外形串是唯一事实源：cast 写了几项，每一格就抄几项，不缩写、不调序、不改词。
@@ -342,6 +357,19 @@ def audit(js, cap=12):
         if caption and has_boy and "off-screen boy" not in caption:
             warns.append("第%d页：本页有男主裸字，尾句没写（autofix 改尾句）" % n)
 
+        # POV 硬约束：整页不许出现男性人形。模型会自己往远景/倒影里塞人，
+        # 所以这里只查画面描述里的男性词（text 项的 caption 是「Boy plain text」
+        # 这一句容器描述，不算画面内容）。
+        for it in (p.get("items") or []):
+            if it.get("label") == "text":
+                continue
+            cc = (it.get("caption") or "").lower()
+            hit = re.search(r"\b(1boy|2boys|boys?|men|man|male|guy|gentleman)\b", cc)
+            if hit:
+                out.append("第%d页：画面描述里出现男性（%s），这一页只画女生，我们只留一只手"
+                           % (n, hit.group(1)))
+                break
+
         # 外形串是否原样粘贴
         chars = [i for i in (p.get("items") or []) if i.get("label") == "character"]
         for ch in chars:
@@ -428,12 +456,36 @@ def generate(brief, pages, call, progress=None):
             lay = {1: "S1", 2: "D1", 3: "T3"}.get(n_cells, "L0")
         pure = {k: v for k, v in p.items() if not k.startswith("_")}
         pj = json.loads(json.dumps(pure))
+        notes = []
+        # canvas 只认 single / multi_panel。模型偶尔写 single_panel，下游按这个值
+        # 分支决定「整页一个画面」还是「按格切图」，写错就整页错位。
+        sm = pj.get("summary")
+        if isinstance(sm, dict):
+            want = "single" if len(M.SKELETONS.get(lay) or []) == 1 else "multi_panel"
+            if str(sm.get("canvas")) != want:
+                notes.append("canvas 改 %s" % want)
+                sm["canvas"] = want
         try:
-            notes = M.autofix(pj, js.get("cast"), None, lay,
-                              (js.get("scenes") or {}).get(p.get("scene") or "1") or "",
-                              audit_narr=False, rebuild=False)
+            notes += M.autofix(pj, js.get("cast"), None, lay,
+                               (js.get("scenes") or {}).get(p.get("scene") or "1") or "",
+                               audit_narr=False, rebuild=False)
         except Exception as exc:                # noqa: BLE001 - autofix 崩了也要能出图
-            notes = ["autofix 失败：%s" % exc]
+            notes.append("autofix 失败：%s" % exc)
+        # 文字容器的措辞由代码统一：列数跟着字数算，句首钉死在最左列。
+        # 模型自己写列数实测会按日漫习惯从右列开始读（「热死了，洗把脸」就反了）。
+        for it in pj.get("items") or []:
+            if it.get("label") != "text":
+                continue
+            txt = it.get("text") or ""
+            if not txt.strip():
+                continue
+            k = M._kind(it.get("caption"))
+            if k == "plain":
+                it["caption"] = M.boy_text_cap(txt)
+            elif k == "caption":
+                it["caption"] = M.CAPTION_BOX
+            elif k == "bubble":
+                it["caption"] = M.bubble_cap(txt)
         try:
             issues_p = M.check_page(pj, n, js.get("cast"), lay, None)
         except Exception as exc:                # noqa: BLE001
@@ -450,7 +502,10 @@ def generate(brief, pages, call, progress=None):
         })
         report_pages.append({"n": n, "layout": lay,
                              "grid": len(M.SKELETONS.get(lay) or []),
-                             "issues": issues_p + issues,
+                             # 只带本页的 blocking，别的页的错不该显示在这一页上
+                             "issues": issues_p + [
+                                 x for x in issues
+                                 if ("第%d页" % n) in x or not x.startswith("第")],
                              "autofix": notes})
         prev_layout = M.detect_layout(pj) or prev_layout
 
