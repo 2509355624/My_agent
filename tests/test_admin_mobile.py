@@ -38,10 +38,35 @@ class AdminMobileTest(unittest.TestCase):
         self.assertIn("header a.back, header button.ghost {", self.block)
         self.assertIn("white-space: nowrap;", self.block)
 
-    def test_tables_scroll_inside_themselves(self):
-        self.assertIn("display: block; width: 100%;", self.block)
-        self.assertIn("overflow-x: auto; -webkit-overflow-scrolling: touch;",
-                      self.block)
+    def test_tables_scroll_inside_their_own_box(self):
+        """列多的表格（用量 6 列 / 账单 8 列）在容器里横滑，不把整页撑宽。
+
+        2026-11-21 需求变更：原来在 640 断点给 table 设 display:block 当滚动
+        容器，实测表格的 min-content 仍然把外层 .card 一起撑宽（8 列表格：
+        文档 584px / 视口 477px，整页往右延伸）。改成 #usageTable / #billTable
+        这两个容器自己横滑，表格保持 table 布局并按 max-content 定列宽。
+        """
+        html = _html()
+        self.assertIn("#usageTable, #billTable {", html)
+        self.assertIn("overflow-x: auto; max-width: 100%;", html)
+        self.assertIn("#usageTable table, #billTable table { min-width: max-content; }",
+                      html)
+        # 表格不再自己当滚动容器，避免容器与表格各套一层
+        self.assertNotIn("display: block; width: 100%;", html)
+
+    def test_stacked_cards_fill_the_viewport(self):
+        """窄屏卡片必须占满整行：flex 列布局不能再沿用 grid 的 align-items:start。
+
+        2026-11-21 用户截图：人设卡只占半屏。因为切成 flex 列后
+        align-items:start 等于「按内容宽度排」，卡片宽度被里面的 textarea
+        默认列宽定住（实测 390px 下卡片 202px / 视口 477px）。
+        """
+        html = _html()
+        i = html.index("@media (max-width: 1180px)")
+        block = html[i:html.index("@media (max-width: 640px)", i)]
+        self.assertIn("align-items: stretch;", block)
+        self.assertIn(".panel > * { width: 100%; max-width: 100%; min-width: 0; }",
+                      block)
 
     def test_long_hints_are_allowed_to_shrink(self):
         self.assertIn(".sess-foot > * { min-width: 0; max-width: 100%; }",

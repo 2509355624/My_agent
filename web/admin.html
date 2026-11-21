@@ -323,11 +323,9 @@
     /* agent 列表保持横滑，名字别被挤成竖排 */
     .list { padding: 6px; }
     .list-item { white-space: nowrap; }
-    /* 裸表格改为自身横滑，而不是把整个页面撑宽 */
-    table {
-      display: block; width: 100%;
-      overflow-x: auto; -webkit-overflow-scrolling: touch;
-    }
+    /* 表格不撑宽页面：横滑交给 #usageTable / #billTable 这两个容器（见上），
+       表格自己保持 table 布局。原来在这里给 table 设 display:block，
+       等于容器和表格各套一层滚动，实测还是把 .card 一起撑宽。 */
     table th, table td { white-space: nowrap; }
     /* 会话列的提示长文本含 <b>，flex item 默认 min-width:auto 不肯收缩，
        实测把页面撑到 618px。允许收缩 + 任意处断行。 */
@@ -401,7 +399,13 @@ textarea { min-height: 180px; }
     max-block-size: none;
     overflow: visible;
     padding-right: 0;
+    /* 切到 flex 列布局时，上面 grid 用的 align-items:start 还留着。列方向下
+       它就是「卡片按内容宽度排」：人设卡里的 textarea 只有默认 20 来个字宽，
+       实测手机端只剩半屏；而列多的表格反过来把卡片撑爆、整页往右延伸。
+       这里改回 stretch，宽度显式钉 100%，让卡片永远跟视口走。 */
+    align-items: stretch;
   }
+  .panel > * { width: 100%; max-width: 100%; min-width: 0; }
   .panel > .actions { order: 0; }
 }
 @media (max-width: 640px) {
@@ -452,7 +456,20 @@ textarea { min-height: 180px; }
   max-height: calc(100vh - 128px);
 }
 
-#usageTable, #billTable { overflow-x: auto; max-width: 100%; }
+/* 列多的表格（用量 6 列 / 账单 8 列）不撑页面：卡片宽度跟视口走，
+   表格保持 max-content 的列宽、超出的部分在这两个容器里左右滑动。
+   注意容器本身是 .sess（flex 列），必须自己当滚动容器，
+   否则表格的 min-content 会把外层卡片一起撑宽。 */
+#usageTable, #billTable {
+  overflow-x: auto; max-width: 100%;
+  -webkit-overflow-scrolling: touch;
+  /* 滚动条贴底留一点空隙，手指好划 */
+  padding-bottom: 2px;
+}
+#usageTable table, #billTable table { min-width: max-content; }
+/* 表头只有第一列带内联内距，其余几列标题贴在一起（实测「命中 tokens未命
+   tokens」连成一片）。统一给表头补同款内距。 */
+#usageTable th, #billTable th { padding: 4px 8px; }
 
 @media (max-width: 1100px) {
   .view-tabs { position: sticky; top: 0; z-index: 10; margin-bottom: 10px; }
