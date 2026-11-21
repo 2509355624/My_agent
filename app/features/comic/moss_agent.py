@@ -157,9 +157,11 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
 · **cast.girl 只写不变项**，一项都不许带 wearing / dressed in / 任何衣物。
   衣服一进 cast，这本漫画从第一页到最后一页就只能穿那一件，换装剧情永远失败。
 · 每一页先定「这一页她身上是什么」，写进 summary 的 ③；该页每个 character 格照抄这一段，一个字不改。
-· 换装：换之前那页写旧衣；正在换的那格写清动作和半脱状态；换完那一页起每页都写新衣，不许再出现旧衣。
+· 换装：换之前那页写旧衣；**脱下来那一格写「已经脱掉」**（内搭在身上、湿衣在手里），
+  不写半脱——"半脱"就是两个状态挤在一格，出图必然穿一件拿一件。换完那一页起每页都写新衣，不许再出现旧衣。
   衣服递出去了、送人了、被拿走了，后面就不许再画它。
-· 拿到新衣还没换上的那一页，写她还穿着旧衣、手里拎着新衣——不要让她凭空换好。
+· 拿到新衣还没换上的那一页：写她穿着内搭、手里是新衣（一件在身上、一件在手里，各归各位，
+  两件都写清楚）。不要写「正在套上」，也不要让她凭空换好。
 · **脱下来的衣服不许再挂在身上**：那一格写 held / balled up / dangling from her hand，
   同一格里再写 wearing 它，出图就会画成「身上穿着一件、手里还拿着一件」。
   脱到只剩内搭就写她穿着内搭（a plain white underlayer），别让她光着。
@@ -174,6 +176,30 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
 动作写成已经定住的静态结果：her right hand pulling her right ankle up behind her thigh。
 一页的动作写一件事；换地点就换页，不在一页里跨两个房间。
 上一页结尾她在哪、身上有什么，下一页第一格还在那儿。
+
+════ 一格 = 一个定格（比什么都重要） ════
+一格是读者一眼能看完的一个瞬间，里面只有一个状态。**一格不是一段过程。**
+· **动作和它的结果不许画在同一格**：手还在扯领口（动作）＋ 衣服已经团在手里（结果）＝ 两个状态，
+  出图会画成身上一件、手里一件。第二件事要占第二格。
+· **连续动作只在状态跳变处切格**，中间过程不画——读者靠格与格之间的空白自己补。
+  脱衣、穿衣、走过去、转身，都是这样：只画"脱完了没脱完"、"穿上没穿上"，不画半截。
+· **一格只有一种衣物归属**：在身上（wearing），或者已经离身（held / balled up / dangling from her hand / 在头上）。
+  写了 wearing 它，同一格就绝不许再写手里拿着它。
+· **绝对不许写中间态**：half-off / one shoulder bare / pulled down to her waist / halfway / mid-change /
+  slipping it over。要画"正在脱"，就画一个确定的瞬间：湿衣已经从头顶拉脱、翻套在头上遮住脸
+  （衣服在头上，不在身上），或者已经整件褪到手里。
+· 一格里只有一个人、一个动作、一个表情、一个衣着状态。
+
+**一根时间线怎么排**（她连着做几个动作，比如换衣）：
+一格两状态 → 用 D1 一页一页往下串，不要塞进 L0 的五格。
+  第1页 D1   上格：已经脱净（内搭 + 湿衣团在手里）  |  下格：递出去，她的手空了
+  第2页 D1   上格：接住新衣，新衣在手还没穿        |  下格：套上，头已经钻过去
+  第3页 S1   穿好，看着镜头道谢                    ← 换好之后另起一页
+**翻页 = 状态重置**：新一页的第一格必须是稳定状态（穿着、拿着、站在那儿），不许还在换。
+**状态只许往前走**：已经扔出去、递出去、掉在地上的东西，后面几页只许出现在地上、画面外、
+或者我们手上，不许又回到她手里、怀里。她做过一次的反应（发现、回头、愣住）也不许再做第二遍
+——那是同一个 beat 用了两次。
+**格数 = 状态数**。状态比格多就加页，绝不许把两个状态压进一格。
 
 ════ 字（跟着格数走，别让五格页只有一句话） ════
 一格页 0~2 句；两格页 1~3 句；三格页 2~4 句；五格页 3~5 句。
@@ -196,8 +222,11 @@ T3 · 三格 · 上大横格 + 下两格（上面一个主画面，下面两处�
   [-768, -494, 96, 494]
   [112, -494, 768, -8]      [112, 8, 768, 494]
 
-选法：一页一拍就 S1；一页两个动作 D1；一个主画面加两处补充 T3；
-一整段过程（建场 → 动作 → 反应）才用 L0。
+选法：一页一拍就 S1；一条时间线上前后两个状态 D1（脱净 → 递出、接住 → 套上）；
+一个主画面加两处空间补充 T3；一整段过程（建场 → 动作 → 反应）才用 L0。
+**L0 装的是同一时刻的不同侧面**（一个建场、一个主画面、三处局部），不是时间线：
+五个格子里不许出现"她先做了 A、又做了 B、最后做了 C"——那是把一段过程拆碎塞进小格，
+页内会出现两个互相打架的状态（比如一格已经穿好、另一格还在脱）。连续动作一律用 D1 往下排。
 默认往少格走，一页能用一个画面讲完就不要拆。**永远不做四格**，也不要做左右通高的两格
 （486×1536 那种会把人物拉长），更不要自己发明窄竖条。
 窄格只放局部：左栏三小只放脸、手、脚、道具这些特写，**全身只放在 S1 或 L0 的右通高主格**。
@@ -298,6 +327,40 @@ def _inside(tb, cb, pad=0):
 
 def _cast_segs(spec_str):
     return [s.strip() for s in re.split(r"[,，]", spec_str or "") if s.strip()]
+
+
+# 「一格一个定格」的三条判据。全是**封闭句式**，不是衣物词表准入：
+# 命中就说明这一格真的写了两个状态，改法唯一（拆格 / 改成确定的瞬间），
+# 所以算 blocking 交给模型重修；漏检只是少提示一次，不会误伤稿子。
+_CLOTH = (r"(?:t-shirt|shirt|tee|blouse|dress|gown|uniform|jersey|tank top|sweater"
+          r"|cardigan|jacket|coat|hoodie|jumper|skirt|shorts|pants|trousers"
+          r"|underlayer|towel)")
+
+# 半脱：动作的起点和终点叠在一格里。这些句式一旦出现，出图必然穿一件拿一件。
+# 注意不认裸的 halfway——"a hand lifted halfway and frozen" 是合法的定格。
+_MIDSTATE = (r"half[- ]?off|mid[- ]?change|one bare shoulder|one shoulder bare"
+             r"|bare shoulder (?:just )?covered|one arm (?:already )?(?:pulled )?(?:out of|through)"
+             r"|pulled down to her waist|slipping (?:it|the [a-z -]+) over"
+             r"|pulling (?:it|the [a-z -]+) (?:up )?over")
+
+# 同一格里两个「已经/刚」= 两个时间点塞进一格（already pulled through / just covered）。
+_PHASE = r"\b(?:already|just)\b"
+
+
+def _cloth_phrases(caption):
+    """抽 <修饰…> <衣物词> 的短语，去掉冠词和所有格后返回。
+
+    同一串在同一格里出现两次，说明这件衣服同时被写成「穿在身上」和「拿在手里」：
+    "a soaked white short-sleeve sport shirt and loose white running shorts,
+     her fingers gathering the soaked white short-sleeve sport shirt into a tight ball"
+    合法的一格两件一定带不同修饰（soaked … vs fresh dry …），不会同串。
+    """
+    out = []
+    for m in re.finditer(r"\b((?:[a-z][a-z-]*\s+){0,4})(" + _CLOTH + r")\b",
+                         (caption or "").lower()):
+        mods = re.sub(r"\b(?:a|an|the|her|his|its)\b", " ", m.group(1))
+        out.append(" ".join((mods + " " + m.group(2)).split()))
+    return out
 
 
 def audit(js, cap=12):
@@ -403,6 +466,33 @@ def audit(js, cap=12):
                 out.append("第%d页：画面描述里出现男性（%s），这一页只画女生，我们只留一只手"
                            % (n, hit.group(1)))
                 break
+
+        # 一格一个定格：一格只许一个状态。一格同时写了「动作」和「动作的结果」，
+        # 出图就会画成身上一件、手里一件。每页最多报两条，别让重修消息被刷屏。
+        zhit = 0
+        for it in (p.get("items") or []):
+            if it.get("label") != "character" or zhit >= 2:
+                continue
+            cc = (it.get("caption") or "").lower()
+            what = how = ""
+            mid = re.search(_MIDSTATE, cc)
+            if mid:
+                what, how = ("写了中间态「%s」" % mid.group(0),
+                             "一格只能一个状态：要么还穿着，要么已经脱在手。"
+                             "要画正在脱，就画确定的那一刻（湿衣翻套在头上遮住脸 / 整件已经褪到手里）")
+            else:
+                ph = _cloth_phrases(cc)
+                dup = [x for x in set(ph) if ph.count(x) > 1 and x]
+                phases = re.findall(_PHASE, cc)
+                if dup:
+                    what, how = ("同一格把「%s」写了两次（一次当衣着、一次拿在手里）" % dup[0],
+                                 "一格只许一个衣物归属，拆成两格：一格脱净、一格递出")
+                elif len(phases) >= 2:
+                    what, how = ("同一格里有 %d 个进行中的阶段（%s）" % (len(phases), "、".join(phases)),
+                                 "一格只停在一个瞬间：接住就只是接住，穿好就只是穿好")
+            if what:
+                out.append("第%d页：%s——%s" % (n, what, how))
+                zhit += 1
 
         # 外形串是否原样粘贴。判「这一格画的是不是她」只认 girl 这个词——
         # 模型多数时候写 "a girl about twelve"，极少写 danbooru tag 式的 1girl，
