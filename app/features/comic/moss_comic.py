@@ -365,9 +365,10 @@ positive 提示词是英文的，中途夹一段中文会让光照描述被截�
 它们会直接把画面拉成柔焦或厚涂。
 
 **cast**：每个角色一条英文外形串，**只写不随场景变的属性**——性别年龄、发型发色、
-脸型、常穿的衣服、固定配饰。**手持的、临时拿的道具绝对不要写进来**（写进来会
-每页都长在手上）。key 用**英文小写单词**：woman / man / girl / boy / cat / old_man。例：
-  "woman": "a young woman with long black hair tied up high, a white long-sleeved robe, a dark blue sash"
+脸型、固定配饰。**衣服不写进 cast**：写进去，这本从第一页到最后一页只能穿那一件，
+换装剧情永远失败；衣服写进每页的 `state` 和每一格 `desc`。**手持的、临时拿的道具也不能写**
+（写进来会每页都长在手上）。key 用**英文小写单词**：woman / man / girl / boy / cat / old_man。例：
+  "woman": "a young woman with long black hair tied up high, a dark blue hair ribbon"
 
 **plan**（每页一条，**必须写在 scene 和 panels 之前**）：
   先想清楚整页怎么走，再动笔写每一格。这是防止「整页全画中景、一点都不起落」的唯一手段——
@@ -385,15 +386,15 @@ positive 提示词是英文的，中途夹一段中文会让光照描述被截�
   不许临时改。
 
 ⚠️ **`state` 只是计划，真正压住画面的是每一格 `desc` 里的反向钉住。**
-`cast` 里写的是常穿的衣服，模型每格都会默认把它画回来——**光在 state 里写
+同一页前面几格写过的那件衣服，模型在后面几格会默认画回来——**光在 state 里写
 "completely nude" 压不住**，实测第 3 格又把上衣画回去了（2026-11-12 用户报）。
 
 所以：**一旦这一格是脱掉的，`desc` 里必须同时写两样东西**——
    ① 正面写结果：`completely nude` / `her breasts bare` / `torso fully exposed`
    ② **反向钉死那件衣服**：`no white t-shirt, no grey shorts` / `no cardigan,
-      no skirt`。把 `cast` 里那件衣服的名字原样列出来，前面加 `no`。
+      no skirt`。把这一页前面写过的那件衣服的名字原样列出来，前面加 `no`。
    ✓ `completely nude, no grey knit cardigan, no white shirt`
-   ✗ `completely nude`（模型照样会把 cast 的衣服画回来）
+   ✗ `completely nude`（模型照样会把前面那件衣服画回来）
    ✗ `her cardigan pushed aside`（"推在一边"在模型眼里还是穿着）
 这是 2026-11-12 修「前面露出来了、后面又遮回去」的核心手段：**每一格自己钉住**，
 不要指望 state 那一句话管五格。

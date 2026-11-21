@@ -156,7 +156,14 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
 档案里写的那件衣服不要抄。衣服是她这一集穿的东西，不是她这个人。
 · **cast.girl 只写不变项**，一项都不许带 wearing / dressed in / 任何衣物。
   衣服一进 cast，这本漫画从第一页到最后一页就只能穿那一件，换装剧情永远失败。
-· 每一页先定「这一页她身上是什么」，写进 summary 的 ③；该页每个 character 格照抄这一段，一个字不改。
+· 每一页先定「这一页她身上是什么」，写进 summary 的 ③。
+· 每一格按景别写人物，**一格只写一次**：
+  - 看得到身体的格（全身、中景、中近景）：完整外形串 + 这一页的衣着，抄一次，不缩写不调序
+  - 纯局部特写（close-up of her face / of her hand / of her feet）：只写那一处——脸就写发型、
+    眼睛、表情，手就写手指和入画的袖口。**不写身材、不贴全身外形串、不写整件衣服**。
+    脸特写里写 slender small frame 或 wearing …，出图只能把镜头拉远成中景
+· 一格里的衣服只提一次。先写了「背后湿透的衬衫」，结尾就不要再贴一遍外形串和衣着——
+  同一格写两遍，出图会当成两件衣服。
 · 换装：换之前那页写旧衣；**脱下来那一格写「已经脱掉」**（内搭在身上、湿衣在手里），
   不写半脱——"半脱"就是两个状态挤在一格，出图必然穿一件拿一件。换完那一页起每页都写新衣，不许再出现旧衣。
   衣服递出去了、送人了、被拿走了，后面就不许再画它。
@@ -247,7 +254,9 @@ T3 · 三格 · 上大横格 + 下两格（上面一个主画面，下面两处�
 ①里的格线永远细：thin white gutters + a thin black ink border。不要写 thick / heavy / bold frame——五页连起来翻，外框粗细一变，页面就会跳。
 
 ════ items ════
-character：这一格画什么 —— 景别 + 定住的姿势 + 该角色完整外形串（原样连续粘贴）+ 本页衣着（照抄本页 ③ 里那一段；正在换装就写变化）+ 结尾固定写
+character：这一格画什么 —— 景别 + 定住的姿势 + 外形串（看得到身体的格：完整原样粘贴；
+  纯脸 / 手的特写：只写那一处相关的项，别贴全身串和整件衣服）+ 本页衣着（照抄本页 ③ 里那一段；
+  正在换装就写变化）+ 结尾固定写
   monochrome greyscale screentone, bold black ink outline, flat shading, no color cast.
 object：空镜或道具 + 结尾固定写 No speech bubble and no text in this panel.
 text：只写容器形状和字的排法，台词内容只进 text 字段。按「谁在说」选容器，不按好不好看选。
@@ -286,7 +295,8 @@ text：只写容器形状和字的排法，台词内容只进 text 字段。按�
 湿、汗、水只用材质词：soaked, translucent, clinging, dark and heavy；不要写 dark patch / black stain / wet spot（会画成一块脏）。
 人物镜头最紧到中近景：medium close-up with head and shoulders in frame。
 只写明暗、材质、网点，不写颜色词。
-外形串是唯一事实源：cast 写了几项，每一格就抄几项，不缩写、不调序、不改词。
+外形串是唯一事实源：看得到身体的格，cast 写了几项就抄几项，不缩写、不调序、不改词；
+纯局部特写只抄和那一处有关的项（脸：发型、头带、眼睛、脸）。
 双人同框时第二个人开头显式互斥：In sharp contrast, the other girl has NO long hair, NO headband。
 衣服不在 cast 里：只有「这一页她穿什么」，没有「她这个人穿什么」。
 
@@ -334,14 +344,29 @@ def _cast_segs(spec_str):
 # 所以算 blocking 交给模型重修；漏检只是少提示一次，不会误伤稿子。
 _CLOTH = (r"(?:t-shirt|shirt|tee|blouse|dress|gown|uniform|jersey|tank top|sweater"
           r"|cardigan|jacket|coat|hoodie|jumper|skirt|shorts|pants|trousers"
-          r"|underlayer|towel)")
+          r"|underlayer|towel"
+          # 2026-11-22 补：少这几个，温泉话题整本的浴衣/牛仔裤根本进不了检测，
+          # 「穿一件拿一件」「中间态」在换装剧情里全部静默失效（实跑发现）。
+          r"|yukata|kimono|robe|jeans|socks|stockings|tights|swimsuit)")
 
 # 半脱：动作的起点和终点叠在一格里。这些句式一旦出现，出图必然穿一件拿一件。
 # 注意不认裸的 halfway——"a hand lifted halfway and frozen" 是合法的定格。
 _MIDSTATE = (r"half[- ]?off|mid[- ]?change|one bare shoulder|one shoulder bare"
              r"|bare shoulder (?:just )?covered|one arm (?:already )?(?:pulled )?(?:out of|through)"
              r"|pulled down to her waist|slipping (?:it|the [a-z -]+) over"
-             r"|pulling (?:it|the [a-z -]+) (?:up )?over")
+             r"|pulling (?:it|the [a-z -]+) (?:up )?over"
+             # 「正在落/正在套」也是过程：catching … as it settles over her shoulders
+             # 等于同一格里既接住又穿好（2026-11-22 更衣话题 P5 实跑）。
+             r"|as it (?:settles|slips|slides) (?:over|down)"
+             # 浴衣「正从肩上滑落」= 还穿着 + 正在脱，同一格两个状态
+             # （2026-11-22 温泉话题 P3 实跑）。主语必须是衣物——裸的
+             # `sliding down` 会命中「汗珠滑下脖子」，实测误报过一次。
+             + r"|" + _CLOTH + r"\s+sliding (?:off|down)"
+             # 脱到一半的另外两种写法（2026-11-22 更衣话题 P3 实跑）：
+             # the shirt pulled halfway up her torso / dragging the shirt up from her waist
+             + r"|pulled halfway (?:up|down)"
+             + r"|dragging (?:it|the [a-z -]+) (?:up|down)"
+             + r"|tugging (?:it|the [a-z -]+) (?:up|down)")
 
 # 同一格里两个「已经/刚」= 两个时间点塞进一格（already pulled through / just covered）。
 _PHASE = r"\b(?:already|just)\b"
@@ -361,6 +386,49 @@ def _cloth_phrases(caption):
         mods = re.sub(r"\b(?:a|an|the|her|his|its)\b", " ", m.group(1))
         out.append(" ".join((mods + " " + m.group(2)).split()))
     return out
+
+
+# 「同一件衣服既穿着又拿在手里」只认**离体动作**。两处都写在穿着语境里，是
+# 同一格把人写了两遍（啰嗦、不矛盾），不该当矛盾去重修。
+# 2026-11-22 实测：更衣话题 P1 背身格先写「背后的湿衬衫 + 短裤」，句末又贴了
+# 一遍完整外形串和衣着，旧判据（同串出现两次）把它报成「穿一件拿一件」，
+# 白烧两轮重修还是不过——判据必须看语境。
+_OFF_BODY = (r"held|holding|balled up|clutched|clutching|dangling|carried|carrying"
+             r"|in her (?:right |left )?hand|gathering|gathered|peeled|stripped"
+             r"|slipped off|off her body|draped|hanging from her"
+             r"|catching|reaching for|settl(?:es|ing) over|pulling on|slipping into")
+_ON_BODY = r"wearing|dressed in|clad in"
+
+
+def _wear_hand_clash(caption):
+    """同一件衣服，一处写在身上、另一处写在手里。返回这些衣物短语。"""
+    low = (caption or "").lower()
+    ph = _cloth_phrases(low)
+    dup = {x for x in ph if x and ph.count(x) > 1}
+    if not dup:
+        return []
+    sents = re.split(r"[.;]", low)
+    out = []
+    for p in dup:
+        kinds = set()
+        for s in sents:
+            if p not in s:
+                continue
+            if re.search(_OFF_BODY, s):
+                kinds.add("off")
+            if re.search(_ON_BODY, s):
+                kinds.add("on")
+        if "off" in kinds and "on" in kinds:
+            out.append(p)
+    return sorted(out)
+
+
+# 纯局部特写（脸、手、脚）：画面里没有身体，不需要全身外形串。往里塞
+# 「slender small frame / wearing …」，出图只能把镜头拉远成中景。
+# 允许中间夹修饰词：close-up of her **raised** hand / of her **wet** hair。
+_TIGHT = re.compile(r"close[- ]up (?:of|on) her (?:[a-z-]+ ){0,2}(?:face|eyes|mouth|lips"
+                    r"|hand|hands|fingers|wrist|arm|leg|foot|feet|ankle|shoulder|hair|nape)", re.I)
+_FACE_WORDS = ("hair", "headband", "bangs", "eye", "face")
 
 
 def audit(js, cap=12):
@@ -484,9 +552,14 @@ def audit(js, cap=12):
                 ph = _cloth_phrases(cc)
                 dup = [x for x in set(ph) if ph.count(x) > 1 and x]
                 phases = re.findall(_PHASE, cc)
-                if dup:
-                    what, how = ("同一格把「%s」写了两次（一次当衣着、一次拿在手里）" % dup[0],
+                clash = _wear_hand_clash(cc)
+                if clash:
+                    what, how = ("同一格把「%s」写了两次（一次当衣着、一次拿在手里）" % clash[0],
                                  "一格只许一个衣物归属，拆成两格：一格脱净、一格递出")
+                elif dup:
+                    # 两处都在「穿着」语境：描述重复，不矛盾。不拦，只提醒。
+                    warns.append("第%d页：「%s」在同一格里写了两遍（都是穿着），"
+                                 "一个字只说一次" % (n, dup[0]))
                 elif len(phases) >= 2:
                     what, how = ("同一格里有 %d 个进行中的阶段（%s）" % (len(phases), "、".join(phases)),
                                  "一格只停在一个瞬间：接住就只是接住，穿好就只是穿好")
@@ -502,10 +575,22 @@ def audit(js, cap=12):
             cc = (ch.get("caption") or "").lower()
             if "girl" not in cc:
                 continue
+            if _TIGHT.search(cc):
+                # 纯局部特写里没有身体：要求全身外形串等于逼它把镜头拉开。
+                # 只核对脸和头发这一组，其余不查。
+                got = sum(1 for w in _FACE_WORDS if w in cc)
+                if got < 3:
+                    out.append("第%d页：脸/手特写格几乎没写她的脸和头发（%d/5 个要素）——"
+                               "特写只写那一处，但脸得是同一个人" % (n, got))
+                continue
             miss = [s for s in girl_segs if s.lower() not in cc]
             if miss:
-                out.append("第%d页：人物 caption 漏了外形串 %s"
-                           % (n, "、".join("「%s」" % m for m in miss[:3])))
+                # autofix 的「补齐 girl 外形串」会补回来（包括模型写 "she stands…"
+                # 不带 girl 的那一格），所以不拿它去多烧一轮重修。
+                # 实测温泉话题：模型重修时把外形串写掉，audit 判 blocking →
+                # 连修三轮、最后还是红，落盘稿却是完整的。
+                warns.append("第%d页：人物 caption 漏了外形串 %s（autofix 会补）"
+                             % (n, "、".join("「%s」" % m for m in miss[:3])))
                 break
 
     return out, warns

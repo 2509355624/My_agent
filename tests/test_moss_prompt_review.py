@@ -64,7 +64,35 @@ class ReviewCatchesTheBadDraft(unittest.TestCase):
             "Bottom panel: %s, standing still." % GIRL,
         ])
         issues, _ = _issues(spec)
-        self.assertTrue([m for _, m in issues if "同一串衣物" in m], issues)
+        self.assertTrue([m for _, m in issues if "手里拿着" in m], issues)
+
+    def test_same_garment_written_twice_is_not_a_clash(self):
+        """两处都写在穿着语境里 = 描述重复，不是穿一件拿一件。
+
+        实测（更衣话题 P1 背身格）：模型先写「背后的湿衬衫 + 短裤」，句末又贴一遍
+        完整外形串和衣着。旧判据把它当矛盾，白烧两轮重修还是不过。
+        """
+        spec = _spec_file([
+            "Top panel: %s, the same girl, her soaked white short-sleeve sport shirt "
+            "clinging and dark, loose white running shorts, a girl about eighteen, "
+            "slender small frame, wearing a soaked white short-sleeve sport shirt "
+            "clinging to her body, loose white running shorts." % GIRL,
+            "Bottom panel: %s, standing still." % GIRL,
+        ])
+        issues, warns = _issues(spec)
+        self.assertEqual([m for _, m in issues if "手里拿着" in m], [])
+        self.assertTrue([w for w in warns if "写了两遍" in w], warns)
+
+    def test_face_closeup_is_not_forced_to_carry_the_body_string(self):
+        """脸特写里没写身材和全身外形串是对的——逼它写就会把镜头拉远。"""
+        spec = _spec_file([
+            "Small left-top panel, close-up of her face from the front: long straight "
+            "dark hair with soft blunt bangs, a wide fluffy pale cloth headband, large "
+            "round dark eyes, round soft face, faint blush, eyes narrowed.",
+            "Bottom panel: %s, standing still." % GIRL,
+        ])
+        issues, _ = _issues(spec)
+        self.assertEqual([m for _, m in issues if "外形串漏项" in m], [])
 
     def test_text_outside_any_cell_is_reported(self):
         """文字 bbox 不落在任何一格内，字就会压在格线上。"""

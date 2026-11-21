@@ -110,6 +110,32 @@ def _phrases(text, n=12):
     return {" ".join(w[i:i + n]) for i in range(len(w) - n + 1)}
 
 
+def _cloth_nouns(seg):
+    return {m.group(0) for m in re.finditer(A._CLOTH, seg, re.I)}
+
+
+def _worn_vs_held(caption):
+    """把衣物名词分成「在身上」和「在手里」两组。
+
+    一个分句里有几个衣物时，看它前面最近的那个语境词（wearing / holding …），
+    而不是按逗号切——「wearing A, B and C, D held in her arms」这类句子里，
+    B、C 属于前面的 wearing，D 属于后面的 held。
+    """
+    low = (caption or "").lower()
+    worn, held = set(), set()
+    for m in re.finditer(A._CLOTH, low):
+        win = low[max(0, m.start() - 90):m.start()]
+        # 取**最近**的那个语境词：一句里可能先 wearing 再 holding，
+        # 谁离这个衣物更近就归谁（按出现顺序优先 wearing 会把后者全算成穿着）。
+        on = re.search(r"(?:%s)[^.;]*$" % A._ON_BODY, win)
+        off = re.search(r"(?:%s)[^.;]*$" % A._OFF_BODY, win)
+        if off and (not on or off.start() > on.start()):
+            held.add(m.group(0))
+        elif on:
+            worn.add(m.group(0))
+    return worn, held
+
+
 def review(spec):
     """返回 (rows, issues)。rows 是每页的可读结构，issues 是 [(档, 消息)]。"""
     rows, issues, warns = [], [], []
@@ -134,8 +160,10 @@ def review(spec):
             issues.append(("错", "P%s 的 prompt_override 不是合法 JSON：%s" % (n, e)))
             continue
 
+        # 文字只要落在**某一格**里就行，object（空镜/道具）也算一格。
+        # 只按 character 算，会让落在空镜格里的字被误报成「压在格线上」。
         cells = [it.get("bbox") for it in (d.get("items") or [])
-                 if it.get("label") == "character"]
+                 if it.get("label") in ("character", "object")]
         chars = [it for it in (d.get("items") or []) if it.get("label") == "character"]
         texts = [it for it in (d.get("items") or []) if it.get("label") == "text"]
         cap = ((d.get("summary") or {}).get("caption") or "")
@@ -158,21 +186,42 @@ def review(spec):
             if mid:
                 issues.append(("错", "P%s 格%d 写了中间态「%s」——一格只有一个定格"
                                % (n, i + 1, mid.group(0))))
-            # 同一格里同一串衣物出现两次 = 这件衣服既被写成穿在身上、又被写成
-            # 拿在手里。和 `moss_agent.audit` 用的是同一条判据（`_cloth_phrases`），
-            # 这里多给出「哪一格、哪一串」，方便直接改。
-            ph = A._cloth_phrases(c.lower())
-            dup = sorted({p for p in ph if p and ph.count(p) > 1})
-            if dup:
-                issues.append(("错", "P%s 格%d 同一串衣物「%s」在一格里出现 %d 次——"
-                               "同一件既在身上又在手里"
-                               % (n, i + 1, dup[0], ph.count(dup[0]))))
+            # 同一件衣服既在身上又在手里（判据同 moss_agent.audit：只认离体动作）。
+            # 两处都写在穿着语境里只是重复描述，出图不会画成两件，降为「疑」。
+            clash = A._wear_hand_clash(c.lower())
+            if clash:
+                issues.append(("错", "P%s 格%d 「穿着 %s」和「手里拿着 %s」同时出现"
+                               % (n, i + 1, clash[0], clash[0])))
+            else:
+                ph = A._cloth_phrases(c.lower())
+                dup = sorted({p for p in ph if p and ph.count(p) > 1})
+                if dup:
+                    warns.append("P%s 格%d 同一件「%s」写了两遍（都是穿着）——不矛盾，"
+                                 "但白占字数" % (n, i + 1, dup[0]))
+                # 同款同色、一个穿着一个拿着（淋雨话题 P4 实跑：换上灰 T 恤，
+                # 手里还捧着同款灰 T 恤 + 粉短裤）。短语不同串，上面那条抓不到。
+                worn, held = _worn_vs_held(c.lower())
+                same = sorted(worn & held)
+                if same:
+                    warns.append("P%s 格%d 穿着「%s」手里又拿着同款——读者会看成两件，"
+                                 "确认那件是不是换下来的旧衣"
+                                 % (n, i + 1, "」「".join(same[:2])))
             if len(re.findall(A._PHASE, c.lower())) >= 2:
                 issues.append(("错", "P%s 格%d 有两个「already/just」，是两个时间点挤进一格"
                                % (n, i + 1)))
-            if segs and c:
+            tight = bool(A._TIGHT.search(c.lower()))
+            if tight:
+                # 局部特写里塞身材词，出图只能把镜头拉远成中景。
+                if re.search(r"slender|small frame|full[- ]body|head to toe", c.lower()):
+                    warns.append("P%s 格%d 是局部特写却写了身材词，镜头会被拉远" % (n, i + 1))
+            elif segs and c:
                 miss = [s for s in segs if s.lower() not in c.lower()]
-                if miss:
+                if len(miss) <= 2:
+                    # 只漏一两项（常见是配饰、身材）：脸还在，不算错。
+                    if miss:
+                        warns.append("P%s 格%d 外形串少了 %s（只漏 %d 项，脸没丢）"
+                                     % (n, i + 1, "、".join("「%s」" % m[:20] for m in miss), len(miss)))
+                elif miss:
                     issues.append(("错", "P%s 格%d 外形串漏项 %s"
                                    % (n, i + 1, "、".join("「%s」" % m[:28] for m in miss[:2]))))
             if words(c) > 110:
