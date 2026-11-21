@@ -74,7 +74,10 @@ class PageInfoTests(unittest.TestCase):
         texts = _texts_by_id(self.info)
         self.assertEqual(texts["cap-0"]["text"], "她掀开锅盖。")
         self.assertEqual(texts["cap-0"]["kind"], "narration")
-        self.assertEqual(texts["cap-0"]["bubble"], "none")
+        # 2026-11-21：原来是 "none"——那不在 Soda 的 BUBBLE_TYPES
+        # ("speech"/"shout"/"thought"/"narration") 里，等于不画框，
+        # 字直接压在画面上。narration 才是白底方框，且同样没有气泡尾巴。
+        self.assertEqual(texts["cap-0"]["bubble"], "narration")
         self.assertEqual(texts["bub-0-0"]["text"], "好香。")
         self.assertEqual(texts["bub-0-1"]["text"], "快点快点。")
         self.assertEqual(texts["bub-0-0"]["bubble"], "speech")

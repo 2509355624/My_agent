@@ -45,6 +45,7 @@ from flask import Blueprint, jsonify, request, send_file
 from app.features.comic import soda_letter
 from app.features.image import lora_slots
 from app.features.comic import moss_comic
+from app.features.comic import moss_agent
 from app.features.comic import moss_twopass
 from app.integrations import llm
 from app.features.image import jobs as image_jobs
@@ -388,7 +389,9 @@ def api_moss_write():
         brief, pages=pages,
         style=str(data.get("style") or "").strip(),
         ratio="%dx%d" % (WIDTH, HEIGHT),
-        layout=str(data.get("layout") or "").strip())
+        layout=str(data.get("layout") or "").strip(),
+        provider=str(data.get("provider") or "").strip() or None,
+        model=str(data.get("model") or "").strip() or None)
     if spec is None:
         # 502 = 模型侧没交作业（解析失败），不是用户的错，页面提示重来一次
         return jsonify({"ok": False,
@@ -401,10 +404,13 @@ def api_moss_write():
     return jsonify(out)
 
 
-def _twopass_call(system, user, max_tokens=8000, temperature=None, tag=""):
+def _twopass_call(system, user, max_tokens=8000, temperature=None, tag="",
+                  provider=None, model=None):
     """把台子的 LLM 链路包成 moss_twopass 要的 call(system, user, …)。
 
     `tag` 只用于日志对账，不参与请求。
+    `provider` / `model` 是页面选的模型，透传给 llm：选中项当链头、失败自动降级；
+    都不传时走全局默认链，和加下拉之前的行为一致。
     """
     text = llm.call_llm(
         [{"role": "system", "content": system},
@@ -412,17 +418,27 @@ def _twopass_call(system, user, max_tokens=8000, temperature=None, tag=""):
         max_tokens=max_tokens,
         temperature=temperature,
         timeout=300,
+        provider=provider,
+        model=model,
     )
     return text or ""
 
 
 @bp.route("/api/moss/two_agent", methods=["POST"])
 def api_moss_two_agent():
-    """双 Agent 链路：编剧 AI 拆幕 → 逐页编译 AI 出 Layout JSON → 代码闸门。
+    """整本一条线：写 → 代码体检 → 定向重修 → 再体检 → 每页 autofix。
 
-    和 `/api/moss/write` **两条独立链路**：那边是官方一次出整篇，这边每页
-    独立编译并带 `prompt_override`，`build_page_prompt` 见到它就原样放行。
-    出图、状态、保存全部复用原有那套，前端不用另开页面。
+    2026-11-21 合并：原来是「编剧 AI 拆幕 + 每页编译 AI」共 1+N 次请求，
+    7000 字编译契约每页重发一遍，3 页约 2.3 万 token 输入。现在一个 AI 直接
+    产出整本 Layout JSON，中间那份 Markdown 稿不再存在。
+
+    自查是真检查：`moss_agent.audit()` 只比事实（格子对不对得上骨架、文字有没有
+    落进格子、外形串有没有原样粘上、尾句跟本页有几种人的话是否一致、台词有没
+    重复），不通过就把清单交回模型定向重修，最多 2 轮；仍不过就 autofix 兜底，
+    不阻断出图。
+
+    旧两段链路保留：请求体 `{"legacy": true}` 或环境变量 `MOSS_TWOPASS_LEGACY=1`
+    可切回去对比。产物结构完全一致（每页带 `prompt_override`），前端不用改。
     """
     data = request.get_json(silent=True) or {}
     brief = str(data.get("brief") or "").strip()
@@ -432,22 +448,40 @@ def api_moss_two_agent():
         pages = max(1, min(12, int(data.get("pages") or 3)))
     except (TypeError, ValueError):
         pages = 3
+    provider = str(data.get("provider") or "").strip() or None
+    model = str(data.get("model") or "").strip() or None
+    legacy = bool(data.get("legacy")) or os.environ.get("MOSS_TWOPASS_LEGACY") == "1"
+
+    # 把页面选的模型绑进 call：链路内部多次调用（成稿 / 重修）都走它。
+    def bound_call(system, user, max_tokens=8000, temperature=None, tag=""):
+        return _twopass_call(system, user, max_tokens=max_tokens,
+                             temperature=temperature, tag=tag,
+                             provider=provider, model=model)
+
+    engine = "twopass" if legacy else "agent"
     try:
-        spec, report = moss_twopass.generate(brief, pages, _twopass_call)
+        if legacy:
+            spec, report = moss_twopass.generate(brief, pages, bound_call)
+        else:
+            spec, report = moss_agent.generate(brief, pages, bound_call)
     except BaseException as exc:                # noqa: BLE001 - 模型侧异常一律转 502
         return jsonify({"ok": False,
-                        "error": "双 Agent 编译失败：%s" % (str(exc) or exc.__class__.__name__)}), 502
+                        "error": "MOSS 链路失败：%s" % (str(exc) or exc.__class__.__name__)}), 502
 
     d = _new_task_dir(spec)
     spec, ps = _save(d, spec, None)
-    with open(os.path.join(d, "script.md"), "w", encoding="utf-8") as fh:
-        fh.write(report.get("script_md") or "")
+    if report.get("script_md"):
+        with open(os.path.join(d, "script.md"), "w", encoding="utf-8") as fh:
+            fh.write(report.get("script_md") or "")
+    rep = {k: v for k, v in report.items() if k != "script_md"}
     with open(os.path.join(d, "twopass_report.json"), "w", encoding="utf-8") as fh:
-        json.dump({k: v for k, v in report.items() if k != "script_md"},
-                  fh, ensure_ascii=False, indent=1)
+        json.dump(rep, fh, ensure_ascii=False, indent=1)
     out = _payload(d, spec, ps)
     out["brief"] = brief
-    out["two_agent"] = {"secs": report.get("secs"),
+    out["two_agent"] = {"engine": engine,
+                        "secs": report.get("secs"),
+                        "pass": report.get("pass"),
+                        "rounds": report.get("rounds") or [],
                         "pages": report.get("pages") or [],
                         "notes": report.get("script_issues") or []}
     return jsonify(out)

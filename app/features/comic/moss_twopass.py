@@ -129,51 +129,138 @@ def pick_json(text):
 
 
 # ────────────────────── 剧本 AI 提示词 ──────────────────────
-SCRIPT_SYSTEM = """你写条漫分镜稿。任务只有一个：把这一段写成**每一格都能直接照着画**的稿子。
+SCRIPT_SYSTEM = """你写条漫分镜稿。任务只有一个：把这一段写成**每一格都能直接照着画、每一句都值得读**的稿子。
 
-不写节拍表、不写弧线、不写「本页核心信息」、不写「页尾钩子」。
-那些是给自己看的笔记，不是稿子。稿子只有一件事：第几格，画什么，谁说什么。
+稿子里有两条线，缺一不可：
+- **叙事**：由旁白框承担。交代时间、地点、人物来历、发生了什么、人物心里在想什么。读者不靠台词也能读懂这一页在讲什么。
+- **对话**：由气泡承担。写人物真正会说出口的话——语气、口癖、没说破的意思都在句子里。
+
+**画面描述要写满，落进画面的文字框要短。** 这是两回事，别搞反：
+- 给编译 AI 看的「画面：」——地点、时间、站位、动作接点，写得越足越好，它全靠这个画。
+- 给读者看的文字框（台词 / 旁白）——**每框就一句短话**，十来个字说完一个意思就停，
+  像参考图那样「我回来了ー」「等我做完作业就吃ー」「好ー」，一段一个框，各自分开。
+  不要把三四件事揉进一个框、不要写成长长的一大段塞在格子角落——
+  这种挤成一坨的大框正是要避免的。**短不是碎**：不要「啊——」「是…」这种没内容的语气字，
+  每句都要有实在信息，只是信息一句一框、别贪多。
+
+=== 格号 = 阅读顺序（从上到下、从左到右）===
+格号就是**读者看这一页的先后顺序**，不是画面重要程度的排名。
+格1 是读者第一眼看到的那一格（页面最上排最左），格2 是它右边那格；
+这一排从左到右写完，再写下一排，每排都从左到右。
+所以叙事也按这个顺序推进：先发生的事写进小号格，后发生的写进大号格。
+**不许**把最抓人的大场面编成格1、把前因塞进格5——那会让读者倒着读。
+一格里有好几句话时，也按从上到下的顺序：先说的写前面，后说的写后面。
+
+但每一页怎么接下一页，要写进稿子里——不是另写一条「页尾钩子」笔记，
+而是让**最后一格的画面本身就是没做完的那一下**，下一页第一格从那一下接着画。
+页与页断不开，靠的是画面接画面，不是靠笔记提醒。
 
 === 一格写四样 ===
 
 格1｜远景｜街角
-画面：冬日傍晚，街灯刚亮，他背着包沿人行道走，呼出的白气留在身后。
-台词：无
-旁白：今天比平时冷，只想快点回家。
+画面：冬日傍晚，街灯刚亮，女孩背着包沿人行道走，呼出的白气留在身后；画面里只有她一个人。
+台词：女「说好今天去的，你可别忘了。」
+旁白：「她在那个街角等了很久。」
+       「书包里装着他送的那本书。」
 
 - 格头：`格号｜景别｜这一格的主体`。景别只用 远景 / 全景 / 中景 / 近景 / 特写 / 过肩。
-- 画面：谁在画面里、在哪、朝向哪、手上有什么、正在做什么。一句中文，必须是能画出来的东西。
+- 画面：谁在画面里、在哪、朝向哪、手上有什么、正在做什么，
+  **写成一个能照着画的完整句子，信息给足**（地点、时间、光、动作接点都写进去）。
+  **第一人称 POV（这是硬约束，每一格都算）**：镜头就是男主自己的眼睛，画面里**只有女生**。
+  绝不写 `1boy` / `boy` / 男孩 / 男人 / 他的脸、身体、衣服——写了就把男主画进画面了。
+  男主需要入画时只写手：`pov hands` 或 `disembodied hand`（镜头外伸进来的一只手），
+  并写清这只手在做什么（递东西 / 接过 / 扶住 / 敲桌）；不写「他的手」「男孩的手」。
+  多女生同框时逐个写清每个女生的站位和朝向，各自气泡各指各人。
+  位置要挂靠具体参照物（门内 / 门外 / 台阶上 / 铁门里侧 / 灶台左边），
+  别只写「站在一边」「走过去」——参考物没写死，下一页就会把人画到另一边去。
+  相邻两格人物的相对位置不许变，除非这一格写明他是怎么走过去的。
+  两人同框时，**只写谁身上有随身物**；另一个人一个字都别提这件东西——
+  写「没有包」和写「有包」一样会把它画出来。
   不写「气氛」「心情」「仿佛」「好像」「似乎」这类画不出来的词。
 - 台词：写成 `说话人「说的话」`，说话人只写 女 / 男。
-  一格最多两句，两个人在对话时可以各一句。这一格没人说话就写「台词：无」。
-  每句 ≤11 字，口语。别写书面句子，别写解释性长句。
-- 旁白：读者必须知道、但人物没说出口的那一件事。一格最多一句。不需要就不写这一行。
-- 音效：风声 / 门铃 / 脚步 / 手机震动。不需要就不写。
+  **默认让画面里的女生自己说话**——参考图那种整页都是女生之间的对话就很好，
+  不需要男主插话。男主的话**只有剧情真的需要时才写**一句，别每页都给他安排台词。
+  **看谁在开口，不看话里提到了谁。** 真要写男主（镜头后面不出镜的「我」），标 `男「…」`；
+  不能因为句中有个「她」就把女生的话标成男，也不能反过来。
+  **标 `男` 只是给这句话定归属，绝不代表画面里要出现一个男人**——男主永远只有画外的手。
+  男主的话出图时画成白边裸字（不进气泡），写在他说那句的格子下面；女生的话照常用气泡，
+  写在她在的那格下面。**全页没有 `男「…」` 时，编译尾句不许提 boy，一个字都不许留。**
+  **一句写完整的话，十来个字是常态**，人物要交代背景、讲经过、说心里话，
+  就让他好好说完——「我低估了这座山，现在迷路了，手机也没电」这种就是好台词。
+  **一句一个气泡**：每句落一个气泡，别把两三句揉进同一个气泡里。一格写 1~2 句就够，
+  别把一句完整的话切碎成语气词，也别一句塞两件不相干的事。
+  这一格真没人说话才写「台词：无」。
+- 旁白：台词讲不出来、但读者需要知道的那一件事——时间、前因、人物来历、没说出口的念头。
+  **一个文字框只放一句短话**（十来个字说完就停），用「」括起来；
+  要交代两三件事就写成两三句、各占一格或各占一个框，**绝不把好几句堆进同一个白框**。
+  参考图那种「标签」就是一句一行的小竖条，不是一大段。
+  不需要叙事的格就不写这一行。
+- 音效：风声 / 门铃 / 脚步 / 熊吼 / 手机震动。不需要就不写。
+- **状态：每一页最后一格下面写一行**，格式固定 `状态：谁在哪 / 谁身上有什么 / 什么成了事实`。
+  这是下一页的入场凭据：下一页第一格从这份状态接着写，人的位置不许换、
+  随身物不许凭空多或少，除非这一页明确写了谁把东西交给谁、谁走进或走出。
+  例：`状态：他在木屋里，手里拿着火把；熊在屋外；火堆还烧着。`、
+     `状态：他在门外街上，背黑包；她在门里，空手；门推开一条缝，人还没出来。`
+  只写事实，不写情绪、不写「气氛变了」。
 
-=== 一页几格 ===
+=== 一页几格：默认一格，分镜只在必要时用 ===
 
-换一个取景框才能画的东西，才配占新的一格。同一个画面里的两个人、一个动作、一句话，各自算一格。
-一页 2~4 格。只有一个例外：本段最重的那一瞬（一个对视、一双手、一张脸），可以单独占一页一格。
+**默认一页就是一格。** 整页一个画面：在场的人、各自站在哪、谁在说话、此刻在做什么，
+一起画进这一个画面里，各人的话各指各人。多人同框是这种漫画最擅长的事——
+两个人面对面说话、三个人围一张桌子，一个画面就能演完，不要因为「是漫画」就切格子。
 
-不许为了把页面排满而拆格子；也不许为了少画几页，把两个动作塞进一格。
+只有这几种情况才拆成多格，其余一律单格：
+- **两格**：一件事必须拆成「因 → 果」两个瞬间才看得懂（他递出钱包 → 钱包里是空的），
+  或两人正面对峙、一问一答各占一格。
+- **三格**：三个人接连说话，一人一格，气泡只指说话的那个人。
+- **四格**：一段连着的分解动作（拿鸡蛋 → 敲壳 → 下锅 → 装盘），这是分镜真正该用的地方。
+  一件事一格讲得完，就别动用四格。
 
-相邻两格的景别不要一样。远景 → 中景 → 近景 → 特写 是自然的走法；
+**不要五格、六格。** 一格装不下，就写到下一页去，不要靠多切格子把页面排满。
+格子是为了把一件事讲清楚，不是为了看起来「像漫画」。
+
+用户或需求里写明了这一页要几格，就照那个数写，一格都不许少——
+那是他已经想好的节奏，你只负责把每格写满，不替他删格、合并格。
+
+多格时相邻两格的景别不要一样：远景 → 中景 → 近景 → 特写 是自然的走法；
 连着两张同样大小的脸，读者看不出谁在变。
+
+=== 页和页要接起来 ===
+
+这是**一条连续的镜头**，不是几页各讲各的。上一页读到哪一瞬间，下一页就从那一瞬间往下走。
+
+- **每页最后一格停在一个没做完的动作上**：手停在半空、话说到一半、刚要转身、
+  门推开一条缝人还没进来、手机震了一下屏幕还没看。别写成一个已经收尾的句号
+  （「两人挥手告别」「她走远了」「喝完了」都是收尾，不能当页尾）。
+- **下一页第一格直接接住那个动作**：上一页手停在半空，这一页手就落下来；
+  上一页话没说完，这一页把话说完。人物位置和朝向也接着上一页，不重新起头。
+- **地点只往前走，不许折返**：人已经从店里出来了，后面就走在店外，
+  不要再「走向那家店」；已经在街角了，就不要又回到街角。
+  换地点要写清是怎么过去的（「她拉着我拐进街角」），不能凭空换。
+- **上一页已经发生的事，下一页默认成立**，不要重演一遍（她已经蹦出来打过招呼，
+  下一页不要再写一次她蹦出来）。
+
+一个自检：把相邻两页的第一格和最后一格连起来读——如果中间要补一句「然后呢」才讲得通，
+就是断了；如果上一页最后一格的动作在下一页第一格原样重演，也是断了。
 
 === 一整段 ===
 
 用户给的是这一段要发生什么，不是一整部作品。
 把这一段写完就行：不必从前情讲起，也不必替它收尾。
-最后一格停在张力上——一句没说完的话、一个没答的眼神、一只停在半空的手。
 
 页数是上限，不是任务量。素材只够三页就写三页，不够就更少。
 不要补头补尾：「放学回家 → 相遇 → 交谈 → 喝可可 → 告别」这种把一段摊成五个地点的写法，就是补出来的。
 
 === 角色与场景（英文，会被原样拼进出图 prompt）===
 
-`## 角色` 这一节全英文：
+`## 角色` 这一节全英文，**只写女生，绝不写 boy / 1boy 那一行**：
 - girl: 1girl, <外形串>
-- boy: 1boy, <外形串>
+
+**这是第一人称 POV：镜头后面的人就是男主本人（也就是「我」）。** 画面里出现的所有人都是女生；
+「我」不出镜、没有脸、没有身体、没有衣服，绝不能给「我」写 1boy 或任何男性外形。
+我需要伸手或接东西时，画面里只写 `pov hands` / `disembodied hand`（镜头外伸进来的一只手），
+不写「他的手」「男孩的手」。写 `1boy` / `boy` / 男人的脸或身体，就是事故——男主被拽进画面了。
+多女主同框时每人各写一行（girl / girl2 / girl3），都带 pov。
 
 用户需求里写明的外形词（金发、双马尾、绿眼、遮眼发、开衫、耳钉……）必须逐字出现在这一行，
 一个词都不许删、不许换、不许因为「黑白页画不出颜色」改成明度词（blonde 不许写成 light）。
@@ -188,23 +275,25 @@ SCRIPT_SYSTEM = """你写条漫分镜稿。任务只有一个：把这一段写�
 # 标题四到八个字
 ## 角色
 - girl: 1girl, blonde twin tails, hair over one eye, green eyes, light linen blouse, mid-grey knit cardigan
-- boy: 1boy, short dark hair, mid-grey duffle coat, light-grey scarf, black backpack
 ## 场景 1
 A winter street corner in front of a convenience store, a frosted glass door, a low metal railing, a street lamp above, hard light from the lamp.
 ## 页 1
 场景：1
-格1｜远景｜街角
-画面：冬日傍晚，街灯刚亮，他背着包沿人行道走，呼出的白气留在身后。
-台词：无
-旁白：今天比平时冷，只想快点回家。
-格2｜中景｜他
-画面：他低头看手机，屏幕上一条字条。
-台词：男「她怎么知道我想吃甜的。」
+格1｜中景｜女孩站在路灯下
+画面：傍晚便利店门口，女孩抱着纸袋站在路灯下偏头看向镜头这一侧，路灯光把她的影子拉在身后；画面里只有她一个人，镜头是男主自己的眼睛。
+台词：女「你不是说请我吃饭吗？」
+      女「电影票我买好了。」
+旁白：「她攒了两周的零用钱。」
+状态：女孩在便利店门外路灯下，抱着纸袋；两张票已经拿到她手里。
 ## 页 2
 场景：1
-格1｜近景｜她
-画面：便利店门被推开，她蹦出来半步，遮眼发被风吹起一点。
-台词：女「啊——！你也在这。」
+格1｜特写｜递出的电影票
+画面：镜头外伸进来一只手（pov hands），把一盒爆米花递到女孩面前；女孩低头看着，画面里除了这只手只有她一个人。
+旁白：「爆米花是刚买的。」
+格2｜近景｜女孩的脸
+画面：女孩接过爆米花愣了一秒，随即捂嘴笑出声，肩膀微微发抖；背景是便利店的玻璃门。
+台词：女「那说好了，下次你请。」
+状态：女孩还在店门外，爆米花已经接到她手里；约好下次再来。
 """
 
 
@@ -263,19 +352,32 @@ def build_script_user(brief, pages):
     if tags:
         look = ("\n\n用户写明的外观词（**必须逐字出现在角色台账里**）：\n"
                 + ", ".join(tags) + "\n"
-                "这些是他的指令，不是参考。`1girl`/`1boy` 只表示人数与性别，"
-                "其余每一条都要在 `girl:` / `boy:` 那一行里留下同一个词，"
-                "不许删、不许换成明度词、不许翻译成黑白。")
+                "这些是他的指令，不是参考。这些词要逐字留在 `girl:` 那一行，"
+                "不许删、不许换成明度词、不许翻译成黑白。"
+                "**角色台账只写女生、不写 boy/1boy——这是第一人称 POV，"
+                "画面里只能有女生，男主是镜头后的人、不出镜。**")
     return """需求（人给的，只有这些）：
 
 %s%s
 
-把这一段写成 %d 页以内的分镜稿。**%d 页是上限，素材不够就少写页。**
+    把这一段写成 %d 页以内的分镜稿。**%d 页是上限，素材不够就少写页。**
 
-每一格照这个格式写：`格K｜景别｜主体`，下面接 `画面：` / `台词：` / `旁白：` / `音效：`。
+    每一格照这个格式写：`格K｜景别｜主体`，下面接 `画面：` / `台词：` / `旁白：` / `音效：`。
+    **台词写完整的话，一句十来个字是常态；旁白承担叙事，一格可以写两三句**——
+    要让人读下来知道时间地点、发生了什么、人物在想什么，不要省字。
+    每页最后一格下面再写一行 `状态：谁在哪 / 谁身上有什么 / 什么成了事实`。
 
-不要写节拍表，不要写弧线，不要写核心信息，不要写页尾钩子。
-那些是笔记，不是稿子；稿子只要「第几格画什么、谁说什么」。""" % (
+    稿子就是角色台账、场景台账和逐格稿这三样，按格式写满即可。
+    **第一人称 POV（硬约束）**：男主是镜头后的人、就是「我」，画面里只能有女生，
+    角色台账只写 girl 行、绝不写 boy/1boy；我需要入画时只写 pov hands / disembodied hand（伸进来的一只手），
+    绝不写男孩的脸、身体、衣服。男主说的话标 `男「…」` 只是定归属，画成画外白边裸字。
+    **一页默认就一格**：一个画面把在场的人、站位、谁说什么都装进去，多女生同框就画在一格里。
+    只有「因果两瞬间 / 三人接连发言 / 连着的分解动作」才拆成 2~4 格，不要五格六格。
+    用户已经写明这一页几格的，照那个数写，不许删格合并格。
+
+页和页要接成一条线：每页最后一格停在没做完的动作上，下一页第一格从那儿接着画；
+人的相对位置和随身物照上一页的 `状态：` 继承，不许凭空换边或多出东西；
+地点只往前走，已经发生过的事不要重演。""" % (
         brief, look, pages, pages)
 
 
@@ -311,6 +413,11 @@ L3 · 等权 2×3 六格（六步连续动作，无主次）
   中左 [-246, -494, 244, -7]    中右 [-246, 7, 244, 494]
   下左 [258, -494, 748, -7]     下右 [258, 7, 748, 494]
 
+L6 · 规整五格（5 格默认，格号严格 = 从上到下、从左到右）
+  上左 [-750, -494, -8, -8]     上右 [-750, 8, -8, 494]
+  下左 [8, -494, 750, -172]     下中 [8, -160, 750, 160]   下右 [8, 172, 750, 494]
+  格1 上左 → 格2 上右 → 格3 下左 → 格4 下中 → 格5 下右
+
 L4 · 三条横带（3 格，三视角并列，不做推进）
   上带 [-750, -494, -250, 494]
   中带 [-236, -494, 236, 494]
@@ -320,6 +427,11 @@ L5 · 左通高 + 右上下二切（3 格，双人主次/对峙）
   左通高 [-750, -494, 750, -7]
   右上   [-750, 7, 61, 494]
   右下   [74, 7, 750, 494]
+
+T3 · 上大横格 + 下两小（3 格，一页一个主画面 + 两个补充）
+  上主格 [-768, -494, 96, 494]
+  下左   [112, -494, 768, -8]
+  下右   [112, 8, 768, 494]
 
 S1 · 满版单格（1 格，一页一拍：一张脸、一双手、一个对视）
   整页   [-768, -494, 768, 494]
@@ -351,9 +463,13 @@ __LAYOUTS__
 选法：**版式不是你来选，是这一页的拍数决定的**，上游已经指定好并写进用户消息，
 你只负责原样照抄格子坐标。三件事要记住：
 
+- **格号 = 阅读顺序**：格1 是读者第一眼看到的那一格（最上排最左），格2 是它右边那格；
+  同一排从左到右数完，再数下一排。**bbox 数组里格子的先后就是阅读先后**，
+  不许自己把某一格挪到前面、不许按画面大小重排；先发生的事在小号格，后发生的在大号格。
+
 - **S1（满版一格）是正式页型，不是残缺页**。一页只有一格时，整页就是一张脸、
   一双手或一个对视，把所有画面信息都放进这一格，**不许自己加格**。
-- 2 格（D1 上下 / D2 左右）用于「前后两个动作」或「双人对峙」，不要用来塞四句话。
+- 2 格（D1 上下 / D2 左右）用于「前后两个动作」或「双人对峙」；一格可以装一个完整小回合（2~4 句）。
 - 相邻页不许用同一骨架（会读腻）；但连续两页都是 S1 是允许的——
   那是刻意的连拍，不是撞版式。
 
@@ -361,9 +477,15 @@ __LAYOUTS__
 1. 分格句：说清一页几块、谁大谁小、白沟与墨框。**这一句丢了模型会画成无边框大图。**
 2. 画风锁：`Manga page, monochrome, greyscale screentones, dense vertical wall screentone, inked lineart, bold black ink outlines, pen crosshatching.`
 3. 主格人物的**完整外形串**（从台账逐字抄，不许改写、不许缩写）。
+   **这是第一人称 POV：画面里只有女生，绝不出现 1boy / boy / 男人 / 男性的脸、身体、衣服。**
+   男主是镜头后的人，只需要入画时写 `pov hands` / `disembodied hand`（镜头外伸进来的一只手），
+   不写他的脸和身体。caption 里绝不许出现 `1boy`、`a boy`、`a man`、`male`。
 4. 场景串：地点 / 时间 / 光源 / 两三个具体物件。
-5. 尾句：`Flat screentone shading, clear Chinese comic text in sharp speech bubbles.`
-   （本页无任何文字时，尾句换成 `no text and no speech bubbles anywhere on the page.`）
+5. 尾句（代码按本页台词自动写死，你不用自己拼）：
+   - 只有女生说话：`Flat screentone shading, clear Chinese text: the girl's words in sharp speech bubbles with short pointer tails; no bare text, no off-screen speaker.`
+   - 剧本写了 `男「…」`（画外男主）时，才换成：`Flat screentone shading, clear Chinese text: the girl's words in sharp speech bubbles, the off-screen boy's words as white-outlined bare text with no bubble.`
+   - 本页无任何文字：`no text and no speech bubbles anywhere on the page.`
+   **男主画外裸字不是每页标配**：用户没写男主台词时，绝不许自己加一段画外字、也不许在右下角安排男主的话。
 
 四、items
 - 每个角色 / 空镜 / 文字各自一条，bbox 钉死。
@@ -371,20 +493,36 @@ __LAYOUTS__
 - 人物的 caption 结尾必须再重复一次画风锁短句：
   `monochrome greyscale screentone, bold black ink outline, flat shading, no color cast.`
 - 文字 item 的 caption 只描述容器（形状+描边+竖排列数+尾巴指向），台词内容只进 text 字段。
-  气泡写 `short pointer tail pointing toward <某人> face`；旁白写 `(no bubble tail)`；
-  拟声写 `no bubble`。
+  **女生的话**（user 标 女 / who=girl）：圆角气泡 + `short pointer tail pointing toward the girl's face`。
+  **男生的话**（user 标 男 / who=boy）：**不许画任何气泡**——写 `Boy plain text: bare Chinese
+  dialogue overlaid directly on the panel, thick white outline around every character,
+  NO speech bubble, no bubble tail, no pointer tail, no enclosing frame`。男主不出镜，
+  给他画气泡，尾巴就只能指向女生，读者会当成女生说的——这是本次要修的归属事故。
+  旁白写 `(no bubble tail)`；拟声写 `no bubble`。
 - 空镜格在 caption 尾部声明 `No speech bubble and no text in this panel.`
   **有字的格子绝不许出现这句**。
 
 五、文字框 bbox 公式（格子 [y0,x0,y1,x1]，h=y1-y0，w=x1-x0）
-- 气泡（第 1 条，贴右下）：[y1-0.27h, x1-0.49w, y1-0.06h, x1-0.07w]
-- 气泡（第 2 条，叠在上方）：[y1-0.56h, x1-0.49w, y1-0.35h, x1-0.07w]
-- 旁白（贴左上）：[y0+0.05h, x0+0.07w, y0+0.28h, x0+0.56w]
+- 气泡从下往上叠，最多 4 条，每条高 0.21h、间隔 0.03h：
+  第 1 条（最下）：[y0+0.74h, x1-0.49w, y0+0.95h, x1-0.07w]
+  第 2 条：[y0+0.50h, x1-0.49w, y0+0.71h, x1-0.07w]
+  第 3 条：[y0+0.26h, x1-0.49w, y0+0.47h, x1-0.07w]
+  第 4 条（最上）：[y0+0.02h, x1-0.49w, y0+0.23h, x1-0.07w]
+- 男主白边裸字（第 1 条，贴右上，与气泡上下错开）：[y0+0.04h, x0+0.55w, y0+0.26h, x1-0.07w]
+- 男主白边裸字（第 2 条，往下叠）：[y0+0.28h, x0+0.55w, y0+0.48h, x1-0.07w]
+  同格既有裸字又有气泡时：裸字占上半（0.04~0.48h）、气泡只排最下两条
+  （0.50~0.95h），绝不叠在一起；一格最多 2 裸字 + 2 气泡。
+- 旁白（贴左上，一格多句往下叠，最多 4 框，每框高 0.21h、间隔 0.02h）：
+  第 1 框：[y0+0.04h, x0+0.07w, y0+0.25h, x0+0.56w]
+  第 2 框：[y0+0.27h, x0+0.07w, y0+0.48h, x0+0.56w]
+  第 3 框：[y0+0.50h, x0+0.07w, y0+0.71h, x0+0.56w]
+  第 4 框：[y0+0.73h, x0+0.07w, y0+0.94h, x0+0.56w]
 - 拟声（居中）：[y0+0.34h, x0+0.24w, y0+0.66h, x1-0.24w]
 **文字框离格边至少留 2%，绝不贴画面边缘（贴边会生前缀乱码）。**
 
 六、同格多文字的上下顺序
-按叙事先后**从上往下**：先发生的放上，后发生的放下。
+**先说的在最上、后说的往下排**（中文阅读顺序，从上往下）：
+先发生的放上，后发生的放下。
 同一格既有旁白又有气泡时，按「起念 → 落定」排，不要机械套「旁白在左上」。
 
 七、硬禁项
@@ -396,10 +534,15 @@ __LAYOUTS__
 - 正文不出现色相词（red/blue/brown/pink/green/yellow/orange/purple），只写明暗与材质。
 - 衣物动作写成**已完成的静态结果**（`her hand resting on the notebook`），
   不写拉扯过程动词。
-- 台词每条 ≤11 字；全页拟声最多 1 个；一格最多两条气泡。
+- 台词按编剧稿原样落字，**不许为凑短而删字或改写成碎句**；列数按字数自动给足
+  （十来字一列，长了排两列），别把长句挤成一列小字。全页拟声最多 1 个；
+  一格最多四条气泡，同格有男主裸字时气泡退到两条。
 - 一页只有一个地点。
 - 双人同框时，第二个人的句首必须显式互斥（`In sharp contrast, the boy has NO long hair, NO glasses, ...`），
-  切断第一个人的特征往下传。
+  切断第一个人的特征往下传。**互斥只列外形与衣服**（头发 / 眼睛 / 裙子 / 开衫这一类），
+  随身物件（包 / 伞 / 杯子 / 手机……）一个字都不许写——`NO backpack` 和
+  `with empty hands` 都会把这件东西请进画面，另一个人就会被画上同款。
+  物件只在它主人那一个人的描述里出现一次，另一个人的描述里绝不再提。
 
 八、坐标与顶层字段
 - bbox_coord_space 固定 "abs_centralized"，bbox_format 固定 "yxyx"。
@@ -417,7 +560,8 @@ __LAYOUTS__
 - 每个 label=text 的 item **必须**带 `text` 字段，内容是该句台词原文，
   一字不改、不加标点、不许留空、不许把台词塞进 caption 代替。
 - caption 只描述气泡容器，永远不承载台词内容。
-- 台词归属：女生说的话 → 女生所在的那格；男生说的话 → 男生所在的那格。
+- 台词归属：女生说的话 → 女生所在那格，画带尾巴气泡；男生说的话 → 落在他那格，
+  画无气泡的白边竖排裸字（第四节），绝不给男主画指向女生的气泡。
   user 里给了几句台词，就必须产出几条带 text 的 item，数量对得上。
 
 十、外形串的粘贴方式
@@ -433,7 +577,7 @@ __LAYOUTS__
 
 十二、气泡不许自己估位置
 - 一律用第五节的公式算，不许目测。
-- 气泡上边不低于所在格高度的 30% 处（也就是贴下半部）；
+- 一条气泡时贴下半部；同格多条时按第五节公式从下往上叠，最多四条；
   气泡宽度约为格宽的 42%，绝不许占满整格宽。
 
 十三、服装只许写「变动」，不许新增
@@ -458,6 +602,12 @@ SKELETONS = {
     "L3": [[-750, -494, -260, -7], [-750, 7, -260, 494],
            [-246, -494, 244, -7], [-246, 7, 244, 494],
            [258, -494, 748, -7], [258, 7, 748, 494]],
+    # 2026-11-21（阅读顺序）：规整 5 格，格号严格 = 从上到下、从左到右的阅读顺序。
+    # 上排两格、下排三格；L0/L1 的「顶条 + 通高主格」按格号读会跳，保留给老剧本，
+    # 新剧本 5 格默认走这套。坐标与 L0–L5 同系（y[-750,750] x[-494,494]）。
+    "L6": [[-750, -494, -8, -8], [-750, 8, -8, 494],
+           [8, -494, 750, -172], [8, -160, 750, 160],
+           [8, 172, 750, 494]],
     "L4": [[-750, -494, -250, 494], [-236, -494, 236, 494], [250, -494, 750, 494]],
     "L5": [[-750, -494, 750, -7], [-750, 7, 61, 494], [74, 7, 750, 494]],
     # 2026-11-21（B 层）：补 1 格 / 2 格。用户给的素材只有一个 beat 时，
@@ -467,6 +617,10 @@ SKELETONS = {
     "S1": [[-768, -494, 768, 494]],
     "D1": [[-768, -494, -8, 494], [8, -494, 768, 494]],
     "D2": [[-768, -494, 768, -8], [-768, 8, 768, 494]],
+    # 2026-11-21（三格）：L5「左通高 + 右两小」左栏比例 1:3.1，人塞进去只能画成竹竿
+    # （用户原话「角色突然变得很高」）；L4 三条等宽横带又没有主次。
+    # T3 改成「上大横格 + 下两格」：三格都不窄，且上格天然是这一页的主画面。
+    "T3": [[-768, -494, 96, 494], [112, -494, 768, -8], [112, 8, 768, 494]],
 }
 
 # ── 画风与分格句：由代码写死，不让模型每页自己措辞 ──
@@ -507,6 +661,9 @@ LAYOUT_SENTENCE = {
            "gutters and bold ink borders."),
     "L3": ("Manga page divided into six equal panels in two columns and three rows, "
            "separated by clean white gutters and bold ink borders."),
+    "L6": ("Manga page divided into five panels read strictly top to bottom then left to "
+           "right: two panels across the top row and three across the bottom row, "
+           "separated by clean white gutters and bold ink borders."),
     "L4": ("Manga page divided into three full-width horizontal bands stacked top to "
            "bottom, separated by clean white gutters and bold ink borders."),
     "L5": ("Manga page divided into three panels: one tall full-height panel on the left "
@@ -520,9 +677,18 @@ LAYOUT_SENTENCE = {
            "clean white gutter and bold ink borders."),
     "D2": ("Manga page divided into two panels, side by side, separated by one clean "
            "white gutter and bold ink borders."),
+    "T3": ("Manga page divided into three panels: one wide main panel across the top, and two "
+           "equal panels side by side across the bottom, separated by clean white gutters "
+           "and bold ink borders."),
 }
 
-TAIL_WITH_TEXT = "Flat screentone shading, clear Chinese text in sharp speech bubbles."
+# 编译尾句按「本页到底有哪些人的话」生成（2026-11-21）：
+# 男主画外裸字不是每页标配——只有剧本真的写了 `男「…」` 才提 boy。
+# 之前写死 boy 那句，导致只有女生对话的页也被要求画一段画外男主字（右下角那句）。
+TAIL_GIRL_ONLY = ("Flat screentone shading, clear Chinese text: the girl's words in sharp speech "
+                  "bubbles with short pointer tails; no bare text, no off-screen speaker.")
+TAIL_WITH_BOY = ("Flat screentone shading, clear Chinese text: the girl's words in sharp speech bubbles, "
+                 "the off-screen boy's words as white-outlined bare text with no bubble.")
 TAIL_NO_TEXT = "no text and no speech bubbles anywhere on the page."
 
 
@@ -570,11 +736,27 @@ def build_moss_user(script, page_n, prev_state, prev_layout, must_layout):
         slots = line_slots(lines, must_layout)
         rows = []
         for i, ln in enumerate(lines):
-            rows.append("  第 %d 句 ｜ 说话人 %s ｜ 只放进第 %d 格 ｜ text 字段填「%s」"
-                        % (i + 1, ln["who"], slots[i], ln["text"]))
+            # 男主不出镜：给他画带尾巴气泡，尾巴只能指向女生 → 归属就错了。
+            # 男主话一律白边裸字，和女生气泡从容器上隔离。
+            box = ("容器：**白边裸字**（Boy plain text），无气泡、无尾巴、无框，竖排"
+                   if ln["who"] == "boy"
+                   else "容器：**带尾巴气泡**，尾巴指向女生脸")
+            rows.append("  第 %d 句 ｜ 说话人 %s ｜ 只放进第 %d 格 ｜ %s ｜ text 字段填「%s」"
+                        % (i + 1, ln["who"], slots[i], box, ln["text"]))
         line_block = "\n".join(rows)
-        line_block += "\n  共 %d 句，本页必须有 %d 个带 text 的 text item。" % (
+        has_boy_here = any(ln["who"] == "boy" for ln in lines)
+        boy_note = ("**男主的话绝不许画成气泡。**\n"
+                    if has_boy_here else
+                    "**本页没有男主台词**：一个 boy 字都不要写进 caption，"
+                    "不许自作主张加画外男主的裸字。\n")
+        count_line = "\n  共 %d 句，本页必须有 %d 个带 text 的 text item。\n" % (
             len(lines), len(lines))
+        line_block += (count_line + boy_note +
+                       "  同一格有多句时，按**从上到下的阅读顺序**排："
+                       "先说的在最上、后说的往下排（第 1 句最上、第 4 句最下），"
+                       "每条按字数给足列数（十来字一列，长了排两到三列），"
+                       "文字要清楚可读，不许为凑短删字改字；"
+                       "同格有男主裸字时，裸字占上半、气泡只排最下两条。")
     else:
         line_block = ("  本页没有台词：**不要画任何气泡**。"
                       "需要交代的事由下面的旁白块承担；没有旁白的格写否定句。")
@@ -585,25 +767,40 @@ def build_moss_user(script, page_n, prev_state, prev_layout, must_layout):
     slot_plan = (cell_plan_text(must_layout, cells) if cells
                  else slot_plan_text(must_layout, who1, who_other, bool(lines)))
 
-    narr = (act.get("narr") or "").strip()
-    if narr:
+    # 逐格稿：编剧在哪一格写了旁白，那一格就画一个 caption 框，写几句画几句。
+    # 旧格式（没有 narrs）回退到单句 narr + narr_cell。
+    narrs = act.get("narrs") or []
+    if not narrs and (act.get("narr") or "").strip():
         slots0 = line_slots(lines, must_layout) if lines else []
-        # 逐格稿已经写明旁白在第几格，就用它；旧格式回退到「第一句台词那一格」。
         nslot = (int(act["narr_cell"]) if act.get("narr_cell") else
                  (slots0[0] if slots0 else (LAYOUT_SLOTS.get(must_layout)
                                             or LAYOUT_SLOTS["L0"])["main"]))
-        narr_block = ("旁白（必须原样照抄，一个字都不许改）：\n"
-                      "  第 %d 格左上角放一个小方角 caption 框，caption 里写 "
-                      "`no bubble tail`，text 字段填「%s」。\n"
-                      "  它是**旁白框不是气泡**：不许加气泡尾、不许挪到别的格、"
-                      "不许改写成台词。框里的中文**竖排**（一个字一行往下叠，"
-                      "列从右往左），不要横排。\n" % (nslot, narr))
+        narrs = [{"text": act["narr"].strip(), "cell": nslot}]
+    if narrs:
+        rows = []
+        for e in narrs:
+            rows.append("  第 %s 格左上角放一个小方角 caption 框，"
+                        "text 字段填「%s」。" % (e["cell"], e["text"]))
+        narr_block = ("旁白（逐格逐句列出，必须原样照抄，一个字都不许改）：\n"
+                      + "\n".join(rows)
+                      + "\n  同一格有多句旁白时，按列出的先后**从上往下叠**，"
+                      "各占一个框，别合并、别漏句；每句列数按字数给足，"
+                      "十来字一列，长了排两到三列。\n"
+                      "  每个 caption 框 caption 里写 `no bubble tail`；"
+                      "**旁白框不是气泡**：不加气泡尾、不挪到别的格、不改写成台词。"
+                      "框里中文**竖排**（一个字一行往下叠，多列时**从左往右**排，句首在最左列），不要横排。\n")
     else:
         narr_block = "本幕无旁白：不许自己加旁白框。\n"
 
     prev = "（本页是第一页，无前情）"
     if page_n > 1:
-        prev = "（上一幕的退场状态 + 既成事实，本页必须从这里长出来）" + (prev_state or "unknown")
+        prev = ("（**接续与入场状态**：上一页最后一格停在什么瞬间，本页第一格必须"
+                "**从那个瞬间接着画**，不许另起场景、不许把已经发生过的事重演、"
+                "不许折返回去已经走过的地点。\n"
+                "  **上一页退场状态（硬约束）**：%s\n"
+                "  人物的相对位置、谁身上有什么随身物，必须与这份状态一致；"
+                "  只有本页剧本明确写了交接（谁把东西递给谁、谁走进或走出）才允许变。"
+                "  不许凭空增减物件，不许交换两人的内外位置。）" % (prev_state or "unknown"))
 
     # 整段弧线 + 本页落在哪一拍（2026-11-21）。
     # 「没头没尾」的根因是逐页编译各自为政：每页只知道自己前后，不知道整段往哪走。
@@ -658,9 +855,11 @@ def build_moss_user(script, page_n, prev_state, prev_layout, must_layout):
 不许补充时间、色温、氛围词——同一场景的页共用同一句，画风才不漂）：
 %s
 
-角色外形串（**整段原样连续粘贴，不许拆开调序省略**）：
+角色外形串（**整段原样连续粘贴，不许拆开调序省略；只有女生，绝不出现 boy/1boy**）：
 %s
-
+**第一人称 POV 硬约束：画面里只有女生。绝不画 1boy / boy / 男人 / 男性的脸、身体、衣服——
+男主是镜头后的人，不出镜；需要入画时只写 pov hands / disembodied hand（镜头外伸进来的一只手）。
+上面角色串里若出现任何 boy/1boy 行，一律忽略，绝不照着画成画面里的人。**
 %s
 上一页版式：%s
 
@@ -675,7 +874,8 @@ def build_moss_user(script, page_n, prev_state, prev_layout, must_layout):
         line_block,
         narr_block,
         scene_text,
-        script["cast_text"],
+        "\n".join(ln for ln in script["cast_text"].splitlines()
+                  if not re.match(r"\s*-\s*boy\s*:", ln, re.I)),
         prev, prev_layout or "无")
 
 
@@ -789,6 +989,11 @@ def parse_script(md, brief=""):
         d["state_in"] = en_only(d["state_in"])
         d["state_out"] = en_only(d["state_out"])
         d["fact"] = en_only(d.get("fact") or "")
+        # 逐格稿的页末状态（2026-11-21）：`状态：谁在哪 / 谁身上有什么 / 什么成了事实`。
+        # 和旧格式的「退场状态」占同一个槽位，新写法优先；中文原样保留，不洗词。
+        stm = re.search(r"^[ \t]*状态\s*[:：]\s*(.+?)\s*$", body, re.M)
+        if stm:
+            d["state_out"] = stm.group(1).strip()
 
         outfit_m = re.search(r"(?:本页服装|本幕服装|服装)\s*[:：]\s*(.+)", body)
         d["outfit"] = en_only(outfit_m.group(1)) if outfit_m else ""
@@ -832,20 +1037,32 @@ def parse_script(md, brief=""):
                 ls = [{"who": "girl" if w == "女" else "boy", "text": t.strip(),
                        "cell": k}
                       for w, t in re.findall(r"([女男])\s*「(.+?)」", raw_lines)]
-                nm2 = re.search(r"「(.+?)」", " ".join(f.get("旁白", [])))
-                nr = (nm2.group(1) if nm2 else " ".join(f.get("旁白", []))).strip()
-                nr = re.sub(r"^(旁白|Narrator)\s*[:：]\s*", "", nr).strip('「」"').strip()
-                if nr.lower() in ("", "无", "none", "—", "-"):
-                    nr = ""
+                # 旁白可以一格写多句（2026-11-21 放开叙事密度）：每句「」单独一个框。
+                # 原来只 re.search 第一句，第二句往后的叙事全被丢掉。
+                raw_narr = " ".join(f.get("旁白", []))
+                quoted = re.findall(r"「(.+?)」", raw_narr)
+                if quoted:
+                    nrs = [x.strip() for x in quoted]
+                else:
+                    nrs = [raw_narr.strip()]
+                nrs = [re.sub(r"^(旁白|Narrator)\s*[:：]\s*", "", x).strip('「」"').strip()
+                       for x in nrs]
+                nrs = [x for x in nrs if x.lower() not in ("", "无", "none", "—", "-")]
+                nr = nrs[0] if nrs else ""
                 sfx = " ".join(f.get("音效", [])).strip()
                 if sfx.lower() in ("无", "none", "—", "-"):
                     sfx = ""
                 cells[k] = {"shot": hm.group(2).strip(), "subject": hm.group(3).strip(),
-                            "visual": vis, "lines": ls, "narr": nr, "sfx": sfx}
+                            "visual": vis, "lines": ls, "narr": nr, "narrs": nrs,
+                            "sfx": sfx}
             d["cells"] = cells
             d["grid"] = len(cells)          # 格数 = 实际写了几格，不再靠它自报
             d["lines"] = [ln for k in sorted(cells) for ln in cells[k]["lines"]]
             d["line_count"] = len(d["lines"])
+            # 每格旁白各自保留：一格写几句就落几个框（2026-11-21 放开叙事后
+            # 一格常有两三句）。单句 narr / narr_cell 仍填第一句，供旧调用方回退。
+            d["narrs"] = [{"text": t, "cell": k}
+                          for k in sorted(cells) for t in cells[k]["narrs"]]
             n1 = next((cells[k]["narr"] for k in sorted(cells) if cells[k]["narr"]), "")
             d["narr_cell"] = next((k for k in sorted(cells) if cells[k]["narr"]), None)
             if n1:
@@ -868,6 +1085,21 @@ def parse_script(md, brief=""):
     return out
 
 
+def page_exit_state(act):
+    """一页的退场状态：优先编剧写的 `状态：` 行，退回末格画面 + 既成事实。
+
+    两处逐页编译都从这里取，口径只有这一份。逐格稿早期产物没有状态行，
+    用末格画面兜底，至少不会把前情丢成 unknown。
+    """
+    st = (act.get("state_out") or "").strip()
+    if not st and act.get("cells"):
+        st = (act["cells"][max(act["cells"])].get("visual") or "").strip()
+    fact = (act.get("fact") or "").strip()
+    if fact:
+        st = "%s | established: %s" % (st, fact)
+    return st
+
+
 def grab_first(body, label):
     """抓一行 `label：xxx`（到行尾），用于格数/拍号/核心信息这类单行字段。"""
     m = re.search(r"%s\s*[:：]\s*(.+)" % label, body or "")
@@ -881,8 +1113,10 @@ NEG_SENT = "No speech bubble and no text in this panel."
 
 
 def _kind(cap):
-    """按 caption 判定文字元素类型：气泡 / 旁白 / 拟声。"""
+    """按 caption 判定文字元素类型：气泡 / 男主白边裸字 / 旁白 / 拟声。"""
     low = (cap or "").lower()
+    if "boy plain text" in low:
+        return "plain"
     if "no bubble tail" in low:
         return "caption"
     if "no bubble" in low:
@@ -890,42 +1124,92 @@ def _kind(cap):
     return "bubble"
 
 
-def bubble_cap(text):
+def _text_columns(text):
+    """竖排列数：一列约十个字，长了多给列，最多三列（再多格子放不下）。
+
+    2026-11-21 放开内容创作后台词不再是 3~8 字碎句，十来字到二十来字都正常，
+    原来的 `<=10 → 1 列，否则 2 列` 会把长句挤成一坨。
+    """
+    n = len(text or "")
+    if n <= 10:
+        return 1
+    if n <= 20:
+        return 2
+    return 3
+
+
+def boy_text_cap(text):
+    """男主台词的 caption：**白边裸字，无气泡无尾巴**（2026-11-21 用户要求）。
+
+    第一人称视角下男主不出镜；带尾巴气泡只能指向画面里唯一的女生，
+    读者就把他的话当成女生说的。所以他的话不套任何容器，
+    直接压在画面上的白边竖排字，和女生气泡一眼分得开。
+    """
+    ncol = _text_columns(text)
+    return ("Boy plain text: bare Chinese dialogue overlaid directly on the panel, "
+            "thick white outline around every character for legibility, "
+            "NO speech bubble, no bubble tail, no pointer tail, no enclosing frame, "
+            "Chinese text written vertically with each character stacked top to bottom, "
+            "%d column%s ordered left to right, "
+            "compact plain text sized so several can share this panel." %
+            (ncol, "" if ncol == 1 else "s"))
+
+
+
+
+def bubble_cap(text, who="girl"):
     """气泡的 caption：**由代码统一写**，不让模型每页自己措辞。
 
     依据 `moss-image-prompt/SKILL.comic.md` §7：caption 只说明「有什么形状的文字容器、
     在画面哪个方位」，内容放 `text`。
 
-    **竖排中文**（2026-11-21 用户要求）：一个字往下叠成竖列，列从右往左排——
-    日漫的写法。横排中文在这套画风里会被压扁、行距挤成一坨（实测那页就是这样）。
-    台词 ≤11 字，一列约放 10 字，超了才排两列。
+    **竖排中文**（2026-11-21 用户要求）：一个字往下叠成竖列。
+    多列时**从左往右**排，句首落在最左列——2026-11-21 用户第二次修正：
+    「中国人习惯从左往右读」，日式从右往左会让读者按相反顺序读出台词。
+    横排中文在这套画风里会被压扁、行距挤成一坨（实测那页就是这样）。
+    台词一句一个意思，一列约放 10 字，超了才排两列。
+
+    **尾巴点名说话人**（2026-11-21）：原来只写 `the speaker's face`，两人同框时
+    模型自己猜，实测把女生的「我来拿」尾巴画到了男生脸上。这里点名 girl / boy。
     """
-    ncol = 1 if len(text or "") <= 10 else 2
+    ncol = _text_columns(text)
+    target = "the boy's" if who == "boy" else "the girl's"
     return ("Vertical rounded speech bubble with a thin black ink outline, "
             "Chinese text written vertically with each character stacked top to bottom, "
-            "%d column%s of text ordered right to left, "
-            "short pointer tail pointing toward the speaker's face, "
-            "single bubble only in this panel." % (ncol, "" if ncol == 1 else "s"))
+            "%d column%s of text ordered left to right, "
+            "short pointer tail pointing toward %s face, "
+            "compact bubble sized so several can share this panel." %
+            (ncol, "" if ncol == 1 else "s", target))
 
 
 def bbox_bubble(cell, idx):
+    """同格气泡从下往上叠，最多 4 条（2026-11-21 高密度小漫画）。
+
+    每条高 0.21h、间隔 0.03h，最下一条贴 y0+0.74h、最上一条到 y0+0.02h。
+    原来只有两条（贴 y1-0.27h / y1-0.56h），一格塞三句就会叠在一起。
+    宽度仍是格宽 42%，不占满整格。
+    """
     y0, x0, y1, x1 = cell
     h, w = y1 - y0, x1 - x0
-    if idx == 0:
-        return [int(y1 - 0.27 * h), int(x1 - 0.49 * w),
-                int(y1 - 0.06 * h), int(x1 - 0.07 * w)]
-    return [int(y1 - 0.56 * h), int(x1 - 0.49 * w),
-            int(y1 - 0.35 * h), int(x1 - 0.07 * w)]
+    i = max(0, min(int(idx), 3))
+    top = 0.74 - 0.24 * i
+    return [int(y0 + top * h), int(x1 - 0.49 * w),
+            int(y0 + (top + 0.21) * h), int(x1 - 0.07 * w)]
 
 
 def bbox_caption(cell, idx):
+    """旁白框：贴格左上，一格多句时往下叠，最多 4 个框。
+
+    原来只写了 idx 0/1 两个位置，放开叙事后一格能写两三句旁白，
+    第三句会和第一句重叠。改成递推：每个框高 0.21h、间隔 0.02h，
+    从 0.04h 起往下排，到 0.96h 收住，绝不贴格边。
+    """
     y0, x0, y1, x1 = cell
     h, w = y1 - y0, x1 - x0
-    if idx == 0:
-        return [int(y0 + 0.05 * h), int(x0 + 0.07 * w),
-                int(y0 + 0.28 * h), int(x0 + 0.56 * w)]
-    return [int(y0 + 0.31 * h), int(x0 + 0.07 * w),
-            int(y0 + 0.54 * h), int(x0 + 0.56 * w)]
+    i = max(0, min(int(idx), 3))
+    top = 0.04 + 0.23 * i
+    return [int(y0 + top * h), int(x0 + 0.07 * w),
+            int(y0 + (top + 0.21) * h), int(x0 + 0.56 * w)]
 
 
 def bbox_sfx(cell):
@@ -933,6 +1217,17 @@ def bbox_sfx(cell):
     h, w = y1 - y0, x1 - x0
     return [int(y0 + 0.34 * h), int(x0 + 0.24 * w),
             int(y0 + 0.66 * h), int(x1 - 0.24 * w)]
+
+
+def bbox_plain(cell, idx):
+    """男主白边裸字：贴右上，和贴右下的女生气泡上下错开，同格也不叠。"""
+    y0, x0, y1, x1 = cell
+    h, w = y1 - y0, x1 - x0
+    if idx == 0:
+        return [int(y0 + 0.04 * h), int(x0 + 0.55 * w),
+                int(y0 + 0.26 * h), int(x1 - 0.07 * w)]
+    return [int(y0 + 0.28 * h), int(x0 + 0.55 * w),
+            int(y0 + 0.48 * h), int(x1 - 0.07 * w)]
 
 
 # 每套骨架的「角色槽位」——台词落格和每一格的语义都从这里取，不写死格号。
@@ -945,15 +1240,18 @@ LAYOUT_SLOTS = {
     "L1": {"scene": 1, "main": 2, "s1": 3, "s2": 4, "prop": 5},
     "L2": {"scene": None, "main": 1, "s1": 2, "s2": 3, "prop": 4},
     "L3": {"scene": 1, "main": 2, "s1": 3, "s2": 4, "prop": 5, "extra": 6},
+    "L6": {"scene": None, "main": 1, "s1": 1, "s2": 2, "prop": 4},
     "L4": {"scene": None, "main": 1, "s1": 2, "s2": 3, "prop": None},
     "L5": {"scene": None, "main": 1, "s1": 2, "s2": 3, "prop": None},
     # B 层：
     #   单格页没有「第二格」可放第二个人——两个人必须同框在第一格，
-    #   台词也全落第一格（一格最多两句，所以单格页台词 ≤2 句这条要成立）。
+    #   台词也全落第一格（一格最多四条气泡 / 有男主裸字时最多两条）。
     "S1": {"scene": None, "main": 1, "s1": 1, "s2": 1, "prop": None},
     #   两格页：第一格放第一说话人，第二格放反应/第二说话人。
     "D1": {"scene": None, "main": 1, "s1": 1, "s2": 2, "prop": None},
     "D2": {"scene": None, "main": 1, "s1": 1, "s2": 2, "prop": None},
+    #   三格页：上格是主画面（第一说话人），下两格放反应 / 道具。
+    "T3": {"scene": None, "main": 1, "s1": 1, "s2": 2, "prop": 3},
 }
 
 
@@ -993,11 +1291,13 @@ _CELL_ROLE = {
     "L1": {1: "顶部横条", 2: "左侧通高主格", 3: "右栏最上", 4: "右栏中间", 5: "右栏最下"},
     "L2": {1: "上方宽主格", 2: "下排最左", 3: "下排中间", 4: "下排最右"},
     "L3": {1: "上排左", 2: "上排右", 3: "中排左", 4: "中排右", 5: "下排左", 6: "下排右"},
+    "L6": {1: "上排左", 2: "上排右", 3: "下排最左", 4: "下排中间", 5: "下排最右"},
     "L4": {1: "上带", 2: "中带", 3: "下带"},
     "L5": {1: "左侧通高主格", 2: "右上", 3: "右下"},
     "S1": {1: "满版整页"},
     "D1": {1: "上半格", 2: "下半格"},
     "D2": {1: "左格", 2: "右格"},
+    "T3": {1: "上方宽主格", 2: "下排左", 3: "下排右"},
 }
 
 
@@ -1091,10 +1391,35 @@ def panel_owner(item):
 #   它是「按词表按句删除模型写的场景描述」，属于语义级删改——会误删正常句子，
 #   也是「针对某个场景做的特化」。场景现在原样使用，基调由编剧侧的提示词管。
 
-def rebuild_summary(js, cast, layout, has_text, scene=""):
+def retail_caption(cap, has_text, has_boy):
+    """**只换尾句**，正文一个字不动（2026-11-21 单 Agent 链路）。
+
+    单 Agent 自己写的就是一整段连贯英文，不能像两段链路那样拆成五段重拼。
+    但尾句是「本页到底有没有字、有没有男主画外音」的确定性事实，
+    模型经常照抄模板却不写对应的 text item——尾句说有裸字、页面里一段都没有，
+    模型收到自相矛盾的两句指令，画出来要么没字、要么给男生画气泡。
+
+    做法：从最后一个 "flat screentone shading" 处截断（那是尾句的固定开头），
+    换成按实际 text item 算出来的那一句。找不到就整段接在末尾。
+    """
+    if not has_text:
+        tail = TAIL_NO_TEXT
+    elif has_boy:
+        tail = TAIL_WITH_BOY
+    else:
+        tail = TAIL_GIRL_ONLY
+    cap = (cap or "").strip()
+    i = cap.lower().rfind("flat screentone shading")
+    if i <= 0:
+        return (cap.rstrip(" .") + ". " + tail) if cap else tail
+    head = cap[:i].rstrip().rstrip(",").rstrip(".")
+    return (head + ". " + tail) if head else tail
+
+
+def rebuild_summary(js, cast, layout, has_text, scene="", has_boy=False):
     """summary.caption 由代码拼装：分格句 + 画风锁 + 人物串 + 场景 + 尾句。
     前三段是常量或台账，第四段用**整章共用**的场景串（不是模型每页新写的），
-    这样三页的 summary.caption 逐字相同，模型没有任何余地每页重新定调。"""
+    has_boy 决定尾句提不提画外男主——没有男主台词时一个 boy 字都不留。"""
     items = js.get("items") or []
     owners = set()
     for it in items:
@@ -1117,12 +1442,16 @@ def rebuild_summary(js, cast, layout, has_text, scene=""):
     # 写 multi_panel 会让模型按「分格页」重新切格，一页一格的意图就丢了。
     s["canvas"] = ("single" if len(SKELETONS.get(layout) or []) == 1
                    else "multi_panel")
-    parts = [LAYOUT_SENTENCE.get(layout, ""), STYLE_LOCK, cast_block, scene_text,
-             TAIL_WITH_TEXT if has_text else TAIL_NO_TEXT]
+    if not has_text:
+        tail = TAIL_NO_TEXT
+    else:
+        tail = TAIL_WITH_BOY if has_boy else TAIL_GIRL_ONLY
+    parts = [LAYOUT_SENTENCE.get(layout, ""), STYLE_LOCK, cast_block, scene_text, tail]
     s["caption"] = " ".join(p for p in parts if p).strip()
 
 
-def autofix(js, cast=None, lines=None, layout=None, scene="", narr="", narr_cell=None):
+def autofix(js, cast=None, lines=None, layout=None, scene="", narr="",
+            narr_cell=None, narrs=None, audit_narr=True, rebuild=True):
     """把模型不该负责的确定性部分接过来：整数化、台词按说话人落格、文字框按公式重排、
     否定句校正、顶层字段归位、外形串补齐。
     模型只管「写什么」；「放哪」和「多宽」一律由代码算。"""
@@ -1185,11 +1514,13 @@ def autofix(js, cast=None, lines=None, layout=None, scene="", narr="", narr_cell
             if not (1 <= slot <= len(SKELETONS[layout])):
                 continue
             cell = list(SKELETONS[layout][slot - 1])
+            is_boy = ln["who"] == "boy"
             items.append({
                 "label": "text",
-                "caption": bubble_cap(ln["text"]),
+                "caption": (boy_text_cap(ln["text"]) if is_boy
+                            else bubble_cap(ln["text"], ln["who"])),
                 "text": ln["text"],
-                "bbox": bbox_bubble(cell, 0),
+                "bbox": (bbox_plain(cell, 0) if is_boy else bbox_bubble(cell, 0)),
             })
             present.add(nt)
             notes.append("补漏台词「%s」→第%d格" % (ln["text"], slot))
@@ -1197,15 +1528,19 @@ def autofix(js, cast=None, lines=None, layout=None, scene="", narr="", narr_cell
     # 1.42) 气泡的 caption 一律由代码统一写（形状与方位，内容仍在 text 字段）。
     # 模型原来写的是「Rounded bubble low in the panel…」这类每页不同的话，
     # 十页十种措辞气泡形状就会跟着漂——按 SKILL §7 这本来就该是代码的活。
-    line_nts = {norm_text(ln["text"]) for ln in (lines or [])}
+    line_by_text = {norm_text(ln["text"]): ln for ln in (lines or [])}
     for it in items:
         if it.get("label") != "text":
             continue
-        if norm_text(it.get("text") or "") in line_nts:
-            want = bubble_cap(it.get("text"))
-            if (it.get("caption") or "") != want:
-                it["caption"] = want
-                notes.append("气泡 caption 统一")
+        ln = line_by_text.get(norm_text(it.get("text") or ""))
+        if ln is None:
+            continue
+        is_boy = ln["who"] == "boy"
+        want = boy_text_cap(ln["text"]) if is_boy else bubble_cap(ln["text"], ln["who"])
+        if (it.get("caption") or "") != want:
+            it["caption"] = want
+            notes.append("男主白边裸字 caption 统一" if is_boy
+                         else "气泡 caption 统一")
 
     # 1.45) 旁白：剧本那一句，位置由代码定。
     # 2026-11-21（实测那页之后改写）：模型**已经**写了同样这句旁白时，留它原位
@@ -1214,46 +1549,73 @@ def autofix(js, cast=None, lines=None, layout=None, scene="", narr="", narr_cell
     # 模型写的旁白框里，script 没有的那句才删：它会真印在画面上，变成剧本里
     # 不存在的一句话。判据只看「caption 类 + 是不是剧本里的台词」，不做语义判断。
     narr = (narr or "").strip()
-    narr_key = norm_text(narr)
+    # 逐格稿：每格旁白各落各框。旧调用只传 narr，退回单句列表。
+    want = []
+    if narrs:
+        for e in narrs:
+            t = str((e.get("text") if isinstance(e, dict) else e) or "").strip()
+            if not t:
+                continue
+            c = e.get("cell") if isinstance(e, dict) else narr_cell
+            want.append({"text": t, "cell": c})
+    elif narr:
+        want = [{"text": narr, "cell": narr_cell}]
+    want_keys = {norm_text(e["text"]) for e in want}
     line_keys = {norm_text(ln.get("text")) for ln in (lines or [])}
     cap_caption = ("Small rectangular caption box in the upper left corner of this panel, "
-                   "Chinese text set vertically in columns read right to left, "
+                   "Chinese text set vertically in columns read left to right, "
                    "no bubble tail, single caption box only in this panel.")
-    have_narr = None
+    # 模型写了的旁白框按 text 认领（同一句只留一个），剧本没有的删掉。
+    # 2026-11-21：单 Agent 链路**没有上游剧本**，模型写的旁白就是唯一事实源。
+    # `audit_narr=False` 时跳过「剧本没有就删」——否则这一页 5 句旁白会被删成 0 句，
+    # 出来的页只剩一句台词，读起来就是叙事缺失。措辞仍然统一，只是不再删内容。
+    have = {}                       # norm_text -> item
     drop = []
-    for it in items:
-        if it.get("label") != "text" or _kind(it.get("caption")) != "caption":
+    if audit_narr:
+        for it in items:
+            if it.get("label") != "text" or _kind(it.get("caption")) != "caption":
+                continue
+            k = norm_text(it.get("text"))
+            if k in want_keys:
+                if k not in have:
+                    have[k] = it
+                else:
+                    drop.append(it)     # 同一句出现两次，留第一个
+                continue
+            if k and k not in line_keys:
+                drop.append(it)         # 剧本没有这句且不是台词 → 模型自己编的
+        for it in drop:
+            items.remove(it)
+            notes.append("删多余旁白框")
+        for it in have.values():
+            it["caption"] = cap_caption  # 措辞统一，避免十页十种形状
+    else:
+        # 没有剧本可对账：旁白只统一措辞，一句不删
+        for it in items:
+            if it.get("label") == "text" and _kind(it.get("caption")) == "caption":
+                it["caption"] = cap_caption
+    # 剧本写了、模型没画的旁白：补框，落到它自己那一格。
+    for e in want:
+        nk = norm_text(e["text"])
+        if nk in have:
             continue
-        k = norm_text(it.get("text"))
-        if narr_key and k == narr_key:
-            # 同一句旁白出现两次：只留第一个，后面的是重复框
-            if have_narr is None:
-                have_narr = it
-            else:
-                drop.append(it)
-            continue
-        if k and k not in line_keys:
-            drop.append(it)          # 剧本没有这句，且是旁白框 → 模型自己编的
-    for it in drop:
-        items.remove(it)
-        notes.append("删多余旁白框")
-    if have_narr is not None:
-        # 措辞也统一成代码这句：竖排、单框。模型自己写的那版措辞各异，
-        # 下一页就换个说法，形状跟着漂。
-        have_narr["caption"] = cap_caption
-    if narr_key and layout in SKELETONS and have_narr is None:
-        slots0 = line_slots(lines or [], layout)
-        lp = LAYOUT_SLOTS.get(layout) or LAYOUT_SLOTS["L0"]
-        slot = (int(narr_cell) if narr_cell else
-                (slots0[0] if slots0 else lp["main"]))
-        cell = list(SKELETONS[layout][slot - 1])
-        items.append({
-            "label": "text",
-            "caption": cap_caption,
-            "text": narr,
-            "bbox": bbox_caption(cell, 0),
-        })
-        notes.append("旁白落第%d格左上" % slot)
+        if layout in SKELETONS:
+            slots0 = line_slots(lines or [], layout)
+            lp = LAYOUT_SLOTS.get(layout) or LAYOUT_SLOTS["L0"]
+            try:
+                slot = int(e["cell"]) if e.get("cell") else (
+                    slots0[0] if slots0 else lp["main"])
+            except (ValueError, TypeError):
+                slot = slots0[0] if slots0 else lp["main"]
+            slot = max(1, min(slot, len(SKELETONS[layout])))
+            cell = list(SKELETONS[layout][slot - 1])
+            items.append({
+                "label": "text",
+                "caption": cap_caption,
+                "text": e["text"],
+                "bbox": bbox_caption(cell, 0),
+            })
+            notes.append("旁白落第%d格左上" % slot)
 
     # 1.5) 只删**没有字的** text item：空框会被画成一个空白气泡，100% 是坏结果。
     # 2026-11-21 不再删「重复台词」——重复可能是刻意的呼应，删不删由编剧决定。
@@ -1329,7 +1691,7 @@ def autofix(js, cast=None, lines=None, layout=None, scene="", narr="", narr_cell
 
     # 3) 按公式重算 bbox（气泡自下往上叠、旁白自上往下、拟声居中）
     for cell, ts in groups.items():
-        kinds = {"bubble": [], "caption": [], "sfx": []}
+        kinds = {"bubble": [], "plain": [], "caption": [], "sfx": []}
         for t in ts:
             kinds[_kind(t.get("caption"))].append(t)
         # 气泡：后说的贴最下（idx 0），先说的往上叠
@@ -1337,10 +1699,23 @@ def autofix(js, cast=None, lines=None, layout=None, scene="", narr="", narr_cell
             kinds["bubble"].sort(key=lambda t: t["_ord"], reverse=True)
         else:
             kinds["bubble"].sort(key=lambda t: t["bbox"][0], reverse=True)
+        # 同格有男主裸字时：裸字占上半，气泡最多两条只在下半，绝不叠。
+        # 没有裸字时气泡放宽到四条——高密度小漫画一格三四个气泡是常态。
+        bubble_max = 2 if kinds["plain"] else 4
         for i, t in enumerate(kinds["bubble"]):
+            if i >= bubble_max:
+                notes.append("同格裸字+气泡超量，第%d条气泡保留原位置" % (i + 1))
+                continue
+            t["bbox"] = bbox_bubble(list(cell), i)
+        # 男主白边裸字：贴右上，和贴右下的气泡上下错开；顺序与气泡同理
+        if all(t.get("_ord") is not None for t in kinds["plain"]):
+            kinds["plain"].sort(key=lambda t: t["_ord"], reverse=True)
+        else:
+            kinds["plain"].sort(key=lambda t: t["bbox"][0], reverse=True)
+        for i, t in enumerate(kinds["plain"]):
             if i >= 2:
                 break
-            t["bbox"] = bbox_bubble(list(cell), i)
+            t["bbox"] = bbox_plain(list(cell), i)
         kinds["caption"].sort(key=lambda t: t["bbox"][0])
         for i, t in enumerate(kinds["caption"]):
             if i >= 2:
@@ -1376,6 +1751,10 @@ def autofix(js, cast=None, lines=None, layout=None, scene="", narr="", narr_cell
         m = re.match(r".*?\b(boy|girl)\b", low)
         who = m.group(1) if m else None
         if not who or who not in cast:
+            continue
+        # 2026-11-21 POV：画面里只有女生。绝不把 boy 外形串补进 caption——
+        # 补了就等于把男主画进画面。男主只以 pov hands 出现，没有外形串。
+        if who == "boy":
             continue
         clauses = [x.strip() for x in cast[who].split(",") if len(x.split()) >= 2]
         if not clauses:
@@ -1417,8 +1796,29 @@ def autofix(js, cast=None, lines=None, layout=None, scene="", narr="", narr_cell
             js["summary"]["caption"] = cleaned
 
     # 7) summary 整体重建：分格句与画风段全部由代码给，模型只贡献场景
+    # 2026-11-21：单 Agent 链路传 rebuild=False——它自己写的就是一整段连贯英文
+    # （分格→画风→主格人物→场景→文字），拆成五段再拼回去反而更差。
+    if not rebuild:
+        # 单 Agent：正文保留模型写的一整段，只校尾句（见 retail_caption）。
+        has_text = any((t.get("text") or "").strip() for t in items if t.get("label") == "text")
+        has_boy = any("boy plain text" in (it.get("caption") or "").lower()
+                      for it in items if it.get("label") == "text")
+        s = js.setdefault("summary", {})
+        old = s.get("caption") or ""
+        new = retail_caption(old, has_text, has_boy)
+        if new != old:
+            s["caption"] = new
+            notes.append("改尾句（按本页实际文字）")
+        return notes
     has_text = any((t.get("text") or "").strip() for t in items if t.get("label") == "text")
-    rebuild_summary(js, cast, layout, has_text, scene)
+    has_boy = any((ln.get("who") or "") == "boy" for ln in (lines or []))
+    if not lines:
+        # 单 Agent 链路没有剧本台词表：说话人只能从已经落进页面的 text item 认。
+        # 不认的话尾句永远写成「no bare text」，而页面里明明有一段白边裸字，
+        # 模型收到自相矛盾的两句指令，画出来就是要么没字、要么给男生画气泡。
+        has_boy = any("boy plain text" in (it.get("caption") or "").lower()
+                      for it in items if it.get("label") == "text")
+    rebuild_summary(js, cast, layout, has_text, scene, has_boy=has_boy)
     notes.append("重建 summary（画风锁由代码写死）")
 
     return notes
@@ -1574,7 +1974,8 @@ def _layout_for(grid, prev_layout=None, want=""):
     也没有一格骨架可用，只能往空格子里派内容。这里把 1 格/2 格接进同一条链路。
 
     1 格 → S1（满版）；2 格 → D1 上下 / D2 左右（交替避免连撞）；
-    3 格 → L5 ↔ L4；4 格 → L2；5 格 → L0 ↔ L1；6 格 → L3。
+    3 格 → T3（上大横格 + 下两格，2026-11-21 替换掉 L5 的 1:3.1 窄条）；
+    5 格 → L0。4 格不再产出（用户明确不要 4 格）。
     编剧若显式写了合法版式，以它为准。
     """
     w = re.sub(r"\s+", "", (want or "")).upper()
@@ -1586,12 +1987,14 @@ def _layout_for(grid, prev_layout=None, want=""):
     if g == 2:
         return "D2" if prev_layout == "D1" else "D1"
     if g == 3:
-        return "L4" if prev_layout == "L5" else "L5"
+        return "T3"
     if g == 4:
-        return "L2"
+        # 4 格没有独立骨架：按「上主格 + 下两格」收一格，不让它凭空多一格。
+        return "T3"
     if g >= 6:
         return "L3"
-    return "L1" if prev_layout == "L0" else "L0"
+    # 5 格：单 Agent 只出 L0（顶条 + 右通高主格 + 左三小，用户认可的那套）。
+    return "L0"
 
 
 def generate(brief, pages, call, progress=None):
@@ -1685,11 +2088,9 @@ def generate(brief, pages, call, progress=None):
             if empty:
                 struct_notes.append("第 %d 页：格 %s 没写画面"
                                     % (a["n"], "、".join(str(x) for x in empty)))
-            narrs = [k for k in sorted(cells) if cells[k]["narr"]]
-            if len(narrs) > 1:
-                struct_notes.append(
-                    "第 %d 页写了 %d 句旁白（格 %s），目前只画格 %d 那第一句"
-                    % (a["n"], len(narrs), "、".join(str(x) for x in narrs), narrs[0]))
+            # 逐格旁白现在每格各画一框（2026-11-21），不再只画第一句。
+            # 只有格数超出骨架可容纳的 caption 数才算结构问题——交给 check_page
+            # 的几何校验，这里不再按「只画第一句」报过时提示。
     if beat_nums_in_table:
         missing = [x for x in beat_nums_in_table if x not in claimed]
         if missing:
@@ -1727,7 +2128,8 @@ def generate(brief, pages, call, progress=None):
 
         notes = autofix(js, script["cast"], act.get("lines"),
                         must, act.get("scene_text") or "",
-                        act.get("narr") or "", act.get("narr_cell"))
+                        act.get("narr") or "", act.get("narr_cell"),
+                        narrs=act.get("narrs"))
         issues = check_page(js, n, script["cast"], must, act.get("lines"))
         used = detect_layout(js)
         if used != must:
@@ -1752,12 +2154,7 @@ def generate(brief, pages, call, progress=None):
                        "grid": len(SKELETONS.get(must) or []),
                        "beat": act.get("beat") or "",
                        "issues": issues, "autofix": notes})
-        prev_state = act.get("state_out") or ""
-        # 逐格稿没有「退场状态」这一栏：上一页的最后一格就是前情。
-        if not prev_state and act.get("cells"):
-            prev_state = (act["cells"][max(act["cells"])].get("visual") or "").strip()
-        if act.get("fact"):
-            prev_state = "%s | established: %s" % (prev_state, act["fact"])
+        prev_state = page_exit_state(act)
         prev_layout = detect_layout(js) or prev_layout
 
     title = (script.get("title") or "").strip()
@@ -1870,7 +2267,8 @@ def main():
         notes = autofix(js, script["cast"], script["acts"][n - 1].get("lines"),
                         must, script["acts"][n - 1].get("scene_text") or "",
                         script["acts"][n - 1].get("narr") or "",
-                        script["acts"][n - 1].get("narr_cell"))
+                        script["acts"][n - 1].get("narr_cell"),
+                        narrs=script["acts"][n - 1].get("narrs"))
         if notes:
             print("  代码修正 %d 项：%s" % (len(notes), "；".join(notes[:5])))
         issues = check_page(js, n, script["cast"], must,
@@ -1894,7 +2292,7 @@ def main():
         with open(os.path.join(OUT_DIR, "page%d.json" % n), "w", encoding="utf-8") as f:
             json.dump(pure, f, ensure_ascii=False, indent=2)
 
-        prev_state = script["acts"][n - 1]["state_out"]
+        prev_state = page_exit_state(script["acts"][n - 1])
         used = detect_layout(js)
         print("  识别版式：%s（要求 %s）" % (used or "未识别", must))
         prev_layout = used or prev_layout

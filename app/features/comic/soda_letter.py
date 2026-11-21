@@ -49,6 +49,75 @@ def _to_tl(cell):
             "w": int(x1 - x0), "h": int(y1 - y0)}
 
 
+def _clamp_narr(bb, max_w=330, max_h=232):
+    """旁白框收一收：左上角不动，右下角往里收。
+
+    `bbox_caption` 是按**格宽比例**算的（0.49w × 0.21h），S1 满版时约 500×322px，
+    两句话的白底框直接盖住人脸（2026-11-21 实测「大气泡糊脸」）。排字这一层
+    知道真实字数，按字数给框就够了：字多了 Soda 自己会缩字号、排多列。
+    """
+    y0, x0, y1, x1 = bb
+    return [y0, x0, y0 + min(y1 - y0, max_h), x0 + min(x1 - x0, max_w)]
+
+
+def _panel_of(bb, boxes):
+    """文字 bbox（中心原点 yxyx）落在哪一格 → panel id。"""
+    cy, cx = (bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0
+    best, bi = None, 0
+    for i, c in enumerate(boxes):
+        y0, x0, y1, x1 = c
+        if y0 <= cy <= y1 and x0 <= cx <= x1:
+            return "p%d" % (i + 1)
+        d = abs((y0 + y1) / 2.0 - cy) + abs((x0 + x1) / 2.0 - cx)
+        if best is None or d < best:
+            best, bi = d, i
+    return "p%d" % (bi + 1)
+
+
+def _texts_from_override(page, boxes):
+    """从双段链路的 `prompt_override` 里取文字条目（每条一句 + 精确 bbox）。
+
+    2026-11-21：双段链路把文字钉进 override 的 text items——每条一句、bbox
+    已算好；而 `panels[].caption` 是**多句拼成的一段**。Soda 原来只读 panels，
+    于是「蛋糕是她惦记了一路的事。说这话时她没抬头…」两句被塞进同一个框、
+    位置也和画面里的排版对不上（实测页 2）。有 override 就以它为准。
+    """
+    ov = page.get("prompt_override")
+    if not isinstance(ov, str) or not ov.strip():
+        return []
+    try:
+        d = json.loads(ov)
+    except Exception:                          # noqa: BLE001  坏 JSON 退回旧路
+        return []
+    out = []
+    for i, it in enumerate(d.get("items") or []):
+        if it.get("label") != "text":
+            continue
+        txt = (it.get("text") or "").strip()
+        bb = it.get("bbox")
+        if not txt or not (isinstance(bb, list) and len(bb) == 4):
+            continue
+        cap = (it.get("caption") or "").lower()
+        # 判定顺序有讲究：旁白的 caption 里也带 "bubble" 字样（`no bubble tail`），
+        # 先认 "caption box" 才不会把旁白误判成气泡。
+        if "sound effect" in cap or "katakana" in cap:
+            kind, bubble, tid = "sfx", "shout", "sfx-ov%d" % i
+        elif "caption box" in cap or "no bubble tail" in cap:
+            kind, bubble, tid = "narration", "narration", "cap-ov%d" % i
+        elif "speech bubble" in cap:
+            kind, bubble, tid = "dialogue", "speech", "bub-ov%d" % i
+        else:
+            # narration = 白底方框（Soda 的 BUBBLE_TYPES 里唯一的旁白框型；
+            # 旧代码传 "none" 不在枚举内，等于不画框，字直接压在画面上）
+            kind, bubble, tid = "narration", "narration", "cap-ov%d" % i
+        if kind == "narration":
+            bb = _clamp_narr(bb)
+        out.append({"id": tid, "text": txt, "kind": kind,
+                    "panel_id": _panel_of(bb, boxes), "direction": "vertical",
+                    "bubble": bubble, "bbox": _to_tl(bb)})
+    return out
+
+
 def page_info(spec, page):
     """一页 spec → SodaLetterPage 的 page_info JSON 字符串。
 
@@ -68,12 +137,12 @@ def page_info(spec, page):
             "description": moss_comic._fill_page(
                 (panel.get("desc") or "").strip(), cast, seen),
         })
-        # 旁白：贴左上，无气泡。
+        # 旁白：贴左上，白底方框（bubble="narration"）。
         cap = (panel.get("caption") or "").strip()
         if cap:
             texts.append({"id": "cap-%d" % i, "text": cap, "kind": "narration",
                           "panel_id": pid, "direction": "vertical",
-                          "bubble": "none", "bbox": _to_tl(
+                          "bubble": "narration", "bbox": _to_tl(
                               moss_comic._text_bbox(cell, "caption"))})
         # 拟声：格中大字，shout 气泡（爆炸框）。
         sfx = (panel.get("sfx") or "").strip()
@@ -91,20 +160,26 @@ def page_info(spec, page):
                           "bbox": _to_tl(
                               moss_comic._text_bbox(cell, "bubble", j))})
 
+    # 双段链路的 override 里有拆好的逐条文字 + 精确 bbox，优先用它；
+    # 没有 override（老任务 / 单段链路）才退回上面从 panels 拼的那份。
+    ov_texts = _texts_from_override(page, boxes)
+
     info = {
         "version": 1,
         "page": {
             "page_id": "page-%s" % page.get("n", 1),
             "canvas_width": moss_comic._CANVAS_W,
             "canvas_height": moss_comic._CANVAS_H,
-            "reading_direction": "rtl",
+            # 2026-11-21：中文竖排的列序改成从左往右（句首在最左列）。
+            # 原来写 "rtl"（日式），读者会把第二列当句首，台词顺序整个反掉。
+            "reading_direction": "ltr",
             "dialogue_mode": "lettering",      # letter_image 只排这个模式的字
             "text_direction": "vertical",
             "color_mode": "color",
             "text_font_size": 42,              # 1024 宽下的基准字号（Soda 默认）
             "text_max_chars": 6,               # 6 字一列，见文件头字号说明
             "panels": panels,
-            "texts": texts,
+            "texts": ov_texts or texts,
         },
     }
     return json.dumps(info, ensure_ascii=False)

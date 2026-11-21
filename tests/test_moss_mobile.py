@@ -57,6 +57,22 @@ class MossStudioSimpleTest(unittest.TestCase):
                 "jobbar"):
             self.assertIn('id="%s"' % element_id, html)
 
+    def test_zoom_has_navigation_and_blocks_blue_selection(self):
+        html = _html()
+        for element_id in ("zprev", "znext", "zpage"):
+            self.assertIn('id="%s"' % element_id, html)
+        self.assertIn("function zoomCollect()", html)
+        self.assertIn("function zoomShow(i)", html)
+        # 蓝屏 = 浏览器把图片当文本选中。四条 CSS 加 dragstart 拦截，缺一就会复发。
+        for rule in ("user-select: none", "-webkit-user-select: none",
+                     "-webkit-user-drag: none", "-webkit-touch-callout: none",
+                     "-webkit-tap-highlight-color: transparent"):
+            self.assertIn(rule, html)
+        self.assertIn('addEventListener("dragstart"', html)
+        self.assertIn('e.key === "ArrowLeft"', html)
+        self.assertIn('e.key === "ArrowRight"', html)
+        self.assertIn('e.key === "Escape"', html)
+
 
 if __name__ == "__main__":
     unittest.main()

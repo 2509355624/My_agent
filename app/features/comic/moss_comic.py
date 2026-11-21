@@ -1207,6 +1207,37 @@ def _bubbles(panel):
     return [x for x in out if x][:MAX_BUBBLES]
 
 
+_NO_TEXT_TAIL = ("Flat screentone shading, no text, no lettering, no speech bubbles "
+                 "anywhere on the page; leave clean empty areas where the lettering "
+                 "will be placed later.")
+
+
+def _strip_text_items(js_text):
+    """剥掉 Layout JSON 里的全部文字条目，供 Soda 程序排字模式出底图。
+
+    2026-11-21：`with_text=False` 原来对 `prompt_override` 完全无效（第 1222 行
+    直接 `return ov.strip()`），于是底图提示词仍带着中文描述，模型照画一遍、
+    SodaLetterPage 再画一遍，两套字叠在一起（实测页 2 出现三层字重叠）。
+    这里把 text 条目清空、尾句换成明确「不许写字」，底图只留画面。
+    """
+    try:
+        d = json.loads(js_text)
+    except Exception:                          # noqa: BLE001  坏 JSON 原样退回
+        return js_text
+    if not isinstance(d, dict):
+        return js_text
+    items = [i for i in (d.get("items") or []) if i.get("label") != "text"]
+    d["items"] = items
+    s = d.get("summary")
+    if isinstance(s, dict):
+        cap = (s.get("caption") or "").strip()
+        # 尾句原来是「clear Chinese text: ...」那一串，整段换掉；
+        # 前面是画风/场景/人物，原样保留。
+        head = cap.split("Flat screentone shading")[0].strip() or cap
+        s["caption"] = (head + " " + _NO_TEXT_TAIL).strip()
+    return json.dumps(d, ensure_ascii=False)
+
+
 def build_page_prompt(spec, page, with_text=True):
     """把一页 JSON 编译成 §15 官方 Layout JSON **字符串**。
 
@@ -1219,9 +1250,14 @@ def build_page_prompt(spec, page, with_text=True):
     """
     # 双段式链路（编剧 AI + 逐页编译 AI）产出的整页 Layout JSON：
     # 已经由代码闸门钉死分格/落格/画风锁，这里不再二次拼装，原样交给出图端。
+    #
+    # 2026-11-21 修：这里原来无条件原样返回，`with_text` 参数被吃掉 →
+    # Soda 程序排字模式下底图提示词仍带中文，模型先画一遍字、Soda 再画一遍，
+    # 两套字叠在一起（实测页 2 三层字重叠）。现在 with_text=False 时剥掉
+    # 全部 text 条目，并把尾句换成「不许写字」。
     ov = (page or {}).get("prompt_override")
     if isinstance(ov, str) and ov.strip():
-        return ov.strip()
+        return ov.strip() if with_text else _strip_text_items(ov.strip())
 
     lay = page.get("layout") or "single"
     lay_text = LAYOUTS[lay][0]                 # 分格句
@@ -1349,7 +1385,7 @@ def resolve_style(name):
 
 
 def repair(spec, problems, brief, pages, layout, ratio, style_text,
-           provider=None, timeout=240):
+           provider=None, model=None, timeout=240):
     """把**硬伤清单**交给模型，让它只改有问题的格子，返回新的 spec。
 
     2026-11-03 用户拍板：单次调用没有自我纠错的回路，用一次额外的「补正」
@@ -1380,7 +1416,7 @@ def repair(spec, problems, brief, pages, layout, ratio, style_text,
             {"role": "user", "content": "\n".join(lines)}]
     try:
         text = llm.call_llm(msgs, timeout=timeout, provider=provider,
-                            max_tokens=max(4096, int(pages) * 900))
+                            model=model, max_tokens=max(4096, int(pages) * 900))
     except Exception:                            # noqa: BLE001
         return None, ""
     new_spec, _why = parse_json(text or "")
@@ -1390,7 +1426,7 @@ def repair(spec, problems, brief, pages, layout, ratio, style_text,
 
 
 def write(brief, pages=4, style="", ratio="1024x1536", provider=None,
-          timeout=240, progress=None, layout="", prev="", prev_scene="",
+          model=None, timeout=240, progress=None, layout="", prev="", prev_scene="",
           cast=None, repair_rounds=1):
     """一句话剧情 → 整篇 spec。返回 (spec, raw, error)。
 
@@ -1415,7 +1451,7 @@ def write(brief, pages=4, style="", ratio="1024x1536", provider=None,
     # 白烧一次调用。同 `comic_story.write_story` 的口径。
     budget = max(4096, int(pages) * 900)
     text = llm.call_llm(messages, timeout=timeout, provider=provider,
-                        max_tokens=budget)
+                        model=model, max_tokens=budget)
     raw = text or ""
     spec, why = parse_json(raw)
     if spec is None:
@@ -1447,7 +1483,7 @@ def write(brief, pages=4, style="", ratio="1024x1536", provider=None,
                      len(problems), problems[0][1][:60])
             new_spec, new_raw = repair(spec, problems, brief, pages, layout,
                                        ratio, style_text, provider=provider,
-                                       timeout=timeout)
+                                       model=model, timeout=timeout)
             if not isinstance(new_spec, dict):
                 log.warning("moss 补正没交回可用 JSON，保留一手稿")
                 break

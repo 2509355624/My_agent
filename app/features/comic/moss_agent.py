@@ -1,0 +1,472 @@
+# -*- coding: utf-8 -*-
+"""MOSS 单 Agent 链路：一次写完整本 → 代码体检 → 定向重修 → 再体检。
+
+为什么合并（2026-11-21）
+────────────────────────────
+原来「编剧 AI 写逐格稿 → 每页编译 AI 出 JSON」是 1+N 次请求，7000 字编译契约
+每页重发一遍。3 页下来约 2.3 万 token 输入，其中 2.1 万是同一份约束的重复。
+更大的问题是两个 AI 互不知情：编剧不知道最终 JSON 长什么样，只能写「画面：…」
+让下游猜；下游不知道这句为什么这么写，只能照抄。中间那份 Markdown 是纯损耗。
+
+这里只留一个 AI，让它直接产出最终格式。省下来的注意力放在「写得好不好」上。
+
+自查为什么是代码
+────────────────────────────
+「再问一遍模型你觉得行吗」= 多烧一次钱，还拿不到判据。
+`audit()` 只比事实：格子对不对得上骨架、文字有没有落进格子、外形串有没有原样
+粘上、尾句跟本页有几种人的话是否一致、同一句台词有没有重复。
+判据都是可数的，所以不误判、不重跑没问题的页——把清单交给模型，它只改这几处。
+
+调用预算
+────────────────────────────
+1 次成稿 + 最多 2 次重修；一轮就过就只有 1 次。修完仍不过就交给 autofix 兜底，
+不阻断出图（宁可出一版能改的，也不让人卡在这里）。
+"""
+import json
+import re
+import time
+
+from app.features.comic import moss_twopass as M
+
+STYLE_LOCK = M.STYLE_LOCK
+GIRL_TAIL = M.TAIL_GIRL_ONLY
+BOY_TAIL = M.TAIL_WITH_BOY
+NO_TAIL = M.TAIL_NO_TEXT
+S1_SENT = M.LAYOUT_SENTENCE["S1"]
+L6_SENT = M.LAYOUT_SENTENCE["L6"]
+D1_SENT = M.LAYOUT_SENTENCE["D1"]
+
+MAX_ROUNDS = 2          # 最多重修几轮
+REPAIR_TEMP = 0.3       # 重修时压低随机性，只改点名的错
+
+# 只用这三套：L0（顶条+右通高+左三小，图 1 那套标准格式）、S1、D1。
+# 2026-11-21 撤掉 L6 / L5：它们的窄格是 1:2.3 / 1:3.1 的竖条，人塞进去必然被
+# 拉成竹竿（用户实拍「角色突然变得很高」）。骨架少了，模型也不用挑。
+# 2026-11-21（第二次）：用户拍板「只跑 1 格、2 格、3 格、5 格，4 格不要」，
+# 3 格用 T3（上大横格 + 下两格），5 格只留 L0（顶部条 + 右通高 + 左三小）。
+# D2「左右通高两格」实测 486×1536 = 1:3.2，比 L5 还窄，全身站进去必然拉长——不放进来了。
+AGENT_LAYOUTS = ("L0", "S1", "D1", "T3")
+
+# ── 示例页：L6 五格，密度照这个来 ──
+EXAMPLE = {
+    "layout": "L0",
+    "scene": "1",
+    "summary": {
+        "meta": ["comic", "manga", "screentone"],
+        "canvas": "multi_panel",
+        "caption": (
+            "A black-and-white Japanese manga page divided into five panels: one tall "
+            "dominant panel filling the right side from top to bottom, a narrow left "
+            "column of three small stacked panels, and a thin horizontal establishing "
+            "strip across the very top, all separated by thin white gutters and thick "
+            "black ink borders. Manga page, monochrome, greyscale screentones, inked "
+            "lineart, bold black ink outlines, pen crosshatching. In the dominant right "
+            "panel, a girl about twelve, slender small frame, long straight dark hair "
+            "with soft blunt bangs pulled back by a wide fluffy pale cloth headband, "
+            "large round dark eyes, round soft face, faint blush, wearing a plain "
+            "short-sleeve white track shirt with a small chest number bib, loose white "
+            "running shorts, a dark fabric scrunchie on her left wrist, white ankle "
+            "socks and dark running shoes, stands on the track doing a standing quad "
+            "stretch, one hand pulling her right ankle up behind her, her other arm "
+            "raised for balance. School athletic field late afternoon, a cinder running "
+            "track with faded white lane lines, a low chain-link fence and a row of "
+            "school buildings behind, a water bottle and a small towel on the grass "
+            "edge, paper bunting overhead, long low sun casting stretched screentone "
+            "shadows. Flat screentone shading, clear Chinese text: the girl's words in "
+            "sharp speech bubbles with short pointer tails; no bare text, no off-screen "
+            "speaker."
+        ),
+    },
+    "items": [
+        {"label": "object", "bbox": [-768, -494, -692, 494], "caption": (
+            "Thin top strip panel, establishing view of an empty school athletic field "
+            "in late afternoon: cinder track curving away, faded white lane lines, a low "
+            "chain-link fence, paper bunting strung overhead, a water bottle and a folded "
+            "towel on the grass edge, long shadows raking across the ground. "
+            "No speech bubble and no text in this panel.")},
+        {"label": "character", "bbox": [-692, -262, 754, 494], "caption": (
+            "Tall dominant right panel, full body shot from a low front three-quarter "
+            "angle: a girl about twelve, slender small frame, long straight dark hair "
+            "with soft blunt bangs pulled back by a wide fluffy pale cloth headband, "
+            "large round dark eyes, round soft face, faint blush, plain short-sleeve "
+            "white track shirt with a small chest number bib, loose white running "
+            "shorts, dark fabric scrunchie on her left wrist, white ankle socks, dark "
+            "running shoes, standing on one leg in a standing quad stretch, her right "
+            "hand pulling her right ankle up behind her thigh, her left arm raised out "
+            "for balance, torso upright, head turned slightly toward the viewer, cinder "
+            "track and white lane lines under her standing foot, fence and school "
+            "building far behind. monochrome greyscale screentone, bold black ink "
+            "outline, flat shading, no color cast.")},
+        {"label": "text", "bbox": [364, 124, 667, 441], "text": "再压一下就好",
+         "caption": (
+            "Tall rounded oval speech bubble in the lower right of the dominant panel, "
+            "thin black ink outline, Chinese text written vertically with each "
+            "character stacked top to bottom, 2 columns ordered left to right, short "
+            "pointer tail pointing toward the girl's face.")},
+        {"label": "character", "bbox": [-378, -494, 117, -272], "caption": (
+            "Small left-top panel, close-up of her face from the front: long straight "
+            "dark hair gathered back by the wide pale headband, blunt bangs, large round "
+            "dark eyes, round soft face, faint blush, brows drawn slightly together, a "
+            "bead of sweat at her temple. a girl about twelve, slender small frame, long "
+            "straight dark hair with soft blunt bangs pulled back by a wide fluffy pale "
+            "cloth headband, large round dark eyes, round soft face, faint blush. "
+            "monochrome greyscale screentone, bold black ink outline, flat shading, "
+            "no color cast. No speech bubble and no text in this panel.")},
+        {"label": "character", "bbox": [130, -494, 540, -272], "caption": (
+            "Small left-middle panel, medium shot from behind at three-quarter angle: "
+            "the same girl, long straight dark hair over her back, white track shirt and "
+            "running shorts, both hands pulling the raised ankle toward her hip, chin "
+            "lifted a little, the field and fence beyond her. a girl about twelve, "
+            "slender small frame, long straight dark hair with soft blunt bangs pulled "
+            "back by a wide fluffy pale cloth headband, large round dark eyes, round "
+            "soft face, faint blush. monochrome greyscale screentone, bold black ink "
+            "outline, flat shading, no color cast.")},
+        {"label": "text", "bbox": [178, -446, 306, -366], "text": "一 二 三 四",
+         "caption": (
+            "Rounded oval speech bubble in the upper right of the panel, thin black "
+            "outline, Chinese text written vertically with each character stacked top "
+            "to bottom, 1 column, short pointer tail pointing toward the girl's head.")},
+        {"label": "object", "bbox": [553, -494, 754, -272], "caption": (
+            "Small left-bottom panel, close-up at ground level on the cinder: a dark "
+            "running shoe planted on a faded white lane line, loose ash and small stones "
+            "around the sole, the corner of a folded towel at the edge of the frame. "
+            "No speech bubble and no text in this panel.")},
+    ],
+    "bbox_coord_space": "abs_centralized",
+    "bbox_format": "yxyx",
+}
+
+SYSTEM = """你写黑白日漫整页分镜，直接输出 Layout JSON。输入是一句话题和一个页数，输出是一个 JSON 对象。
+只输出 JSON，不要围栏、不要解释、不要在 JSON 前后写任何字。
+
+════ 输出 ════
+{
+  "title": "标题，12 字以内",
+  "cast": {"girl": "英文外形串"},
+  "scenes": {"1": "英文场景串", "2": "..."},
+  "pages": [ 每页一个对象，字段如下 ]
+}
+每页：{"layout": "L0", "scene": "1", "summary": {...}, "items": [...],
+        "bbox_coord_space": "abs_centralized", "bbox_format": "yxyx"}
+
+════ 一页怎么想 ════
+一页只放一个地点、一个动作。读者翻过这页，要能说出「她刚做了什么」。
+写之前先定三件事：她现在在哪、身体停在什么姿势、脸上是什么表情。
+动作写成已经定住的静态结果：her right hand pulling her right ankle up behind her thigh。
+一页的动作写一件事；换地点就换页，不在一页里跨两个房间。
+上一页结尾她在哪、身上有什么，下一页第一格还在那儿。
+
+════ 字（跟着格数走，别让五格页只有一句话） ════
+一格页 0~2 句；两格页 1~3 句；三格页 2~4 句；五格页 3~5 句。
+台词一句一个意思，十来个字，落在说话人自己在的那一格。
+旁白只在「不看字就看不懂这一格」时写一句，写在这一格左上角。
+单个格子可以完全没有字——特写本身就说清了，就别硬塞；但**整页空得只剩一句**，读者会不知道这一页发生了什么。
+
+════ 骨架（只有这四种，bbox 整组照抄，一个字符都不许改） ════
+L0 · 五格 · 顶条建场 + 右通高主格 + 左栏三小
+  [-768, -494, -692, 494]   顶条
+  [-692, -262, 754, 494]    右通高主格
+  [-378, -494, 117, -272]   左上小格
+  [130, -494, 540, -272]    左中小格
+  [553, -494, 754, -272]    左下小格
+S1 · 一格 · 一页只装一个瞬间（一张脸、一双手、一个对视）
+  [-768, -494, 768, 494]
+D1 · 两格 · 上下（同一空间里前后两个动作：递出去 → 接住）
+  [-768, -494, -8, 494]    [8, -494, 768, 494]
+T3 · 三格 · 上大横格 + 下两格（上面一个主画面，下面两处补充）
+  [-768, -494, 96, 494]
+  [112, -494, 768, -8]      [112, 8, 768, 494]
+
+选法：一页一拍就 S1；一页两个动作 D1；一个主画面加两处补充 T3；
+一整段过程（建场 → 动作 → 反应）才用 L0。
+默认往少格走，一页能用一个画面讲完就不要拆。**永远不做四格**，也不要做左右通高的两格
+（486×1536 那种会把人物拉长），更不要自己发明窄竖条。
+窄格只放局部：左栏三小只放脸、手、脚、道具这些特写，**全身只放在 S1 或 L0 的右通高主格**。
+相邻两页换着用，不要连着两页同一个骨架。
+格号 = 阅读顺序：从上到下、从左到右。L0 是 顶条 → 右通高主格 → 左上 → 左中 → 左下；T3 是 上主格 → 下左 → 下右。
+一格一条 character 或 object，bbox 正好等于这一格，整组不许增删、不许重叠、不许跨骨架借格。
+
+════ summary.caption：一整段英文，连着写完，不分行不标号 ════
+依次写这五样，用逗号句号连起来：
+① 分格：A black-and-white Japanese manga page divided into five panels: one tall dominant panel filling the right side from top to bottom, a narrow left column of three small stacked panels, and a thin horizontal establishing strip across the very top, separated by thin white gutters and thick black ink borders.
+② 画风：Manga page, monochrome, greyscale screentones, inked lineart, bold black ink outlines, pen crosshatching.
+③ 主格：景别 + 她在做什么 + 完整外形串（从 cast 逐字抄，不缩写不调序）+ 构图位置
+④ 场景：地点 + 时间 + 光源 + 两三个具体物件
+⑤ 文字：有字写 Flat screentone shading, clear Chinese text: the girl's words in sharp speech bubbles with short pointer tails；
+   本页还有男主画外话，补 the off-screen boy's words as white-outlined bare text with no bubble；
+   整页没有字写 no text and no speech bubbles anywhere on the page.
+全英文，一个汉字都不许有。
+
+════ items ════
+character：这一格画什么 —— 景别 + 定住的姿势 + 该角色完整外形串（原样连续粘贴）+ 结尾固定写
+  monochrome greyscale screentone, bold black ink outline, flat shading, no color cast.
+object：空镜或道具 + 结尾固定写 No speech bubble and no text in this panel.
+text：只写容器形状和字的排法，台词内容只进 text 字段。
+  女生的话：Vertical rounded speech bubble with a thin black ink outline, Chinese text written vertically with each character stacked top to bottom, N columns ordered left to right, short pointer tail pointing toward the girl's face, compact bubble.
+  男主画外的话：Boy plain text: bare Chinese dialogue overlaid directly on the panel, thick white outline around every character, NO speech bubble, no bubble tail, no enclosing frame, Chinese text written vertically with each character stacked top to bottom, N columns ordered left to right.
+  旁白：Small rectangular caption box in the upper corner of this panel, Chinese text set vertically in columns read left to right, no bubble tail.
+**多列中文一律从左往右排**：句首落在最左一列，读者按最左列 → 右边列的顺序读（不要说 right to left）。
+每个 label=text 的 item 必须带 text 字段：这句原文，一字不改，不留空。
+
+════ 文字框 bbox（格 [y0,x0,y1,x1]，h=y1-y0，w=x1-x0，算完取整） ════
+气泡从下往上叠：第1条 [y0+0.74h, x1-0.49w, y0+0.95h, x1-0.07w]
+              第2条 [y0+0.50h, x1-0.49w, y0+0.71h, x1-0.07w]
+              第3条 [y0+0.26h, x1-0.49w, y0+0.47h, x1-0.07w]
+男主裸字贴右上：第1条 [y0+0.04h, x0+0.55w, y0+0.26h, x1-0.07w]
+              第2条 [y0+0.28h, x0+0.55w, y0+0.48h, x1-0.07w]
+旁白贴左上，往下叠：[y0+0.04h, x0+0.07w, y0+0.25h, x0+0.56w]
+                  [y0+0.27h, x0+0.07w, y0+0.48h, x0+0.56w]
+框离格边至少留 2%。气泡宽度约为格宽的 42%。同一格多句，先说的在上。
+
+════ 画什么 ════
+镜头就是男主的眼睛：画面里只有女生，可以有两三个女生同框。
+男主是镜头后的人、不入画；需要他的手写 pov hands / disembodied hand，要他的声音用画外裸字。
+人物镜头最紧到中近景：medium close-up with head and shoulders in frame。
+只写明暗、材质、网点，不写颜色词。
+外形串是唯一事实源：cast 写了几项，每一格就抄几项，不缩写、不调序、不改词。
+双人同框时第二个人开头显式互斥：In sharp contrast, the other girl has NO long hair, NO headband。
+衣物以 cast 为基准，只写已经发生的变化（sleeves rolled up / cardigan slipped off one shoulder）。
+
+════ 一页长这样（照这个密度和写法，不要缩水） ════
+""" + json.dumps(EXAMPLE, ensure_ascii=False, indent=1) + """
+
+现在把话题写成 pages。"""
+
+
+# ══════════════════════ 体检 ══════════════════════
+def _cells(p):
+    return [tuple(i.get("bbox") or ()) for i in (p.get("items") or [])
+            if i.get("label") in ("character", "object")]
+
+
+def _texts(p):
+    return [i for i in (p.get("items") or []) if i.get("label") == "text"]
+
+
+def _overlap(a, b):
+    if len(a) != 4 or len(b) != 4:
+        return False
+    return (min(a[2], b[2]) - max(a[0], b[0]) > 1
+            and min(a[3], b[3]) - max(a[1], b[1]) > 1)
+
+
+def _inside(tb, cb, pad=0):
+    if len(tb) != 4 or len(cb) != 4:
+        return False
+    return (tb[0] >= cb[0] - pad and tb[1] >= cb[1] - pad
+            and tb[2] <= cb[2] + pad and tb[3] <= cb[3] + pad)
+
+
+def _cast_segs(spec_str):
+    return [s.strip() for s in re.split(r"[,，]", spec_str or "") if s.strip()]
+
+
+def audit(js, cap=12):
+    """只看可数的事实。返回 `(blocking, warns)`。
+
+    `blocking` 是要模型改的：代码补不回来的（格子对不上骨架、文字跑出格子、
+    外形串漏项、台词重复）。`warns` 是代码能兜底的（尾句、页数超限、空字段），
+    只记进报告，不拿它去多烧一次重修——autofix 会重建 summary、截断页数。
+    """
+    out = []
+    warns = []
+    pgs = js.get("pages") or []
+    if not pgs:
+        return ["没有产出任何页"], []
+    if len(pgs) > cap:
+        warns.append("页数 %d 超过上限 %d（会截断）" % (len(pgs), cap))
+
+    cast = js.get("cast") or {}
+    girl_segs = _cast_segs(cast.get("girl") or "")
+    if not girl_segs:
+        out.append("cast 里没有 girl 外形串")
+    elif len(girl_segs) < 6:
+        out.append("cast 的 girl 外形串只有 %d 项，太少（要写满 8 项）" % len(girl_segs))
+
+    seen_lines = {}
+    for n, p in enumerate(pgs, 1):
+        lay = (p.get("layout") or "").strip().upper()
+        sk = M.SKELETONS.get(lay) if lay in AGENT_LAYOUTS else None
+        if not sk:
+            out.append("第%d页：版式 %r 不在 L0/S1/D1/T3 里（只允许 1、2、3、5 格，不要四格、不要左右通高两格）"
+                       % (n, lay))
+            continue
+        cells = _cells(p)
+        if sorted(cells) != sorted(tuple(c) for c in sk):
+            miss = [c for c in sk if tuple(c) not in cells]
+            extra = [c for c in cells if list(c) not in sk]
+            msg = "第%d页：格子跟 %s 对不上" % (n, lay)
+            if miss:
+                msg += "，缺 %s" % miss
+            if extra:
+                msg += "，多出 %s" % extra
+            out.append(msg)
+        for i in range(len(cells)):
+            for k in range(i + 1, len(cells)):
+                if _overlap(cells[i], cells[k]):
+                    out.append("第%d页：格子重叠 %s / %s" % (n, list(cells[i]), list(cells[k])))
+
+        # 每个格子都要有人或物
+        for c in sk:
+            if tuple(c) not in cells:
+                out.append("第%d页：格 %s 里没有 character/object" % (n, list(c)))
+
+        # 文字：必须有 text、必须落在某个格子里
+        tcnt = 0
+        for t in _texts(p):
+            tcnt += 1
+            txt = (t.get("text") or "").strip()
+            if not txt:
+                out.append("第%d页：有一条 text item 的 text 是空的" % n)
+                continue
+            if len(txt) > 26:
+                out.append("第%d页：「%s」太长（%d 字），拆成两框" % (n, txt[:12], len(txt)))
+            tb = tuple(t.get("bbox") or ())
+            # 文字框位置由 autofix 按公式重排，模型算歪了不算它的错
+            if not any(_inside(tb, c, pad=8) for c in sk):
+                warns.append("第%d页：「%s」的框算到格子外了（autofix 会重排）"
+                             % (n, txt[:10]))
+            if seen_lines.get(txt):
+                out.append("第%d页：「%s」在第%d页已经用过，换一句"
+                           % (n, txt[:12], seen_lines[txt]))
+            else:
+                seen_lines[txt] = n
+        if tcnt > 6:
+            warns.append("第%d页：文字 %d 条，可能挤" % (n, tcnt))
+
+        # 尾句由 autofix 按本页实际文字改写（retail_caption），这里只记一笔
+        caption = ((p.get("summary") or {}).get("caption") or "").lower()
+        has_boy = any("boy plain text" in (t.get("caption") or "").lower() for t in _texts(p))
+        if caption and "off-screen boy" in caption and not has_boy:
+            warns.append("第%d页：尾句写了男主画外音，但本页没有男主裸字（autofix 改尾句）" % n)
+        if caption and has_boy and "off-screen boy" not in caption:
+            warns.append("第%d页：本页有男主裸字，尾句没写（autofix 改尾句）" % n)
+
+        # 外形串是否原样粘贴
+        chars = [i for i in (p.get("items") or []) if i.get("label") == "character"]
+        for ch in chars:
+            cc = (ch.get("caption") or "").lower()
+            if "1girl" not in cc:
+                continue
+            miss = [s for s in girl_segs if s.lower() not in cc]
+            if miss:
+                out.append("第%d页：人物 caption 漏了外形串 %s"
+                           % (n, "、".join("「%s」" % m for m in miss[:3])))
+                break
+
+    return out, warns
+
+
+# ══════════════════════ 链路 ══════════════════════
+def _repair_user(brief, pages, js, issues):
+    return ("话题：%s\n目标 %d 页。\n\n"
+            "下面这版稿子体检没过，问题都列出来了，逐条改掉，其余内容保持原样。\n\n"
+            "== 体检不通过 ==" % (brief, pages)
+            + "\n".join("- " + x for x in issues)
+            + "\n\n== 现有稿子 ==\n"
+            + json.dumps(js, ensure_ascii=False)
+            + "\n\n输出改好之后的完整 JSON，结构和字段与原来一致，只输出 JSON。")
+
+
+def generate(brief, pages, call, progress=None):
+    """一次成稿 → 代码体检 → 定向重修（最多 MAX_ROUNDS 轮）→ 每页 autofix。
+
+    返回 `(spec, report)`，spec 与 moss_twopass.generate 同构：
+    每页带 `prompt_override`（整页 Layout JSON），下游一行不用改。
+    """
+    say = progress or (lambda msg: None)
+    t0 = time.time()
+    cap = max(1, int(pages or 1))
+    user = ("话题：%s\n\n写成 %d 页，%d 是上限——素材只够 %d 页就写 %d 页。"
+            "\n每页按上面的规矩写好 layout / summary / items，一次输出整本。"
+            % (brief, cap, cap, cap, cap))
+
+    rounds = []
+    say("单 Agent 成稿（上限 %d 页）…" % cap)
+    raw = call(SYSTEM, user, max_tokens=16000, temperature=0.85, tag="agent_p0") or ""
+    js = M.pick_json(raw)                    # 解析不了直接抛，交给上层 502
+
+    issues, warns = audit(js, cap)
+    rounds.append({"round": 0, "issues": issues, "warns": warns, "chars": len(raw)})
+    say("体检：%s" % ("通过" if not issues else "%d 条待修" % len(issues)))
+
+    for r in range(1, MAX_ROUNDS + 1):
+        if not issues:
+            break
+        say("第 %d 轮重修（%d 条）…" % (r, len(issues)))
+        # 首轮把问题全给它；后几轮只给仍然没过的
+        raw2 = call(SYSTEM, _repair_user(brief, cap, js, issues),
+                    max_tokens=16000, temperature=REPAIR_TEMP,
+                    tag="agent_fix%d" % r) or ""
+        try:
+            js2 = M.pick_json(raw2)
+        except Exception:                      # noqa: BLE001 - 修坏了就保留上一版
+            say("第 %d 轮没解析出 JSON，保留上一版" % r)
+            rounds.append({"round": r, "issues": ["解析失败"], "chars": len(raw2)})
+            break
+        new_issues, new_warns = audit(js2, cap)
+        rounds.append({"round": r, "issues": new_issues, "warns": new_warns,
+                       "chars": len(raw2)})
+        # 只有变好才收（问题数变多说明它改崩了）
+        if len(new_issues) <= len(issues):
+            js, issues, warns = js2, new_issues, new_warns
+        else:
+            say("第 %d 轮改完问题更多，保留上一版" % r)
+            break
+        say("复查：%s" % ("通过" if not issues else "还剩 %d 条" % len(issues)))
+
+    pgs = (js.get("pages") or [])[:cap]
+    if not pgs:
+        raise RuntimeError("单 Agent 没有产出任何一页")
+
+    out_pages, report_pages = [], []
+    prev_layout = None
+    for n, p in enumerate(pgs, 1):
+        lay = (p.get("layout") or "").strip().upper()
+        if lay not in AGENT_LAYOUTS:
+            n_cells = len(_cells(p)) or 1
+            lay = {1: "S1", 2: "D1", 3: "T3"}.get(n_cells, "L0")
+        pure = {k: v for k, v in p.items() if not k.startswith("_")}
+        pj = json.loads(json.dumps(pure))
+        try:
+            notes = M.autofix(pj, js.get("cast"), None, lay,
+                              (js.get("scenes") or {}).get(p.get("scene") or "1") or "",
+                              audit_narr=False, rebuild=False)
+        except Exception as exc:                # noqa: BLE001 - autofix 崩了也要能出图
+            notes = ["autofix 失败：%s" % exc]
+        try:
+            issues_p = M.check_page(pj, n, js.get("cast"), lay, None)
+        except Exception as exc:                # noqa: BLE001
+            issues_p = ["check_page 失败：%s" % exc]
+        pure = {k: v for k, v in pj.items() if not k.startswith("_")}
+        out_pages.append({
+            "n": n, "layout": lay,
+            "grid": len(M.SKELETONS.get(lay) or []),
+            "beat": "", "core": "", "hook": "",
+            "scene": (js.get("scenes") or {}).get(p.get("scene") or "1") or "",
+            "plan": M._plan_from(pj),          # noqa: SLF001
+            "panels": M.layout_to_panels(pj),
+            "prompt_override": json.dumps(pure, ensure_ascii=False),
+        })
+        report_pages.append({"n": n, "layout": lay,
+                             "grid": len(M.SKELETONS.get(lay) or []),
+                             "issues": issues_p + issues,
+                             "autofix": notes})
+        prev_layout = M.detect_layout(pj) or prev_layout
+
+    title = (js.get("title") or "").strip()
+    if len(title) > 18:
+        title = ""
+    spec = {"title": title or (brief[:10] or "未命名"),
+            "style": (js.get("scenes") or {}).get("1") or "",
+            "cast": js.get("cast") or {},
+            "pages": out_pages}
+    return spec, {
+        "mode": "agent",
+        "rounds": rounds,
+        "pass": not issues,
+        "pages": report_pages,
+        "script_issues": issues,
+        "warns": warns,
+        "secs": round(time.time() - t0, 1),
+    }

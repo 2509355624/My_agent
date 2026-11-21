@@ -98,7 +98,12 @@
     background: #0d0d14; min-height: 240px; }
   .canvas .ph { color: var(--text-mute); font-size: 12px; text-align: center;
     padding: 60px 20px; line-height: 1.8; }
-  .canvas img { width: 100%; border-radius: var(--radius-sm); display: block; cursor: zoom-in; }
+  .canvas img { width: 100%; border-radius: var(--radius-sm); display: block; cursor: zoom-in;
+    /* 2026-11-21：点图偶尔整片蓝屏＝浏览器把图片当文本选中了。禁选中 / 禁拖拽 /
+       禁长按菜单 / 禁触摸高亮，四条一起堵死，别只加一条——触发方式不止一种。 */
+    user-select: none; -webkit-user-select: none; -webkit-user-drag: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  .canvas { user-select: none; -webkit-user-select: none; }
   .panels { display: grid; gap: 8px; }
   .panel { border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
     padding: 8px; background: #0f0f17; }
@@ -124,9 +129,31 @@
   #hist select { max-width: 320px; }
 
   #zoom { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.92);
-    z-index: 30; align-items: center; justify-content: center; cursor: zoom-out; }
+    z-index: 30; align-items: center; justify-content: center; cursor: zoom-out;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent; }
   #zoom.on { display: flex; }
-  #zoom img { max-width: 94vw; max-height: 94vh; }
+  #zoom img { max-width: 90vw; max-height: 88vh; cursor: default;
+    /* 图片本身不接事件：既防选中蓝屏，也让点图等同点遮罩（关闭）。 */
+    pointer-events: none; user-select: none; -webkit-user-select: none;
+    -webkit-user-drag: none; -webkit-touch-callout: none; }
+  #zoom .zbtn { position: absolute; top: 50%; transform: translateY(-50%);
+    width: 46px; height: 68px; border-radius: 10px; z-index: 2;
+    background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.32);
+    color: #fff; font-size: 30px; line-height: 1; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; }
+  #zoom .zbtn:hover:not(:disabled) { background: rgba(255,255,255,.3); }
+  #zoom .zbtn:disabled { opacity: .25; cursor: default; }
+  #zoom .zprev { left: 18px; }
+  #zoom .znext { right: 18px; }
+  #zoom .zpage { position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
+    z-index: 2; color: #fff; font-size: 13px; background: rgba(0,0,0,.55);
+    padding: 4px 12px; border-radius: 12px; }
+  @media (max-width: 640px) {
+    #zoom .zbtn { width: 38px; height: 56px; font-size: 25px; }
+    #zoom .zprev { left: 6px; }
+    #zoom .znext { right: 6px; }
+  }
   #toast { position: fixed; left: 50%; bottom: 32px; transform: translateX(-50%);
     background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
     padding: 9px 16px; border-radius: 20px; font-size: 13px; display: none; z-index: 40;
@@ -220,6 +247,16 @@
       <div class="spacer"></div>
       <button class="btn primary" id="btn-write">让编剧写剧本</button>
     </div>
+    <div class="row" style="margin-top:8px;align-items:center;gap:8px">
+      <span style="font-size:12px;color:var(--text-dim)">编剧模型</span>
+      <select id="prov" title="渠道；选中的当链头，失败自动降级" style="min-width:150px">
+        <option value="">— 加载中 —</option>
+      </select>
+      <select id="model" title="具体模型；留空用该渠道默认" style="min-width:170px">
+        <option value="">（默认模型）</option>
+      </select>
+      <span style="font-size:11px;color:var(--text-dim)">选中项优先，挂了自动走降级链</span>
+    </div>
     <details class="note">
       <summary>说明</summary>
       <div class="hint">编剧只写「这一格画什么」，画风串、人物外形由脚本注入 → 格与格不会串味。
@@ -273,7 +310,12 @@
 
 </div>
 
-<div id="zoom"><img id="zoomimg" alt=""></div>
+<div id="zoom">
+  <button type="button" class="zbtn zprev" id="zprev" aria-label="上一页">‹</button>
+  <img id="zoomimg" alt="">
+  <button type="button" class="zbtn znext" id="znext" aria-label="下一页">›</button>
+  <span class="zpage" id="zpage"></span>
+</div>
 <div id="toast"></div>
 
 <script>
@@ -289,7 +331,7 @@ var LAYOUT_LABEL = {
   single: "单格", "2h": "两格·上下", "3h": "三格·上中下",
   "3t": "三格·上大下二小", "2x2": "四格 2×2"
 };
-var LAYOUT_N = { S1: 1, D1: 2, D2: 2, L0: 5, L1: 5, L2: 4, L3: 6, L4: 3, L5: 3,
+var LAYOUT_N = { S1: 1, D1: 2, D2: 2, T3: 3, L0: 5, L1: 5, L2: 4, L3: 6, L4: 3, L5: 3, L6: 5,
                  single: 1, "2h": 2, "3h": 3, "3t": 3, "2x2": 4 };
 
 function $(id) { return document.getElementById(id); }
@@ -326,6 +368,63 @@ async function api(path, body) {
   return j;
 }
 
+/* ══ 编剧模型选择（同漫画工作台：两级下拉 + 选中项当链头，失败自动降级）══ */
+var MOSS_PROVIDERS = [];
+var LS_MOSS_LLM = 'moss_llm_choice';
+function rememberMossLlm() {
+  try {
+    localStorage.setItem(LS_MOSS_LLM, JSON.stringify({
+      provider: $("prov").value, model: $("model").value
+    }));
+  } catch (e) { /* 隐私模式下 localStorage 不可用，忽略 */ }
+}
+function savedMossLlm() {
+  try { return JSON.parse(localStorage.getItem(LS_MOSS_LLM) || '{}') || {}; }
+  catch (e) { return {}; }
+}
+async function loadMossProviders() {
+  try {
+    // scope=comic：把「漫画台可见」的自定义中转站一起要回来（和 comic_studio 同源）
+    var d = await (await fetch('/api/providers?scope=comic')).json();
+    MOSS_PROVIDERS = d.providers || [];
+    var sel = $("prov");
+    sel.innerHTML = MOSS_PROVIDERS.map(function (p) {
+      return '<option value="' + esc(p.id) + '">' + esc(p.label)
+        + (p.custom ? ' · 自定义' : '') + '</option>';
+    }).join('');
+    var want = savedMossLlm();
+    if (want.provider && MOSS_PROVIDERS.some(function (p) { return p.id === want.provider; })) {
+      sel.value = want.provider;
+    } else if (d.default && MOSS_PROVIDERS.some(function (p) { return p.id === d.default; })) {
+      sel.value = d.default;
+    }
+    await loadMossModels();
+  } catch (e) { /* 拉不到就留空，请求里不传 = 走后端默认链 */ }
+}
+async function loadMossModels() {
+  var pid = $("prov").value;
+  var meta = MOSS_PROVIDERS.filter(function (p) { return p.id === pid; })[0] || {};
+  var sel = $("model");
+  sel.innerHTML = '<option value="">（' + esc(meta.label || pid || '默认') + ' 默认模型）</option>';
+  if (!pid) return;
+  try {
+    var d = await (await fetch('/api/models?provider=' + encodeURIComponent(pid))).json();
+    var ids = ((d && d.models) || []).filter(function (m) { return !m.retiring; })
+      .map(function (m) { return m.id; });
+    if (ids.length) {
+      sel.innerHTML = '<option value="">（默认：' + esc(ids[0]) + '）</option>'
+        + ids.map(function (id) {
+            return '<option value="' + esc(id) + '">' + esc(id) + '</option>';
+          }).join('');
+    }
+    var want = savedMossLlm();
+    if (want.provider === pid && want.model
+        && [].some.call(sel.options, function (o) { return o.value === want.model; })) {
+      sel.value = want.model;
+    }
+  } catch (e) { /* 静默：留一个「默认模型」项 */ }
+}
+
 /* ══ 编剧 ══════════════════════════════════════════════════ */
 async function doWrite() {
   var brief = $("brief").value.trim();
@@ -341,6 +440,11 @@ async function doWrite() {
           : "编剧正在写剧本（几秒）…");
   try {
     var payload = { brief: brief, pages: nPages };
+    // 编剧模型：选中项当链头，后端 llm 层失败自动降级；留空走全局默认链
+    if ($("prov") && $("prov").value) {
+      payload.provider = $("prov").value;
+      if ($("model") && $("model").value) payload.model = $("model").value;
+    }
     // 双段模式的版式与画风由链路自己定，这两个值连传都不传，省得后端还要忽略
     if (!two) { payload.layout = $("layout").value; payload.style = style; }
     var r = await api(two ? "/api/moss/two_agent" : "/api/moss/write", payload);
@@ -354,8 +458,14 @@ async function doWrite() {
     loadList();
     /* 结构提醒只提示、不改剧本：把「格数对不上、有东西没落进任何一格」
        这类事实摆出来，判断留给编剧自己，原文照旧落盘给人看。 */
-    var notes = (r.two_agent && r.two_agent.notes) || [];
-    if (notes.length) {
+    var ta = r.two_agent || {};
+    var notes = ta.notes || [];
+    if (ta.engine === "agent" && !notes.length) {
+      var rn = (ta.rounds || []).length;
+      bar("写好了：一次成稿 → 代码体检"
+          + (rn > 1 ? " → 修 " + (rn - 1) + " 轮 → 通过" : " → 通过")
+          + "（" + (ta.secs || "?") + " 秒）");
+    } else if (notes.length) {
       bar("剧本结构提醒：" + notes.join("；"));
     } else if (r.issues && r.issues.length) {
       toast("剧本有 " + r.issues.length + " 条体检提示，看剧本区");
@@ -733,6 +843,40 @@ async function draw(pageNo, reroll) {
   setTimeout(startPoll, 3000);
 }
 
+/* ══ 放大看图：蓝屏防护 + 左右翻页（2026-11-21） ══════════════
+   蓝屏是浏览器把图片当文本选中。CSS 四条（禁选中 / 禁拖拽 / 禁长按菜单 /
+   禁触摸高亮）已经堵死，这里再拦 dragstart 和 zoom 内的 selectstart。
+   翻页只收「当前已经出图的页」：没出图的不算，页码按画布出现顺序。 */
+var Z = { list: [], i: 0 };
+
+function zoomCollect() {
+  var out = [];
+  document.querySelectorAll('.canvas img[data-role="img"]').forEach(function (im) {
+    if (im.style.display !== "none" && im.getAttribute("src")) out.push(im);
+  });
+  return out;
+}
+function zoomShow(i) {
+  if (!Z.list.length) return;
+  Z.i = (i + Z.list.length) % Z.list.length;
+  $("zoomimg").src = Z.list[Z.i].src;
+  $("zpage").textContent = (Z.i + 1) + " / " + Z.list.length;
+  var many = Z.list.length > 1;
+  $("zprev").disabled = !many;
+  $("znext").disabled = !many;
+}
+function zoomOpen(im) {
+  Z.list = zoomCollect();
+  var idx = Z.list.indexOf(im);
+  zoomShow(idx < 0 ? 0 : idx);
+  $("zoom").className = "on";
+}
+function zoomClose() {
+  $("zoom").className = "";
+  Z.list = [];
+  $("zoomimg").removeAttribute("src");
+}
+
 document.addEventListener("click", function (e) {
   var b = e.target.closest && e.target.closest("button[data-act]");
   if (b) {
@@ -741,12 +885,27 @@ document.addEventListener("click", function (e) {
     return;
   }
   var img = e.target;
-  if (img.tagName === "IMG" && img.closest(".canvas")) {
-    $("zoomimg").src = img.src;
-    $("zoom").className = "on";
+  if (img.tagName === "IMG" && img.closest(".canvas")) zoomOpen(img);
+});
+$("zoom").addEventListener("click", function (e) {
+  if (e.target.closest && e.target.closest(".zbtn")) return;
+  zoomClose();
+});
+$("zoom").addEventListener("selectstart", function (e) { e.preventDefault(); });
+$("zprev").addEventListener("click", function (e) { e.stopPropagation(); zoomShow(Z.i - 1); });
+$("znext").addEventListener("click", function (e) { e.stopPropagation(); zoomShow(Z.i + 1); });
+document.addEventListener("dragstart", function (e) {
+  var t = e.target;
+  if (t && t.tagName === "IMG" && (t.closest(".canvas") || t.id === "zoomimg")) {
+    e.preventDefault();
   }
 });
-$("zoom").addEventListener("click", function () { $("zoom").className = ""; });
+document.addEventListener("keydown", function (e) {
+  if (!$("zoom").classList.contains("on")) return;
+  if (e.key === "Escape") { zoomClose(); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); zoomShow(Z.i - 1); }
+  else if (e.key === "ArrowRight") { e.preventDefault(); zoomShow(Z.i + 1); }
+});
 
 $("btn-write").addEventListener("click", doWrite);
 
@@ -820,6 +979,11 @@ $("histsel").addEventListener("change", async function () {
 /* 打开页面：有最近任务就自动切到最新那个，省一步 */
 (async function boot() {
   loadLoras();
+  if ($("prov")) {
+    $("prov").addEventListener("change", function () { rememberMossLlm(); loadMossModels(); });
+    if ($("model")) $("model").addEventListener("change", rememberMossLlm);
+    await loadMossProviders();
+  }
   await loadList();
   var first = $("histsel").options[1];
   if (!first) return;
