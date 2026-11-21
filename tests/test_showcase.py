@@ -252,13 +252,17 @@ class ShowcaseTest(unittest.TestCase):
         """
         data = self.client.get("/api/showcase/config", headers=self.headers).get_json()
         self.assertEqual([s["id"] for s in data["image_skills"]],
-                         ["silver", "krea2-jiguang-1x"])
+                         ["silver", "krea2-jiguang"])
         self.assertEqual(data["default_image_skill"], "silver")
         self.assertEqual(data["image_scenes"][0]["channel"], "Silver · 现场生成")
         self.assertEqual(data["image_scenes"][0]["channel_suffix"], "现场生成")
 
     def test_channel_switch_drives_the_workflow(self):
-        """访客切到 krea2：工作流渠道、入队 skill、链路文案三处都要跟着换。"""
+        """访客切到 krea2：工作流渠道、入队 skill、链路文案三处都要跟着换。
+
+        2026-11-21：单次档（`krea2-jiguang-1x`）下架，展示页这条改成完整版
+        `krea2-jiguang`——白名单里留着下架渠道，访客点它会静默降级成 Silver。
+        """
         job = _FakeJob()
         with mock.patch.object(showcase_api, "build_t2i_workflow",
                                return_value={"1": {"class_type": "SaveImage"}}) as build, \
@@ -266,22 +270,24 @@ class ShowcaseTest(unittest.TestCase):
                                   return_value=(job, None)) as enqueue:
             response = self.client.post(
                 "/api/showcase/image/submit", headers=self.headers,
-                json={"scene_id": "rainy_bookstore", "skill": "krea2-jiguang-1x"})
+                json={"scene_id": "rainy_bookstore", "skill": "krea2-jiguang"})
         self.assertEqual(response.status_code, 202)
         body = response.get_json()["job"]
-        self.assertEqual(build.call_args.args[0], "krea2-jiguang-1x")
-        self.assertEqual(enqueue.call_args.kwargs["skill"], "krea2-jiguang-1x")
-        self.assertEqual(body["scene"]["skill"], "krea2-jiguang-1x")
-        self.assertIn("krea2 极光单次", body["scene"]["channel"])
+        self.assertEqual(build.call_args.args[0], "krea2-jiguang")
+        self.assertEqual(enqueue.call_args.kwargs["skill"], "krea2-jiguang")
+        self.assertEqual(body["scene"]["skill"], "krea2-jiguang")
+        self.assertIn("krea2 极光", body["scene"]["channel"])
 
     def test_unknown_channel_falls_back_to_silver(self):
         """请求体里的 skill 只能取白名单，别的值一律回落默认档。
 
-        展示页是公网、没有登录——不能让人靠改请求体点名完整版极光、moss
-        或任何内部渠道。回落而不是报错：页面文案变了、渠道没跟着变，也不能
-        把访客卡在 400 上。
+        展示页是公网、没有登录——不能让人靠改请求体点名任意工作流。回落而不是
+        报错：页面文案变了、渠道没跟着变，也不能把访客卡在 400 上。
+
+        `krea2-jiguang-1x` 在名单里是**故意的**：它是 2026-11-21 下架的单次档，
+        拿它当「过期渠道」样本，谁要是把它加回白名单，这条立刻会红。
         """
-        for bogus in ("krea2-jiguang", "moss", "", "   ", None, "../../etc/passwd"):
+        for bogus in ("krea2-jiguang-1x", "moss", "", "   ", None, "../../etc/passwd"):
             with self.subTest(skill=bogus):
                 with showcase_api._LOCK:
                     showcase_api._SESSIONS.clear()
@@ -308,10 +314,10 @@ class ShowcaseTest(unittest.TestCase):
             response = self.client.post(
                 "/api/showcase/image/submit", headers=self.headers,
                 json={"mode": "ai", "prompt": "画只猫",
-                      "skill": "krea2-jiguang-1x"})
+                      "skill": "krea2-jiguang"})
         self.assertEqual(response.status_code, 202)
-        self.assertEqual(translate.call_args.kwargs.get("skill"), "krea2-jiguang-1x")
-        self.assertEqual(build.call_args.args[0], "krea2-jiguang-1x")
+        self.assertEqual(translate.call_args.kwargs.get("skill"), "krea2-jiguang")
+        self.assertEqual(build.call_args.args[0], "krea2-jiguang")
 
     def test_custom_prompt_requires_text_and_respects_length_cap(self):
         empty = self.client.post(

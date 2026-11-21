@@ -79,9 +79,8 @@ def roleplay_system(mode="guide"):
 # （空、内部渠道 id、别的重渠道）一律回落 `DEFAULT_IMAGE_SKILL`。展示页是
 # 公网、没有登录，不能让人靠改请求体点名任意工作流。
 #
-# ⚠️ 只放 `krea2-jiguang-1x`（单次采样、1024×1536、约 25~40 秒），**不要**
-# 换成完整版 `krea2-jiguang`：那条要跑两段采样 + 2x 超分，90~210 秒，
-# 访客等不起，显存也吃得更满。
+# ⚠️ 只放现在还活着的渠道：`krea2-jiguang-1x`（单次档）2026-11-21 已下架，
+# 不要再放回去——那会在访客点按钮时静默降级成 Silver。
 IMAGE_SKILLS = [
     {
         "id": "silver",
@@ -90,10 +89,17 @@ IMAGE_SKILLS = [
         "channel": "Silver",
     },
     {
-        "id": "krea2-jiguang-1x",
+        # 2026-11-21：原来这里是极光**单次档**（`krea2-jiguang-1x`，25~40 秒）。
+        # 用户当天拍板「去除 krea2 1x」，渠道进了 `skills.ARCHIVED_SKILLS`，
+        # 展示页这条跟着换回完整版——不换的话访客点它会静默降级成 Silver，
+        # 按钮还在、效果没了，属于最难查的那种坏。
+        # ⚠️ 代价：完整版是两段采样 + 2x 超分，90~210 秒，且更吃显存。展示页
+        # 是公网「现场生成」，访客等不等得起要单独定——不满意就整条删掉，
+        # 别把这里再改回单次档（那个渠道已经没了）。
+        "id": "krea2-jiguang",
         "label": "krea2 极光",
-        "note": "分辨率更高 · 慢一些",
-        "channel": "krea2 极光单次",
+        "note": "细节更多 · 要等约两分钟",
+        "channel": "krea2 极光",
     },
 ]
 DEFAULT_IMAGE_SKILL = "silver"
@@ -107,7 +113,7 @@ def image_skill(skill=None):
 
 
 def image_channel(skill=None, suffix="现场生成"):
-    """渠道展示文案：`Silver · 现场生成` / `krea2 极光单次 · 现场生成`。"""
+    """渠道展示文案：`Silver · 现场生成` / `krea2 极光 · 现场生成`。"""
     item = _IMAGE_SKILL_MAP[image_skill(skill)]
     return "%s · %s" % (item["channel"], suffix)
 

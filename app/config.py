@@ -415,8 +415,21 @@ OLLAMA_VISION_KEEP_ALIVE = os.getenv("OLLAMA_VISION_KEEP_ALIVE", "5m")
 # 的总时长上限；服务端若持续滴数据，仍可能超过这个值。
 VISION_TIMEOUT = float(os.getenv("VISION_TIMEOUT", "120"))
 # 发出去前把图缩到最长边这么多像素。QQ 群里的图有 8MB 级的，直接 base64
-# 是 11MB 字符串——既慢又贵，还可能撞服务端请求体上限
-VISION_MAX_EDGE = int(os.getenv("VISION_MAX_EDGE", "1024"))
+# 是 11MB 字符串——既慢又贵，还可能撞服务端请求体上限。
+#
+# 2026-11-21 从 1024 放到 1568，依据是同一天用中转站 deepseek-v4.1-flash-1017
+# 实测的两组对比（1080×2400 手机截图 + 1600×1000 桌面截图，各压一档问同一组
+# 小字问题）：
+#   · 1024：竖版截图宽度只剩 461px，`deepseek-v4.1-flash-1017` 被读成
+#     `deepseek-v4.1.flash-1017`（连字符认成句点）——正文能懂，型号/编号这类
+#     小字开始出错；
+#   · 1568：同一个问题全对，图 58KB、prompt_tokens 5038（比 1024 的 4654
+#     多 8%）；
+#   · 2048/2400：还是全对，但 token 停在 5299 不再涨（模型内部 patch 上限），
+#     等于多花带宽不换准确率。
+# 所以 1568 是「小字不出错」和「别白烧 token」的交点。要更省就调回 1024，
+# 要更狠可以到 2048——都走 .env 的 VISION_MAX_EDGE，不用改代码。
+VISION_MAX_EDGE = int(os.getenv("VISION_MAX_EDGE", "1568"))
 
 # 生图审核（app/image_audit.py）单张的识图超时。**故意比 VISION_TIMEOUT 短**：
 # 识图预处理卡住只是让这轮对话慢，而审核卡住是**挡在发图这一步前面**，

@@ -2817,13 +2817,21 @@ class JiguangSingleChannelTest(unittest.TestCase):
         self.assertEqual((self.wf[orig]["inputs"]["width"],
                           self.wf[orig]["inputs"]["height"]), (1024, 1536))
 
-    def test_shows_up_on_gen_pad_with_chinese_label(self):
-        """跑图台渠道列表自动带出来（`_allowed_skills` 扫目录 + SKILL.md label）。"""
+    def test_archived_so_gen_pad_no_longer_shows_it(self):
+        """2026-11-21 下架：跑图台列表里不再有它，但目录还在、还能加载。
+
+        用户当天拍板「去除 krea2 1x」——完整版和单次档只差一档分辨率，两张
+        卡片并排放，选错就是白等或者白丢细节。现在只留 `krea2-jiguang`。
+        目录**不删**：上面那几条 NotIn 断言还要拿它当「同 LoRA、链全拆」的样本。
+        """
         from app.gen_api import channels
+        from app.skills import load_skill
         by_id = {c["id"]: c for c in channels()}
-        self.assertIn(self.NAME, by_id)
-        self.assertEqual(by_id[self.NAME]["label"], "极光单次")
-        self.assertEqual(by_id[self.NAME]["steps"], "8")
+        self.assertNotIn(self.NAME, by_id)
+        # 完整版还在，而且跑图台上写的是中文名
+        self.assertEqual(by_id["krea2-jiguang"]["label"], "krea2 极光")
+        # 盘上还能读（样本用途）
+        self.assertTrue(load_skill(self.NAME))
 
     def test_no_extra_timeout_entry(self):
         """不单独配超时——1024×1536 单段比完整版快得多，吃 180 兜底就够。

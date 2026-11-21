@@ -395,14 +395,14 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    "krea2极光": "krea2-jiguang",
                    "极光": "krea2-jiguang",
                    "krea2-jiguang": "krea2-jiguang",
-                   # 2026-11-17 用户拍板的极光**单次采样版**（1024×1536、
-                   # 一段 8 步、末尾不挂 2x 超分）。和上面那条挂同一个 LoRA，
-                   # 只把放大链全拆掉。
-                   # ⚠️ key 里不能带空格，`_fixed_chan` 会先去空白再查表；
-                   # 正则侧另见 `_FIXED_CHAN_RE` 的顺序说明。
-                   "krea2极光单次": "krea2-jiguang-1x",
-                   "极光单次": "krea2-jiguang-1x",
-                   "krea2-jiguang-1x": "krea2-jiguang-1x",
+                   # 2026-11-21 用户拍板「去除 krea2 1x」：渠道进了
+                   # `skills.ARCHIVED_SKILLS`。旧的三个点名词**仍然认**，但全部
+                   # 落到完整版——用户嘴上还会说「极光单次」，若不认就会整句交给
+                   # 模型；若只认前缀，「单次」两个字会漏进画面正文（旧坑）。
+                   # 现在词被吃掉、渠道落极光，正文干净。
+                   "krea2极光单次": "krea2-jiguang",
+                   "极光单次": "krea2-jiguang",
+                   "krea2-jiguang-1x": "krea2-jiguang",
                    "qwen": "qwen_image_v1", "qwen-hd": "qwen-hd",
                    "qwen角色设定表": "qwen-charsheet",
                    "qwen修复": "qwen-restore",
@@ -602,9 +602,10 @@ _FIXED_CHAN_RE = re.compile(
     r"|krea2\s*宝可梦|krea2\s*柔光|krea2\s*奶油"
     r"|krea2\s*写实|krea2\s*通用"
     r"|krea2\s*铭音|krea2\s*鬼针草|krea2\s*铭鬼"
-    # 2026-11-17 极光单次采样版（`krea2-jiguang-1x`）。⚠️ **必须排在下面
-    # `krea2\s*极光` 前面**：正则同起点左优先，短名在前会把「krea2极光单次」
-    # 吃成「krea2极光」，剩下的「单次」还会被当正文塞进提示词。
+    # 2026-11-21 单次档下架（`krea2-jiguang-1x` 进 ARCHIVED_SKILLS），但这几个词
+    # 仍然要吃进来：`krea2极光单次` 落在下面 `krea2\s*极光` 上时，正则只吃掉
+    # 「krea2极光」，剩下「单次」会被当画面正文塞进提示词。登记整串、映射到
+    # 完整版，既兼容旧叫法又不脏正文。
     r"|krea2\s*极光\s*单\s*次"
     r"|krea2\s*极光"
     r"|qwen\s*角色设定表"
@@ -622,7 +623,7 @@ _FIXED_CHAN_RE = re.compile(
     # 2026-10-16 用户拍板放开的 krea2 系中文点名词（不带 `krea2` 前缀也认，
     # 这批是**独特词**——当正文形容词用几乎不可能，所以全句可认）。
     # 2026-11-17 极光单次的裸词（同上，长名排前面；「极光单次」不是日常
-    # 形容词，全句可认）。
+    # 形容词，全句可认）。2026-11-21 单次档下架，词仍登记、落完整版。
     r"|亚洲真人|动漫真人|宝可梦|米山舞|铭音|鬼针草|极光单次|极光"
     # 光打「krea2」两个字 → 落 krea2-general 兜底（用户拍板）。
     # ⚠️ 两条约束都不能省：
@@ -1976,20 +1977,20 @@ _REVISE_TEMPLATE = (
     "  krea2-yoneyama / krea2-rella / krea2-asianmix / krea2-anime2real / "
     "krea2-coscandid / krea2-pokemon / krea2-softlight / krea2-creamy / "
     "krea2-real / krea2-general / krea2-mingyin / krea2-guizhencao / "
-    "krea2-minggui / krea2-jiguang / krea2-jiguang-1x"
-    " = krea2 系 15 条，用户原话点「krea2米山舞 / krea2日系 / krea2亚洲真人 / "
+    "krea2-minggui / krea2-jiguang"
+    " = krea2 系 14 条，用户原话点「krea2米山舞 / krea2日系 / krea2亚洲真人 / "
     "krea2动漫真人 / krea2真人cos / krea2宝可梦 / krea2柔光 / krea2奶油 / "
     "krea2写实 / krea2通用 / krea2铭音 / krea2鬼针草 / krea2铭鬼 / "
-    "krea2极光 / krea2极光单次」时对应填；\n"
-    "  ⚠️ 两条极光：`krea2-jiguang` 是完整版（两段采样 + 2x 超分，3328×4864，"
-    "慢）；`krea2-jiguang-1x` 是单次采样版（1024×1536，不放大，快）。"
-    "用户说「极光单次」时才填后者，只说「极光」仍填前者；\n"
+    "krea2极光」时对应填；\n"
+    "  ⚠️ 极光只有一条：`krea2-jiguang`（两段采样 + 2x 超分，3328×4864，慢）。"
+    "用户说「极光单次」也填它——单次档 2026-11-21 已下架，"
+    "别再声称有一个快的单次版；\n"
     "  qwen-charsheet = 说「qwen 角色设定表」（**7 分区** character design sheet 工作流，\n"
     "  qwen-image-2.1 上，2304×1536 / 16 步，不放大；右下细节格不画文字）。\n"
     "  qwen-restore = 说「qwen修复」（**引用图修复**工作流，qwen-image-2.1 + 修复 LoRA，\n"
     "  1536 面积档 / 25 步，不放大；引用图轮由代码专路直接入队，不用你填 skill）。\n"
     "  ⚠️ 通用「krea2」已下架，原话只说了 krea2 没带风格词时**别填 krea2 系**"
-    "（那 15 个名字都不是他说的），skill 别填。\n"
+    "（那 14 个名字都不是他说的），skill 别填。\n"
     "  nffa / cunny / miao = 原话点名才填；\n"
     "  moss = 原话点名「moss」才填（MOSS-Image 5B，**25 步** / 1024×1536 / "
     "约 74 秒，画面出字最准，纯文生图；8 步 / 50 步两档已下架，"

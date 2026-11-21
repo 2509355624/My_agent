@@ -142,9 +142,11 @@ class ChannelParseTest(unittest.TestCase):
                           ("krea2通用", "krea2-general"),
                           # 2026-11-04 新增：极光（用户挪进 loras 目录的那条）
                           ("krea2极光", "krea2-jiguang"),
-                          # 2026-11-17 新增：极光单次采样版（同 LoRA、1024×1536、
-                          # 不放大）。长名必须排在「krea2极光」前面，见下一个测试。
-                          ("krea2极光单次", "krea2-jiguang-1x")):
+                          # 2026-11-21：极光**单次档**下架（`krea2-jiguang-1x`
+                          # 进了 ARCHIVED_SKILLS）。旧叫法仍然认，但落完整版——
+                          # 用户嘴上还会说「极光单次」，不认就整句交给模型，
+                          # 只认前缀又会把「单次」漏进画面正文。
+                          ("krea2极光单次", "krea2-jiguang")):
             with self.subTest(name=name):
                 self.assertEqual(_pc("%s 1girl" % name), (cid, "1girl"))
                 # 名字里夹空格也认（`krea2 米山舞` / `krea2 真人 cos`）
@@ -443,22 +445,21 @@ class BareKrea2WordTest(unittest.TestCase):
         self.assertEqual(direct_gen._parse_channel("极光 初音")[0],
                          "krea2-jiguang")
 
-    def test_jiguang_single_is_not_eaten_by_jiguang(self):
-        """「极光单次」必须整串吃掉，不能落成「极光」+ 正文里剩「单次」。
+    def test_jiguang_single_word_falls_to_full_version(self):
+        """「极光单次」不再是独立渠道（2026-11-21 下架），但仍整串吃掉、落完整版。
 
-        2026-11-17 加 `krea2-jiguang-1x`（单次采样版，和完整版挂同一个 LoRA）。
-        `krea2极光` 是它的前缀——正则同起点左优先、裸词分支也是 `极光` 在前，
-        两处都要把长名排前面，否则「单次」两个字会被当画面内容喂进提示词，
-        渠道还会静默落回完整版（同 2026-10-08 `krea2米山舞` 被吃成 `krea2`）。
+        原来这条测的是「单次档不能被极光吃掉」——那是 11-17 加 `krea2-jiguang-1x`
+        时的口径。现在用户拍板「去除 krea2 1x」，渠道没了、旧叫法还在：
+          · 必须仍整串命中：只吃「krea2极光」会把「单次」漏成画面正文；
+          · 必须落 `krea2-jiguang`：不能因为词被认了就整天幻想还有单次档。
         """
         for text, desc in (("krea2极光单次 1girl", "1girl"),
                            ("krea2 极光 单次 海边", "海边"),
                            ("krea2极光单次，少女", "少女"),
-                           ("极光单次 少女", "少女"),
-                           ("krea2-jiguang-1x 1girl solo", "1girl solo")):
+                           ("极光单次 少女", "少女")):
             with self.subTest(text=text):
                 self.assertEqual(direct_gen._parse_channel(text),
-                                 ("krea2-jiguang-1x", desc))
+                                 ("krea2-jiguang", desc))
         # 完整版两个写法一个都不能被抢走（长名在前不等于短名失效）
         self.assertEqual(direct_gen._parse_channel("krea2极光 1girl"),
                          ("krea2-jiguang", "1girl"))

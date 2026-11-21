@@ -235,6 +235,13 @@ ARCHIVED_SKILLS = tuple(
     # 「渠道串号」就是这么来的：归档 = list_skills 不吐它 = QQ 的
     # _allowed_skills 里没有 = direct_gen 认不出 = 静默降级成默认档。
     + ["moss", "moss8", "moss50", "moss_page"]
+    # 2026-11-21 用户拍板：「去除 krea2 1x」。
+    # `krea2-jiguang-1x` 是 11-17 加的极光单次档（一次采样、不放大、25~40 秒），
+    # 它和完整版挂同一个 LoRA，跑图台上两张卡片只差一档分辨率，选错就是白等
+    # 或者白丢细节。现在只留完整版 `krea2-jiguang`（极光），单次档下架。
+    # 目录原地保留：`tests/test_image_channels.py` 拿它当「同 LoRA、链全拆」
+    # 的样本；`load_skill` 走文件系统照样能读，只是不再出现在任何渠道清单里。
+    + ["krea2-jiguang-1x"]
 )
 
 
