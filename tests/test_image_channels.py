@@ -2403,12 +2403,23 @@ class Anima2sChannelTest(unittest.TestCase):
         self.assertEqual(wf[_stage2(wf)]["inputs"]["sampler_name"], "er_sde")
 
     def test_skeleton_is_unchanged_from_anima_line(self):
-        """6 条 LoRA（同序同强度）+ 1.2× latent + 2x 像素放大 + 同一串提示词。"""
+        """6 条 LoRA（同序同强度）+ 1.2× latent + 2x 像素放大 + 同一串提示词。
+
+        2026-11-22 起两边的**第 5 条**故意不同：用户拿 ComfyUI 里更早那份
+        `anima线条早期.json` 对比后认为它更好看，anima-line 改回 detailer 0.8
+        （双 detailer）；本渠道仍挂 `Anima_in_real` 0.8。除这一条外必须逐项同。
+        """
         mine, theirs = _load(self.NAME), _load("anima-line")
         _, chain = _lora_chain(mine)
         _, ref_chain = _lora_chain(theirs)
-        self.assertEqual([(f, st) for _, f, st in chain],
-                         [(f, st) for _, f, st in ref_chain])
+        self.assertEqual(len(chain), len(ref_chain), self.NAME)
+        for i, ((_, f1, s1), (_, f2, s2)) in enumerate(zip(chain, ref_chain)):
+            if i == 1:                       # 从采样器那端数第 2 个 = 第 5 条
+                self.assertEqual(s1, s2, "分叉只许换文件，强度仍要一致")
+                self.assertEqual(f1, "Anima_in_real_update_v2_epoch_20.safetensors")
+                self.assertEqual(f2, "anima_context_detailer_base10.safetensors")
+                continue
+            self.assertEqual((f1, s1), (f2, s2), self.NAME)
         self.assertEqual(mine[_upscale(mine)]["inputs"]["scale_by"], 1.2)
         up = _all(mine, "UpscaleModelLoader")
         self.assertEqual(len(up), 1, self.NAME)
