@@ -176,6 +176,20 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
   不写 unlike the previous one）——读者没看过档案。
 · 湿、脏、破写在这一页的衣着里：soaked, translucent, clinging, muddy at the hem。不写进 cast。
 · 「干净的新衣服」写 fresh, dry，不要写 dry clean（会被读成干洗）。
+· **每件衣服都写清款式**：领型（collar / open collar / V-neck / sailor collar）、门襟和扣子
+  （buttoned placket with small buttons）、袖长、版型、口袋。只写 a white shirt，出图会自己编一件——
+  扣子说没就没、领子说变就变，下一页还换成 polo。
+  **同一件衣服跨页用同一串词**：这一页写 a white short-sleeve button-up shirt with a collar and a
+  buttoned placket，后面每一页都照抄这一串，不许换说法（shirt / blouse / polo 混着写＝三件衣服）。
+· **外衣是湿透、半透、或者这一集要脱掉的，第一次出现就把里面那一层写清**：
+  颜色 + 款式（a plain white underlayer tank / a dark sports bra with thin straps），后面每页沿用同一串词。
+  不写内搭，模型会自己给她配一件——第一页是黑运动内衣、第三页变白背心，前后就接不上了。
+  内搭是「她这一身」的一部分：只有换装剧情才许换，换了要写清在哪一格换的。
+  **内搭不是后面才揭晓的东西**：她从头到尾都穿着它，所以**第一页就得写**，
+  湿透的白外衣要写成 clinging translucent over her plain white underlayer tank（从领口看得见那两根细带），
+  **绝不写 clinging to her skin / against her bare skin**——那等于她里面什么都没穿，下一页就没得接了。
+· **写 ③ 按顺序写全**：内搭 → 外衣 → 下装 → 鞋袜。三层都在这页身上，就三层都写；
+  只写外衣，等于把里面那层交给模型自己编。
 
 ════ 一页怎么想 ════
 一页只放一个地点、一个动作。读者翻过这页，要能说出「她刚做了什么」。
@@ -211,7 +225,14 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
 ════ 字（跟着格数走，别让五格页只有一句话） ════
 一格页 0~2 句；两格页 1~3 句；三格页 2~4 句；五格页 3~5 句。
 台词一句一个意思，十来个字，落在说话人自己在的那一格。
-② 那种方框只写两种东西：不看字就看不懂的信息（几点、在哪、她心里那句话），或者她接下来要做什么。写在这一格左上角。
+**台词跟动作对齐**：一句台词必须落在「这件事真正发生」的那一格——说「给你」「接着」，
+就得是东西已经离手、她的手伸向画面外、朝我递过来的那一格。
+上一格她只是把湿衣服抱在胸前 / 团在手里，就只写动作、一个字都不许说。
+「拿着」和「递出」是两个状态，拆成两格时台词永远在**后面**那一格。
+一句台词只出现一次，不许为了把格子填满而在两格各写一遍。
+**这一集只有两种字：她的圆气泡、他的直角方框。没有第三种容器。**
+不许旁白框、不许独白框——她心里怎么想、她打算做什么，一个字都不上画面；
+时间地点交给画面本身（拍到哪就是哪）。想让她说什么，就让她自己在气泡里说出口。
 单个格子可以完全没有字——特写本身就说清了，就别硬塞；但**整页空得只剩一句**，读者会不知道这一页发生了什么。
 
 ════ 骨架（只有这四种，bbox 整组照抄，一个字符都不许改） ════
@@ -248,7 +269,7 @@ T3 · 三格 · 上大横格 + 下两格（上面一个主画面，下面两处�
 ③ 主格：景别 + 她在做什么 + 完整外形串（从 cast 逐字抄，不缩写不调序）+ 本页衣着（这一页她身上穿什么，这一页在换装就写成变化）+ 构图位置
 ④ 场景：地点 + 时间 + 光源 + 两三个具体物件
 ⑤ 文字：有字写 Flat screentone shading, clear Chinese text: the girl's words in sharp speech bubbles with short pointer tails；
-   本页还有男主画外话，补 the off-screen boy's words as white-outlined bare text with no bubble；
+   本页还有男主画外话，补 the off-screen boy's words in a plain rectangular box with a thin black outline and no tail；
    整页没有字写 no text and no speech bubbles anywhere on the page.
 全英文，一个汉字都不许有。
 ①里的格线永远细：thin white gutters + a thin black ink border。不要写 thick / heavy / bold frame——五页连起来翻，外框粗细一变，页面就会跳。
@@ -259,29 +280,35 @@ character：这一格画什么 —— 景别 + 定住的姿势 + 外形串（看
   正在换装就写变化）+ 结尾固定写
   monochrome greyscale screentone, bold black ink outline, flat shading, no color cast.
 object：空镜或道具 + 结尾固定写 No speech bubble and no text in this panel.
-text：只写容器形状和字的排法，台词内容只进 text 字段。按「谁在说」选容器，不按好不好看选。
-  ① 她本人在这一格画面里开口 → 气泡，尾巴指向她的脸：
+text：只写容器形状和字的排法，台词内容只进 text 字段。**只有两种容器，按「谁在说」选**：
+  ① 她本人在这一格画面里开口 → 圆气泡，尾巴指向她的脸：
      Vertical rounded speech bubble with a thin black ink outline, Chinese text written vertically with each character stacked top to bottom, N columns, the first column on the left, reading left to right, short pointer tail pointing toward the girl's face, compact bubble.
-  ② 她的心思、她自己的提议、她接下来要做什么 → 方框，无尾巴，不指向任何人：
-     Small rectangular caption box in the upper left corner of this panel, thin black ink outline, Chinese text written vertically with each character stacked top to bottom, N columns, the first column on the left, reading left to right, no bubble tail, no pointer.
-  ③ 只有男主画外的一句话 → 白边裸字，独立成框，绝不进气泡：
-     Boy plain text: bare Chinese dialogue overlaid directly on the panel, thick white outline around every character, NO speech bubble, no bubble tail, no enclosing frame, Chinese text written vertically with each character stacked top to bottom, N columns, the first column on the left, reading left to right.
+  ② 只有男主画外的一句话 → 直角矩形方框（不是气泡、也不是裸字），贴这一格右上：
+     Boy speech box: plain rectangular box with a thin black ink outline, sharp square corners, no bubble tail, no pointer, Chinese text written vertically with each character stacked top to bottom, N columns, the first column on the left, reading left to right.
 
-**归属不能图省事。** 男主裸字只用来放「他对她说的一句话」，一页最多一句，而且必须是在回应她上一格的动作或话。
-凡是「接下来该去做什么」的念头、她自己下的决定、她的感受和判断，一律是她的（用 ②，她在画面里就 ①）。
-把她的心思写成裸字，等于让男主替她做决定——角色就反了，读者也会读错人。
+**没有旁白框**：不要 rectangular caption box，不要「她心想 / 她决定 / 她意识到」这类文字。
+读者需要知道的事，让画面自己说，或者让她用气泡说出口。
+
+**男主的话一律用矩形方框**：他不出镜，给他画气泡，尾巴就只能指向女生，读者会把他的话当成她说的。
+方框是他的身份标记——**直角方框＝他，圆气泡＝她**，一眼分得开；不许写成压在画面上的白边裸字
+（裸字没有边界，翻页时和拟声、网点糊在一起）。方框位置固定在右上，永远不跟她的气泡重叠。
+
+**归属不能图省事。** 男主的方框只放「他对她说的一句话」，一页最多一句，而且必须是在回应她上一格的动作或话。
+**写成一句直接的要求**：衣服给我 / 接着 / 转过来看看——而不是反问（有换的吗 / 你不冷吗）。
+反问把动作推回给她，画面就空着；直接说他要什么，她的动作才接得上。
+凡是「接下来该去做什么」的念头、她自己下的决定、她的感受和判断，**一个字都不许上画面**（不写独白、不写旁白），
+交给表情和动作。她的提议确实要出口，就用 ① 让她自己说。
 **多列中文一律从左往右排**：句首落在最左一列，读者按最左列 → 右边列的顺序读（不要说 right to left）。
-**同一格里同时有她的话和我们的话时，必须两个框分开**：气泡带尾巴指向她，裸字放另一侧、不带任何边框。两条不同归属的字绝不许并进同一个气泡。
+**同一格里同时有她的话和他的话时，必须是两个容器**：圆气泡带尾巴指向她，直角方框放另一侧。
+两条不同归属的字绝不许并进同一个气泡。
 每个 label=text 的 item 必须带 text 字段：这句原文，一字不改，不留空。
 
 ════ 文字框 bbox（格 [y0,x0,y1,x1]，h=y1-y0，w=x1-x0，算完取整） ════
 气泡从下往上叠：第1条 [y0+0.74h, x1-0.49w, y0+0.95h, x1-0.07w]
               第2条 [y0+0.50h, x1-0.49w, y0+0.71h, x1-0.07w]
               第3条 [y0+0.26h, x1-0.49w, y0+0.47h, x1-0.07w]
-男主裸字贴右上：第1条 [y0+0.04h, x0+0.55w, y0+0.26h, x1-0.07w]
+男主方框贴右上：第1条 [y0+0.04h, x0+0.55w, y0+0.26h, x1-0.07w]
               第2条 [y0+0.28h, x0+0.55w, y0+0.48h, x1-0.07w]
-旁白贴左上，往下叠：[y0+0.04h, x0+0.07w, y0+0.25h, x0+0.56w]
-                  [y0+0.27h, x0+0.07w, y0+0.48h, x0+0.56w]
 框离格边至少留 2%。气泡宽度约为格宽的 42%。同一格多句，先说的在上。
 
 ════ 画什么 ════
@@ -337,6 +364,24 @@ def _inside(tb, cb, pad=0):
 
 def _cast_segs(spec_str):
     return [s.strip() for s in re.split(r"[,，]", spec_str or "") if s.strip()]
+
+
+# 外形串里的年龄：只认「about X」（英文数词或阿拉伯数字都归一成整数）。
+# 模型改写年龄时一定还写 about，所以这一条判据不会漏；取不到 age 就不查。
+_AGE_WORDS = {"ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+              "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+              "nineteen": 19}
+
+
+def _ages(text):
+    out = set()
+    for m in re.finditer(r"about\s+([a-z]+|\d{1,2})", (text or "").lower()):
+        tok = m.group(1)
+        if tok.isdigit():
+            out.add(int(tok))
+        elif tok in _AGE_WORDS:
+            out.add(_AGE_WORDS[tok])
+    return out
 
 
 # 「一格一个定格」的三条判据。全是**封闭句式**，不是衣物词表准入：
@@ -467,6 +512,10 @@ def audit(js, cap=12):
         out.append("cast 里写了衣服（%s …）——衣服不许进 cast：把这一段挪进每一页 summary 的 ③，"
                    "cast 只留年龄、身材、发型、头带、眼睛、脸、配饰，否则整本换不了装"
                    % cloth.group(1))
+    # 年龄是外形串里最容易被改写的一项：模型会顺着剧情把她写成 another age。
+    # 只比数字（about twelve / about 18 都归一成 12），不比措辞——这是事实，不是文风。
+    cast_ages = _ages(girl_spec)
+    cast_age = sorted(cast_ages)[0] if len(cast_ages) == 1 else None
 
     seen_lines = {}
     for n, p in enumerate(pgs, 1):
@@ -506,6 +555,13 @@ def audit(js, cap=12):
                 continue
             if len(txt) > 26:
                 out.append("第%d页：「%s」太长（%d 字），拆成两框" % (n, txt[:12], len(txt)))
+            # 2026-11-22：旁白框取消——那一格方框只留给男主的台词。
+            # 判据是容器名（模型自己写的 caption），不是台词内容：
+            # 有 caption box 又没有 boy speech box，就是她又在心里说话。
+            tcap = (t.get("caption") or "").lower()
+            if "caption box" in tcap and "boy speech box" not in tcap:
+                out.append("第%d页：「%s」用了旁白框——这一集只有她的圆气泡和他的直角方框，"
+                           "旁白/独白一律不写，让她自己说出来" % (n, txt[:10]))
             tb = tuple(t.get("bbox") or ())
             # 文字框位置由 autofix 按公式重排，模型算歪了不算它的错
             if not any(_inside(tb, c, pad=8) for c in sk):
@@ -521,11 +577,11 @@ def audit(js, cap=12):
 
         # 尾句由 autofix 按本页实际文字改写（retail_caption），这里只记一笔
         caption = ((p.get("summary") or {}).get("caption") or "").lower()
-        has_boy = any("boy plain text" in (t.get("caption") or "").lower() for t in _texts(p))
+        has_boy = any("boy speech box" in (t.get("caption") or "").lower() for t in _texts(p))
         if caption and "off-screen boy" in caption and not has_boy:
-            warns.append("第%d页：尾句写了男主画外音，但本页没有男主裸字（autofix 改尾句）" % n)
+            warns.append("第%d页：尾句写了男主画外音，但本页没有男主方框（autofix 改尾句）" % n)
         if caption and has_boy and "off-screen boy" not in caption:
-            warns.append("第%d页：本页有男主裸字，尾句没写（autofix 改尾句）" % n)
+            warns.append("第%d页：本页有男主方框，尾句没写（autofix 改尾句）" % n)
 
         # POV 硬约束：整页不许出现男性人形。模型会自己往远景/倒影里塞人，
         # 所以这里只查画面描述里的男性词（text 项的 caption 是「Boy plain text」
@@ -576,10 +632,19 @@ def audit(js, cap=12):
         # 模型多数时候写 "a girl about twelve"，极少写 danbooru tag 式的 1girl，
         # 原来按 1girl 判会让这条检查在大多数页上直接跳过。
         chars = [i for i in (p.get("items") or []) if i.get("label") == "character"]
+        age_hit = 0
         for ch in chars:
             cc = (ch.get("caption") or "").lower()
             if "girl" not in cc:
                 continue
+            # 年龄只看数：cast 写 about twelve，这一格写成 about eighteen 就是换了个人。
+            if cast_age and age_hit < 1:
+                wrong = [a for a in _ages(cc) if a != cast_age]
+                if wrong:
+                    out.append("第%d页：年龄写成 about %s，cast 里是 about %s——"
+                               "外形串照抄，年龄一个数都不许改（改了就换了一个人）"
+                               % (n, wrong[0], cast_age))
+                    age_hit += 1
             if _TIGHT.search(cc):
                 # 纯局部特写里没有身体：要求全身外形串等于逼它把镜头拉开。
                 # 带脸的那一类（脸/头发/后颈）才核对「还是同一个人」；

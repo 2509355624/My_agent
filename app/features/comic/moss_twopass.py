@@ -183,7 +183,7 @@ SCRIPT_SYSTEM = """你写条漫分镜稿。任务只有一个：把这一段写�
   **看谁在开口，不看话里提到了谁。** 真要写男主（镜头后面不出镜的「我」），标 `男「…」`；
   不能因为句中有个「她」就把女生的话标成男，也不能反过来。
   **标 `男` 只是给这句话定归属，绝不代表画面里要出现一个男人**——男主永远只有画外的手。
-  男主的话出图时画成白边裸字（不进气泡），写在他说那句的格子下面；女生的话照常用气泡，
+  男主的话出图时画成直角矩形方框（不进气泡、无尾巴），写在他说那句的格子下面；女生的话照常用气泡，
   写在她在的那格下面。**全页没有 `男「…」` 时，编译尾句不许提 boy，一个字都不许留。**
   **一句写完整的话，十来个字是常态**，人物要交代背景、讲经过、说心里话，
   就让他好好说完——「我低估了这座山，现在迷路了，手机也没电」这种就是好台词。
@@ -370,7 +370,7 @@ def build_script_user(brief, pages):
     稿子就是角色台账、场景台账和逐格稿这三样，按格式写满即可。
     **第一人称 POV（硬约束）**：男主是镜头后的人、就是「我」，画面里只能有女生，
     角色台账只写 girl 行、绝不写 boy/1boy；我需要入画时只写 pov hands / disembodied hand（伸进来的一只手），
-    绝不写男孩的脸、身体、衣服。男主说的话标 `男「…」` 只是定归属，画成画外白边裸字。
+    绝不写男孩的脸、身体、衣服。男主说的话标 `男「…」` 只是定归属，画成画外的直角矩形方框。
     **一页默认就一格**：一个画面把在场的人、站位、谁说什么都装进去，多女生同框就画在一格里。
     只有「因果两瞬间 / 三人接连发言 / 连着的分解动作」才拆成 2~4 格，不要五格六格。
     用户已经写明这一页几格的，照那个数写，不许删格合并格。
@@ -483,9 +483,9 @@ __LAYOUTS__
 4. 场景串：地点 / 时间 / 光源 / 两三个具体物件。
 5. 尾句（代码按本页台词自动写死，你不用自己拼）：
    - 只有女生说话：`Flat screentone shading, clear Chinese text: the girl's words in sharp speech bubbles with short pointer tails; no bare text, no off-screen speaker.`
-   - 剧本写了 `男「…」`（画外男主）时，才换成：`Flat screentone shading, clear Chinese text: the girl's words in sharp speech bubbles, the off-screen boy's words as white-outlined bare text with no bubble.`
+   - 剧本写了 `男「…」`（画外男主）时，才换成：`Flat screentone shading, clear Chinese text: the girl's words in sharp speech bubbles, the off-screen boy's words in a plain rectangular box with a thin black outline and no tail.`
    - 本页无任何文字：`no text and no speech bubbles anywhere on the page.`
-   **男主画外裸字不是每页标配**：用户没写男主台词时，绝不许自己加一段画外字、也不许在右下角安排男主的话。
+   **男主画外方框不是每页标配**：用户没写男主台词时，绝不许自己加一段画外字、也不许在右下角安排男主的话。
 
 四、items
 - 每个角色 / 空镜 / 文字各自一条，bbox 钉死。
@@ -494,10 +494,10 @@ __LAYOUTS__
   `monochrome greyscale screentone, bold black ink outline, flat shading, no color cast.`
 - 文字 item 的 caption 只描述容器（形状+描边+竖排列数+尾巴指向），台词内容只进 text 字段。
   **女生的话**（user 标 女 / who=girl）：圆角气泡 + `short pointer tail pointing toward the girl's face`。
-  **男生的话**（user 标 男 / who=boy）：**不许画任何气泡**——写 `Boy plain text: bare Chinese
-  dialogue overlaid directly on the panel, thick white outline around every character,
-  NO speech bubble, no bubble tail, no pointer tail, no enclosing frame`。男主不出镜，
-  给他画气泡，尾巴就只能指向女生，读者会当成女生说的——这是本次要修的归属事故。
+  **男生的话**（user 标 男 / who=boy）：**不许画气泡**——写 `Boy speech box: plain
+  rectangular box with a thin black ink outline, sharp square corners, no bubble tail,
+  no pointer`。男主不出镜，给他画气泡，尾巴就只能指向女生，读者会当成女生说的——
+  这是归属事故。方框是他的身份标记，别让他和她的容器混成一种。
   旁白写 `(no bubble tail)`；拟声写 `no bubble`。
 - 空镜格在 caption 尾部声明 `No speech bubble and no text in this panel.`
   **有字的格子绝不许出现这句**。
@@ -508,10 +508,10 @@ __LAYOUTS__
   第 2 条：[y0+0.50h, x1-0.49w, y0+0.71h, x1-0.07w]
   第 3 条：[y0+0.26h, x1-0.49w, y0+0.47h, x1-0.07w]
   第 4 条（最上）：[y0+0.02h, x1-0.49w, y0+0.23h, x1-0.07w]
-- 男主白边裸字（第 1 条，贴右上，与气泡上下错开）：[y0+0.04h, x0+0.55w, y0+0.26h, x1-0.07w]
-- 男主白边裸字（第 2 条，往下叠）：[y0+0.28h, x0+0.55w, y0+0.48h, x1-0.07w]
-  同格既有裸字又有气泡时：裸字占上半（0.04~0.48h）、气泡只排最下两条
-  （0.50~0.95h），绝不叠在一起；一格最多 2 裸字 + 2 气泡。
+- 男主矩形方框（第 1 条，贴右上，与气泡上下错开）：[y0+0.04h, x0+0.55w, y0+0.26h, x1-0.07w]
+- 男主矩形方框（第 2 条，往下叠）：[y0+0.28h, x0+0.55w, y0+0.48h, x1-0.07w]
+  同格既有方框又有气泡时：方框占上半（0.04~0.48h）、气泡只排最下两条
+  （0.50~0.95h），绝不叠在一起；一格最多 2 方框 + 2 气泡。
 - 旁白（贴左上，一格多句往下叠，最多 4 框，每框高 0.21h、间隔 0.02h）：
   第 1 框：[y0+0.04h, x0+0.07w, y0+0.25h, x0+0.56w]
   第 2 框：[y0+0.27h, x0+0.07w, y0+0.48h, x0+0.56w]
@@ -536,7 +536,7 @@ __LAYOUTS__
   不写拉扯过程动词。
 - 台词按编剧稿原样落字，**不许为凑短而删字或改写成碎句**；列数按字数自动给足
   （十来字一列，长了排两列），别把长句挤成一列小字。全页拟声最多 1 个；
-  一格最多四条气泡，同格有男主裸字时气泡退到两条。
+  一格最多四条气泡，同格有男主方框时气泡退到两条。
 - 一页只有一个地点。
 - 双人同框时，第二个人的句首必须显式互斥（`In sharp contrast, the boy has NO long hair, NO glasses, ...`），
   切断第一个人的特征往下传。**互斥只列外形与衣服**（头发 / 眼睛 / 裙子 / 开衫这一类），
@@ -561,7 +561,7 @@ __LAYOUTS__
   一字不改、不加标点、不许留空、不许把台词塞进 caption 代替。
 - caption 只描述气泡容器，永远不承载台词内容。
 - 台词归属：女生说的话 → 女生所在那格，画带尾巴气泡；男生说的话 → 落在他那格，
-  画无气泡的白边竖排裸字（第四节），绝不给男主画指向女生的气泡。
+  画无尾巴的直角矩形方框（第四节），绝不给男主画指向女生的气泡。
   user 里给了几句台词，就必须产出几条带 text 的 item，数量对得上。
 
 十、外形串的粘贴方式
@@ -683,12 +683,12 @@ LAYOUT_SENTENCE = {
 }
 
 # 编译尾句按「本页到底有哪些人的话」生成（2026-11-21）：
-# 男主画外裸字不是每页标配——只有剧本真的写了 `男「…」` 才提 boy。
+# 男主画外方框不是每页标配——只有剧本真的写了 `男「…」` 才提 boy。
 # 之前写死 boy 那句，导致只有女生对话的页也被要求画一段画外男主字（右下角那句）。
 TAIL_GIRL_ONLY = ("Flat screentone shading, clear Chinese text: the girl's words in sharp speech "
                   "bubbles with short pointer tails; no bare text, no off-screen speaker.")
 TAIL_WITH_BOY = ("Flat screentone shading, clear Chinese text: the girl's words in sharp speech bubbles, "
-                 "the off-screen boy's words as white-outlined bare text with no bubble.")
+                 "the off-screen boy's words in a plain rectangular box with a thin black outline and no tail.")
 TAIL_NO_TEXT = "no text and no speech bubbles anywhere on the page."
 
 
@@ -737,8 +737,8 @@ def build_moss_user(script, page_n, prev_state, prev_layout, must_layout):
         rows = []
         for i, ln in enumerate(lines):
             # 男主不出镜：给他画带尾巴气泡，尾巴只能指向女生 → 归属就错了。
-            # 男主话一律白边裸字，和女生气泡从容器上隔离。
-            box = ("容器：**白边裸字**（Boy plain text），无气泡、无尾巴、无框，竖排"
+            # 男主话一律直角矩形方框，和女生气泡从容器上隔离。
+            box = ("容器：**直角矩形方框**（Boy speech box），无气泡、无尾巴，竖排"
                    if ln["who"] == "boy"
                    else "容器：**带尾巴气泡**，尾巴指向女生脸")
             rows.append("  第 %d 句 ｜ 说话人 %s ｜ 只放进第 %d 格 ｜ %s ｜ text 字段填「%s」"
@@ -748,7 +748,7 @@ def build_moss_user(script, page_n, prev_state, prev_layout, must_layout):
         boy_note = ("**男主的话绝不许画成气泡。**\n"
                     if has_boy_here else
                     "**本页没有男主台词**：一个 boy 字都不要写进 caption，"
-                    "不许自作主张加画外男主的裸字。\n")
+                    "不许自作主张加画外男主的方框。\n")
         count_line = "\n  共 %d 句，本页必须有 %d 个带 text 的 text item。\n" % (
             len(lines), len(lines))
         line_block += (count_line + boy_note +
@@ -756,7 +756,7 @@ def build_moss_user(script, page_n, prev_state, prev_layout, must_layout):
                        "先说的在最上、后说的往下排（第 1 句最上、第 4 句最下），"
                        "每条按字数给足列数（十来字一列，长了排两到三列），"
                        "文字要清楚可读，不许为凑短删字改字；"
-                       "同格有男主裸字时，裸字占上半、气泡只排最下两条。")
+                       "同格有男主方框时，方框占上半、气泡只排最下两条。")
     else:
         line_block = ("  本页没有台词：**不要画任何气泡**。"
                       "需要交代的事由下面的旁白块承担；没有旁白的格写否定句。")
@@ -1126,9 +1126,14 @@ TIGHT_CU = re.compile(r"close[- ]up (?:of|on) "
 
 
 def _kind(cap):
-    """按 caption 判定文字元素类型：气泡 / 男主白边裸字 / 旁白 / 拟声。"""
+    """按 caption 判定文字元素类型：气泡 / 男主矩形方框 / 旁白 / 拟声。
+
+    `plain` 这个 id 沿用旧名（外面按它分桶算 bbox），容器已经从「白边裸字」
+    改成「直角矩形方框」——2026-11-22 用户按漫画台设计规则改的：
+    裸字没有边界，翻页时和拟声、网点糊在一起；直角方框才是「画面外的人在说话」。
+    """
     low = (cap or "").lower()
-    if "boy plain text" in low:
+    if "boy speech box" in low:
         return "plain"
     if "no bubble tail" in low:
         return "caption"
@@ -1161,20 +1166,19 @@ CAPTION_BOX = ("Small rectangular caption box in the upper left corner of this p
 
 
 def boy_text_cap(text):
-    """男主台词的 caption：**白边裸字，无气泡无尾巴**（2026-11-21 用户要求）。
+    """男主台词的 caption：**直角矩形方框，无尾巴**（2026-11-22 用户改的）。
 
     第一人称视角下男主不出镜；带尾巴气泡只能指向画面里唯一的女生，
-    读者就把他的话当成女生说的。所以他的话不套任何容器，
-    直接压在画面上的白边竖排字，和女生气泡一眼分得开。
+    读者就把他的话当成女生说的。原来用「白边裸字」，出图时和拟声、网点糊在
+    一起，边界不清；改成直角方框：**直角方框＝他，圆气泡＝她**，一眼分得开，
+    也和漫画台「我的话用矩形框」的约定一致。
     """
     ncol = _text_columns(text)
-    return ("Boy plain text: bare Chinese dialogue overlaid directly on the panel, "
-            "thick white outline around every character for legibility, "
-            "NO speech bubble, no bubble tail, no pointer tail, no enclosing frame, "
-            "Chinese text written vertically with each character stacked top to bottom, "
-            "%d column%s, first character of the sentence at the TOP of the LEFT column, "
-            "reading left to right, "
-            "compact plain text sized so several can share this panel." %
+    return ("Boy speech box: plain rectangular box with a thin black ink outline, sharp "
+            "square corners, no speech bubble, no bubble tail, no pointer, placed in the "
+            "upper right of this panel, Chinese text written vertically with each character "
+            "stacked top to bottom, %d column%s, first character of the sentence at the TOP "
+            "of the LEFT column, reading left to right." %
             (ncol, "" if ncol == 1 else "s"))
 
 
@@ -1244,7 +1248,7 @@ def bbox_sfx(cell):
 
 
 def bbox_plain(cell, idx):
-    """男主白边裸字：贴右上，和贴右下的女生气泡上下错开，同格也不叠。"""
+    """男主直角矩形方框：贴右上，和贴右下的女生气泡上下错开，同格也不叠。"""
     y0, x0, y1, x1 = cell
     h, w = y1 - y0, x1 - x0
     if idx == 0:
@@ -1269,7 +1273,7 @@ LAYOUT_SLOTS = {
     "L5": {"scene": None, "main": 1, "s1": 2, "s2": 3, "prop": None},
     # B 层：
     #   单格页没有「第二格」可放第二个人——两个人必须同框在第一格，
-    #   台词也全落第一格（一格最多四条气泡 / 有男主裸字时最多两条）。
+    #   台词也全落第一格（一格最多四条气泡 / 有男主方框时最多两条）。
     "S1": {"scene": None, "main": 1, "s1": 1, "s2": 1, "prop": None},
     #   两格页：第一格放第一说话人，第二格放反应/第二说话人。
     "D1": {"scene": None, "main": 1, "s1": 1, "s2": 2, "prop": None},
@@ -1420,7 +1424,7 @@ def retail_caption(cap, has_text, has_boy):
 
     单 Agent 自己写的就是一整段连贯英文，不能像两段链路那样拆成五段重拼。
     但尾句是「本页到底有没有字、有没有男主画外音」的确定性事实，
-    模型经常照抄模板却不写对应的 text item——尾句说有裸字、页面里一段都没有，
+    模型经常照抄模板却不写对应的 text item——尾句说有方框、页面里一个都没有，
     模型收到自相矛盾的两句指令，画出来要么没字、要么给男生画气泡。
 
     做法：从最后一个 "flat screentone shading" 处截断（那是尾句的固定开头），
@@ -1563,7 +1567,7 @@ def autofix(js, cast=None, lines=None, layout=None, scene="", narr="",
         want = boy_text_cap(ln["text"]) if is_boy else bubble_cap(ln["text"], ln["who"])
         if (it.get("caption") or "") != want:
             it["caption"] = want
-            notes.append("男主白边裸字 caption 统一" if is_boy
+            notes.append("男主方框 caption 统一" if is_boy
                          else "气泡 caption 统一")
 
     # 1.45) 旁白：剧本那一句，位置由代码定。
@@ -1721,15 +1725,15 @@ def autofix(js, cast=None, lines=None, layout=None, scene="", narr="",
             kinds["bubble"].sort(key=lambda t: t["_ord"], reverse=True)
         else:
             kinds["bubble"].sort(key=lambda t: t["bbox"][0], reverse=True)
-        # 同格有男主裸字时：裸字占上半，气泡最多两条只在下半，绝不叠。
-        # 没有裸字时气泡放宽到四条——高密度小漫画一格三四个气泡是常态。
+        # 同格有男主方框时：方框占上半，气泡最多两条只在下半，绝不叠。
+        # 没有方框时气泡放宽到四条——高密度小漫画一格三四个气泡是常态。
         bubble_max = 2 if kinds["plain"] else 4
         for i, t in enumerate(kinds["bubble"]):
             if i >= bubble_max:
-                notes.append("同格裸字+气泡超量，第%d条气泡保留原位置" % (i + 1))
+                notes.append("同格方框+气泡超量，第%d条气泡保留原位置" % (i + 1))
                 continue
             t["bbox"] = bbox_bubble(list(cell), i)
-        # 男主白边裸字：贴右上，和贴右下的气泡上下错开；顺序与气泡同理
+        # 男主直角方框：贴右上，和贴右下的气泡上下错开；顺序与气泡同理
         if all(t.get("_ord") is not None for t in kinds["plain"]):
             kinds["plain"].sort(key=lambda t: t["_ord"], reverse=True)
         else:
@@ -1834,7 +1838,11 @@ def autofix(js, cast=None, lines=None, layout=None, scene="", narr="",
     if not rebuild:
         # 单 Agent：正文保留模型写的一整段，只校尾句（见 retail_caption）。
         has_text = any((t.get("text") or "").strip() for t in items if t.get("label") == "text")
-        has_boy = any("boy plain text" in (it.get("caption") or "").lower()
+        # 说话人只能从已经落进页面的 text item 认（单 Agent 没有剧本台词表）。
+        # 旧容器叫 boy plain text，2026-11-22 改成直角矩形方框后是 boy speech box，
+        # 两个都认：认不出来尾句就会写成「no bare text」，和画面里的方框自相矛盾。
+        has_boy = any(("boy speech box" in (it.get("caption") or "").lower()
+                       or "boy plain text" in (it.get("caption") or "").lower())
                       for it in items if it.get("label") == "text")
         s = js.setdefault("summary", {})
         old = s.get("caption") or ""
@@ -1847,9 +1855,10 @@ def autofix(js, cast=None, lines=None, layout=None, scene="", narr="",
     has_boy = any((ln.get("who") or "") == "boy" for ln in (lines or []))
     if not lines:
         # 单 Agent 链路没有剧本台词表：说话人只能从已经落进页面的 text item 认。
-        # 不认的话尾句永远写成「no bare text」，而页面里明明有一段白边裸字，
-        # 模型收到自相矛盾的两句指令，画出来就是要么没字、要么给男生画气泡。
-        has_boy = any("boy plain text" in (it.get("caption") or "").lower()
+        # 不认的话尾句永远写成「no bare text」，而页面里明明有一个男主方框，
+        # 模型收到自相矛盾的两句指令，画出来就是要么没字、要么给他画气泡。
+        has_boy = any(("boy speech box" in (it.get("caption") or "").lower()
+                       or "boy plain text" in (it.get("caption") or "").lower())
                       for it in items if it.get("label") == "text")
     rebuild_summary(js, cast, layout, has_text, scene, has_boy=has_boy)
     notes.append("重建 summary（画风锁由代码写死）")
