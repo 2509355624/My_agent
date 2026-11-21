@@ -340,6 +340,8 @@
     </div>
     <div class="row" id="bubbleAllRow" style="display:none;margin-bottom:12px">
       <button class="btn primary" id="btnBubbleAll" onclick="bubbleAll()">🫧 一键加气泡（全部待加格）</button>
+      <button class="btn" id="btnWatermark" onclick="openWatermark()"
+              title="在成品图上放水印，产出到独立 watermark/ 目录，不动原图">💧 一键加水印</button>
       <a class="btn" id="btnZip" style="text-decoration:none" href="#" onclick="return zipGuard()">📦 下载成品 zip</a>
       <span id="progress" style="color:var(--text-dim);font-size:12px"></span>
     </div>
@@ -391,7 +393,7 @@ function setBusy(b, phase) {
   // 槽位刷新会调 setBusy(false)，把「生成剧本」重新启用（用户能重复点，
   // 一重复就是两个 agent 在并发烧 token）。
   const busy = b || !!SCRIPT_JOB;
-  for (const id of ['btnScript', 'btnSave', 'btnStart', 'btnRerun', 'btnBubbleAll', 'btnRefix', 'btnChat', 'btnChatUndo'])
+  for (const id of ['btnScript', 'btnSave', 'btnStart', 'btnRerun', 'btnBubbleAll', 'btnWatermark', 'btnRefix', 'btnChat', 'btnChatUndo'])
     document.getElementById(id).disabled = busy;
   document.querySelectorAll('.slot .ops button, .slot .ops select').forEach(x => x.disabled = busy);
   // 手动修复栏也要锁：跑一轮 Qwen 时再点一次就是两个后台任务抢同一格。
@@ -1880,6 +1882,7 @@ async function refresh() {
   renderFix(d.fix);          // 重新补正后靠这个 2 秒轮询把报告刷出来
   renderPortraits(d.portraits);   // 生图模式的写真（③ 卡），顺带刷新单张重跑的结果
   RUNNING = d.running || null;   // renderSlot 靠它判断排队的格有没有线程在管
+  _panels = d.panels || [];      // 水印编辑器：从面板里挑有成品图的格
   const grid = document.getElementById('grid');
   if (!d.panels.length) {
     // 纯写真任务（生图模式新建的目录没有剧本）：漫画卡显示一句指向 ③ 卡，
@@ -2447,10 +2450,145 @@ syncModeInputs();
 applyMode();
 
 loadPromptSuffix();
+// ── 水印编辑器（2026-11-21）──
+// 一套 marks 套到所有已加气泡的格；位置用 0~1 相对坐标，换不同尺寸图也不跑偏。
+let WM_MARKS = [];       // [{text, x, y}] —— x/y 相对比例
+let WM_PANELS = [];      // 本任务里有成品图的格 [{no, url}]
+let WM_CUR = null;       // 当前预览的格
+let _panels = [];        // 最近一次 status 的全量面板（水印取成品图用）
+
+function openWatermark() {
+  WM_PANELS = _panels.filter(p => p.state === 'done' && p.final_url)
+    .map(p => ({no: p.no, url: p.final_url, rev: p.rev}));
+  if (!WM_PANELS.length) { toast('还没有加了气泡的成品图——先加气泡', true); return; }
+  WM_CUR = WM_PANELS[0];
+  const sel = document.getElementById('wmPick');
+  sel.innerHTML = WM_PANELS.map(p =>
+    '<option value="' + p.no + '">第 ' + p.no + ' 格（成品）</option>').join('');
+  wmRenderCanvas();
+  wmRenderList();
+  document.getElementById('wmMsg').textContent = '';
+  document.getElementById('wmDlg').showModal();
+}
+function wmClose() { document.getElementById('wmDlg').close(); }
+function wmSwitch() {
+  WM_CUR = WM_PANELS.find(p => p.no === document.getElementById('wmPick').value) || WM_PANELS[0];
+  wmRenderCanvas();
+}
+function wmRenderCanvas() {
+  const box = document.getElementById('wmCanvas');
+  box.innerHTML = '';
+  if (!WM_CUR) return;
+  const img = document.createElement('img');
+  img.src = imgUrl(WM_CUR.url, String(WM_CUR.rev || '0/0').split('/')[1]);
+  img.style.cssText = 'width:100%;display:block';
+  box.appendChild(img);
+  WM_MARKS.forEach((m, i) => {
+    const d = document.createElement('div');
+    d.textContent = m.text || '水印';
+    d.title = '拖动调整位置';
+    d.style.cssText = 'position:absolute;left:' + (m.x * 100) + '%;top:' + (m.y * 100)
+      + '%;transform:translate(-50%,-50%);color:#fff;-webkit-text-stroke:2px #000;'
+      + 'font-size:14px;font-weight:600;white-space:nowrap;cursor:move;padding:2px 4px';
+    d.addEventListener('pointerdown', e => wmDragStart(e, i));
+    box.appendChild(d);
+  });
+  box.onclick = e => {
+    if (e.target !== img) return;                  // 点在已有水印上不算新增
+    const r = box.getBoundingClientRect();
+    WM_MARKS.push({text: '', x: (e.clientX - r.left) / r.width,
+                   y: (e.clientY - r.top) / r.height});
+    wmRenderCanvas(); wmRenderList();
+    const ins = document.querySelectorAll('#wmList input.wmText');
+    if (ins.length) ins[ins.length - 1].focus();
+  };
+}
+function wmDragStart(e, i) {
+  e.preventDefault(); e.stopPropagation();
+  const box = document.getElementById('wmCanvas');
+  const r = box.getBoundingClientRect();
+  const move = ev => {
+    WM_MARKS[i].x = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
+    WM_MARKS[i].y = Math.max(0, Math.min(1, (ev.clientY - r.top) / r.height));
+    wmRenderCanvas();
+  };
+  const up = () => { window.removeEventListener('pointermove', move);
+                     window.removeEventListener('pointerup', up); };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+}
+function wmRenderList() {
+  const box = document.getElementById('wmList');
+  document.getElementById('wmCount').textContent = '（' + WM_MARKS.length + ' 个）';
+  if (!WM_MARKS.length) { box.innerHTML = '<div style="color:var(--text-dim);font-size:12px">在左边图上点一下放第一个水印</div>'; return; }
+  box.innerHTML = WM_MARKS.map((m, i) =>
+    '<div class="row" style="gap:8px;margin-bottom:8px;align-items:center">'
+    + '<span style="font-size:12px;color:var(--text-dim);width:28px">' + (i + 1) + '</span>'
+    + '<input class="wmText" value="' + String(m.text).replace(/"/g, '&quot;')
+    + '" placeholder="dy：233" data-i="' + i + '" style="flex:1">'
+    + '<button class="btn small" onclick="wmDel(' + i + ')" title="删除这个水印">✕</button></div>').join('');
+  box.querySelectorAll('input.wmText').forEach(inp => {
+    inp.addEventListener('input', () => {
+      WM_MARKS[+inp.dataset.i].text = inp.value;
+      wmRenderCanvas();
+    });
+  });
+}
+function wmDel(i) { WM_MARKS.splice(i, 1); wmRenderCanvas(); wmRenderList(); }
+function wmClear() { WM_MARKS = []; wmRenderCanvas(); wmRenderList(); }
+async function wmSubmit() {
+  const marks = WM_MARKS.filter(m => (m.text || '').trim());
+  if (!marks.length) { toast('至少填一个水印文字', true); return; }
+  const name = (marks[0].text || 'wm').replace(/[：:\s/\\]/g, '').slice(0, 24);
+  const btn = document.getElementById('wmSave');
+  btn.disabled = true;
+  document.getElementById('wmMsg').textContent = '正在生成…';
+  try {
+    const d = await api('/api/comic/watermark', {task: TASK, marks, name});
+    document.getElementById('wmMsg').textContent = '';
+    toast('已生成 ' + d.count + ' 张水印图 → watermark/');
+    wmClose();
+  } catch (e) {
+    document.getElementById('wmMsg').textContent = '';
+    toast('水印失败：' + e.message, true);
+  } finally { btn.disabled = false; }
+}
+
 poll();
 loadProviders();
 restoreSession();
 </script>
+
+<!-- 水印编辑器（2026-11-21）：在成品图上点一下放水印，可多个、可拖动、可改文字。
+     一套水印套到所有已加气泡的格，产出到独立 watermark/ 目录，原图只读。 -->
+<dialog id="wmDlg"
+        style="background:var(--bg-elev);color:var(--text);border:1px solid var(--border);
+               border-radius:var(--radius);padding:18px;width:900px;max-width:96vw;">
+  <h3 style="font-size:15px;font-weight:500;margin-bottom:6px">一键加水印</h3>
+  <div style="color:var(--text-dim);font-size:12px;line-height:1.6;margin-bottom:12px">
+    在图上点一下放一个水印，填文字（如 <code style="color:var(--info)">dy：233</code>）；可放多个、拖动位置、随时修改或删除。
+    这套水印会套到本任务<b>所有已加气泡的成品图</b>，输出到独立的 <code style="color:var(--info)">watermark/</code> 目录，原图不会动。
+  </div>
+  <div style="display:flex;gap:14px;align-items:flex-start">
+    <div style="flex:0 0 300px;min-width:0">
+      <select id="wmPick" style="width:100%;margin-bottom:8px" onchange="wmSwitch()"></select>
+      <div id="wmCanvas" style="position:relative;width:300px;border:1px solid var(--border);
+                                background:var(--bg);cursor:crosshair;user-select:none;overflow:hidden"></div>
+      <div style="font-size:11px;color:var(--text-dim);margin-top:6px">点图放水印 · 拖动圆点移位置</div>
+    </div>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:13px;font-weight:500;margin-bottom:8px">水印文字 <span id="wmCount" style="color:var(--text-dim);font-weight:400"></span></div>
+      <div id="wmList" style="max-height:360px;overflow:auto"></div>
+      <div id="wmMsg" style="font-size:12px;min-height:18px;margin:10px 0 4px;color:var(--text-dim)"></div>
+    </div>
+  </div>
+  <div class="row" style="justify-content:flex-end;margin-top:12px">
+    <button class="btn small" onclick="wmClear()">清空</button>
+    <span style="flex:1"></span>
+    <button class="btn small" onclick="wmClose()">取消</button>
+    <button class="btn primary small" id="wmSave" onclick="wmSubmit()">确定加水印</button>
+  </div>
+</dialog>
 
 <!-- 自定义中转站（2026-10-22）：只有漫画台有入口，也只在这里的下拉里出现 -->
 <dialog id="provDlg"

@@ -72,6 +72,7 @@ from app.features.comic import portrait as comic_portrait
 from app.features.comic import prompt_suffix as comic_prompt_suffix
 from app.features.comic import render_opts as comic_render_opts
 from app.features.comic import thumb as comic_thumb
+from app.features.comic import watermark as comic_watermark
 from app import config as _cfg
 from app.config import BASE_DIR
 
@@ -2640,3 +2641,54 @@ def api_comic_download():
                         "error": "这一集还没有任何图（先跑阶段一生成场景图）"}), 404
     return send_file(buf, mimetype="application/zip", as_attachment=True,
                      download_name="%s_final.zip" % task.task_id)
+
+
+@bp.route("/api/comic/watermark", methods=["POST"])
+def api_comic_watermark():
+    """给**已加气泡的成品图**叠水印，产出到独立 watermark/ 目录（2026-11-21）。
+
+    用户作品被搬运 → 要在图上留下自己的平台水印（dy：233 / ks：我是233）。
+
+    - 源图只读 final/，raw/ 与 final/ 全程一个字节都不动。
+    - marks：水印列表，每项 {text, x, y}，x/y 是 0~1 相对坐标（前端点哪就传哪），
+      一套 marks 应用到所有已加气泡的格子，位置按相对比例落到每一格。
+    - 文件名 `格号_文字.png`（如 `04_dy233.png`），重做同名直接覆盖。
+    - name：文件名后缀，默认从第一条水印文字生成（safe_name）。
+
+    只处理 state=done（成品图存在）的格；没有成品图的格跳过并回报。
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        path = _task_dir(data.get("task"))
+        task = _load_task(path)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+
+    marks = data.get("marks") or []
+    items = comic_watermark.normalize_marks(marks)
+    if not items:
+        return jsonify({"ok": False,
+                        "error": "没有水印：先在图上点一下放水印、填上文字"}), 400
+
+    # 文件名后缀：显式 name 优先，否则取第一条文字清洗后的片段。
+    name = comic_watermark.safe_name(data.get("name") or items[0][0])
+    done = []
+    skipped = []
+    for p in task.panels:
+        if p.state != "done" or not os.path.isfile(task.final_path(p)):
+            skipped.append(p.no)
+            continue
+        dst = task.watermark_path(p.no, name)
+        try:
+            comic_watermark.stamp(task.final_path(p), dst, marks)
+            done.append(p.no)
+        except Exception as exc:            # 某一格坏了不该拖垮整本
+            log.warning("水印失败 格%s: %s", p.no, exc)
+            skipped.append(p.no)
+
+    if not done:
+        return jsonify({"ok": False,
+                        "error": "没有可加水印的成品图（先给格子加气泡）"}), 400
+    return jsonify({"ok": True, "task": task.task_id, "name": name,
+                    "count": len(done), "done": done, "skipped": skipped,
+                    "dir": os.path.relpath(task.watermark_dir, os.path.dirname(path))})

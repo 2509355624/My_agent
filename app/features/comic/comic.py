@@ -785,6 +785,14 @@ class Task:
     def final_path(self, p):
         return os.path.join(self.final_dir, "%s_final.png" % p.no)
 
+    # 水印独立目录（2026-11-21）：只读 final/，产出全放这里，绝不碰原图。
+    @property
+    def watermark_dir(self):
+        return os.path.join(self.dir, "watermark")
+
+    def watermark_path(self, no, name):
+        return os.path.join(self.watermark_dir, "%s_%s.png" % (no, name))
+
     def load_state(self):
         """把 state.json 里记着的进度贴回面板，实现断点续跑。"""
         if not os.path.exists(self.state_path):

@@ -689,15 +689,19 @@ def main():
             "写真状态条")
     s = rep(s,
             "      <button class=\"btn primary\" id=\"btnBubbleAll\" onclick=\"bubbleAll()\">🫧 一键加气泡（全部待加格）</button>\n"
+            "      <button class=\"btn\" id=\"btnWatermark\" onclick=\"openWatermark()\"\n"
+            "              title=\"在成品图上放水印，产出到独立 watermark/ 目录，不动原图\">💧 一键加水印</button>\n"
             "      <a class=\"btn\" id=\"btnZip\" style=\"text-decoration:none\" href=\"#\" onclick=\"return zipGuard()\">📦 下载成品 zip</a>\n"
             "      <span id=\"progress\" style=\"color:var(--text-dim);font-size:12px\"></span>\n"
             "    </div>",
             "      <button class=\"btn primary\" id=\"btnBubbleAll\" onclick=\"bubbleAll()\">🫧 一键加气泡（全部待加格）</button>\n"
+            "      <button class=\"btn hidden-by-friend\" id=\"btnWatermark\" onclick=\"openWatermark()\"\n"
+            "              title=\"在成品图上放水印，产出到独立 watermark/ 目录，不动原图\">💧 一键加水印</button>\n"
             "      <button class=\"btn\" id=\"btnSendInline\" onclick=\"doSendQQ()\">📤 重发到 QQ</button>\n"
             "      <a class=\"btn hidden-by-friend\" id=\"btnZip\" style=\"text-decoration:none\" href=\"#\" onclick=\"return zipGuard()\">📦 下载成品 zip</a>\n"
             "      <span id=\"progress\" style=\"color:var(--text-dim);font-size:12px\"></span>\n"
             "    </div>\n"
-            "    <div class=\"inline-status\" id=\"lsBubble\"></div>", "加气泡状态条")
+            "    <div class=\"inline-status\" id=\"lsBubble\"></div>", "加气泡状态条（水印按钮群友隐藏）")
 
     # ⑨ 渲染参数：母本整卡隐藏（DOM 保留，loadRenderOpts 照常写不报错），
     #    另给一张只有画幅预设 + 自填宽高的卡。
@@ -715,6 +719,9 @@ def main():
 
     s = rep(s, "<dialog id=\"provDlg\"", "<dialog id=\"provDlg\" class=\"hidden-by-friend\"",
             "自定义中转站弹窗")
+    # 水印编辑器：站主防搬运功能，群友版隐藏按钮（上面）与弹窗，JS 保留不报错。
+    s = rep(s, "<dialog id=\"wmDlg\"", "<dialog id=\"wmDlg\" class=\"hidden-by-friend\"",
+            "水印编辑器弹窗")
 
     # ⑪ 母本里两处钩子（只加一行，不改逻辑）
     s = rep(s,
