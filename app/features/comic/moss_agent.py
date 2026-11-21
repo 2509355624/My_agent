@@ -143,13 +143,30 @@ SYSTEM = """你写黑白日漫整页分镜，直接输出 Layout JSON。输入�
 ════ 输出 ════
 {
   "title": "标题，12 字以内",
-  "cast": {"girl": "英文外形串"},
+  "cast": {"girl": "英文外形串：只写脸、身材、发型、配饰，绝不写衣服"},
   "scenes": {"1": "英文场景串", "2": "..."},
   "pages": [ 每页一个对象，字段如下 ]
 }
 每页：{"layout": "L0", "scene": "1", "summary": {...}, "items": [...],
         "bbox_coord_space": "abs_centralized", "bbox_format": "yxyx"}
 summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格数核对一遍）。
+
+════ 人：脸是固定的，衣服跟着这一页走 ════
+输入开头常带着一段现成的英文外形串。那是**角色档案**，重点是脸和身材：年龄、体型、发型发色、头带、眼睛、脸型、配饰。
+档案里写的那件衣服不要抄。衣服是她这一集穿的东西，不是她这个人。
+· **cast.girl 只写不变项**，一项都不许带 wearing / dressed in / 任何衣物。
+  衣服一进 cast，这本漫画从第一页到最后一页就只能穿那一件，换装剧情永远失败。
+· 每一页先定「这一页她身上是什么」，写进 summary 的 ③；该页每个 character 格照抄这一段，一个字不改。
+· 换装：换之前那页写旧衣；正在换的那格写清动作和半脱状态；换完那一页起每页都写新衣，不许再出现旧衣。
+  衣服递出去了、送人了、被拿走了，后面就不许再画它。
+· 拿到新衣还没换上的那一页，写她还穿着旧衣、手里拎着新衣——不要让她凭空换好。
+· **脱下来的衣服不许再挂在身上**：那一格写 held / balled up / dangling from her hand，
+  同一格里再写 wearing 它，出图就会画成「身上穿着一件、手里还拿着一件」。
+  脱到只剩内搭就写她穿着内搭（a plain white underlayer），别让她光着。
+· 档案里那件衣服不进任何一格，也不许拿它的细节做对比（不写 the lace collar of the old one、
+  不写 unlike the previous one）——读者没看过档案。
+· 湿、脏、破写在这一页的衣着里：soaked, translucent, clinging, muddy at the hem。不写进 cast。
+· 「干净的新衣服」写 fresh, dry，不要写 dry clean（会被读成干洗）。
 
 ════ 一页怎么想 ════
 一页只放一个地点、一个动作。读者翻过这页，要能说出「她刚做了什么」。
@@ -192,7 +209,7 @@ T3 · 三格 · 上大横格 + 下两格（上面一个主画面，下面两处�
 依次写这五样，用逗号句号连起来：
 ① 分格：A black-and-white Japanese manga page divided into five panels: one tall dominant panel filling the right side from top to bottom, a narrow left column of three small stacked panels, and a thin horizontal establishing strip across the very top, separated by thin white gutters and a thin black ink border around the whole page.
 ② 画风：Manga page, monochrome, greyscale screentones, inked lineart, bold black ink outlines, pen crosshatching.
-③ 主格：景别 + 她在做什么 + 完整外形串（从 cast 逐字抄，不缩写不调序）+ 构图位置
+③ 主格：景别 + 她在做什么 + 完整外形串（从 cast 逐字抄，不缩写不调序）+ 本页衣着（这一页她身上穿什么，这一页在换装就写成变化）+ 构图位置
 ④ 场景：地点 + 时间 + 光源 + 两三个具体物件
 ⑤ 文字：有字写 Flat screentone shading, clear Chinese text: the girl's words in sharp speech bubbles with short pointer tails；
    本页还有男主画外话，补 the off-screen boy's words as white-outlined bare text with no bubble；
@@ -201,7 +218,7 @@ T3 · 三格 · 上大横格 + 下两格（上面一个主画面，下面两处�
 ①里的格线永远细：thin white gutters + a thin black ink border。不要写 thick / heavy / bold frame——五页连起来翻，外框粗细一变，页面就会跳。
 
 ════ items ════
-character：这一格画什么 —— 景别 + 定住的姿势 + 该角色完整外形串（原样连续粘贴）+ 结尾固定写
+character：这一格画什么 —— 景别 + 定住的姿势 + 该角色完整外形串（原样连续粘贴）+ 本页衣着（照抄本页 ③ 里那一段；正在换装就写变化）+ 结尾固定写
   monochrome greyscale screentone, bold black ink outline, flat shading, no color cast.
 object：空镜或道具 + 结尾固定写 No speech bubble and no text in this panel.
 text：只写容器形状和字的排法，台词内容只进 text 字段。按「谁在说」选容器，不按好不好看选。
@@ -235,12 +252,19 @@ text：只写容器形状和字的排法，台词内容只进 text 字段。按�
 远景需要人时写 two or three distant girl figures，写 girl 不写 person/figure/someone。
 我们只以一只手的形式出现：pov hands / disembodied hand，最多两只，且贴画面边缘。
 递、扔、交、接这类动作，**她的手或小臂必须留在画面里**，东西不能自己悬在半空。
+**我们的动作也要画出来**：我把东西扔给她，就画成画面边缘伸出的手把东西抛过去、她伸手接住；
+不要改成她自己去找、自己去拿——那是把我们的动作偷掉了。
 湿、汗、水只用材质词：soaked, translucent, clinging, dark and heavy；不要写 dark patch / black stain / wet spot（会画成一块脏）。
 人物镜头最紧到中近景：medium close-up with head and shoulders in frame。
 只写明暗、材质、网点，不写颜色词。
 外形串是唯一事实源：cast 写了几项，每一格就抄几项，不缩写、不调序、不改词。
 双人同框时第二个人开头显式互斥：In sharp contrast, the other girl has NO long hair, NO headband。
-衣物以 cast 为基准，只写已经发生的变化（sleeves rolled up / cardigan slipped off one shoulder）。
+衣服不在 cast 里：只有「这一页她穿什么」，没有「她这个人穿什么」。
+
+════ cast 长这样（照这个抄结构，衣服一个字都不许带） ════
+"cast": {"girl": "a girl about twelve, slender small frame, long straight dark hair with soft blunt bangs pulled back by a wide fluffy pale cloth headband, large round dark eyes, round soft face, faint blush, a dark fabric scrunchie on her left wrist"}
+她这一页穿什么，不在 cast 里，而在这一页的 ③（英文）：
+"...a soaked white short-sleeve track shirt clinging to her, loose white running shorts..."
 
 ════ 一页长这样（照这个密度和写法，不要缩水） ════
 """ + json.dumps(EXAMPLE, ensure_ascii=False, indent=1) + """
@@ -292,11 +316,21 @@ def audit(js, cap=12):
         warns.append("页数 %d 超过上限 %d（会截断）" % (len(pgs), cap))
 
     cast = js.get("cast") or {}
-    girl_segs = _cast_segs(cast.get("girl") or "")
+    girl_spec = cast.get("girl") or ""
+    girl_segs = _cast_segs(girl_spec)
     if not girl_segs:
         out.append("cast 里没有 girl 外形串")
     elif len(girl_segs) < 6:
-        out.append("cast 的 girl 外形串只有 %d 项，太少（要写满 8 项）" % len(girl_segs))
+        out.append("cast 的 girl 外形串只有 %d 项，太少（年龄、身材、发型+头带、眼睛、脸、配饰写满这几样）"
+                   % len(girl_segs))
+    # 2026-11-21：cast 里写衣服 = 这本书换不了装。
+    # 判据只认一个词「wearing」（以及 dressed in / clad in），不是衣物词表：
+    # 外形串里写衣服几乎必然用这个句式，命中即事实，改法也唯一——把这段剪进本页 ③。
+    cloth = re.search(r"\b(wearing|dressed in|clad in)\b", girl_spec, re.I)
+    if cloth:
+        out.append("cast 里写了衣服（%s …）——衣服不许进 cast：把这一段挪进每一页 summary 的 ③，"
+                   "cast 只留年龄、身材、发型、头带、眼睛、脸、配饰，否则整本换不了装"
+                   % cloth.group(1))
 
     seen_lines = {}
     for n, p in enumerate(pgs, 1):
@@ -370,11 +404,13 @@ def audit(js, cap=12):
                            % (n, hit.group(1)))
                 break
 
-        # 外形串是否原样粘贴
+        # 外形串是否原样粘贴。判「这一格画的是不是她」只认 girl 这个词——
+        # 模型多数时候写 "a girl about twelve"，极少写 danbooru tag 式的 1girl，
+        # 原来按 1girl 判会让这条检查在大多数页上直接跳过。
         chars = [i for i in (p.get("items") or []) if i.get("label") == "character"]
         for ch in chars:
             cc = (ch.get("caption") or "").lower()
-            if "1girl" not in cc:
+            if "girl" not in cc:
                 continue
             miss = [s for s in girl_segs if s.lower() not in cc]
             if miss:

@@ -1759,6 +1759,11 @@ def autofix(js, cast=None, lines=None, layout=None, scene="", narr="",
         low = cap.lower()
         m = re.match(r".*?\b(boy|girl)\b", low)
         who = m.group(1) if m else None
+        # 2026-11-21：模型常写 "she stands on the track" 而不带 girl 这个词。
+        # 台账里只有她一个人时，character 格不可能是别人——按 girl 补，
+        # 否则外形串在这一格静默丢失，下一页她的脸就开始飘。
+        if not who and "girl" in cast and len(cast) == 1:
+            who = "girl"
         if not who or who not in cast:
             continue
         # 2026-11-21 POV：画面里只有女生。绝不把 boy 外形串补进 caption——
