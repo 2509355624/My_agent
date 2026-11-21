@@ -99,14 +99,16 @@ def check_outfit(spec, name):
         for i, it in enumerate(cells, 1):
             cap = it.get("caption") or ""
             bits = outfit_bits(cap)
+            tight = bool(A._TIGHT.search(cap.lower()))
             lines.append("   格%d %s" % (i, (" ｜ ".join(bits))[:300] or "（没写衣着）"))
             if not bits:
                 # 脸 / 手 / 脚的特写里看不到衣服，不写是对的——硬塞一件反而画错。
-                if A._TIGHT.search(cap.lower()):
+                if tight:
                     lines[-1] += "   ← 局部特写，不需要衣着"
                 else:
                     issues.append("P%s 格%d 没写任何衣着——人物会裸着或沿用上一格"
                                   % (p.get("n"), i))
+
 
     # 1) 档案里那件衣服不许出现在画面里
     leak = []

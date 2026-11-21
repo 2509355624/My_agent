@@ -361,7 +361,7 @@ _MIDSTATE = (r"half[- ]?off|mid[- ]?change|one bare shoulder|one shoulder bare"
              # 浴衣「正从肩上滑落」= 还穿着 + 正在脱，同一格两个状态
              # （2026-11-22 温泉话题 P3 实跑）。主语必须是衣物——裸的
              # `sliding down` 会命中「汗珠滑下脖子」，实测误报过一次。
-             + r"|" + _CLOTH + r"\s+sliding (?:off|down)"
+             + r"|" + _CLOTH + r"\s+(?:sliding|slid|slides?|slipping|slipped) (?:off|down)"
              # 脱到一半的另外两种写法（2026-11-22 更衣话题 P3 实跑）：
              # the shirt pulled halfway up her torso / dragging the shirt up from her waist
              + r"|pulled halfway (?:up|down)"
@@ -605,6 +605,7 @@ def _repair_user(brief, pages, js, issues):
             + "\n\n== 现有稿子 ==\n"
             + json.dumps(js, ensure_ascii=False)
             + "\n\n输出改好之后的完整 JSON，结构和字段与原来一致，只输出 JSON。")
+
 
 
 def generate(brief, pages, call, progress=None):
