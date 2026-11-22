@@ -385,6 +385,11 @@ def api_moss_write():
         pages = max(1, min(12, int(data.get("pages") or 1)))
     except (TypeError, ValueError):
         pages = 1
+    # 输入可能是「男主 / 女主 / 剧情」三栏拼的（2026-11-22）。四格这条链没有
+    # 「男主台词」这个概念，但至少要把「男主：无」变成一句人话，不能把标签
+    # 当剧情文字喂进去。旧的一句话输入原样透传，一个字都不动。
+    raw_brief = brief
+    brief = moss_agent.compose_brief(moss_agent.parse_brief(brief), fallback=brief)
     spec, raw, err = moss_comic.write(
         brief, pages=pages,
         style=str(data.get("style") or "").strip(),
@@ -392,6 +397,7 @@ def api_moss_write():
         layout=str(data.get("layout") or "").strip(),
         provider=str(data.get("provider") or "").strip() or None,
         model=str(data.get("model") or "").strip() or None)
+    brief = raw_brief
     if spec is None:
         # 502 = 模型侧没交作业（解析失败），不是用户的错，页面提示重来一次
         return jsonify({"ok": False,
@@ -461,7 +467,11 @@ def api_moss_two_agent():
     engine = "twopass" if legacy else "agent"
     try:
         if legacy:
-            spec, report = moss_twopass.generate(brief, pages, bound_call)
+            # 双段链路自己不会拆三段式，这里先归一成一段人话再给它。
+            # agent 链路在 generate 内部自己拆（还要把「有没有男主」传给体检）。
+            spec, report = moss_twopass.generate(
+                moss_agent.compose_brief(moss_agent.parse_brief(brief), fallback=brief),
+                pages, bound_call)
         else:
             spec, report = moss_agent.generate(brief, pages, bound_call)
     except BaseException as exc:                # noqa: BLE001 - 模型侧异常一律转 502

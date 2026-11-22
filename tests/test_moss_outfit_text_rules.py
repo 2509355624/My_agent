@@ -58,7 +58,8 @@ class LineFollowsTheActionTest(unittest.TestCase):
 class NoInnerMonologueTest(unittest.TestCase):
     def test_only_two_containers_exist(self):
         s = A.SYSTEM
-        self.assertIn("这一集只有两种字", s)
+        # 2026-11-22 起是「最多两种」：没有男主的一集只有她的圆气泡。
+        self.assertIn("这一集最多两种字", s)
         self.assertIn("没有旁白框", s)
         self.assertIn("rectangular caption box", s)   # 明确点名不要它
 

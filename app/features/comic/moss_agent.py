@@ -137,7 +137,8 @@ EXAMPLE = {
     "bbox_format": "yxyx",
 }
 
-SYSTEM = """你写黑白日漫整页分镜，直接输出 Layout JSON。输入是一句话题和一个页数，输出是一个 JSON 对象。
+SYSTEM = """你写黑白日漫整页分镜，直接输出 Layout JSON。输入是这一本里有谁、她是谁、这一集发生什么，
+还有一个页数上限；输出是一个 JSON 对象。
 只输出 JSON，不要围栏、不要解释、不要在 JSON 前后写任何字。
 
 ════ 输出 ════
@@ -151,8 +152,22 @@ SYSTEM = """你写黑白日漫整页分镜，直接输出 Layout JSON。输入�
         "bbox_coord_space": "abs_centralized", "bbox_format": "yxyx"}
 summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格数核对一遍）。
 
+════ 这一本里有谁（先定这个，再动笔） ════
+输入开头会写清。**这一节决定整本有没有第二个人，读错了后面全错**：
+· 「只有她一个人」→ 全书只有她。不许写男方框、不许写「他」说的任何话、不许出现男人的手或影子，
+  也不许出现「镜头后面的我」——这一本的镜头是第三个人在看她，不是谁的眼睛。
+  她的情绪、她的决定、她的反应，全部交给表情、身体和镜头。
+· 「男主（画外，不出镜）」→ 他只在字里，不在画里。**但他不必说话**：整本一句不说完全正常，
+  只有剧情真的需要一个回应（她递东西给他、他必须给个交代）时才写。
+  **整本最多两三句**，一页最多一句；能让她自己做完的事，不要他去开口。
+  五页里他出现两三页已经是上限，剩下几页交给她和镜头。
+· 输入里根本没提这一节 → 按「有他，但能不说就不说」处理。
+**没有男主的戏，就是没有。** 不许为了把格子填满就给他编话——
+「我来我来，先回家」「衣服放门口了」这种句子，落在纯女主的一集里就是凭空多出一个人。
+她在泥里摔了一跤、自己走回家、脱鞋、冲澡，这一路本来就不需要谁开口。
+
 ════ 人：脸是固定的，衣服跟着这一页走 ════
-输入开头常带着一段现成的英文外形串。那是**角色档案**，重点是脸和身材：年龄、体型、发型发色、头带、眼睛、脸型、配饰。
+输入里的「她是谁」通常是一段现成的英文外形串。那是**角色档案**，重点是脸和身材：年龄、体型、发型发色、头带、眼睛、脸型、配饰。
 档案里写的那件衣服不要抄。衣服是她这一集穿的东西，不是她这个人。
 · **cast.girl 只写不变项**，一项都不许带 wearing / dressed in / 任何衣物。
   衣服一进 cast，这本漫画从第一页到最后一页就只能穿那一件，换装剧情永远失败。
@@ -191,6 +206,19 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
 · **写 ③ 按顺序写全**：内搭 → 外衣 → 下装 → 鞋袜。三层都在这页身上，就三层都写；
   只写外衣，等于把里面那层交给模型自己编。
 
+════ 用镜头讲，别用字讲 ════
+一页只说一件事，靠换机位把它说清。想让人读出「她冷」「她脏」「她不想被碰」，
+不要写台词，换一个能看见这件事的镜头：
+· 建场（远）：环境比她大——雨里的巷子、门口的水洼、亮着灯的浴室。人不一定在画面正中。
+· 动作（中）：手在做什么——捏着湿透的衣角、扶着门框、鞋跟在台阶上蹭泥。
+· 局部（特写）：只说一件事的一小块——塞满泥的指甲、滴水还往下淌的发梢、脚背上冲下来的黑水。
+· 反应（近）：脸和眼睛。她看的方向，就是她把注意力放在哪儿。
+一页里把「远 → 中 → 特写」串起来，读者自己补得出因果；
+三张同样的半身像平铺，等于什么都没说。
+**S1 一格只在「这一页就是那一张脸 / 那一个对视」时才用。**
+她站着说一句话不是理由——那件事要用 D1（说之前 → 说之后），
+或者 T3（人 + 她看的东西 + 手边）来讲。
+
 ════ 一页怎么想 ════
 一页只放一个地点、一个动作。读者翻过这页，要能说出「她刚做了什么」。
 写之前先定三件事：她现在在哪、身体停在什么姿势、脸上是什么表情。
@@ -222,18 +250,22 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
 ——那是同一个 beat 用了两次。
 **格数 = 状态数**。状态比格多就加页，绝不许把两个状态压进一格。
 
-════ 字（跟着格数走，别让五格页只有一句话） ════
-一格页 0~2 句；两格页 1~3 句；三格页 2~4 句；五格页 3~5 句。
+════ 字（这些是上限，不是配额） ════
+一格页 0~1 句；两格页 0~2 句；三格页 0~3 句；五格页 0~4 句。
+**镜头能说清的就不写字。** 整本一句台词都没有也成立——她摔进泥里、爬起来、进门脱鞋、站在花洒下，
+画面自己会讲；读者不需要有人替她说明。
+为了把格子填满去写「好……」「嗯」「唉」是错的，读者只会觉得吵。
 台词一句一个意思，十来个字，落在说话人自己在的那一格。
 **台词跟动作对齐**：一句台词必须落在「这件事真正发生」的那一格——说「给你」「接着」，
 就得是东西已经离手、她的手伸向画面外、朝我递过来的那一格。
 上一格她只是把湿衣服抱在胸前 / 团在手里，就只写动作、一个字都不许说。
 「拿着」和「递出」是两个状态，拆成两格时台词永远在**后面**那一格。
 一句台词只出现一次，不许为了把格子填满而在两格各写一遍。
-**这一集只有两种字：她的圆气泡、他的直角方框。没有第三种容器。**
+**这一集最多两种字：她的圆气泡、他的直角方框。**（没有男主时只有第一种，那就只有气泡，或者干脆没有字。）
 不许旁白框、不许独白框——她心里怎么想、她打算做什么，一个字都不上画面；
 时间地点交给画面本身（拍到哪就是哪）。想让她说什么，就让她自己在气泡里说出口。
-单个格子可以完全没有字——特写本身就说清了，就别硬塞；但**整页空得只剩一句**，读者会不知道这一页发生了什么。
+单个格子可以完全没有字，整页也可以一个字都没有——**判断标准是「画面把这个瞬间说清了没有」**，
+不是「这一页有没有字」。一张脸愣在那儿、一只手抓着湿衣服、一排水洼里的倒影，本来就不需要谁来解说。
 
 ════ 骨架（只有这四种，bbox 整组照抄，一个字符都不许改） ════
 L0 · 五格 · 顶条建场 + 右通高主格 + 左栏三小
@@ -269,7 +301,8 @@ T3 · 三格 · 上大横格 + 下两格（上面一个主画面，下面两处�
 ③ 主格：景别 + 她在做什么 + 完整外形串（从 cast 逐字抄，不缩写不调序）+ 本页衣着（这一页她身上穿什么，这一页在换装就写成变化）+ 构图位置
 ④ 场景：地点 + 时间 + 光源 + 两三个具体物件
 ⑤ 文字：有字写 Flat screentone shading, clear Chinese text: the girl's words in sharp speech bubbles with short pointer tails；
-   本页还有男主画外话，补 the off-screen boy's words in a plain rectangular box with a thin black outline and no tail；
+   本页还有男主画外话，补 the off-screen boy's words in a plain rectangular box with a thin black outline and no tail
+   ——**这一本没有男主时，这一句一个字都不许出现**；
    整页没有字写 no text and no speech bubbles anywhere on the page.
 全英文，一个汉字都不许有。
 ①里的格线永远细：thin white gutters + a thin black ink border。不要写 thick / heavy / bold frame——五页连起来翻，外框粗细一变，页面就会跳。
@@ -312,13 +345,16 @@ text：只写容器形状和字的排法，台词内容只进 text 字段。**�
 框离格边至少留 2%。气泡宽度约为格宽的 42%。同一格多句，先说的在上。
 
 ════ 画什么 ════
-镜头就是我们：她冲着镜头做动作——递过来、扔过来、抬眼看过来、把东西推到你面前，动作方向直接朝画面外。
+**有男主时**，镜头就是我们：她冲着镜头做动作——递过来、扔过来、抬眼看过来、把东西推到你面前，动作方向直接朝画面外。
+**没有男主时**，镜头是旁观者：她做给谁看都不为，动作朝着画面里她正在处理的东西（手里的衣角、脚下的水洼、墙上的挂钩）。
 **整页不许出现任何男性人形**：前景、远景、路人、操场边的其他学生、镜中倒影、门后剪影，全部只画女性。
 远景需要人时写 two or three distant girl figures，写 girl 不写 person/figure/someone。
-我们只以一只手的形式出现：pov hands / disembodied hand，最多两只，且贴画面边缘。
+有男主时，我们只以一只手的形式出现：pov hands / disembodied hand，最多两只，且贴画面边缘；
+没有男主时，画面里**连手都没有**——没有「我」，就没有「我的手」，她的东西自己拿、自己放。
 递、扔、交、接这类动作，**她的手或小臂必须留在画面里**，东西不能自己悬在半空。
-**我们的动作也要画出来**：我把东西扔给她，就画成画面边缘伸出的手把东西抛过去、她伸手接住；
+**有男主时，我们的动作也要画出来**：我把东西扔给她，就画成画面边缘伸出的手把东西抛过去、她伸手接住；
 不要改成她自己去找、自己去拿——那是把我们的动作偷掉了。
+（没有男主时这一条不适用：剧本里没有「我」，就没有需要画出来的「我的动作」。）
 湿、汗、水只用材质词：soaked, translucent, clinging, dark and heavy；不要写 dark patch / black stain / wet spot（会画成一块脏）。
 人物镜头最紧到中近景：medium close-up with head and shoulders in frame。
 只写明暗、材质、网点，不写颜色词。
@@ -336,6 +372,85 @@ text：只写容器形状和字的排法，台词内容只进 text 字段。**�
 """ + json.dumps(EXAMPLE, ensure_ascii=False, indent=1) + """
 
 现在把话题写成 pages。"""
+
+
+# ══════════════════════ 输入：谁在这本里 ══════════════════════
+# 用户 2026-11-22 定的输入格式（沿用漫画工作台那套）：
+#   男主：无
+#   女主：a girl about twelve, …
+#   剧情：她在雨里摔进泥坑，自己走回家，脱鞋，冲澡。
+# 男主写「无」= 这一集没有男主的戏：全程只有她，不许凭空给他编台词。
+# 实测《泥坑之后，热水之前》：剧情里明明没有他，编剧自己塞了「我来我来，先回家」
+# 和「衣服放门口了」两句——旧提示词只教了「男主的话怎么画」，从没说过「可以没有男主」。
+_ROLE_LINE = re.compile(
+    r"^[\s#*\-]*"
+    r"(?:[【\[]\s*(男主|女主|剧情)\s*[】\]]"          # 【男主】无
+    r"|(男主|女主|剧情)\s*[*]{0,2}\s*[：:])"        # 男主：无 / **男主**：无
+    r"\s*(.*)$")
+# 「无」的各种写法。空的不算：写了「男主：」却没填，是没交作业，不是没有他。
+_NO_MALE = {"无", "无男主", "没有", "没有男主", "none", "no", "n/a", "na", "null", "-", "—", "空"}
+
+
+def parse_brief(text):
+    """把输入的「男主 / 女主 / 剧情」拆成三段。
+
+    兼容 `男主：` `男主:` `【男主】`，以及标签下面接着写多行。返回：
+    `male` / `female` / `plot`、`labeled`（有没有命中角色行）、`male_none`。
+    一行角色行都没有 = 旧格式，整段当剧情（`labeled=False`），
+    提示词那边按「有他、但能不说就不说」处理。
+    """
+    raw = (text or "").strip()
+    out = {"male": "", "female": "", "plot": "", "labeled": False, "male_none": False}
+    if not raw:
+        return out
+    buckets = {"男主": [], "女主": [], "剧情": []}
+    cur = None
+    for line in raw.splitlines():
+        hit = _ROLE_LINE.match(line)
+        if hit:
+            cur = hit.group(1) or hit.group(2)
+            out["labeled"] = True
+            buckets[cur].append((hit.group(3) or "").strip())
+        elif cur:
+            buckets[cur].append(line.strip())
+        else:
+            buckets["剧情"].append(line.strip())
+    for key, val in (("male", "男主"), ("female", "女主"), ("plot", "剧情")):
+        out[key] = "\n".join(x for x in buckets[val] if x).strip()
+    out["male_none"] = bool(out["labeled"]) and \
+        out["male"].strip().strip("。.，,").lower() in _NO_MALE
+    if not out["labeled"]:
+        out["plot"] = raw
+    return out
+
+
+def compose_brief(parsed, fallback=""):
+    """把三段拼成编剧能读的段落：谁在这本里 → 她是谁 → 这一集发生什么。
+
+    旧格式（没有角色行）原样返回，一个字都不加。
+    """
+    if not parsed.get("labeled"):
+        return fallback
+    head = ["== 这一本里有谁 =="]
+    if parsed.get("male_none"):
+        head.append("只有她一个人。所有页、所有格子都只有她，没有第二个人，"
+                    "也不存在「镜头后面的我」。")
+        head.append("不要给她安排任何对话对象：不写男方框、不写「他」说的话、"
+                    "不出现男人的手。她的反应靠表情、动作和她看的东西。")
+    else:
+        male = (parsed.get("male") or "").strip()
+        if male:
+            head.append("男主（画外，不出镜）：%s" % male)
+        else:
+            head.append("男主：这一集没指定，按「有他」处理，但他能不说就不说")
+        head.append("他不一定说话：整本一句不说完全正常，"
+                    "只有剧情真的需要他回应时才写一句。")
+    body = []
+    if (parsed.get("female") or "").strip():
+        body += ["== 她是谁 ==", parsed["female"].strip()]
+    if (parsed.get("plot") or "").strip():
+        body += ["== 这一集发生什么 ==", parsed["plot"].strip()]
+    return "\n".join(head + body)
 
 
 # ══════════════════════ 体检 ══════════════════════
@@ -481,12 +596,14 @@ _TIGHT_FACE = re.compile(r"close[- ]up (?:of|on) her (?:[a-z-]+ ){0,2}"
 _FACE_WORDS = ("hair", "headband", "bangs", "eye", "face")
 
 
-def audit(js, cap=12):
+def audit(js, cap=12, male_none=False):
     """只看可数的事实。返回 `(blocking, warns)`。
 
     `blocking` 是要模型改的：代码补不回来的（格子对不上骨架、文字跑出格子、
-    外形串漏项、台词重复）。`warns` 是代码能兜底的（尾句、页数超限、空字段），
-    只记进报告，不拿它去多烧一次重修——autofix 会重建 summary、截断页数。
+    外形串漏项、台词重复、声明没男主却出现男方框）。`warns` 是代码能兜底的
+    （尾句、页数超限、空字段），只记进报告，不拿它去多烧一次重修——
+    autofix 会重建 summary、截断页数。
+    `male_none=True` 来自输入里的「男主：无」：这一集没有他的话，就不该有他的框。
     """
     out = []
     warns = []
@@ -562,6 +679,12 @@ def audit(js, cap=12):
             if "caption box" in tcap and "boy speech box" not in tcap:
                 out.append("第%d页：「%s」用了旁白框——这一集只有她的圆气泡和他的直角方框，"
                            "旁白/独白一律不写，让她自己说出来" % (n, txt[:10]))
+            # 声明「这一集没有男主」却画了男方框：不是风格问题，是这一页凭空多了一个人。
+            # 判据只认容器名（结构事实），不猜台词内容归谁——归属是编剧的活。
+            if male_none and "boy speech box" in tcap:
+                out.append("第%d页：「%s」是男主的方框，但这一集没有男主——"
+                           "删掉它；她要说话就用她的圆气泡，不需要说话就整格无字"
+                           % (n, txt[:12]))
             tb = tuple(t.get("bbox") or ())
             # 文字框位置由 autofix 按公式重排，模型算歪了不算它的错
             if not any(_inside(tb, c, pad=8) for c in sk):
@@ -670,7 +793,7 @@ def audit(js, cap=12):
 
 # ══════════════════════ 链路 ══════════════════════
 def _repair_user(brief, pages, js, issues):
-    return ("话题：%s\n目标 %d 页。\n\n"
+    return ("%s\n\n目标 %d 页。\n\n"
             "下面这版稿子体检没过，问题都列出来了，逐条改掉，其余内容保持原样。\n\n"
             "== 体检不通过 ==" % (brief, pages)
             + "\n".join("- " + x for x in issues)
@@ -689,16 +812,21 @@ def generate(brief, pages, call, progress=None):
     say = progress or (lambda msg: None)
     t0 = time.time()
     cap = max(1, int(pages or 1))
-    user = ("话题：%s\n\n写成 %d 页，%d 是上限——素材只够 %d 页就写 %d 页。"
+    # 输入可能是「男主/女主/剧情」三段，也可能还是旧的一句话。
+    # 三段就拼成编剧能读的段落，并把「有没有男主」顺下来给体检用。
+    parsed = parse_brief(brief)
+    ctx = compose_brief(parsed, fallback=brief)
+    male_none = bool(parsed.get("male_none"))
+    user = ("%s\n\n写成 %d 页，%d 是上限——素材只够 %d 页就写 %d 页。"
             "\n每页按上面的规矩写好 layout / summary / items，一次输出整本。"
-            % (brief, cap, cap, cap, cap))
+            % (ctx, cap, cap, cap, cap))
 
     rounds = []
     say("单 Agent 成稿（上限 %d 页）…" % cap)
     raw = call(SYSTEM, user, max_tokens=16000, temperature=0.85, tag="agent_p0") or ""
     js = M.pick_json(raw)                    # 解析不了直接抛，交给上层 502
 
-    issues, warns = audit(js, cap)
+    issues, warns = audit(js, cap, male_none=male_none)
     rounds.append({"round": 0, "issues": issues, "warns": warns, "chars": len(raw)})
     say("体检：%s" % ("通过" if not issues else "%d 条待修" % len(issues)))
 
@@ -707,7 +835,7 @@ def generate(brief, pages, call, progress=None):
             break
         say("第 %d 轮重修（%d 条）…" % (r, len(issues)))
         # 首轮把问题全给它；后几轮只给仍然没过的
-        raw2 = call(SYSTEM, _repair_user(brief, cap, js, issues),
+        raw2 = call(SYSTEM, _repair_user(ctx, cap, js, issues),
                     max_tokens=16000, temperature=REPAIR_TEMP,
                     tag="agent_fix%d" % r) or ""
         try:
@@ -716,7 +844,7 @@ def generate(brief, pages, call, progress=None):
             say("第 %d 轮没解析出 JSON，保留上一版" % r)
             rounds.append({"round": r, "issues": ["解析失败"], "chars": len(raw2)})
             break
-        new_issues, new_warns = audit(js2, cap)
+        new_issues, new_warns = audit(js2, cap, male_none=male_none)
         rounds.append({"round": r, "issues": new_issues, "warns": new_warns,
                        "chars": len(raw2)})
         # 只有变好才收（问题数变多说明它改崩了）
@@ -796,7 +924,9 @@ def generate(brief, pages, call, progress=None):
     title = (js.get("title") or "").strip()
     if len(title) > 18:
         title = ""
-    spec = {"title": title or (brief[:10] or "未命名"),
+    # 标题兜底用剧情那一段：三段式 brief 的前十个字是「男主：无\n女主：…」，不能当标题。
+    brief_tail = (parsed.get("plot") or brief).replace("\n", " ").strip()
+    spec = {"title": title or (brief_tail[:12] or "未命名"),
             "style": (js.get("scenes") or {}).get("1") or "",
             "cast": js.get("cast") or {},
             "pages": out_pages}

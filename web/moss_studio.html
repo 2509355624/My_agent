@@ -46,7 +46,17 @@
   }
   input:focus, textarea:focus, select:focus { border-color: var(--accent); }
   textarea { width: 100%; line-height: 1.6; resize: vertical; }
-  #brief { min-height: 92px; }
+  /* ── 这一集：男主 / 女主 / 剧情（2026-11-22） ──
+     男主写「无」= 这一集没有他，全程只有女主；留空 = 有他，但能不说就不说。 */
+  .roles { display: grid; grid-template-columns: 84px 1fr; gap: 8px; align-items: center;
+    margin-bottom: 8px; }
+  .roles .lab { font-size: 12px; color: var(--text-dim); text-align: right; }
+  .roles input { width: 100%; }
+  #plot { min-height: 92px; }
+  @media (max-width: 620px) {
+    .roles { grid-template-columns: 1fr; gap: 4px; }
+    .roles .lab { text-align: left; }
+  }
   .btn { background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
     border-radius: var(--radius-sm); padding: 8px 14px; cursor: pointer; font: inherit;
     white-space: nowrap; }
@@ -211,10 +221,19 @@
 
   <div id="jobbar"></div>
 
-  <!-- ── 1. 剧情 ── -->
+  <!-- ── 1. 这一集 ── -->
   <div class="card">
-    <h2>一句话剧情</h2>
-    <textarea id="brief" placeholder="例：清晨，一只胖橘猫跳上还在睡觉的男主人胸口坐下。男人没醒。猫慢慢抬起爪子，一巴掌拍在他脸上。男人惊坐起来，猫已经蹲在床脚舔爪子，装作什么都不知道。"></textarea>
+    <h2>这一集</h2>
+    <div class="roles">
+      <span class="lab">男主</span>
+      <input id="male" placeholder="写「无」＝这一集没有他的戏，全程只有女主；留空＝有他，但他不必开口">
+      <span class="lab">女主</span>
+      <input id="female" placeholder="她的外形串（英文）；留空就用上面的角色档案">
+    </div>
+    <div class="roles" style="align-items:start">
+      <span class="lab" style="padding-top:9px">剧情</span>
+      <textarea id="plot" placeholder="例：她在雨里摔进泥坑，衣服全脏了；自己爬起来走回家，在门口脱掉泥鞋，进浴室冲澡。整段没有别人。"></textarea>
+    </div>
     <div class="row" style="margin-top:10px">
       <select id="layout">
         <option value="2x2" selected>四格 2×2</option>
@@ -426,9 +445,23 @@ async function loadMossModels() {
 }
 
 /* ══ 编剧 ══════════════════════════════════════════════════ */
+/* 三栏拼成后端能认的固定格式；男主那行空着就整行不写，
+   后端据此按「有他、但能不说就不说」处理（不是「没有他」）。 */
+function buildBrief() {
+  var male = ($("male").value || "").trim();
+  var female = ($("female").value || "").trim();
+  var plot = ($("plot").value || "").trim();
+  if (!plot) return "";
+  var lines = [];
+  if (male) lines.push("男主：" + male);
+  if (female) lines.push("女主：" + female);
+  lines.push("剧情：" + plot);
+  return lines.join("\n");
+}
+
 async function doWrite() {
-  var brief = $("brief").value.trim();
-  if (!brief) { toast("先写一句剧情", true); return; }
+  var brief = buildBrief();
+  if (!brief) { toast("先写剧情", true); return; }
   var style = $("style").value;
   if (style === "custom") style = $("styleCustom").value.trim();
   var two = $("twoAgent") && $("twoAgent").checked;

@@ -50,7 +50,10 @@ class MossStudioSimpleTest(unittest.TestCase):
     def test_original_ids_are_kept(self):
         html = _html()
         for element_id in (
-                "brief", "layout", "style", "styleCustom", "pages", "btn-write",
+                # 2026-11-22：一句话剧情拆成「男主 / 女主 / 剧情」三栏，
+                # brief 退役，换成 male / female / plot。
+                "male", "female", "plot",
+                "layout", "style", "styleCustom", "pages", "btn-write",
                 "spec-card", "spec-title", "spec-style", "cast-list", "issues",
                 "btn-save", "btn-draw-all", "lora-card", "lora-rows",
                 "btn-lora-save", "pages-wrap", "zoom", "toast", "histsel",
