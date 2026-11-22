@@ -108,6 +108,11 @@ SKILL = "moss-qunyou"
 # 方向带。跑几张如果发现人物姿态被拽跑，第一件事是把这里退回 3.0。
 STEPS = 30
 CFG = 3.5
+# 默认画风（2026-11-22 用户按「回家」成图定档，原串照抄）：现有全彩锁下这句
+# 会渲染成冷蓝夜色 + 暖灯、清晰墨线的安静生活向。agent 每本会自己写一句
+# style，在 two_agent 出口写死覆盖它，保证跨本不漂；换画风只改这一处。
+DEFAULT_STYLE = ("black and white manga page, crisp inked lineart, screentone dot shading, "
+                 "high contrast evening light, quiet slice-of-life mood")
 # 分辨率：群友原版 1024×1536。实测这个尺寸在 12GB 卡上能出图（8 步 72 秒），
 # 降到 896×1344 反而在采样阶段出纯噪声，所以保持原版尺寸不动。
 # 改这里必须同步 `moss_comic._CANVAS_W/_CANVAS_H`，否则 bbox 会整体偏。
@@ -482,6 +487,10 @@ def api_moss_two_agent():
     except BaseException as exc:                # noqa: BLE001 - 模型侧异常一律转 502
         return jsonify({"ok": False,
                         "error": "MOSS 链路失败：%s" % (str(exc) or exc.__class__.__name__)}), 502
+
+    # 画风由代码定档，不用模型每本自填的 scenes[1]：那句随剧情变化，跨本会漂。
+    # 写在出口而不是 generate 内部，用户手改 spec 前的第一份事实就统一。
+    spec["style"] = DEFAULT_STYLE
 
     d = _new_task_dir(spec)
     spec, ps = _save(d, spec, None)

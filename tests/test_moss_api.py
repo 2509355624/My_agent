@@ -17,6 +17,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -265,6 +266,26 @@ class RenderRejectTest(_Base):
             json.dump({"title": "空", "pages": []}, fh)
         r = self.c.post("/api/moss/render", json={"task": name})
         self.assertEqual(r.status_code, 400)
+
+
+class DefaultStyleTest(_Base):
+    """2026-11-22：画风由代码定档，模型每本自填的 style 不许漂。"""
+
+    def test_two_agent_pins_default_style_into_spec_and_prompt(self):
+        spec = _spec()
+        spec["style"] = "模型自己写的另一句画风"
+        with mock.patch.object(moss_api.moss_agent, "generate",
+                               return_value=(spec, {"secs": 1, "pages": []})):
+            r = self.c.post("/api/moss/two_agent",
+                            json={"brief": "她回家了", "pages": 1})
+        self.assertTrue(r.get_json()["ok"], r.get_json())
+        d = os.path.join(self.state, r.get_json()["task"])
+        with open(os.path.join(d, "spec.json"), encoding="utf-8") as fh:
+            saved = json.load(fh)
+        self.assertEqual(saved["style"], moss_api.DEFAULT_STYLE)
+        self.assertIn("screentone dot shading", moss_api.DEFAULT_STYLE)
+        with open(os.path.join(d, "prompts.txt"), encoding="utf-8") as fh:
+            self.assertIn(moss_api.DEFAULT_STYLE, fh.read())
 
 
 if __name__ == "__main__":
