@@ -240,5 +240,49 @@ class OutfitContinuityTest(unittest.TestCase):
             self.assertEqual(pj["summary"]["caption"], "unchanged")
 
 
+class SceneContinuityTest(unittest.TestCase):
+    """scene 串引用式写法守卫（2026-11-22 粉光除粘液 P2 丢 dusk / P6 换布局）。
+
+    每页出图独立送画，「the same …」到出图端只剩光杆地名——串必须自包含。
+    """
+
+    def _js(self, scene_str):
+        page = {"layout": "S1", "beat": "她扫地",
+                "outfits": {"girl": "navy sailor top"},
+                "scene": "1",
+                "summary": {"canvas": "single", "caption": "A girl sweeping."},
+                "items": [{"label": "character", "caption": "a girl sweeping",
+                           "bbox": [0, 0, 100, 100]}],
+                "bbox_coord_space": "abs_centralized", "bbox_format": "yxyx"}
+        return {"scenes": {"1": scene_str},
+                "pages": [dict(page), dict(page)]}
+
+    def test_audit_flags_same_reference(self):
+        issues, _ = A.audit(self._js("the same stone plaza at dusk"), cap=4)
+        self.assertTrue(any("the same" in x for x in issues), issues)
+
+    def test_audit_passes_self_contained_scene(self):
+        issues, _ = A.audit(
+            self._js("a cracked stone plaza at dusk, broken cobblestones, "
+                     "low purple light"), cap=4)
+        self.assertFalse(any("scene 串" in x for x in issues), issues)
+
+    def test_audit_skips_single_page_and_missing_scene(self):
+        # 单页不查；整本没交 scenes 表也不查（字段级缺失由模型侧负责）
+        js = self._js("the same plaza")
+        js["pages"] = [js["pages"][0]]
+        issues, _ = A.audit(js, cap=4)
+        self.assertFalse(any("the same" in x for x in issues), issues)
+        js2 = {"pages": [dict(js["pages"][0]), dict(js["pages"][0])]}
+        js2["pages"][0]["outfits"] = {"girl": "navy top"}
+        js2["pages"][1]["outfits"] = {"girl": "navy top"}
+        issues, _ = A.audit(js2, cap=4)
+        self.assertFalse(any("scene 串" in x for x in issues), issues)
+
+    def test_system_has_scene_rules(self):
+        self.assertIn("自包含", A.SYSTEM)
+        self.assertIn("the same", A.SYSTEM)
+
+
 if __name__ == "__main__":
     unittest.main()
