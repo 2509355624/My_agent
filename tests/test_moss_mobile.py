@@ -47,6 +47,13 @@ class MossStudioSimpleTest(unittest.TestCase):
         self.assertIn(".panel .trow { grid-template-columns: 1fr; }", block)
         self.assertIn("input, textarea, select { font-size: 16px; }", block)
 
+    def test_running_progress_shows_in_page_placeholder(self):
+        """画图进度挪进正在画的那页格子（2026-11-22），全局条不再重复播报。"""
+        html = _html()
+        self.assertIn("it.n === p.running.page", html)
+        self.assertIn("画图中 · 已等", html)
+        self.assertNotIn("正在画第", html)
+
     def test_original_ids_are_kept(self):
         html = _html()
         for element_id in (

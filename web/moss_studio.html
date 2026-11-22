@@ -753,6 +753,14 @@ function patch(p) {
     } else {
       img.style.display = "none";
       ph.style.display = "";
+      // 画图进度就放在正在画的那页格子里（2026-11-22 用户要求）：
+      // 顶部的全局状态条不再重复播报，哪页在画看哪页。
+      if (p.running && it.n === p.running.page) {
+        ph.innerHTML = '<span class="spin"></span>画图中 · 已等 ' +
+          Math.round(p.running.waited) + " 秒（一页约 150~200 秒）";
+      } else {
+        ph.innerHTML = "还没出图<br>点右上角「出图」";
+      }
     }
     var pt = box.querySelector('[data-role="prompt"]');
     if (pt && document.activeElement !== pt) pt.value = it.prompt || "";
@@ -768,8 +776,8 @@ function patch(p) {
   $("steps-hint").textContent = (p.ratio || "") + " · cfg " + (p.cfg || "")
     + " · 全彩赛璐璐画风，步数太低会掉细节";
   if (p.running) {
-    bar('<span class="spin"></span>正在画第 ' + p.running.page + " 页 · 已等 " +
-        Math.round(p.running.waited) + " 秒（一页约 150~200 秒）");
+    // 进度已挪到正在画的那页格子里，全局条不再重复（终止按钮仍在这里）。
+    bar("");
   } else {
     var errs = (p.pages || []).filter(function (x) { return x.status === "error"; });
     if (errs.length) bar(errs.length + " 页没画出来，看每页下面的红字", true);
