@@ -69,15 +69,27 @@ class AuditGroupTest(unittest.TestCase):
             }],
         }
 
-    def test_pov_mode_flags_male(self):
-        out, _ = A.audit(self._min_spec(), cap=2, group=False)
-        self.assertTrue(any("男性" in x for x in out),
-                        "单女主模式仍要拦男性人形：%s" % out)
+    def test_new_role_with_look_passes(self):
+        """2026-11-22：放宽 POV 男性禁令——写了种族+外形的人类守卫照过。"""
+        js = self._min_spec()
+        js["pages"][0]["items"][0]["caption"] = (
+            "full shot of a human guard with short grey hair and a steel helmet")
+        out, _ = A.audit(js, cap=2, group=False)
+        self.assertFalse(any("没写种族" in x for x in out), out)
 
-    def test_group_mode_allows_male(self):
-        out, _ = A.audit(self._min_spec(), cap=2, group=True)
-        self.assertFalse(any("男性" in x for x in out),
-                         "群像模式不该拦男性：%s" % out)
+    def test_new_role_bare_title_is_blocked(self):
+        """光杆 a guard 没交外形：拦，否则模型拿前几页的哥布林填空。"""
+        js = self._min_spec()
+        js["pages"][0]["items"][0]["caption"] = "full shot of a guard holding a spear"
+        out, _ = A.audit(js, cap=2, group=False)
+        self.assertTrue(any("没写种族+外形" in x for x in out), out)
+
+    def test_group_mode_skips_bare_title_check(self):
+        """群像有自己的 cast 外形串检查，不重复用单女主的泛称判据。"""
+        js = self._min_spec()
+        js["pages"][0]["items"][0]["caption"] = "full shot of a guard holding a spear"
+        out, _ = A.audit(js, cap=2, group=True)
+        self.assertFalse(any("没写种族+外形" in x for x in out), out)
 
     def test_group_mode_requires_every_cast_filled(self):
         js = self._min_spec()

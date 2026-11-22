@@ -60,6 +60,22 @@ class MossStudioSimpleTest(unittest.TestCase):
                 "jobbar", "outline", "outlineTip", "outlineCount"):
             self.assertIn('id="%s"' % element_id, html)
 
+    def test_each_page_editor_folds_by_default(self):
+        """2026-11-22：手机端每页默认只留页头+图，编辑区点开才露。"""
+        html = _html()
+        self.assertIn('fold.className = "edit-fold";', html)
+        self.assertIn("fold.innerHTML = \"<summary>编辑这一页（场景 / 格子 / 台词 / 提示词）</summary>\";", html)
+        # 包的是整个编辑器 editor，不是只包 panels：场景框也一起收起
+        fold_at = html.index('fold.className = "edit-fold";')
+        chunk = html[fold_at:fold_at + 500]
+        self.assertIn("fold.appendChild(ed);", chunk)
+        self.assertIn("body.appendChild(fold);", chunk)
+        # 图片 canvas 不进折叠层，仍常显
+        self.assertIn("body.appendChild(cv);", html)
+        # 不记状态：刷新全部收起
+        self.assertIn("不用 localStorage 记状态", html)
+        self.assertIn("details.edit-fold > summary", html)
+
     def test_one_chain_and_one_style(self):
         """2026-11-22：双段勾选框与自定义画风退役，下拉只留一种画风。"""
         html = _html()

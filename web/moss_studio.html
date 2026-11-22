@@ -104,6 +104,17 @@
   .pb-body { display: grid; grid-template-columns: 1fr 470px; gap: 0; }
   @media (max-width: 1080px) { .pb-body { grid-template-columns: 1fr; } }
   .editor { padding: 12px; }
+  /* 2026-11-22：每页编辑区默认折叠。手机上原来编辑器排在图片前面，
+     四格输入框能把一页顶到几屏高，想看图得一路滑过去。现在只留页头+图，
+     要改格子才点开「编辑这一页」。不记状态：刷新即全部收起。 */
+  details.edit-fold { min-inline-size: 0; }
+  details.edit-fold > summary { list-style: none; cursor: pointer; user-select: none;
+    padding: 7px 12px; font-size: 11px; color: var(--text-mute);
+    border-bottom: 1px solid var(--border-soft); }
+  details.edit-fold > summary::-webkit-details-marker { display: none; }
+  details.edit-fold > summary::before { content: "▸ "; color: var(--text-mute); }
+  details.edit-fold[open] > summary::before { content: "▾ "; }
+  details.edit-fold > summary:hover { color: var(--accent); }
   .canvas { border-left: 1px solid var(--border-soft); padding: 12px;
     display: flex; align-items: flex-start; justify-content: center;
     background: #0d0d14; min-height: 240px; }
@@ -695,7 +706,14 @@ function renderPage(page) {
   peek.innerHTML = "<summary>最终提示词（原样发给 moss）</summary>" +
     '<textarea readonly data-role="prompt" data-page="' + page.n + '"></textarea>';
   ed.appendChild(peek);
-  body.appendChild(ed);
+
+  // 默认折叠：页头与图片常显，只有真要改格子时才点开这一层。
+  // 不用 localStorage 记状态——刷新全部收起是这一版的默认行为。
+  var fold = document.createElement("details");
+  fold.className = "edit-fold";
+  fold.innerHTML = "<summary>编辑这一页（场景 / 格子 / 台词 / 提示词）</summary>";
+  fold.appendChild(ed);
+  body.appendChild(fold);
 
   var cv = document.createElement("div");
   cv.className = "canvas";

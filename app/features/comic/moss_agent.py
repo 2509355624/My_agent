@@ -453,8 +453,21 @@ text：只写容器形状和字的排法，台词内容只进 text 字段。**�
 ════ 画什么 ════
 **有男主时**，镜头就是我们：她冲着镜头做动作——递过来、扔过来、抬眼看过来、把东西推到你面前，动作方向直接朝画面外。
 **没有男主时**，镜头是旁观者：她做给谁看都不为，动作朝着画面里她正在处理的东西（手里的衣角、脚下的水洼、墙上的挂钩）。
-**整页不许出现任何男性人形**：前景、远景、路人、操场边的其他学生、镜中倒影、门后剪影，全部只画女性。
-远景需要人时写 two or three distant girl figures，写 girl 不写 person/figure/someone。
+**镜头后面的「我」不进画面**：POV 只约束画外的我们，不禁止剧情点名要出场的角色。
+**剧情写到的人类角色就画人类**：人类村庄的守卫、村民、旅人、敌兵照剧情写，
+不写 person/figure/someone 这种没种族没外形的泛称。远景需要人时按剧情写
+two or three distant girl figures 或 two human guards with short brown hair。
+**更不许拿怪物填人类的位置**：写 human guard 就不许画成 goblin/orc——
+前面九页都在打哥布林，第十页的人类守卫照样必须是人，不许顺着前一节的怪物惯性长过去。
+
+════ 新场景换了角色，外形要写死 ════
+换场景时第一次出场的非女主角色（守卫、村民、店主、敌兵、路人），
+在那一格写清**种族 + 可见外形**：a human guard with short grey hair, a steel helmet,
+a brown cloak, holding a spear。后面用 the human guard 指代，外形串不再重复一整段。
+只写 a guard / the guard / a man / a woman / someone 这种光杆称呼＝没交外形，
+模型会拿前面几页的角色去填空（实测：人类村庄的守卫被画成前面打了一路的哥布林）。
+非人类角色也要写明是哪一种（a goblin with green skin and pointed ears），
+不许只写 a creature / a monster。
 有男主时，我们只以一只手的形式出现：pov hands / disembodied hand，最多两只，且贴画面边缘；
 没有男主时，画面里**连手都没有**——没有「我」，就没有「我的手」，她的东西自己拿、自己放。
 递、扔、交、接这类动作，**她的手或小臂必须留在画面里**，东西不能自己悬在半空。
@@ -917,6 +930,22 @@ _TIGHT_FACE = re.compile(r"close[- ]up (?:of|on) her (?:[a-z-]+ ){0,2}"
                          r"(?:face|eyes|mouth|lips|head|hair|nape|chin|cheek)", re.I)
 _FACE_WORDS = ("hair", "headband", "bangs", "eye", "face")
 
+# 新场景首次出场的角色：光杆称呼＝没交外形。
+# 只认「冠词 + 泛称」这个可数事实，不列服饰/发色词表（那是模型的事）。
+#  deliberate 不收 girl：女主有下面专门的 cast 外形串逐项核对，别重复拦。
+_GEN_ROLE = re.compile(
+    r"\b(?:a|an|the|two|three|several)\s+"
+    r"(?:guard|man|woman|person|someone|somebody|figure|boy|"
+    r"villager|townsfolk|soldier|knight|stranger|customer|clerk|"
+    r"creature|monster|beast|enemy)\b", re.I)
+# 只要这一格里给了种族或任一可见外形锚，就算交了——具体写什么由模型决定。
+# 含 human/goblin 这类种族词：同一格「a human guard … the guard」不再重复拦。
+_ROLE_LOOK = re.compile(
+    r"\b(?:human|goblin|orc|elf|dwarf|demon|beast|animal|"
+    r"hair|eye|face|skin|build|muscular|slim|stout|tall|short|"
+    r"young|old|teen|beard|moustache|helmet|cloak|uniform|hat|"
+    r"grey|gray|brown|blond|black|white|green|pale)\b", re.I)
+
 
 def audit(js, cap=12, male_none=False, group=False):
     """只看可数的事实。返回 `(blocking, warns)`。
@@ -1069,18 +1098,22 @@ def audit(js, cap=12, male_none=False, group=False):
         if caption and has_boy and "off-screen boy" not in caption:
             warns.append("第%d页：本页有男主方框，尾句没写（autofix 改尾句）" % n)
 
-        # POV 硬约束：整页不许出现男性人形。模型会自己往远景/倒影里塞人，
-        # 所以这里只查画面描述里的男性词（text 项的 caption 是「Boy plain text」
-        # 这一句容器描述，不算画面内容）。群像模式本来就要画男性，整段跳过。
+        # 新角色写了没有：换场景第一次出场的非女生角色，只写 a guard / the man
+        # 这种光杆称呼＝没交外形，模型会拿前一页的角色填空。
+        # 2026-11-22 异界女兵破围实测：前九页全哥布林，第十页只写 a guard，
+        # 就把人类村庄守卫画成了哥布林。
+        # 代码只查「有没有交外形锚」，不判断外形写得对不对——措辞是模型的活。
+        # 群像模式有自己的 cast 外形串检查，整段跳过。
         if not group:
             for it in (p.get("items") or []):
                 if it.get("label") == "text":
                     continue
                 cc = (it.get("caption") or "").lower()
-                hit = re.search(r"\b(1boy|2boys|boys?|men|man|male|guy|gentleman)\b", cc)
-                if hit:
-                    out.append("第%d页：画面描述里出现男性（%s），这一页只画女生，我们只留一只手"
-                               % (n, hit.group(1)))
+                hit = _GEN_ROLE.search(cc)
+                if hit and not _ROLE_LOOK.search(cc):
+                    out.append("第%d页：新出场角色只写了「%s」没写种族+外形——"
+                               "写成 a human guard with short grey hair, a steel helmet 这样，"
+                               "否则模型会拿前几页的角色填空（哥布林村庄事件）" % (n, hit.group(0)))
                     break
 
         # 一格一个定格：一格只许一个状态。一格同时写了「动作」和「动作的结果」，
