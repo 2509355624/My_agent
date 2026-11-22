@@ -98,12 +98,15 @@ class IndexPrivateGateTest(unittest.TestCase):
             with self.subTest(piece=piece):
                 self.assertIn(piece, html)
 
-    def test_gate_opens_blank_synchronously_then_navigates(self):
-        # 异步 window.open 会被弹窗拦截：必须在点击的同步上下文先开空白页，
-        # 校验过了再 location.replace 填网址。
+    def test_gate_opens_nothing_before_password(self):
+        # 点入口只弹密码框，不许提前开标签页——否则用户看到的是
+        # 「还没输密码就已经跳转了」。开页必须发生在验证通过之后。
         html = _html()
-        self.assertIn('window.open("about:blank", "_blank")', html)
-        self.assertIn("blankWin.location.replace(target)", html)
+        self.assertNotIn('window.open("about:blank"', html)
+        self.assertNotIn("blankWin", html)
+        # 验证通过才开页；被弹窗拦截时退回同标签跳转，不能点了没反应。
+        self.assertIn('window.open(target, "_blank")', html)
+        self.assertIn("location.href = target", html)
 
     def test_other_entries_still_open_directly(self):
         # 不该顺手把别的入口也锁了——用户只点名这 4 个
