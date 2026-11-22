@@ -1205,12 +1205,26 @@ def bubble_cap(text, who="girl"):
     模型自己猜，实测把女生的「我来拿」尾巴画到了男生脸上。这里点名 girl / boy。
     """
     ncol = _text_columns(text)
-    target = "the boy's" if who == "boy" else "the girl's"
+    # who 可以是 boy/girl（单女主链），也可以是群像里的角色 key 或画面描述串
+    # （officer / the commanding officer in a navy uniform）。群像双人同格时
+    # 两条气泡都默认 girl 会把台词连错人（2026-11-22 异界前线 P2 实测）。
+    w = (who or "").strip()
+    low = w.lower()
+    if low in ("boy", "male", "man"):
+        target = "the boy's face"
+    elif low in ("girl", "female", "woman"):
+        target = "the girl's face"
+    elif w:
+        # 自由描述串（the officer…）：走 "the face of X"，别硬拼成
+        # "…officer face"。already 英文，原样用；去掉尾部标点。
+        target = "the face of " + w.rstrip(" .,")
+    else:
+        target = "the girl's face"
     return ("Vertical rounded speech bubble with a thin black ink outline, "
             "Chinese text written vertically with each character stacked top to bottom, "
             "%d column%s, first character of the sentence at the TOP of the LEFT column, "
             "reading left to right, "
-            "short pointer tail pointing toward %s face, "
+            "short pointer tail pointing toward %s, "
             "compact bubble sized so several can share this panel." %
             (ncol, "" if ncol == 1 else "s", target))
 
@@ -1954,7 +1968,7 @@ def layout_to_panels(js):
         if len(b) < 4:
             b = [0, 0, 0, 0]
         y0, x0, y1, x1 = b
-        bub, cap, sfx = [], "", ""
+        bub, cap, sfx, who = [], "", "", []
         for t in texts:
             tb = list(t.get("bbox") or [0, 0, 0, 0])[:4]
             if len(tb) < 4:
@@ -1973,8 +1987,12 @@ def layout_to_panels(js):
                 sfx = (sfx + " " + txt).strip()
             else:
                 bub.append(txt)
+                # 说话人跟着气泡走：build_page_prompt 据此写「尾巴指向谁」。
+                # 编剧在 text item 写 who / speaker；没有就留空串（回退通用文案）。
+                who.append(str(t.get("who") or t.get("speaker") or "").strip())
         out.append({"desc": " ".join(str(f.get("caption") or "").split()).strip(),
-                    "bubbles": bub, "caption": cap, "sfx": sfx})
+                    "bubbles": bub, "caption": cap, "sfx": sfx,
+                    "speakers": who})
     return out
 
 

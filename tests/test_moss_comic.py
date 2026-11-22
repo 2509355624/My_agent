@@ -436,5 +436,70 @@ class FillPageTest(unittest.TestCase):
         self.assertNotIn("silver hair", got)
 
 
+class SpeakerTailInPromptTest(unittest.TestCase):
+    """气泡说话人从 spec 传到出图提示词（异界前线 P2/P3 指代错误的回归）。"""
+
+    def _spec(self, speakers):
+        return {
+            "title": "双人对话", "style": "soft evening light",
+            "cast": {"girl": "a teenage girl with long dark hair"},
+            "pages": [{
+                "n": 1, "layout": "S1",
+                "scene": "a city street at dusk",
+                "panels": [{
+                    "desc": "The girl on the left and an officer on the right talking.",
+                    "bubbles": ["你就是魔法少女？", "是我。情况怎么样？"],
+                    "speakers": speakers, "caption": "", "sfx": "",
+                }],
+            }],
+        }
+
+    def test_each_bubble_points_to_its_own_speaker(self):
+        spec = self._spec(["the officer in a navy uniform", "girl"])
+        d = json.loads(moss_comic.build_page_prompt(spec, spec["pages"][0]))
+        caps = [i["caption"] for i in d["items"]
+                if i["label"] == "text" and "speech bubble" in i["caption"].lower()]
+        self.assertEqual(len(caps), 2, [i for i in d["items"] if i["label"] == "text"])
+        self.assertIn("pointing toward the face of the officer in a navy uniform", caps[0])
+        self.assertIn("the girl's face", caps[1])
+        self.assertNotIn("the girl's face", caps[0])
+
+    def test_missing_speakers_falls_back_to_generic(self):
+        spec = self._spec([])
+        d = json.loads(moss_comic.build_page_prompt(spec, spec["pages"][0]))
+        caps = [i["caption"] for i in d["items"]
+                if i["label"] == "text" and "speech bubble" in i["caption"].lower()]
+        self.assertTrue(all("the speaker's face" in c for c in caps))
+
+
+class FakeMapComplianceTest(unittest.TestCase):
+    """地图类内容必须写成虚构地貌，不许出现现实国家轮廓。"""
+
+    def _spec(self, scene="a frontline base with a map on the table"):
+        return {
+            "title": "前线", "style": "bright daylight",
+            "cast": {"girl": "a teenage girl"},
+            "pages": [{
+                "n": 1, "layout": "S1", "scene": scene,
+                "panels": [{"desc": "A girl and a report with a map of the kingdom.",
+                            "bubbles": [], "caption": "先遣队", "sfx": ""}],
+            }],
+        }
+
+    def test_map_page_gets_fantasy_landscape_note(self):
+        spec = self._spec()
+        d = json.loads(moss_comic.build_page_prompt(spec, spec["pages"][0]))
+        cap = d["summary"]["caption"]
+        self.assertIn("invented fantasy landscape", cap)
+        self.assertIn("recognizable real-world country outlines and national borders are absent", cap)
+
+    def test_page_without_map_has_no_map_note(self):
+        spec = self._spec("a quiet room with a lamp")
+        spec["pages"][0]["panels"][0]["desc"] = "A girl sitting quietly."
+        spec["pages"][0]["panels"][0]["caption"] = ""
+        d = json.loads(moss_comic.build_page_prompt(spec, spec["pages"][0]))
+        self.assertNotIn("invented fantasy landscape", d["summary"]["caption"])
+
+
 if __name__ == "__main__":
     unittest.main()

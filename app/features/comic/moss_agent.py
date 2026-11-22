@@ -257,7 +257,28 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
   脸特写里加 `teenage facial proportions, small head`，然后再写发型、眼睛、表情。
 · 情绪写在**表情**上，不写在**尺寸**上：mouth open in a wide grin / eyes wide with delight
   是表情，不是让她变成大头娃娃。**不写 chibi / super-deformed / cute small body / childlike**。
+· **欢呼 / 举拳 / 大动作那一格最容易画成幼态**：头变大、五官往中间挤。这些格子里
+  比例锚点一个字都不能省，照抄 `slender teen proportions, long legs, small head`，
+  再补 `adult teenage face, not a child's round cheeks`。
 · 收稿前自己比一眼：这一页的头，是不是比上一页大了一圈？大了就是错的，不是风格差异。
+
+════ 地图是虚构的：不画现实世界 ════
+· 剧情里的地图 / 文件 / 屏幕插画，一律写成**虚构地貌**：
+  `an invented fantasy map of an imaginary island chain, abstract contour lines,
+   unlabeled routes and markers, no recognizable real geography`。
+· **绝不写现实国家 / 地区 / 省份的轮廓、边界或版图形状**，也不写国家名字。
+  模型见到「前线基地 + 地图」就爱画成某国的雄鸡版图——那是内容事故
+  （2026-11-22 异界前线 P10 实测）。要画地图就画虚构岛屿群或抽象路线图，
+  认不出任何真实疆界才合格。
+· 这是硬要求，和画风无关：任何一页、任何格都不例外。
+
+════ 发型是硬的：长发就是一直披着 ════
+· cast 写了 `long dark hair`（或任何 long / straight hair）就是**披肩长直发**，
+  每一格都写 `long straight hair worn loose, falling past her shoulders`。
+  模型爱把它随手扎成单马尾 / 丸子头，那是换了个人（2026-11-22 异界前线 P5 实测）。
+· 同一本里发型只有一种：脸特写、战斗格、欢呼格抄的都是同一串，
+  不写 `ponytail` / `tied back` / `hair gathered` 这类会改发型的词。
+· 想让她真的扎起来，只在 cast 里写明并整本照抄那一种；中途不许自己换。
 
 ════ 用镜头讲，别用字讲 ════
 一页只说一件事，靠换机位把它说清。想让人读出「她冷」「她脏」「她不想被碰」，
@@ -424,6 +445,10 @@ text：只写容器形状和字的排法，台词内容只进 text 字段。**�
      Vertical rounded speech bubble with a thin black ink outline, Chinese text written vertically with each character stacked top to bottom, N columns, the first column on the left, reading left to right, short pointer tail pointing toward the girl's face, compact bubble.
   ② 只有男主画外的一句话 → 直角矩形方框（不是气泡、也不是裸字），贴这一格右上：
      Boy speech box: plain rectangular box with a thin black ink outline, sharp square corners, no bubble tail, no pointer, Chinese text written vertically with each character stacked top to bottom, N columns, the first column on the left, reading left to right.
+  **每条圆气泡 text item 必须写 `who` 字段**，值是说话人在画面里的身份：女生写 `girl`，
+  另一个人写他在这一格的外形（如 `the commanding officer in a dark navy uniform`）。
+  尾巴指向谁由这个字段决定；一格两人一问一答时两条必须写不同的 who——
+  都留空或都写 girl，两条尾巴就都连到女生脸上，台词全串（2026-11-22 异界前线 P2 实测）。
 
 **没有旁白框**：不要 rectangular caption box，不要「她心想 / 她决定 / 她意识到」这类文字。
 读者需要知道的事，让画面自己说，或者让她用气泡说出口。
@@ -691,6 +716,17 @@ GROUP_OVERRIDE = """
 · 每个会说话的角色各写一种气泡，气泡落在他自己那一格，短尾巴指着他的脸。
 · 可说话的人最多四种，一页台词仍是上限不是配额；整页 0 句成立。
 · 不许旁白、不许内心独白。
+
+════ 群像：面对谁，镜头就从背后看 ════
+· 一个角色「面对 / 冲向 / 攻击 / 施法朝」某样东西（敌人、门、人群）时，
+  用背对镜头或侧后机位：`seen from behind at a three-quarter angle, facing the monsters`
+  或 `back turned toward the viewer, body aimed at the enemy across the field`。
+  让读者看见她**朝着目标**，不是朝着读者。
+· **不许**写 `facing the camera` / `front view` 又同时说她 facing the enemy——
+  这两句打架，模型只会画正面朝镜头，看着像回头看这边（2026-11-22 异界前线 P6/P8 实测）。
+  要脸就另开一格脸特写（close-up of her face），主格专心交代朝向。
+· 反派 / 目标写在画面深处（`monsters across the middle distance`），别写成
+  `in front of her`——模型算不出「她的前方」是哪个方向。
 
 ════ 群像：多页怎么接 ════
 · 多页时先按**时间顺序**把剧情排好：第 1 页是起点，最后一页是收尾。
@@ -1336,7 +1372,10 @@ def generate(brief, pages, call, progress=None, group=False):
             elif k == "caption":
                 it["caption"] = M.CAPTION_BOX
             elif k == "bubble":
-                it["caption"] = M.bubble_cap(txt)
+                # who 决定气泡尾巴指向谁：群像双人同格必须各写各的，否则
+                # 两条都默认 girl，台词就被连到同一个人脸上（异界前线 P2/P3）。
+                who = it.get("who") or it.get("speaker") or ""
+                it["caption"] = M.bubble_cap(txt, str(who))
         _stamp_palette(pj, js.get("palette"))
         try:
             issues_p = M.check_page(pj, n, js.get("cast"), lay, None)

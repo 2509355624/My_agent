@@ -90,6 +90,16 @@ class ContainerKindTest(unittest.TestCase):
         self.assertIn("the boy's face", cap)
         self.assertNotIn("the girl's face", cap)
 
+    def test_bubble_tail_names_any_group_character(self):
+        # 群像里说话的不止 girl/boy：军官等自由描述串也要进尾巴，
+        # 否则两条气泡都默认 girl，台词连错人（异界前线 P2）。
+        cap = m.bubble_cap("是我。情况怎么样？", "the commanding officer in a navy uniform")
+        self.assertIn("pointing toward the face of the commanding officer in a navy uniform", cap)
+        self.assertNotIn("the girl's face", cap)
+
+    def test_bubble_tail_unknown_falls_back_to_girl(self):
+        self.assertIn("the girl's face", m.bubble_cap("嗯", ""))
+
     def test_cell_slots_follow_script_not_speaker(self):
         # 「为什么」写在第 3 格，就不能因为说话人是谁被挪到别处。
         lines = [{"who": "girl", "text": "为什么", "cell": 3}]

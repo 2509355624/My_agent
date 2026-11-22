@@ -181,6 +181,13 @@ _TAIL_NOTE = ("Clean flat anime coloring with delicate cel shading, %s, "
 # `…covering her body.No speech bubble…`（2026-10-31 首跑实测就是粘连的）。
 _NO_TEXT_CELL = " No speech bubble and no text in this panel."
 
+# 合规兜底：出现地图内容时，明确画面里是虚构地貌。
+# 正向写法——只说要画什么，不列举现实国家名（列举等于喂素材）。
+_FAKE_MAP_NOTE = (" Any map, chart or document illustration in this page shows "
+                  "an invented fantasy landscape of imaginary islands and abstract "
+                  "contour lines with unmarked routes, recognizable real-world "
+                  "country outlines and national borders are absent.")
+
 # 模型会**误用**这条规则：在明明有气泡的格子里也自己写一句
 # `no speech bubble, no text in this panel`（2026-10-31 第二跑实测，第 2 格
 # 有气泡「就是现在」却写着 no text）。这类自写的否定句会和真实存在的文字元素
@@ -211,6 +218,38 @@ _TXT_BUBBLE = ("Tall rounded oval speech bubble with a thin black outline and cl
 _TXT_BUBBLE2 = ("A second tall rounded oval speech bubble stacked above the first "
                 "one, thin black outline, clean vertical Chinese dialogue text in %s, "
                 "short pointer tail pointing toward the speaker's face.")
+
+# 说话人明确时，尾巴必须写「指向画面中的谁」，不能只说 the speaker。
+# 依据：另一条漫画链 comic.py 的实测结论（2026-10-22）——双人同格时写气泡
+# 位置（left/right）模型只会连到最近的人，两个尾巴全挂错；写人（画面里的
+# 女生/军官）它认得出。moss 链原来所有气泡共用 `the speaker's face`，模型
+# 无从判断 speaker 是哪个，P2/P3 就整页连反了。
+_TXT_BUBBLE_SPEAKER = ("Tall rounded oval speech bubble with a thin black outline "
+                       "and clean vertical Chinese dialogue text in %s, compact, "
+                       "short pointer tail pointing toward %s.")
+# speaker 串只用来认人，不让模型画。挡掉可能把「气泡/线框」当素材的写法。
+_SPEAKER_BAD = re.compile(r"speech bubble|text box|caption|pointer tail", re.I)
+
+
+def _bubble_tail(speaker, cast):
+    """把说话人变成「画面里的谁」，供气泡尾巴描述用；认不出就返回空串。
+
+    speaker 两种写法都认：
+      · cast 的 key（girl / woman）→ 用 `the <key>`，模型能对着外形串找到人；
+      · 自由描述串（the commanding officer in a dark navy uniform）→ 原样用。
+    模型认人靠外形，所以 key 优先拼成 `the girl in ...`（有外形串时带上，
+    避免同格两个女性都叫 girl 时连错）。
+    """
+    s = (speaker or "").strip()
+    if not s or _SPEAKER_BAD.search(s):
+        return ""
+    key = s.lower()
+    # key（girl/boy 或 cast 里的角色名）走所有格 the girl's face——
+    # 认人靠这个称呼就够，外形串在 character item 里已经给过，别在尾巴里重复。
+    if key in ("girl", "boy", "woman", "man") or key in (cast or {}):
+        return "the %s's face" % key
+    # 自由描述串（the officer in navy）走 "the face of X"
+    return "the face of " + s.rstrip(" .,")
 _TXT_CAPTION = ("Tall white rectangular narration box with a thin black outline and "
                 "clean vertical Chinese text in %s (no bubble tail).")
 _TXT_SFX = ("Hand-lettered Chinese sound effect drawn large inside this panel in clean "
@@ -1345,11 +1384,21 @@ def build_page_prompt(spec, page, with_text=True):
         # 气泡是数组，一格可以两条：按序从下往上叠（`i=0` 贴右下，
         # `i=1` 叠在它上方）。缝隙见 `_text_bbox`——贴在一起模型会画成一个
         # 大气泡，两条台词挤成一坨。
+        # speakers（可选）与 bubbles 一一对齐，写明每条是谁说的；有就把尾巴
+        # 从通用的 the speaker 换成「指向画面里的那个人」，解决双人对话连反。
+        speakers = panel.get("speakers") or []
+        if isinstance(speakers, str):
+            speakers = [speakers]
         for i, text in enumerate(_bubbles(panel)):
             has_text = True
+            who = _bubble_tail(speakers[i] if i < len(speakers) else "", cast)
+            if who:
+                bcap = _TXT_BUBBLE_SPEAKER % (_cols(text), who)
+            else:
+                bcap = (_TXT_BUBBLE if i == 0 else _TXT_BUBBLE2) % _cols(text)
             items.append({
                 "label": "text",
-                "caption": (_TXT_BUBBLE if i == 0 else _TXT_BUBBLE2) % _cols(text),
+                "caption": bcap,
                 "text": text,
                 "bbox": _text_bbox(cell, "bubble", i),
             })
@@ -1359,6 +1408,17 @@ def build_page_prompt(spec, page, with_text=True):
     # 有文字才说「有清晰中文气泡」，没文字就换成「页面上没有文字」——
     # 两句不能同时出现（见 `_TAIL_NOTE` 注释）。
     cap.append((_TAIL if has_text else _TAIL_NOTE) % light)
+    # 合规兜底（2026-11-22）：这页只要出现地图/版图类内容，就补一句正向的
+    # 「虚构地貌」。编剧规则已经要求这么写，这里是第二道——模型见到
+    # 「前线基地 + 地图」会自己画成现实国家轮廓（异界前线 P10 实测）。
+    # 只在这页真有 map 时才加，别给没地图的页引入无关概念。
+    page_words = " ".join(
+        [str(page.get("scene") or "")]
+        + [str(p.get("desc") or "") + str(p.get("caption") or "")
+           for p in panels]
+    )
+    if re.search(r"\bmap|atlas|border|territory|country|kingdom|报告上的地图", page_words, re.I):
+        cap.append(_FAKE_MAP_NOTE)
 
     summary = {
         "meta": list(_META),
