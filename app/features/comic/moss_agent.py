@@ -38,6 +38,7 @@ D1_SENT = M.LAYOUT_SENTENCE["D1"]
 
 MAX_ROUNDS = 2          # 最多重修几轮
 REPAIR_TEMP = 0.3       # 重修时压低随机性，只改点名的错
+REVIEW_TEMP = 0.3       # 二轮审稿同样压低随机性：审稿是纠错不是再创作
 
 # 只用这三套：L0（顶条+右通高+左三小，图 1 那套标准格式）、S1、D1。
 # 2026-11-21 撤掉 L6 / L5：它们的窄格是 1:2.3 / 1:3.1 的竖条，人塞进去必然被
@@ -1250,6 +1251,30 @@ def _repair_user(brief, pages, js, issues):
 
 
 
+def _review_user(js, cap):
+    """二轮审稿的用户提示：把刚写好的整本丢回去，让同一个模型换审稿身份自查。
+
+    查的全是代码体检查不出来的**语义**问题——`audit()` 只认格数/方位/字数，
+    「P2 说『我打头阵』、P3 又变成『先锋由你打头』」这种前后打架它看不见。
+    """
+    return (
+        "下面是你刚写好的整本分镜剧本。现在换一个身份：你是这本剧本的"
+        "审稿编辑，把它从头到尾读一遍，对照你写剧本时被告知的那些规矩"
+        "逐条自查，重点查下面这些语义问题：\n"
+        "1. 台词归属：每个气泡的 who 必须是真正在说话的那个人；\n"
+        "2. 台词重复/矛盾：同一件事不能在不同页说两遍，前后说法不能打架"
+        "（例：第 2 页女主说「我打头阵」，第 3 页却变成别人要先去探路、"
+        "让她「先锋由你打头」——两页必须统一成同一个人同一个说法）；\n"
+        "3. 剧情衔接：每页 beat / link 要顺滑推进，不能跳页、不能原地打转；\n"
+        "4. 角色一致：发型/服装/年龄和 cast 完全对上；新出场角色要写明种族外形；\n"
+        "5. 画面规矩：脚是脚、身体连着腿；面对敌人的格子用背对/侧后机位；"
+        "不出现真实世界的地图或地名。\n"
+        "只改有问题的页/格，没问题的页原样保留。直接输出修正后的完整 JSON，"
+        "格式与输入完全一致，不要任何解释。\n\n"
+        "当前剧本（%d 页）：\n%s" % (cap, json.dumps(js, ensure_ascii=False))
+    )
+
+
 def generate(brief, pages, call, progress=None, group=False):
     """一次成稿 → 代码体检 → 定向重修（最多 MAX_ROUNDS 轮）→ 每页 autofix。
 
@@ -1329,6 +1354,28 @@ def generate(brief, pages, call, progress=None, group=False):
             say("第 %d 轮改完问题更多，保留上一版" % r)
             break
         say("复查：%s" % ("通过" if not issues else "还剩 %d 条" % len(issues)))
+
+    # 二轮审稿（2026-11-22 用户提出）：结构体检收敛后，同一个模型再调用
+    # 一次、换审稿身份把整本读一遍，对照规矩自查自改——相当于 agent 自己
+    # 跑迭代优化输出。改坏了（解析失败 / 体检问题变多）一律保留原稿。
+    say("二轮审稿：对照规矩自查台词与衔接…")
+    raw_v = call(system, _review_user(js, cap), max_tokens=16000,
+                 temperature=REVIEW_TEMP, tag="agent_review") or ""
+    try:
+        js_v = M.pick_json(raw_v)
+    except Exception:                       # noqa: BLE001 - 审坏了保留原稿
+        say("审稿没解析出 JSON，保留原稿")
+        rounds.append({"round": "review", "issues": ["解析失败"],
+                       "chars": len(raw_v)})
+    else:
+        v_issues, v_warns = audit(js_v, cap, male_none=male_none, group=group)
+        rounds.append({"round": "review", "issues": v_issues,
+                       "warns": v_warns, "chars": len(raw_v)})
+        if len(v_issues) <= len(issues):
+            js, issues, warns = js_v, v_issues, v_warns
+            say("审稿：%s" % ("通过" if not v_issues else "还剩 %d 条" % len(v_issues)))
+        else:
+            say("审稿改完问题更多，保留原稿")
 
     pgs = (js.get("pages") or [])[:cap]
     if not pgs:

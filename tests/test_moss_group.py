@@ -128,11 +128,11 @@ class AuditGroupTest(unittest.TestCase):
 
 class GenerateGroupTest(unittest.TestCase):
     def test_group_uses_group_system_and_no_male_flag(self):
-        captured = {}
+        systems, users = [], []
 
         def call(system, user, **kw):
-            captured["system"] = system
-            captured["user"] = user
+            systems.append(system)
+            users.append(user)
             return json.dumps({
                 "title": "天台合照", "palette": "navy top, cream wall",
                 "cast": {"boy": "a slim teenage boy with short black hair",
@@ -149,18 +149,23 @@ class GenerateGroupTest(unittest.TestCase):
             })
 
         spec, report = A.generate(GROUP_BRIEF, 1, call, group=True)
-        self.assertIn("群像模式", captured["system"])
-        self.assertIn("群像角色", captured["user"])
+        # 每一次调用（含二轮审稿）都得带群像覆写段
+        for s in systems:
+            self.assertIn("群像模式", s)
+        # users[0] 是成稿那次调用；最后一次是二轮审稿（2026-11-22），
+        # 审稿提示里只有剧本 JSON，不再带原始 brief。
+        self.assertIn("群像角色", users[0])
+        self.assertIn("审稿", users[-1])
         self.assertEqual(sorted(spec["cast"]), ["athlete", "boy"])
         self.assertEqual(report["pages"][0]["n"], 1)
 
     def test_solo_unchanged(self):
         """不传 group：SYSTEM 原样、按男主/女主解析，行为与改动前一致。"""
-        captured = {}
+        systems, users = [], []
 
         def call(system, user, **kw):
-            captured["system"] = system
-            captured["user"] = user
+            systems.append(system)
+            users.append(user)
             return json.dumps({
                 "title": "扫地", "palette": "navy top",
                 "cast": {"girl": "a girl about twelve, slender teen proportions, "
@@ -178,9 +183,11 @@ class GenerateGroupTest(unittest.TestCase):
             })
 
         A.generate("男主：无\n女主：a girl\n剧情：她扫地", 1, call)
-        self.assertNotIn("群像模式", captured["system"])
-        self.assertEqual(captured["system"], A.SYSTEM)
-        self.assertIn("只有她一个人", captured["user"])
+        # 每一次调用（含二轮审稿）都必须用裸 SYSTEM，群像覆写不许漏进来
+        for s in systems:
+            self.assertNotIn("群像模式", s)
+            self.assertEqual(s, A.SYSTEM)
+        self.assertIn("只有她一个人", users[0])
 
 
 if __name__ == "__main__":
