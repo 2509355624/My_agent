@@ -57,7 +57,7 @@ class MossStudioSimpleTest(unittest.TestCase):
                 "spec-card", "spec-title", "spec-style", "cast-list", "issues",
                 "btn-save", "btn-draw-all", "lora-card", "lora-rows",
                 "btn-lora-save", "pages-wrap", "zoom", "toast", "histsel",
-                "jobbar"):
+                "jobbar", "outline", "outlineTip", "outlineCount"):
             self.assertIn('id="%s"' % element_id, html)
 
     def test_one_chain_and_one_style(self):
@@ -70,6 +70,17 @@ class MossStudioSimpleTest(unittest.TestCase):
         style = style[:style.index("</select>")]
         self.assertEqual(style.count("<option"), 1)
         self.assertIn('<option value="daily" selected>日常明亮</option>', style)
+
+    def test_outline_drives_pages_and_brief(self):
+        """分集大纲：填了就按行数当页数、并拼进 brief；留空不改变旧行为。"""
+        html = _html()
+        self.assertIn("function parseOutline()", html)
+        self.assertIn("function outlineBlock()", html)
+        # 页数跟随大纲：outline.length 优先于手填的 pages
+        self.assertIn("outline.length ? Math.max.apply", html)
+        # 两条链路都把大纲拼进 brief
+        self.assertIn("if (outline) g.push(outline);", html)
+        self.assertIn("if (outline) lines.push(outline);", html)
 
     def test_zoom_has_navigation_and_blocks_blue_selection(self):
         html = _html()

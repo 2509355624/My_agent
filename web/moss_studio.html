@@ -256,6 +256,15 @@
       <span class="lab">转折/冲突</span>
       <input id="twist" placeholder="可不填。填了就按它排整本节奏；留空＝编剧自己设计一个意外和收尾">
     </div>
+    <div class="roles" style="align-items:start">
+      <span class="lab" style="padding-top:9px"
+            title="可选。一行一页：1：登山　2：雪崩逃跑… 填了就严格按行拆页，页数＝行数；留空＝编剧按五段式自己排">分集大纲</span>
+      <textarea id="outline" rows="6" placeholder="可选，一行一页。不填＝编剧自己按「钩子→推进→意外→反应→收尾」排页。&#10;填了就严格照做，页数＝行数：&#10;1：两人登山，风雪渐大&#10;2：雪崩，两人转身逃跑&#10;3：男生开门让女生进屋，屋外暴风雪&#10;4：清点物资，剩三根柴、一袋饼干&#10;5：第一天，生火取暖&#10;6：第二天，柴火将尽，分食饼干&#10;7：第三天，女生冻伤手指，男生找药&#10;8：第四天，两人轮流守火&#10;9：女生发现雪停，两人到窗边看&#10;10：下山回到小屋"></textarea>
+    </div>
+    <div class="roles" id="outlineTip" style="display:none">
+      <span class="lab"></span>
+      <span style="font-size:12px;color:var(--accent)">已填大纲：<b id="outlineCount">0</b> 页；页数自动跟随大纲，不用改下面的「页数上限」</span>
+    </div>
     <div class="row" style="margin-top:10px">
       <select id="layout">
         <option value="2x2" selected>四格 2×2</option>
@@ -457,15 +466,44 @@ async function loadMossModels() {
 /* 群像模式：把角色多行 + 剧情 + 转折拼成后端 parse_group 认的格式。 */
 function isGroup() { return !!($("groupMode") && $("groupMode").checked); }
 
+/* 分集大纲：一行一页，认「1：xxx」「第2页 xxx」等写法；只收非空行。
+   返回 [{n, body}]，空数组＝没填，走五段式。 */
+function parseOutline() {
+  var raw = ($("outline") && $("outline").value || "").trim();
+  var out = [];
+  raw.split(/\r?\n/).forEach(function (line) {
+    var m = line.trim().match(/^第?\s*(\d+)\s*(?:页)?\s*[：:.、\-]?\s*(.+)$/);
+    if (m && m[2].trim()) out.push({ n: parseInt(m[1], 10), body: m[2].trim() });
+  });
+  out.sort(function (a, b) { return a.n - b.n; });
+  return out;
+}
+
+function outlineBlock() {
+  var items = parseOutline();
+  if (!items.length) return "";
+  return "分集大纲：\n" + items.map(function (x) {
+    return "第" + x.n + "页：" + x.body;
+  }).join("\n");
+}
+
+function syncOutline() {
+  var n = parseOutline().length;
+  if ($("outlineTip")) $("outlineTip").style.display = n ? "" : "none";
+  if ($("outlineCount")) $("outlineCount").textContent = n;
+}
+
 function buildBrief() {
   var plot = ($("plot").value || "").trim();
   var twist = ($("twist") && $("twist").value || "").trim();
   if (!plot) return "";
+  var outline = outlineBlock();
   if (isGroup()) {
     var cast = ($("castLines").value || "").trim();
     if (!cast) return "";
     var g = ["群像角色：", cast, "剧情：" + plot];
     if (twist) g.push("转折：" + twist);
+    if (outline) g.push(outline);
     return g.join("\n");
   }
   var male = ($("male").value || "").trim();
@@ -475,6 +513,7 @@ function buildBrief() {
   if (female) lines.push("女主：" + female);
   lines.push("剧情：" + plot);
   if (twist) lines.push("转折：" + twist);
+  if (outline) lines.push(outline);
   return lines.join("\n");
 }
 
@@ -490,7 +529,12 @@ async function doWrite() {
   if (!brief) { toast("先写剧情", true); return; }
   var style = $("style").value;
   var group = isGroup();
-  var nPages = parseInt($("pages").value, 10) || 1;
+  var outline = parseOutline();
+  // 填了分集大纲就用它的行数当页数（一页一条，不多不少），
+  // 并把输入框同步成这个数，用户一眼能看到这次画几页。
+  var nPages = outline.length ? Math.max.apply(null, outline.map(function (x) { return x.n; }))
+                              : (parseInt($("pages").value, 10) || 1);
+  if (outline.length) $("pages").value = nPages;
   var btn = $("btn-write");
   btn.disabled = true;
   btn.innerHTML = '<span class="spin"></span>编剧中…';
@@ -970,6 +1014,8 @@ $("btn-write").addEventListener("click", doWrite);
 /* 群像开关只切输入区；写剧本统一走 agent 链路，layout/style 一直可见。 */
 $("groupMode").addEventListener("change", syncGroupMode);
 syncGroupMode();
+if ($("outline")) $("outline").addEventListener("input", syncOutline);
+syncOutline();
 $("btn-save").addEventListener("click", function () { saveNow().then(function () { toast("已保存"); }); });
 $("btn-draw-all").addEventListener("click", function () { draw(null, false); });
 /* 终止：不是杀进程。置位一个信号，出图线程当前这页会让 ComfyUI 定向停下，

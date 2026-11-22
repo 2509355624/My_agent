@@ -190,6 +190,12 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
   她做了个反常的决定都行），但不要和上一集重复。
 · 先把整本拆成五段：钩子（她要做什么／卡在哪）→ 推进 → 意外（转折发生）→ 她的反应 → 收尾。
   页数多于五页时一段可以占两页，少于五页就合并，但五段都要有落点。
+· **页数多（8 页以上）或剧情带时间跨度（「七日」「这几天」「撑过去」「一整夜」）时，
+  中段每一页必须落在一个具体事件上**：点的数在变（柴火从五根到三根到一根）、
+  伤/冷/饿在变、天气在变、她试过的办法在变——读者翻过去要能数出过了几天。
+  **绝不许把「这几天怎么过的」压成一页里两个人各说一句话**：那不是分镜，是跳过。
+  一段两页就写两个不同日子、两件不同的事；页数就是天数时能一页一天最好。
+  用户如果给了「分集大纲」逐页点了发生什么，严格按大纲一页一条，不许合并、不许跳过。
 · **每一页写 `beat`**：一句中文，写这一页**发生了什么变化**。
   「她在扫地」是动作流水账，不算 beat；「她发现灯绳断了」才算。
 · 相邻两页的 beat 不许是同一件事——连着两页都在扫同一个地，等于没写剧情。
@@ -331,6 +337,24 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
 · 特写格也照这个写：`close-up of her bare feet on the flat top surface of the block` 比
   `close-up of her feet on the block` 稳得多——脚特写最容易穿模。
 · 站在**地面**上不用写这一套（地面没有边界），但站在**有高度边的东西**上一定要写。
+
+════ 脚是脚、手是手、身体连着腿（2026-11-22 实测） ════
+出图把「脚的动作」画到手的位置、把坐着的人画成身体和腿两截，根因都是只写了一个
+部位名，没写它归谁、接在哪。写脚/腿的格，遵守三条：
+· **脚的动作必须带上腿和身体**：不写 `one boot pressed into the embers`（一只靴子踩在火里
+  ——模型会在她伸手的位置凭空长出一只靴子，看着像她的手变成了鞋）。写
+  `her booted foot resting on the flat stone hearth edge, her leg extending up to her knee
+  under the coat hem, the toe just clear of the embers`，让脚 → 小腿 → 膝盖 → 身体
+  连成一条，落脚面也写清（见上一节）。踩火 / 踩雪 / 踩水都照这个写。
+· **坐着的姿势要把身体和腿接起来**：不写 `sitting up in bed, blanket falling to her waist`
+  再加一句裸腿——模型会把上半身和腿画成两块拼在一起。写
+  `sitting upright on the bed with her hips and the backs of her thighs on the mattress,
+  both knees drawn up, lower legs continuing down to her feet tucked under the blanket,
+  one continuous body from her shoulders through her hips to her feet`。
+  髋、大腿、膝、小腿、脚一路写全，中间不许断在毯子边界上。
+· **特写格只放大一处，但不许让肢体凭空出现**：手特写就只有手和它连着的那截手腕，
+  脚特写就只有脚和它连着的那截脚踝；`a boot` / `a hand` 单独悬在画面里，模型会自己
+  把它接到最近的肢体上，接错就成「手是鞋子」。
 
 ════ 字（这些是上限，不是配额） ════
 一格页 0~1 句；两格页 0~2 句；三格页 0~3 句；五格页 0~4 句。
@@ -488,9 +512,16 @@ def parse_brief(text):
            "labeled": False, "male_none": False}
     if not raw:
         return out
-    buckets = {"男主": [], "女主": [], "剧情": [], "转折": []}
+    buckets = {"男主": [], "女主": [], "剧情": [], "转折": [], _SKIP_BUCKET: []}
     cur = None
     for line in raw.splitlines():
+        # 分集大纲是独立字段，由 parse_outline 单独取；这里吞掉整段，
+        # 否则「第1页：…」会被当成转折的一部分塞进 twist，大纲就被写两遍。
+        if _OUTLINE_HEADER.match(line):
+            cur = _SKIP_BUCKET
+            continue
+        if cur == _SKIP_BUCKET:
+            continue
         hit = _ROLE_LINE.match(line)
         if hit:
             cur = hit.group(1) or hit.group(2)
@@ -508,6 +539,59 @@ def parse_brief(text):
     if not out["labeled"]:
         out["plot"] = raw
     return out
+
+
+# ── 分集大纲（2026-11-22）：可选，用户逐页点了发生什么就严格照它拆页 ──
+# 工作台填了就按行拼进 brief；不填时下面这套完全不触发，行为跟以前一样。
+_OUTLINE_LINE = re.compile(r"^\s*第?\s*(\d+)\s*[页：:.]?\s*[:：.、\-]?\s*(.+?)\s*$")
+_OUTLINE_HEADER = re.compile(r"^\s*[【\[]?\s*分集大纲\s*[】\]]?\s*[：:]\s*$")
+_SKIP_BUCKET = "__outline__"   # 大纲段单独走，不能混进剧情/转折的 bucket
+
+
+def parse_outline(text):
+    """从 brief 里摘出「分集大纲：」段，返回按页号排好的 [(n, 一句话), ...]。
+
+    只认显式 `分集大纲：` 标签，避免把普通剧情里的「1：」误当大纲。
+    没填、格式不对都返回空列表——调用方据此走原来的五段式。
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return []
+    lines, inside, out = raw.splitlines(), False, []
+    for line in lines:
+        if _OUTLINE_HEADER.match(line):
+            inside = True
+            continue
+        if not inside:
+            continue
+        # 碰到下一个顶层标签就停（分集大纲一般是 brief 最后一段）
+        if _ROLE_LINE.match(line) or _ROLE_GROUP.match(line):
+            break
+        hit = _OUTLINE_LINE.match(line)
+        if hit:
+            try:
+                n = int(hit.group(1))
+            except (TypeError, ValueError):
+                continue
+            body = (hit.group(2) or "").strip()
+            if n > 0 and body:
+                out.append((n, body))
+    out.sort(key=lambda x: x[0])
+    return out
+
+
+def compose_outline(items):
+    """把大纲写成编剧必须照做的硬指令；空返回空串。"""
+    if not items:
+        return ""
+    lines = ["== 分集大纲（用户逐页指定，页数与页序都不许改） ==",
+             "严格按下面每一条拆成一页：第 N 条就是第 N 页，"
+             "一页一条、不许合并两页、不许跳过、不许在中间加页。",
+             "每页的 beat 就是那一条里发生的变化；大纲没写的桥段自己补画面，"
+             "但不许另起一页。"]
+    for n, body in items:
+        lines.append("第%d页：%s" % (n, body))
+    return "\n".join(lines)
 
 
 def compose_brief(parsed, fallback=""):
@@ -548,6 +632,16 @@ def compose_brief(parsed, fallback=""):
                  "按「钩子 → 推进 → 意外 → 她的反应 → 收尾」铺到各页。"
                  "不许只是把她做的动作顺序列一遍。"]
     return "\n".join(head + body)
+
+
+def with_outline(ctx, outline):
+    """把分集大纲接到组装好的上下文后面；空大纲原样返回。
+
+    单独抽出来是因为单女主 / 群像两条路都要用，且旧格式（compose_brief 的
+    fallback）也得能带上大纲——不然用户逐页点了 10 页，旧 brief 会丢掉它。
+    """
+    tail = compose_outline(outline)
+    return (ctx or "") + ("\n\n" + tail if tail else "")
 
 
 # ══════════════════════ 群像模式（2026-11-22） ══════════════════════
@@ -618,6 +712,12 @@ def parse_group(text):
         return out
     cur = None
     for line in raw.splitlines():
+        # 同 parse_brief：大纲段单独取，不能混进 plot / twist。
+        if _OUTLINE_HEADER.match(line):
+            cur = _SKIP_BUCKET
+            continue
+        if cur == _SKIP_BUCKET:
+            continue
         hit = _ROLE_GROUP.match(line)
         if hit:
             cur = "cast"
@@ -1092,6 +1192,12 @@ def generate(brief, pages, call, progress=None, group=False):
     say = progress or (lambda msg: None)
     t0 = time.time()
     cap = max(1, int(pages or 1))
+    # 分集大纲逐页点了发生什么：页数=最后一条的页号，且不许再当「上限」讲，
+    # 否则模型会把 10 条压成 5 页（2026-11-22 雪山小屋实测）。
+    outline = parse_outline(brief)
+    strict_outline = bool(outline)
+    if strict_outline:
+        cap = max(n for n, _ in outline)
     system = (SYSTEM + GROUP_OVERRIDE) if group else SYSTEM
     # 群像输入走独立解析：群像角色 / 剧情 / 转折。没写群像角色行就退回单女主，
     # 不误开群像（调用方一般已经按开关判过，这里再兜一层）。
@@ -1110,9 +1216,16 @@ def generate(brief, pages, call, progress=None, group=False):
         parsed = parse_brief(brief)
         ctx = compose_brief(parsed, fallback=brief)
         male_none = bool(parsed.get("male_none"))
-    user = ("%s\n\n写成 %d 页，%d 是上限——素材只够 %d 页就写 %d 页。"
-            "\n每页按上面的规矩写好 layout / summary / items，一次输出整本。"
-            % (ctx, cap, cap, cap, cap))
+    ctx = with_outline(ctx, outline)
+    if strict_outline:
+        user = ("%s\n\n严格写 %d 页，一页不多一页不少：分集大纲给了 %d 条，"
+                "第几条就是第几页，一条都不许合并、跳过或加页。"
+                "\n每页按上面的规矩写好 layout / summary / items，一次输出整本。"
+                % (ctx, cap, len(outline)))
+    else:
+        user = ("%s\n\n写成 %d 页，%d 是上限——素材只够 %d 页就写 %d 页。"
+                "\n每页按上面的规矩写好 layout / summary / items，一次输出整本。"
+                % (ctx, cap, cap, cap, cap))
 
     rounds = []
     say("单 Agent 成稿（上限 %d 页）…" % cap)

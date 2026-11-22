@@ -126,5 +126,55 @@ class StoryBeatTest(unittest.TestCase):
         self.assertTrue(any("beat" in w for w in warns))
 
 
+class OutlineTest(unittest.TestCase):
+    """2026-11-22：分集大纲可选，填了严格一页一条；不填走五段式。"""
+
+    def test_parse_outline_by_page_number(self):
+        brief = ("男主：无\n女主：x\n剧情：被困雪山\n"
+                 "分集大纲：\n第1页：两人登山\n2：雪崩逃跑\n10：下山回家")
+        got = A.parse_outline(brief)
+        self.assertEqual([n for n, _ in got], [1, 2, 10])
+        self.assertEqual(got[0][1], "两人登山")
+
+    def test_parse_outline_ignores_plot_colons(self):
+        """剧情行里的「1：」不能被误当大纲。"""
+        brief = "剧情：1：这不是大纲\n2：也不是"
+        self.assertEqual(A.parse_outline(brief), [])
+
+    def test_parse_outline_empty_is_falsy(self):
+        self.assertEqual(A.parse_outline(""), [])
+        self.assertEqual(A.parse_outline("分集大纲：\n"), [])
+
+    def test_outline_does_not_pollute_twist_or_plot(self):
+        """大纲段拼在 brief 末尾，不能被 parse_brief 当成转折的一部分。"""
+        brief = ("男主：无\n女主：x\n剧情：被困雪山\n转折：柴火用完\n"
+                 "分集大纲：\n1：登山\n2：雪崩")
+        p = A.parse_brief(brief)
+        self.assertEqual(p["twist"], "柴火用完")
+        self.assertEqual(p["plot"], "被困雪山")
+        g = A.parse_group("群像角色：\nboy: a boy\n剧情：登山\n"
+                          "分集大纲：\n1：登山\n2：雪崩")
+        self.assertEqual(g["plot"], "登山")
+
+    def test_compose_outline_forces_one_line_one_page(self):
+        out = A.compose_outline([(1, "登山"), (2, "雪崩")])
+        self.assertIn("第1页：登山", out)
+        self.assertIn("第2页：雪崩", out)
+        self.assertIn("不许合并", out)
+
+    def test_with_outline_appends_and_keeps_original(self):
+        ctx = "== 这一集发生什么 ==\n被困雪山"
+        out = A.with_outline(ctx, [(1, "登山")])
+        self.assertTrue(out.startswith(ctx))
+        self.assertIn("第1页：登山", out)
+        self.assertEqual(A.with_outline(ctx, []), ctx)
+
+    def test_system_has_span_and_limb_rules(self):
+        self.assertIn("中段每一页必须落在一个具体事件上", A.SYSTEM)
+        self.assertIn("分集大纲", A.SYSTEM)
+        self.assertIn("脚是脚、手是手、身体连着腿", A.SYSTEM)
+        self.assertIn("one boot pressed into the embers", A.SYSTEM)
+
+
 if __name__ == "__main__":
     unittest.main()
