@@ -1701,12 +1701,30 @@ class HideAndClearApiTest(_Base):
         self.assertIn("群友的", self.titles("list?scope=pub&size=60", qq="20003"))
         self.hide("群友的")
         self.assertNotIn("群友的", self.titles("list?scope=pub&size=60", qq="20003"))
-        # 作者本人仍然看得到自己的（原规则没变：下架砸不到作者头上）
-        self.assertIn("群友的", self.titles("list?scope=pub&size=60", qq="20002"))
+        # 2026-11-22 用户确认：站长隐藏谁的作品，作者本人也一并看不到
+        # （作者只在自己「我的作品」页还能看到，那边走 /mine）。
+        self.assertNotIn("群友的", self.titles("list?scope=pub&size=60", qq="20002"))
 
-    def test_hidden_view_is_the_only_place_it_shows(self):
+    def test_hidden_view_lists_every_source_at_once(self):
+        """隐藏墙一次列全：scope=pub + hidden=1 也要出站长隐藏的那本，
+        不用两个 tab 各翻一遍（2026-11-22 用户确认）。"""
         self.hide("1")
-        self.assertEqual(self.titles("list?scope=owner&hidden=1&size=60"), ["1"])
+        self.hide("群友的")
+        self.assertEqual(sorted(self.titles("list?scope=pub&hidden=1&size=60")),
+                         sorted(["1", "群友的"]))
+        self.assertEqual(sorted(self.titles("list?scope=owner&hidden=1&size=60")),
+                         sorted(["1", "群友的"]))
+
+    def test_can_hide_flag_follows_identity(self):
+        """can_hide 只认站主：群友对墙上谁的都是 false，出不出按钮前端看它。"""
+        d = self.j(self.c.get("/api/gal/list?scope=pub&size=60&qq=10001",
+                              headers=self.h))
+        self.assertTrue(d["owner"])
+        self.assertTrue(all(w["can_hide"] for w in d["works"]))
+        d = self.j(self.c.get("/api/gal/list?scope=pub&size=60&qq=20002",
+                              headers=self.h))
+        self.assertFalse(d["owner"])
+        self.assertFalse(any(w["can_hide"] for w in d["works"]))
 
     def test_unhide_puts_it_back(self):
         self.hide("1")

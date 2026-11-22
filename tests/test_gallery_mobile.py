@@ -90,6 +90,30 @@ class GalleryHeaderTest(unittest.TestCase):
         cond = html.split("var show = S.tab === \"owner\"", 1)[1].split(";", 1)[0]
         self.assertNotIn("S.owner", cond)
 
+    def test_owner_can_hide_public_works_from_pub_tab(self):
+        """2026-11-22：站长要能隐藏群友的公开作品，且两个 tab 都有入口。
+
+        - 卡片按钮吃后端给的 w.can_hide，不再前端拼 tab 条件（后端按
+          身份给，群友永远是 false）。
+        - 公开 tab 站长也有「更多 ▾ → 看已隐藏」入口；隐藏墙不分来源
+          一次列全，退出按钮在哪一面都挂着。
+        """
+        html = _html()
+        tools = html[html.index("function renderTools()"):]
+        tools = tools[:tools.index("function btn(")]
+        # 公开 tab 的看已隐藏入口
+        self.assertIn('S.owner && S.tab === "pub" && !S.hiddenView', tools)
+        self.assertIn('btn("👁 看已隐藏（需密码）", "", askPin)', tools)
+        # 隐藏墙的退出按钮两个 tab 通用，不再锁在站长 tab 里
+        self.assertIn('if (S.owner && S.hiddenView) {', tools)
+        self.assertIn('btn("← 返回画廊", "primary", toggleHidden)', tools)
+        # 卡片按钮按 can_hide 出，作者自己的管理页（mine tab）不出；
+        # 条件行里不能再自己拼 S.owner（身份判定归后端）。
+        self.assertIn("if (w.can_hide && S.tab !== \"mine\") {", html)
+        line = [l for l in html.splitlines()
+                if "if (" in l and "w.can_hide" in l][0]
+        self.assertNotIn("S.owner", line)
+
     def test_original_ids_are_kept(self):
         html = _html()
         for element_id in (

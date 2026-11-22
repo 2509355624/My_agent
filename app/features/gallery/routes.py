@@ -176,6 +176,9 @@ def _work_row(row, qq):
         "by": name,
         "mine": row["src"] == "user" and row["owner"] == str(qq or ""),
         "hidden": bool(row["hidden"]),
+        # 站长对谁的都能隐藏（包括群友上传的公开作品）；群友只能管自己的
+        # 删除，不能隐藏。前端按这个字段出按钮，别再自己拼 tab 条件。
+        "can_hide": _is_owner(qq),
     }
 
 
@@ -202,10 +205,10 @@ def api_list():
         # 结果一样，从管理页消失，不然一屏里全是已经不要的目录。
         where.append("w.hidden=" + ("1" if hidden_only else "0"))
     else:
-        # 下架的只有作者本人能看到；公开墙一律过滤。
-        # 游客（qq 为空）只走 hidden=0 那一半，owner='' 谁也匹配不上。
-        where.append("(w.hidden=0 OR (w.src='user' AND w.owner=?))")
-        args.append(str(qq or ""))
+        # 2026-11-22 用户确认：站长隐藏谁的作品，作者本人也一并看不到
+        # （墙上一律过滤）。作者只在自己「我的作品」页还能看到（那边走
+        # /mine，不过这条过滤），方便知道自己被下架了。
+        where.append("w.hidden=0")
 
     # scope=owner → 站长的（磁盘目录 + 他自己用网页传的，口径同 _work_row）；
     # scope=pub   → 其他人的。**不传 scope 就还是全部**，老链接和测试不受影响。
@@ -215,6 +218,10 @@ def api_list():
              " CASE WHEN w.ord='' THEN 1 ELSE 0 END, w.ord ASC,"
              " w.sort ASC, w.id DESC")
     scope = str(request.args.get("scope") or "").strip().lower()
+    if hidden_only:
+        # 2026-11-22 用户确认：隐藏墙一次列全，不分站长/公开两个来源。
+        # 站长 tab 和公开 tab 的入口进的是同一面墙，反悔不用两边各翻一遍。
+        scope = ""
     if scope == "owner":
         where.append("(w.src='owner' OR (w.src='user' AND w.owner=?))")
         args.append(str(GALLERY_OWNER_QQ or ""))
@@ -338,7 +345,7 @@ def api_work(wid):
 
     data = _work_row(row, qq or "")
     data["can_delete"] = mine
-    data["can_hide"] = _is_owner(qq) and row["src"] == "owner"
+    data["can_hide"] = _is_owner(qq)   # 站长对谁的都能隐藏，群友作品也一样
     return jsonify({
         "ok": True,
         "work": data,

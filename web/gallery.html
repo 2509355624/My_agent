@@ -843,10 +843,11 @@
     s.className = "s";
     s.textContent = (w.grp ? w.grp + " · " : "") + w.by;
     srow.appendChild(s);
-    // 站主的扫描目录：卡片最下面一个「隐藏」。点了就和清掉扫描结果一样
-    // 从管理页消失（2026-11-22 用户要求，不弹确认）。文件还在盘上，
-    // 重新扫那个目录还能扫回来；误点从「更多 → 看已隐藏」里捞。
-    if (S.owner && S.tab === "owner") {
+    // 站长（w.can_hide 由后端按身份给）对谁的都能隐藏：磁盘目录、群友上传
+    // 的公开作品都一样。点了就和清掉扫描结果一样从墙上消失（2026-11-22
+    // 用户要求，不弹确认）。文件还在盘上；误点从「看已隐藏」里捞回来。
+    // 「我的」tab 不出这个按钮，那边是作者自己的管理页，口径保持原样。
+    if (w.can_hide && S.tab !== "mine") {
       var hb = document.createElement("button");
       hb.type = "button";
       hb.className = "hb" + (S.hiddenView ? " back" : "");
@@ -902,12 +903,14 @@
     }
     // 扫描是站主的事，放「站长」tab —— 它扫的就是这一批目录，
     // 放在这里按钮和内容对得上，也不用挤在「我的」里。
+    // 隐藏墙（2026-11-22 确认：站长 tab / 公开 tab 的入口进来是同一面
+    // 列全的墙）——退出按钮在哪都得有，且要一眼看得到，不能只藏在
+    // 「更多」里。返回不需要密码。
+    if (S.owner && S.hiddenView) {
+      t.appendChild(btn("← 返回画廊", "primary", toggleHidden));
+    }
     if (S.owner && S.tab === "owner") {
-      if (S.hiddenView) {
-        // 隐藏墙里把返回做成第一颗醒目按钮：这是私密视图，进来的人
-        // 得一眼看得到怎么退出，不能只藏在「更多」里。返回不需要密码。
-        t.appendChild(btn("← 返回画廊", "primary", toggleHidden));
-      } else {
+      if (!S.hiddenView) {
         t.appendChild(btn("＋ 扫描文件夹", "primary", openScan));
       }
       t.appendChild(btn("更多 ▾", "tool-more-btn", function () {
@@ -932,6 +935,19 @@
         more.appendChild(btn("👁 看已隐藏（需密码）", "", askPin));
       }
       t.appendChild(more);
+    }
+    // 公开 tab 站长也有「看已隐藏」入口：隐藏的可能是群友传的公开作品，
+    // 反悔时不用切回站长 tab 再找（2026-11-22 用户确认，两个 tab 都要）。
+    if (S.owner && S.tab === "pub" && !S.hiddenView) {
+      t.appendChild(btn("更多 ▾", "tool-more-btn", function () {
+        var m = $("toolMore");
+        if (m) m.classList.toggle("on");
+      }));
+      var pm = document.createElement("div");
+      pm.className = "tool-more";
+      pm.id = "toolMore";
+      pm.appendChild(btn("👁 看已隐藏（需密码）", "", askPin));
+      t.appendChild(pm);
     }
   }
 
