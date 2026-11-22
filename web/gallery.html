@@ -269,6 +269,15 @@
     display:none;align-items:flex-end;justify-content:center}
   #scanbox.on{display:flex}
   @media(min-width:600px){#scanbox{align-items:center}}
+
+  /* ── 看已隐藏：密码面板 ── */
+  #pinbox{position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.76);
+    display:none;align-items:flex-end;justify-content:center}
+  #pinbox.on{display:flex}
+  @media(min-width:600px){#pinbox{align-items:center}}
+  #pinbox .sheet{max-width:380px}
+  #pininput{letter-spacing:.4em;font-size:20px !important;text-align:center}
+  #pinerr{min-height:18px;color:#ff8f8f;font-size:12.5px;margin:-4px 0 10px}
   .sheet .row input[type=text]{margin-bottom:0}
   .sheet .row .up{flex:0 0 auto;background:var(--card2);border:0;color:var(--tx);
     font:inherit;font-size:16px;padding:0 15px;border-radius:10px;cursor:pointer}
@@ -436,6 +445,21 @@
     <div class="row">
       <button class="cancel" id="sccancel">取消</button>
       <button class="ok" id="scgo">扫描这里</button>
+    </div>
+  </div>
+</div>
+
+<!-- 看已隐藏：6 位密码（每次进都要重输，不记验证态） -->
+<div id="pinbox">
+  <div class="sheet">
+    <h3>查看已隐藏</h3>
+    <p>这是站主私人的一面墙。输入 6 位密码才能进入。</p>
+    <input type="text" id="pininput" inputmode="numeric" autocomplete="off"
+           placeholder="6 位数字" maxlength="6">
+    <div id="pinerr"></div>
+    <div class="row">
+      <button class="cancel" id="pincancel">取消</button>
+      <button class="ok" id="pinok">进入</button>
     </div>
   </div>
 </div>
@@ -879,7 +903,13 @@
     // 扫描是站主的事，放「站长」tab —— 它扫的就是这一批目录，
     // 放在这里按钮和内容对得上，也不用挤在「我的」里。
     if (S.owner && S.tab === "owner") {
-      t.appendChild(btn("＋ 扫描文件夹", "primary", openScan));
+      if (S.hiddenView) {
+        // 隐藏墙里把返回做成第一颗醒目按钮：这是私密视图，进来的人
+        // 得一眼看得到怎么退出，不能只藏在「更多」里。返回不需要密码。
+        t.appendChild(btn("← 返回画廊", "primary", toggleHidden));
+      } else {
+        t.appendChild(btn("＋ 扫描文件夹", "primary", openScan));
+      }
       t.appendChild(btn("更多 ▾", "tool-more-btn", function () {
         var m = $("toolMore");
         if (m) m.classList.toggle("on");
@@ -897,8 +927,10 @@
         }));
       }
       more.appendChild(btn("🗑 清空扫描结果", "", clearScan));
-      more.appendChild(btn(S.hiddenView ? "← 回到未隐藏" : "👁 看已隐藏", "",
-                           toggleHidden));
+      // 进隐藏墙要先过 6 位密码；退出（toggleHidden 回正常墙）不用。
+      if (!S.hiddenView) {
+        more.appendChild(btn("👁 看已隐藏（需密码）", "", askPin));
+      }
       t.appendChild(more);
     }
   }
@@ -1144,7 +1176,7 @@
         // 直接从这个墙面摘掉，不留空位；S.works 不动，位置记忆的序号不会错位
         if (el) el.style.display = "none";
         toast((hidden ? "已隐藏《" : "已放回《") + w.title + "》"
-              + (hidden ? "　更多 → 看已隐藏" : ""), 3000);
+              + (hidden ? "　更多 → 看已隐藏（需密码）" : ""), 3000);
       }).catch(function (e) { toast(e.message); });
   }
 
@@ -1155,6 +1187,50 @@
     renderGrps();
     load(true);
   }
+
+  // ── 看已隐藏：6 位密码 ────────────────────────────────
+  // 每次点进来都要重输一次，不在前端存任何「已验证」标记——
+  // 面试把手机递出去，对方就算翻到这个入口也进不去那面墙。
+  // 校验在后端（密码只有 state 里的哈希），前端连密码是什么都不知道。
+  function askPin() {
+    $("pininput").value = "";
+    $("pinerr").textContent = "";
+    $("pinbox").classList.add("on");
+    setTimeout(function () { $("pininput").focus(); }, 50);
+  }
+  function closePin() { $("pinbox").classList.remove("on"); }
+
+  function submitPin() {
+    var code = ($("pininput").value || "").trim();
+    if (!/^\d{6}$/.test(code)) {
+      $("pinerr").textContent = "请输入 6 位数字";
+      return;
+    }
+    var okBtn = $("pinok");
+    okBtn.disabled = true;
+    api("pin/verify", { method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ pin: code }) })
+      .then(function () {
+        closePin();
+        toggleHidden();                   // 验过了才进，验不过留在原墙面
+      })
+      .catch(function (e) {
+        $("pinerr").textContent = e.message || "验证失败";
+        $("pininput").value = "";
+        $("pininput").focus();
+      })
+      .then(function () { okBtn.disabled = false; });
+  }
+
+  $("pincancel").onclick = closePin;
+  $("pinok").onclick = submitPin;
+  $("pininput").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") submitPin();
+  });
+  $("pinbox").addEventListener("click", function (e) {
+    if (e.target === $("pinbox")) closePin();   // 点遮罩空白处关掉
+  });
 
   // ── 作品集详情 ────────────────────────────────────────
   // 点卡片进来先看网格（两列 / 单列可切），再点某张才全屏滑动。

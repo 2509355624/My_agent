@@ -11,8 +11,8 @@
 
   1. 站长 tab 每张卡下面都有「隐藏」按钮，页面不横向溢出
   2. 点隐藏 → 卡从墙面消失、接口里也没有了
-  3. 更多 → 看已隐藏 → 它在那儿，按钮变成「恢复」
-  4. 恢复 → 回到正常墙面
+  3. 更多 → 看已隐藏 → 输对密码 → 它在那儿，按钮变成「恢复」
+  4. 恢复 → 点顶部「← 返回画廊」回到正常墙面
   5. 选一个分类 → 更多里出现「清空「xxx」」→ 点掉 → 只有这个分类空
 """
 import json
@@ -34,6 +34,7 @@ if HERE not in sys.path:
 
 from app.features.gallery import gallery           # noqa: E402
 from app.features.gallery import routes as G      # noqa: E402
+from app.features.gallery import pin              # noqa: E402
 
 EDGE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 PORT = 5199
@@ -92,6 +93,12 @@ def make_app():
     os.makedirs(gallery.CACHE, exist_ok=True)
     G.AGENT_PORT = PORT
     G.GALLERY_OWNER_QQ = "10001"
+    # 「看已隐藏」现在要过密码门，临时服务也在临时目录设一份，别读真实密码
+    pin._AUTH = os.path.join(TMP, "gallery_pin.json")
+    pin._cache = None
+    pin._fails = 0
+    pin._locked_until = 0.0
+    pin.set_pin("839125")
 
     app = Flask(__name__)
     app.register_blueprint(G.bp)
@@ -211,6 +218,13 @@ def main():
               "(%s)" % " / ".join(labels))
         c.js("[].forEach.call(document.querySelectorAll('#toolMore button'),"
              "function(b){if(b.textContent.indexOf('看已隐藏')>=0)b.click()})")
+        time.sleep(0.4)
+        # 密码门：输对 839125 才进得去隐藏墙
+        check(c.js("document.getElementById('pinbox').classList.contains('on')"),
+              "弹出了密码框")
+        c.js("document.getElementById('pininput').value='839125';"
+             "document.getElementById('pinok').click()")
+        wait_for(c, "!document.getElementById('pinbox').classList.contains('on')", 20)
         wait_for(c, "document.querySelectorAll('#grid .card').length>0", 25)
         time.sleep(0.8)
         hb_now = c.js("(function(){var b=document.querySelector('#grid .card .hb');"
@@ -228,10 +242,9 @@ def main():
         time.sleep(1.0)
         check(c.js("document.querySelector('#grid .card').style.display") == "none",
               "已隐藏列表里也拿掉了")
-        c.js("document.querySelector('.tool-more-btn').click()")
-        time.sleep(0.4)
-        c.js("[].forEach.call(document.querySelectorAll('#toolMore button'),"
-             "function(b){if(b.textContent.indexOf('回到未隐藏')>=0)b.click()})")
+        # 退出隐藏墙用顶部的「← 返回画廊」，不用再走「更多」
+        c.js("[].forEach.call(document.querySelectorAll('#tools button'),"
+             "function(b){if(b.textContent.indexOf('返回画廊')>=0)b.click()})")
         wait_for(c, "document.querySelectorAll('#grid .card').length>0", 25)
         time.sleep(1.0)
         back = c.js("fetch('/api/gal/list?scope=owner&size=60')"

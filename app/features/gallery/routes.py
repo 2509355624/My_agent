@@ -31,7 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 from flask import Blueprint, jsonify, request, send_file
 
 from app.gateways import friend_auth
-from app.features.gallery import folder_picker, gallery
+from app.features.gallery import folder_picker, gallery, pin
 from app.core.admin_access import LOCAL_ADDRS, is_lan_addr
 from app.config import GALLERY_OWNER_QQ, AGENT_PORT
 
@@ -684,6 +684,52 @@ def api_visible():
     with gallery.connect() as con:
         con.execute("UPDATE works SET hidden=? WHERE id=?", (hidden, wid))
     return jsonify({"ok": True, "hidden": bool(hidden)})
+
+
+@bp.route("/pin/verify", methods=["POST"])
+def api_pin_verify():
+    """「看已隐藏」的 6 位密码。只认站主，验完即弃、不发 cookie。
+
+    前端每次点进来都要重新输一次（用户要求：面试时把手机递出去，
+    对方翻到那个入口也进不去）。所以这里不记会话、不签 token，
+    只回答这一次的「对 / 不对」。
+
+    没设过密码文件（state/gallery_pin.json）时 configured() 为假——
+    这时隐藏墙对谁都不开放，fail-closed，而不是「没密码就能进」。
+    """
+    bad = _guard()
+    if bad:
+        return bad
+    qq = _qq()
+    if not _is_owner(qq):
+        return jsonify({"ok": False, "error": "只有站主能看"}), 403
+    if not pin.configured():
+        return jsonify({"ok": False, "error": "隐藏墙未启用"}), 503
+    left = pin.locked_left()
+    if left:
+        return jsonify({"ok": False, "error": "输错太多次，%d 秒后再试" % left})
+    body = request.get_json(silent=True) or {}
+    code = str(body.get("pin") or "").strip()
+    if not code.isdigit() or len(code) != 6:
+        return jsonify({"ok": False, "error": "请输入 6 位数字"})
+    ok, left = pin.verify(code)
+    if ok:
+        return jsonify({"ok": True})
+    return jsonify({"ok": False,
+                    "error": ("输错太多次，%d 秒后再试" % left) if left
+                             else "密码不对"})
+
+
+@bp.route("/pin/configured")
+def api_pin_configured():
+    """前端据此决定要不要显示「看已隐藏」入口。"""
+    bad = _guard()
+    if bad:
+        return bad
+    qq = _qq()
+    if not _is_owner(qq):
+        return jsonify({"ok": False, "error": "只有站主能看"}), 403
+    return jsonify({"ok": True, "configured": pin.configured()})
 
 
 @bp.route("/clean", methods=["POST"])

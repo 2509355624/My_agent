@@ -1766,3 +1766,164 @@ class HideAndClearApiTest(_Base):
 
     def test_clear_requires_owner(self):
         self.clear("甲", qq="20002", code=403)
+
+
+class PinGateTest(unittest.TestCase):
+    """「看已隐藏」的 6 位密码门（2026-11-22 用户要求：面试时挡一下）。
+
+    密码只存哈希，文件在临时目录（测试进程 state_path 自动落临时），
+    不碰真实 state/gallery_pin.json。验三件事：
+      1. 对了才放行、错了不进、密码不出现在响应里
+      2. 连续错 5 次锁住，锁住期间连对的也进不去
+      3. 没设过密码 = fail-closed，谁都进不去（不是「没密码就能进」）
+    """
+
+    def setUp(self):
+        import json as _json
+        from app.features.gallery import pin
+        self.pin = pin
+        self.root = tempfile.mkdtemp(prefix="gal_pin_")
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.path = os.path.join(self.root, "gallery_pin.json")
+        p = mock.patch.object(pin, "_AUTH", self.path)
+        p.start()
+        self.addCleanup(p.stop)
+        # 每个用例都从「没设密码 / 没锁 / 没错误计数」的干净状态开始
+        pin._cache = None
+        pin._fails = 0
+        pin._locked_until = 0.0
+        self.addCleanup(self._clean)
+        del _json  # 只用标准库 json，这里不额外引用
+
+    def _clean(self):
+        self.pin._cache = None
+        self.pin._fails = 0
+        self.pin._locked_until = 0.0
+
+    def _set(self, code="839125"):
+        self.pin.set_pin(code)
+
+    def test_no_pin_file_is_fail_closed(self):
+        self.assertFalse(self.pin.configured())
+        ok, left = self.pin.verify("839125")
+        self.assertFalse(ok)
+
+    def test_correct_pin_passes(self):
+        self._set()
+        self.assertTrue(self.pin.configured())
+        ok, _ = self.pin.verify("839125")
+        self.assertTrue(ok)
+
+    def test_wrong_pin_fails(self):
+        self._set()
+        ok, _ = self.pin.verify("000000")
+        self.assertFalse(ok)
+        ok, _ = self.pin.verify("839125")
+        self.assertTrue(ok)                 # 错了不影响下一次对
+
+    def test_file_stores_hash_not_plain_pin(self):
+        self._set()
+        with open(self.path, encoding="utf-8") as f:
+            raw = f.read()
+        self.assertNotIn("839125", raw)
+        self.assertIn("salt", raw)
+        self.assertIn("hash", raw)
+
+    def test_lock_after_five_wrong_tries(self):
+        self._set()
+        for _ in range(5):
+            ok, _ = self.pin.verify("000000")
+            self.assertFalse(ok)
+        # 锁住期间连对的也进不去
+        ok, left = self.pin.verify("839125")
+        self.assertFalse(ok)
+        self.assertGreater(left, 0)
+
+    def test_correct_pin_resets_fail_counter(self):
+        self._set()
+        self.pin.verify("000000")
+        self.pin.verify("000000")
+        self.assertTrue(self.pin.verify("839125")[0])
+        # 清零后再连错 4 次，还不该锁
+        for _ in range(4):
+            self.pin.verify("000000")
+        self.assertEqual(self.pin.locked_left(), 0)
+        self.assertTrue(self.pin.verify("839125")[0])
+
+    def test_reset_pin_clears_lock(self):
+        self._set()
+        for _ in range(5):
+            self.pin.verify("000000")
+        self.assertGreater(self.pin.locked_left(), 0)
+        self._set("111111")
+        self.assertEqual(self.pin.locked_left(), 0)
+        self.assertTrue(self.pin.verify("111111")[0])
+        self.assertFalse(self.pin.verify("839125")[0])
+
+
+class PinApiTest(_Base):
+    """接口层：只有站主能验、格式不对不进、密码不回显。"""
+
+    def setUp(self):
+        super().setUp()
+        from flask import Flask
+        from app.features.gallery import pin
+        self.pin = pin
+        self.app = Flask(__name__)
+        self.app.register_blueprint(gallery_api.bp)
+        self.c = self.app.test_client()
+        self.h = {"X-Friend-Token": "tok"}
+        for target, attr, val in ((friend_auth, "secret", lambda: "tok"),
+                                  (gallery_api, "GALLERY_OWNER_QQ", "10001")):
+            p = mock.patch.object(target, attr, val)
+            p.start()
+            self.addCleanup(p.stop)
+        self.path = os.path.join(self.root, "pin.json")
+        p = mock.patch.object(pin, "_AUTH", self.path)
+        p.start()
+        self.addCleanup(p.stop)
+        pin._cache = None
+        pin._fails = 0
+        pin._locked_until = 0.0
+        self.addCleanup(self._clean)
+        pin.set_pin("839125")
+
+    def _clean(self):
+        self.pin._cache = None
+        self.pin._fails = 0
+        self.pin._locked_until = 0.0
+
+    def post(self, code, qq="10001"):
+        return self.c.post("/api/gal/pin/verify?qq=" + qq, headers=self.h,
+                           json={"pin": code})
+
+    def test_correct_pin_returns_ok(self):
+        d = self.post("839125").get_json()
+        self.assertTrue(d["ok"])
+        self.assertNotIn("839125", str(d))
+
+    def test_wrong_pin_returns_error(self):
+        d = self.post("000000").get_json()
+        self.assertFalse(d["ok"])
+        self.assertIn("密码不对", d["error"])
+
+    def test_bad_format_rejected(self):
+        for code in ("", "123", "abcdef", "1234567"):
+            d = self.post(code).get_json()
+            self.assertFalse(d["ok"])
+
+    def test_non_owner_cannot_verify(self):
+        r = self.post("839125", qq="20002")
+        self.assertEqual(r.status_code, 403)
+
+    def test_configured_endpoint(self):
+        d = self.c.get("/api/gal/pin/configured?qq=10001",
+                       headers=self.h).get_json()
+        self.assertTrue(d["ok"])
+        self.assertTrue(d["configured"])
+
+    def test_not_configured_is_503(self):
+        self.pin._cache = None
+        os.remove(self.path)
+        r = self.post("839125")
+        self.assertEqual(r.status_code, 503)
