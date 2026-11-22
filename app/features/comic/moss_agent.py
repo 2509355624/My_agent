@@ -173,7 +173,7 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
 · **cast 里必须有一项比例锚点，固定写这一串**：`slender teen proportions, long legs, small head`。
   档案里写 slender small frame / petite / tiny / childlike 的，**换成这一串**——年龄、发型、头带、
   眼睛、配饰一个字都不动，只换这一项。small frame / petite 出图会把她画成小孩，
-  而这一本里她是十几岁的学生（2026-11-22 泳池话题：P1 是正常少女，P4 举拳笑那格直接画成 Q 版）。
+  而这一本里她是十几岁的学生（2026-11-22 泳池话题：P1 是正常少女，P2 靠池边喘气那格直接画成 Q 版）。
 · **cast.girl 只写不变项**，一项都不许带 wearing / dressed in / 任何衣物。
   衣服一进 cast，这本漫画从第一页到最后一页就只能穿那一件，换装剧情永远失败。
 · 每一页先定「这一页她身上是什么」，写进 summary 的 ③。
@@ -289,7 +289,7 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
 ════ 踩在东西上，就把接触面写出来 ════
 她站在出发台、领奖台、台阶、池边、椅子、床沿上，出图最常见的坏法是**脚陷进去**：
 方块画到脚前面，脚踝以下消失。原因是只写了 standing on the block——没写台面在哪，
-模型就自己决定台面高度，脚和台面一交叉就成了穿模（2026-11-22 泳池话题 P2 实测）。
+模型就自己决定台面高度，脚和台面一交叉就成了穿模（2026-11-22 泳池话题 P4 实测）。
 · 站 / 蹲 / 坐 / 跪在任何东西上，三样一起写：
   ① 接触面：`both bare feet planted flat on the flat top of the block`（谁的什么部位 + 那个平面）
   ② 平面看得见：`the pale top surface of the block visible under and around her feet`
@@ -675,7 +675,7 @@ def audit(js, cap=12, male_none=False):
                    % len(girl_segs))
     # 比例锚点：出图端靠它把「十几岁的少女」和「Q 版大头娃娃」分开。这一项不是文风，
     # 是同一本里体型一致性的唯一锚——2026-11-22 泳池话题实测：同一份 cast，
-    # P1 是正常少女，P4 举拳大笑那一格直接画成三头身。判据只看有没有写（模型漏了这一项），
+    # P1 是正常少女，P2 靠池边喘气那一格直接画成三头身。判据只看有没有写（模型漏了这一项），
     # 不查它用什么词——措辞是模型的活。
     if girl_spec and "proportion" not in girl_spec.lower():
         out.append("cast 里缺比例锚点——补一项 `slender teen proportions, long legs, small head`，"
