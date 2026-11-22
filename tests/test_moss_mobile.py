@@ -53,12 +53,23 @@ class MossStudioSimpleTest(unittest.TestCase):
                 # 2026-11-22：一句话剧情拆成「男主 / 女主 / 剧情」三栏，
                 # brief 退役，换成 male / female / plot。
                 "male", "female", "plot",
-                "layout", "style", "styleCustom", "pages", "btn-write",
+                "layout", "style", "pages", "btn-write",
                 "spec-card", "spec-title", "spec-style", "cast-list", "issues",
                 "btn-save", "btn-draw-all", "lora-card", "lora-rows",
                 "btn-lora-save", "pages-wrap", "zoom", "toast", "histsel",
                 "jobbar"):
             self.assertIn('id="%s"' % element_id, html)
+
+    def test_one_chain_and_one_style(self):
+        """2026-11-22：双段勾选框与自定义画风退役，下拉只留一种画风。"""
+        html = _html()
+        for gone in ("twoAgent", "twoHint", "styleCustom", "/api/moss/write"):
+            self.assertNotIn(gone, html)
+        self.assertIn('var r = await api("/api/moss/two_agent", payload);', html)
+        style = html[html.index('<select id="style"'):]
+        style = style[:style.index("</select>")]
+        self.assertEqual(style.count("<option"), 1)
+        self.assertIn('<option value="daily" selected>日常明亮</option>', style)
 
     def test_zoom_has_navigation_and_blocks_blue_selection(self):
         html = _html()

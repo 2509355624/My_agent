@@ -265,26 +265,13 @@
         <option value="2h">两格 · 上下</option>
         <option value="single">整页一格</option>
       </select>
-      <select id="style">
+      <select id="style" title="目前只有一种画风；以后加画风在这里加 option">
         <option value="daily" selected>日常明亮</option>
-        <option value="wuxia">武侠</option>
-        <option value="suspense">悬疑冷色</option>
-        <option value="soft">柔和电影感</option>
-        <option value="custom">自定义…</option>
       </select>
-      <input id="styleCustom" placeholder="自定义画风串（英文，写画法+光照+色调+气质）"
-             style="display:none;flex:1;min-width:260px">
       <label style="font-size:12px;color:var(--text-dim)">页数上限
         <input id="pages" type="number" value="4" min="1" max="12" style="width:62px"
                title="这是上限，不是配额。编剧按内容写几页就几页，素材不够会更少">
       </label>
-      <label style="font-size:12px;color:var(--text-dim)"
-             title="编剧 AI 逐格写稿（格｜景别｜画面｜台词）→ 逐页编译 AI 出整页 Layout JSON → 代码闸门。黑白网点口径，约 60 秒/页">
-        <input id="twoAgent" type="checkbox"> 双段链路
-      </label>
-      <span id="twoHint" style="display:none;font-size:12px;color:var(--text-dim)">
-        版式与画风交给链路：编剧写几格就几格（一页一格也合法），页数只是上限，画风固定黑白网点
-      </span>
       <div class="spacer"></div>
       <button class="btn primary" id="btn-write">让编剧写剧本</button>
     </div>
@@ -363,7 +350,7 @@
 var S = { task: null, spec: null, pages: [], timer: null, saving: false,
           pending: false, poll: null, aborted: false };
 
-/* 双段链路的骨架名与旧链路不同（L0–L5 / S1 / D1 / D2）。这里两套都列，
+/* agent 链路的骨架名与旧链路不同（L0–L5 / S1 / D1 / D2）。这里两套都列，
    否则 spec 里是 L0、下拉却只认 single/2h，选中状态全空、看起来像选错了。 */
 var LAYOUT_LABEL = {
   S1: "S1 单格·满版（一页一拍）", D1: "D1 两格·上下", D2: "D2 两格·左右",
@@ -491,31 +478,23 @@ function buildBrief() {
   return lines.join("\n");
 }
 
-/* 群像开关：显示对应输入区，强制走 agent 链路（双段链路是单女主 POV） */
+/* 群像开关：只切输入区。写剧本统一走 agent 链路，layout/style 两种模式都照传。 */
 function syncGroupMode() {
   var g = isGroup();
   $("soloRoles").style.display = g ? "none" : "";
   $("groupRoles").style.display = g ? "" : "none";
-  if (g && $("twoAgent")) { $("twoAgent").checked = false; $("twoAgent").disabled = true; }
-  if ($("twoAgent") && !g) { $("twoAgent").disabled = false; }
-  if ($("twoHint")) $("twoHint").style.display = (!g && $("twoAgent") && $("twoAgent").checked) ? "" : "none";
 }
 
 async function doWrite() {
   var brief = buildBrief();
   if (!brief) { toast("先写剧情", true); return; }
   var style = $("style").value;
-  if (style === "custom") style = $("styleCustom").value.trim();
   var group = isGroup();
-  // 群像必须走 agent 链路（two_agent 端点 + group 参数），双段是写死的 POV 单女主
-  var two = !group && $("twoAgent") && $("twoAgent").checked;
   var nPages = parseInt($("pages").value, 10) || 1;
   var btn = $("btn-write");
   btn.disabled = true;
   btn.innerHTML = '<span class="spin"></span>编剧中…';
-  bar(group ? "群像编剧：多角色同屏（几秒）…"
-        : (two ? ("双段链路：拆幕 + 逐页编译（约 " + (nPages * 60) + " 秒）…")
-               : "编剧正在写剧本（几秒）…"));
+  bar(group ? "群像编剧：多角色同屏（几秒）…" : "编剧正在写剧本（几秒）…");
   try {
     var payload = { brief: brief, pages: nPages };
     if (group) payload.group = true;
@@ -524,9 +503,9 @@ async function doWrite() {
       payload.provider = $("prov").value;
       if ($("model") && $("model").value) payload.model = $("model").value;
     }
-    // 双段模式的版式与画风由链路自己定，这两个值连传都不传，省得后端还要忽略
-    if (!two) { payload.layout = $("layout").value; payload.style = style; }
-    var r = await api((two || group) ? "/api/moss/two_agent" : "/api/moss/write", payload);
+    payload.layout = $("layout").value;
+    payload.style = style;
+    var r = await api("/api/moss/two_agent", payload);
     if (!r.ok) {
       bar("编剧失败：" + (r.error || "未知原因"), true);
       if (r.raw) console.warn("模型原始回复：\n" + r.raw);
@@ -567,7 +546,7 @@ function loadPayload(p) {
     pages: (p.pages || []).map(function (x) {
       return {
         n: x.n, layout: x.layout, scene: x.scene,
-        // 双段式链路每页自带整页 Layout JSON，原样带回，save 时才不会被重拼
+        // agent 链路每页自带整页 Layout JSON，原样带回，save 时才不会被重拼
         prompt_override: x.prompt_override || "",
         plan: x.plan || null,
         panels: (x.panels || []).map(function (pan) {
@@ -725,7 +704,7 @@ function patch(p) {
   var st = $("steps");
   if (st && document.activeElement !== st && p.steps) st.value = p.steps;
   $("steps-hint").textContent = (p.ratio || "") + " · cfg " + (p.cfg || "")
-    + " · 20 步以下黑白网点画风会跑偏";
+    + " · 全彩赛璐璐画风，步数太低会掉细节";
   if (p.running) {
     bar('<span class="spin"></span>正在画第 ' + p.running.page + " 页 · 已等 " +
         Math.round(p.running.waited) + " 秒（一页约 150~200 秒）");
@@ -988,36 +967,9 @@ document.addEventListener("keydown", function (e) {
 
 $("btn-write").addEventListener("click", doWrite);
 
-/* 群像开关：切输入区、锁双段复选框；群像走 agent 链路，layout/style 仍要显示 */
-$("groupMode").addEventListener("change", function () {
-  syncGroupMode();
-  var g = isGroup();
-  ["layout", "style"].forEach(function (id) {
-    var el = $(id);
-    el.disabled = false;
-    el.style.display = "";
-  });
-  if ($("styleCustom")) $("styleCustom").style.display = "";
-});
+/* 群像开关只切输入区；写剧本统一走 agent 链路，layout/style 一直可见。 */
+$("groupMode").addEventListener("change", syncGroupMode);
 syncGroupMode();
-
-/* 双段链路接管版式与画风：格数由编剧写了几格决定（1 格 S1 / 2 格 D1·D2 /
-  3~6 格 L5·L4·L2·L0·L1·L3），画风由代码锁成黑白网点。
-   这两个下拉在双段模式下根本不会被读，所以不是灰掉而是
-   **直接收起来**——放着只会让人以为选了「四格」就能出四格。 */
-$("twoAgent").addEventListener("change", function () {
-  var on = this.checked;
-  ["layout", "style"].forEach(function (id) {
-    var el = $(id);
-    el.disabled = on;
-    el.style.display = on ? "none" : "";
-  });
-  var sc = $("styleCustom");
-  sc.disabled = on;
-  sc.style.display = on ? "none"
-    : ($("style").value === "custom" ? "" : "none");
-  $("twoHint").style.display = on ? "" : "none";
-});
 $("btn-save").addEventListener("click", function () { saveNow().then(function () { toast("已保存"); }); });
 $("btn-draw-all").addEventListener("click", function () { draw(null, false); });
 /* 终止：不是杀进程。置位一个信号，出图线程当前这页会让 ComfyUI 定向停下，
@@ -1036,11 +988,6 @@ $("btn-lora-save").addEventListener("click", async function () {
   if (!LORA.length) return;
   var r = await api("/api/lora/save", { skill: "moss-qunyou", slots: loraPayload() });
   toast(r.message || (r.ok ? "已存为默认" : "保存失败"), !r.ok);
-});
-
-$("style").addEventListener("change", function () {
-  $("styleCustom").style.display = this.value === "custom" ? "" : "none";
-  if (this.value === "custom") $("styleCustom").focus();
 });
 
 /* ══ 历史任务 ══════════════════════════════════════════════ */
