@@ -549,6 +549,120 @@ def compose_brief(parsed, fallback=""):
     return "\n".join(head + body)
 
 
+# ══════════════════════ 群像模式（2026-11-22） ══════════════════════
+# 单女主 POV 的硬规则散落在 SYSTEM 多个段落里（「这一本里有谁」/「画什么」/
+# 「cast 长这样」/「字」）。群像模式不改那几段——而是在 SYSTEM 末尾追加这一段，
+# 明确声明它优先。这样单女主链路一个字不动，群像只是多读一段覆写。
+# 大模型对「最后、且明确写着『以下优先』」的指令遵从度很高，实测见 tools 探针。
+GROUP_OVERRIDE = """
+════════════════════════════════════════════════════
+⚠ 群像模式：下面这一段**优先于上面所有规则**。
+上面凡是说「只画女生 / 不许男性人形 / 男主只在画外 / 只有两种字 / cast 只写 girl」
+的，在群像模式里**全部作废**。这是一本多角色合照，不是第一人称 POV。
+════════════════════════════════════════════════════
+
+════ 群像：这一本里有谁 ════
+输入里会有一段「== 群像角色 ==」，每个角色一行 `key: 英文外形串`。
+· **cast 里每个角色写一条，key 原样照抄**（boy / girl / chubby_uncle / athlete 等），
+  外形串逐字照抄，不缩写不调序不改词，也不带衣服。
+· 这是**第三人称群像**：镜头是旁观者，所有角色都在画面里，没有「镜头后面的我」，
+  没有画外方框。谁说话就把气泡放在**那个人自己在的那一格**。
+· 同屏合照那一页：把剧情点名的所有人**画在同一个画面里**，一个都不能少。
+  写清谁站哪（left / center / right / foreground / background）、彼此的高矮胖瘦差异。
+
+════ 群像：人多怎么画清楚 ════
+· 每个角色第一次全身入画时写完整外形串；同一页后面的格用 `the boy` / `the athlete`
+  这样的指代（key 是 chubby_uncle 就写 the chubby man）。
+· **相邻两个人开头显式互斥**，否则模型会把他们画成同一张脸：
+  `In sharp contrast, the athlete has a broad muscular build and short cropped hair, unlike the slim boy beside him.`
+  体型差异（胖 / 瘦 / 肌肉）、年龄（少年 / 中年）、发型三项至少互斥一项。
+· 特写只写那一个人的局部，别把一堆外形串堆进脸特写。
+· 人数多的那一格用宽景别（wide / full group shot）装下所有人，别用 tight close-up。
+
+════ 群像：字 ════
+· 每个会说话的角色各写一种气泡，气泡落在他自己那一格，短尾巴指着他的脸。
+· 可说话的人最多四种，一页台词仍是上限不是配额；整页 0 句成立。
+· 不许旁白、不许内心独白。
+
+════ 群像：比例与衣服 ════
+· 「比例锚点只针对少女」那条只对 girl 适用：男孩、大叔、健身者按各自身形写，
+  不要把 `slender teen proportions` 套到成年男性身上。
+· 衣服仍不进 cast，写进每一页 summary 的③；同屏时每人衣服各写清楚。
+"""
+
+_ROLE_GROUP = re.compile(
+    r"^[\s#*\-]*(?:[【\[]?\s*群像角色\s*[】\]]?\s*[：:])\s*(.*)$")
+
+
+def parse_group(text):
+    """群像输入：认 `群像角色：` 段里的多行 `key: 外形串`，外加剧情 / 转折。
+
+    返回 `{"cast": {key: spec}, "plot": ..., "twist": ...}`。没有群像角色行时
+    cast 为空（调用方据此退回单女主，不误开群像）。
+    """
+    raw = (text or "").strip()
+    out = {"cast": {}, "plot": "", "twist": ""}
+    if not raw:
+        return out
+    cur = None
+    for line in raw.splitlines():
+        hit = _ROLE_GROUP.match(line)
+        if hit:
+            cur = "cast"
+            rest = (hit.group(1) or "").strip()
+            if rest:
+                buckets_cast(rest, out["cast"])
+            continue
+        h2 = _ROLE_LINE.match(line)
+        if h2:
+            tag = h2.group(1) or h2.group(2)
+            cur = tag
+            val = (h2.group(3) or "").strip()
+            if tag == "剧情" and val:
+                out["plot"] += ("\n" if out["plot"] else "") + val
+            elif tag == "转折" and val:
+                out["twist"] += ("\n" if out["twist"] else "") + val
+            continue
+        if cur == "cast" and line.strip():
+            buckets_cast(line.strip(), out["cast"])
+        elif cur == "剧情" and line.strip():
+            out["plot"] += ("\n" if out["plot"] else "") + line.strip()
+        elif cur == "转折" and line.strip():
+            out["twist"] += ("\n" if out["twist"] else "") + line.strip()
+    return out
+
+
+def buckets_cast(line, into):
+    """把一行 `key: 外形串` 写进 cast。key 规范成英文小写下划线。"""
+    if ":" in line:
+        key, val = line.split(":", 1)
+    elif "：" in line:
+        key, val = line.split("：", 1)
+    else:
+        return
+    key = re.sub(r"[^a-z0-9_]", "", key.strip().lower())
+    val = val.strip()
+    if key and val:
+        into[key] = val
+
+
+def compose_group(parsed):
+    """群像输入 → 编剧能读的段落。"""
+    body = ["== 群像角色 =="]
+    for key, val in (parsed.get("cast") or {}).items():
+        body.append("%s: %s" % (key, val))
+    if (parsed.get("plot") or "").strip():
+        body += ["== 这一集发生什么 ==", parsed["plot"].strip()]
+    twist = (parsed.get("twist") or "").strip()
+    if twist:
+        body += ["== 这一集要出的意外 ==", "转折（必须出现）：" + twist]
+    else:
+        body += ["== 这一集要出的意外 ==",
+                 "转折没指定：自己设计一个只在这一集成立的小意外，"
+                 "按「钩子 → 推进 → 意外 → 反应 → 收尾」铺到各页。"]
+    return "\n".join(body)
+
+
 # ══════════════════════ 体检 ══════════════════════
 def _cells(p):
     return [tuple(i.get("bbox") or ()) for i in (p.get("items") or [])
@@ -692,7 +806,7 @@ _TIGHT_FACE = re.compile(r"close[- ]up (?:of|on) her (?:[a-z-]+ ){0,2}"
 _FACE_WORDS = ("hair", "headband", "bangs", "eye", "face")
 
 
-def audit(js, cap=12, male_none=False):
+def audit(js, cap=12, male_none=False, group=False):
     """只看可数的事实。返回 `(blocking, warns)`。
 
     `blocking` 是要模型改的：代码补不回来的（格子对不上骨架、文字跑出格子、
@@ -700,6 +814,7 @@ def audit(js, cap=12, male_none=False):
     （尾句、页数超限、空字段），只记进报告，不拿它去多烧一次重修——
     autofix 会重建 summary、截断页数。
     `male_none=True` 来自输入里的「男主：无」：这一集没有他的话，就不该有他的框。
+    `group=True` 是群像模式：跳过 POV 那套「只画女生」的判据，cast 也不再强制只有 girl。
     """
     out = []
     warns = []
@@ -716,11 +831,18 @@ def audit(js, cap=12, male_none=False):
     cast = js.get("cast") or {}
     girl_spec = cast.get("girl") or ""
     girl_segs = _cast_segs(girl_spec)
-    if not girl_segs:
-        out.append("cast 里没有 girl 外形串")
-    elif len(girl_segs) < 6:
-        out.append("cast 的 girl 外形串只有 %d 项，太少（年龄、身材、发型+头带、眼睛、脸、配饰写满这几样）"
-                   % len(girl_segs))
+    if group:
+        # 群像：每个角色的外形串都得非空；不强制 girl、不强制比例锚点
+        # （那些锚是给少女用的，套到胖大叔/健身者身上反而画坏）。
+        if not cast or not all(isinstance(v, str) and v.strip()
+                               for v in cast.values()):
+            out.append("群像 cast 有空外形串——每个角色都要写一条英文外形串")
+    else:
+        if not girl_segs:
+            out.append("cast 里没有 girl 外形串")
+        elif len(girl_segs) < 6:
+            out.append("cast 的 girl 外形串只有 %d 项，太少（年龄、身材、发型+头带、眼睛、脸、配饰写满这几样）"
+                       % len(girl_segs))
     # 比例锚点：出图端靠它把「十几岁的少女」和「Q 版大头娃娃」分开。这一项不是文风，
     # 是同一本里体型一致性的唯一锚——2026-11-22 泳池话题实测：同一份 cast，
     # P1 是正常少女，P2 靠池边喘气那一格直接画成三头身。判据只看有没有写（模型漏了这一项），
@@ -731,11 +853,20 @@ def audit(js, cap=12, male_none=False):
     # 2026-11-21：cast 里写衣服 = 这本书换不了装。
     # 判据只认一个词「wearing」（以及 dressed in / clad in），不是衣物词表：
     # 外形串里写衣服几乎必然用这个句式，命中即事实，改法也唯一——把这段剪进本页 ③。
-    cloth = re.search(r"\b(wearing|dressed in|clad in)\b", girl_spec, re.I)
-    if cloth:
-        out.append("cast 里写了衣服（%s …）——衣服不许进 cast：把这一段挪进每一页 summary 的 ③，"
-                   "cast 只留年龄、身材、发型、头带、眼睛、脸、配饰，否则整本换不了装"
-                   % cloth.group(1))
+    # 群像时检查每个角色，不是只查 girl。
+    for role_key, role_spec in (cast.items() if group
+                                else [("girl", girl_spec)]):
+        cloth = re.search(r"\b(wearing|dressed in|clad in)\b",
+                          role_spec or "", re.I)
+        if not cloth:
+            continue
+        if group:
+            out.append("cast.%s 写了衣服（%s …）——衣服不许进 cast：挪进每一页 summary 的 ③，"
+                       "cast 只留外形，否则整本换不了装" % (role_key, cloth.group(1)))
+        else:
+            out.append("cast 里写了衣服（%s …）——衣服不许进 cast：把这一段挪进每一页 summary 的 ③，"
+                       "cast 只留年龄、身材、发型、头带、眼睛、脸、配饰，否则整本换不了装"
+                       % cloth.group(1))
     # 年龄是外形串里最容易被改写的一项：模型会顺着剧情把她写成 another age。
     # 只比数字（about twelve / about 18 都归一成 12），不比措辞——这是事实，不是文风。
     cast_ages = _ages(girl_spec)
@@ -787,7 +918,8 @@ def audit(js, cap=12, male_none=False):
             # 判据是容器名（模型自己写的 caption），不是台词内容：
             # 有 caption box 又没有 boy speech box，就是她又在心里说话。
             tcap = (t.get("caption") or "").lower()
-            if "caption box" in tcap and "boy speech box" not in tcap:
+            if (not group and "caption box" in tcap
+                    and "boy speech box" not in tcap):
                 out.append("第%d页：「%s」用了旁白框——这一集只有她的圆气泡和他的直角方框，"
                            "旁白/独白一律不写，让她自己说出来" % (n, txt[:10]))
             # 声明「这一集没有男主」却画了男方框：不是风格问题，是这一页凭空多了一个人。
@@ -819,16 +951,17 @@ def audit(js, cap=12, male_none=False):
 
         # POV 硬约束：整页不许出现男性人形。模型会自己往远景/倒影里塞人，
         # 所以这里只查画面描述里的男性词（text 项的 caption 是「Boy plain text」
-        # 这一句容器描述，不算画面内容）。
-        for it in (p.get("items") or []):
-            if it.get("label") == "text":
-                continue
-            cc = (it.get("caption") or "").lower()
-            hit = re.search(r"\b(1boy|2boys|boys?|men|man|male|guy|gentleman)\b", cc)
-            if hit:
-                out.append("第%d页：画面描述里出现男性（%s），这一页只画女生，我们只留一只手"
-                           % (n, hit.group(1)))
-                break
+        # 这一句容器描述，不算画面内容）。群像模式本来就要画男性，整段跳过。
+        if not group:
+            for it in (p.get("items") or []):
+                if it.get("label") == "text":
+                    continue
+                cc = (it.get("caption") or "").lower()
+                hit = re.search(r"\b(1boy|2boys|boys?|men|man|male|guy|gentleman)\b", cc)
+                if hit:
+                    out.append("第%d页：画面描述里出现男性（%s），这一页只画女生，我们只留一只手"
+                               % (n, hit.group(1)))
+                    break
 
         # 一格一个定格：一格只许一个状态。一格同时写了「动作」和「动作的结果」，
         # 出图就会画成身上一件、手里一件。每页最多报两条，别让重修消息被刷屏。
@@ -928,30 +1061,45 @@ def _repair_user(brief, pages, js, issues):
 
 
 
-def generate(brief, pages, call, progress=None):
+def generate(brief, pages, call, progress=None, group=False):
     """一次成稿 → 代码体检 → 定向重修（最多 MAX_ROUNDS 轮）→ 每页 autofix。
 
     返回 `(spec, report)`，spec 与 moss_twopass.generate 同构：
     每页带 `prompt_override`（整页 Layout JSON），下游一行不用改。
+    `group=True` 走群像模式：SYSTEM 末尾追加覆写段，输入按「群像角色」解析，
+    audit 跳过 POV 的「只画女生」判据。不传时行为和单女主链路完全一样。
     """
     say = progress or (lambda msg: None)
     t0 = time.time()
     cap = max(1, int(pages or 1))
-    # 输入可能是「男主/女主/剧情」三段，也可能还是旧的一句话。
-    # 三段就拼成编剧能读的段落，并把「有没有男主」顺下来给体检用。
-    parsed = parse_brief(brief)
-    ctx = compose_brief(parsed, fallback=brief)
-    male_none = bool(parsed.get("male_none"))
+    system = (SYSTEM + GROUP_OVERRIDE) if group else SYSTEM
+    # 群像输入走独立解析：群像角色 / 剧情 / 转折。没写群像角色行就退回单女主，
+    # 不误开群像（调用方一般已经按开关判过，这里再兜一层）。
+    gp = parse_group(brief) if group else None
+    if group and not (gp.get("cast")):
+        group = False
+        system = SYSTEM
+    if group:
+        ctx = compose_group(gp)
+        male_none = False
+        # 末尾标题兜底要用 parsed.plot；群像没有男主/女主，这里只借 plot 字段
+        parsed = {"plot": gp.get("plot") or ""}
+    else:
+        # 输入可能是「男主/女主/剧情」三段，也可能还是旧的一句话。
+        # 三段就拼成编剧能读的段落，并把「有没有男主」顺下来给体检用。
+        parsed = parse_brief(brief)
+        ctx = compose_brief(parsed, fallback=brief)
+        male_none = bool(parsed.get("male_none"))
     user = ("%s\n\n写成 %d 页，%d 是上限——素材只够 %d 页就写 %d 页。"
             "\n每页按上面的规矩写好 layout / summary / items，一次输出整本。"
             % (ctx, cap, cap, cap, cap))
 
     rounds = []
     say("单 Agent 成稿（上限 %d 页）…" % cap)
-    raw = call(SYSTEM, user, max_tokens=16000, temperature=0.85, tag="agent_p0") or ""
+    raw = call(system, user, max_tokens=16000, temperature=0.85, tag="agent_p0") or ""
     js = M.pick_json(raw)                    # 解析不了直接抛，交给上层 502
 
-    issues, warns = audit(js, cap, male_none=male_none)
+    issues, warns = audit(js, cap, male_none=male_none, group=group)
     rounds.append({"round": 0, "issues": issues, "warns": warns, "chars": len(raw)})
     say("体检：%s" % ("通过" if not issues else "%d 条待修" % len(issues)))
 
@@ -960,7 +1108,7 @@ def generate(brief, pages, call, progress=None):
             break
         say("第 %d 轮重修（%d 条）…" % (r, len(issues)))
         # 首轮把问题全给它；后几轮只给仍然没过的
-        raw2 = call(SYSTEM, _repair_user(ctx, cap, js, issues),
+        raw2 = call(system, _repair_user(ctx, cap, js, issues),
                     max_tokens=16000, temperature=REPAIR_TEMP,
                     tag="agent_fix%d" % r) or ""
         try:
@@ -969,7 +1117,7 @@ def generate(brief, pages, call, progress=None):
             say("第 %d 轮没解析出 JSON，保留上一版" % r)
             rounds.append({"round": r, "issues": ["解析失败"], "chars": len(raw2)})
             break
-        new_issues, new_warns = audit(js2, cap, male_none=male_none)
+        new_issues, new_warns = audit(js2, cap, male_none=male_none, group=group)
         rounds.append({"round": r, "issues": new_issues, "warns": new_warns,
                        "chars": len(raw2)})
         # 只有变好才收（问题数变多说明它改崩了）

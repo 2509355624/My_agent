@@ -225,11 +225,28 @@
   <!-- ── 1. 这一集 ── -->
   <div class="card">
     <h2>这一集</h2>
-    <div class="roles">
+    <div class="row" style="align-items:center;gap:8px;margin-bottom:10px">
+      <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input id="groupMode" type="checkbox" style="width:auto"> 群像模式（多角色同屏合照）
+      </label>
+      <span style="font-size:11px;color:var(--text-dim)">
+        关闭＝原来的 POV 单女主；打开＝下方可填多个角色，同一画面里一起出现
+      </span>
+    </div>
+    <div class="roles" id="soloRoles">
       <span class="lab">男主</span>
       <input id="male" placeholder="写「无」＝这一集没有他的戏，全程只有女主；留空＝有他，但他不必开口">
       <span class="lab">女主</span>
       <input id="female" placeholder="她的外形串（英文）；留空就用上面的角色档案">
+    </div>
+    <div id="groupRoles" style="display:none">
+      <div class="roles" style="align-items:start">
+        <span class="lab" style="padding-top:9px">群像角色</span>
+        <textarea id="castLines" rows="4" placeholder="每人一行：key: 英文外形串（只写外形，不写衣服）&#10;boy: a slim teenage boy with short black hair and round glasses&#10;girl: a teenage girl with long dark hair and a pale headband&#10;chubby_uncle: a chubby middle-aged man with a round belly and receding hair&#10;athlete: a muscular young man with short cropped hair and broad shoulders"></textarea>
+      </div>
+      <div style="font-size:11px;color:var(--text-dim);margin:2px 0 8px">
+        key 用英文小写（boy / girl / chubby_uncle / athlete…）；写着「合照」的剧情会让所有人进同一格
+      </div>
     </div>
     <div class="roles" style="align-items:start">
       <span class="lab" style="padding-top:9px">剧情</span>
@@ -450,15 +467,22 @@ async function loadMossModels() {
 }
 
 /* ══ 编剧 ══════════════════════════════════════════════════ */
-/* 四栏拼成后端能认的固定格式；男主那行空着就整行不写，
-   后端据此按「有他、但能不说就不说」处理（不是「没有他」）。
-   转折可选：填了就照它排 beat，没填才让编剧自己设计意外。 */
+/* 群像模式：把角色多行 + 剧情 + 转折拼成后端 parse_group 认的格式。 */
+function isGroup() { return !!($("groupMode") && $("groupMode").checked); }
+
 function buildBrief() {
-  var male = ($("male").value || "").trim();
-  var female = ($("female").value || "").trim();
   var plot = ($("plot").value || "").trim();
   var twist = ($("twist") && $("twist").value || "").trim();
   if (!plot) return "";
+  if (isGroup()) {
+    var cast = ($("castLines").value || "").trim();
+    if (!cast) return "";
+    var g = ["群像角色：", cast, "剧情：" + plot];
+    if (twist) g.push("转折：" + twist);
+    return g.join("\n");
+  }
+  var male = ($("male").value || "").trim();
+  var female = ($("female").value || "").trim();
   var lines = [];
   if (male) lines.push("男主：" + male);
   if (female) lines.push("女主：" + female);
@@ -467,20 +491,34 @@ function buildBrief() {
   return lines.join("\n");
 }
 
+/* 群像开关：显示对应输入区，强制走 agent 链路（双段链路是单女主 POV） */
+function syncGroupMode() {
+  var g = isGroup();
+  $("soloRoles").style.display = g ? "none" : "";
+  $("groupRoles").style.display = g ? "" : "none";
+  if (g && $("twoAgent")) { $("twoAgent").checked = false; $("twoAgent").disabled = true; }
+  if ($("twoAgent") && !g) { $("twoAgent").disabled = false; }
+  if ($("twoHint")) $("twoHint").style.display = (!g && $("twoAgent") && $("twoAgent").checked) ? "" : "none";
+}
+
 async function doWrite() {
   var brief = buildBrief();
   if (!brief) { toast("先写剧情", true); return; }
   var style = $("style").value;
   if (style === "custom") style = $("styleCustom").value.trim();
-  var two = $("twoAgent") && $("twoAgent").checked;
+  var group = isGroup();
+  // 群像必须走 agent 链路（two_agent 端点 + group 参数），双段是写死的 POV 单女主
+  var two = !group && $("twoAgent") && $("twoAgent").checked;
   var nPages = parseInt($("pages").value, 10) || 1;
   var btn = $("btn-write");
   btn.disabled = true;
   btn.innerHTML = '<span class="spin"></span>编剧中…';
-  bar(two ? ("双段链路：拆幕 + 逐页编译（约 " + (nPages * 60) + " 秒）…")
-          : "编剧正在写剧本（几秒）…");
+  bar(group ? "群像编剧：多角色同屏（几秒）…"
+        : (two ? ("双段链路：拆幕 + 逐页编译（约 " + (nPages * 60) + " 秒）…")
+               : "编剧正在写剧本（几秒）…"));
   try {
     var payload = { brief: brief, pages: nPages };
+    if (group) payload.group = true;
     // 编剧模型：选中项当链头，后端 llm 层失败自动降级；留空走全局默认链
     if ($("prov") && $("prov").value) {
       payload.provider = $("prov").value;
@@ -488,7 +526,7 @@ async function doWrite() {
     }
     // 双段模式的版式与画风由链路自己定，这两个值连传都不传，省得后端还要忽略
     if (!two) { payload.layout = $("layout").value; payload.style = style; }
-    var r = await api(two ? "/api/moss/two_agent" : "/api/moss/write", payload);
+    var r = await api((two || group) ? "/api/moss/two_agent" : "/api/moss/write", payload);
     if (!r.ok) {
       bar("编剧失败：" + (r.error || "未知原因"), true);
       if (r.raw) console.warn("模型原始回复：\n" + r.raw);
@@ -949,6 +987,19 @@ document.addEventListener("keydown", function (e) {
 });
 
 $("btn-write").addEventListener("click", doWrite);
+
+/* 群像开关：切输入区、锁双段复选框；群像走 agent 链路，layout/style 仍要显示 */
+$("groupMode").addEventListener("change", function () {
+  syncGroupMode();
+  var g = isGroup();
+  ["layout", "style"].forEach(function (id) {
+    var el = $(id);
+    el.disabled = false;
+    el.style.display = "";
+  });
+  if ($("styleCustom")) $("styleCustom").style.display = "";
+});
+syncGroupMode();
 
 /* 双段链路接管版式与画风：格数由编剧写了几格决定（1 格 S1 / 2 格 D1·D2 /
   3~6 格 L5·L4·L2·L0·L1·L3），画风由代码锁成黑白网点。

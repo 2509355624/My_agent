@@ -457,6 +457,11 @@ def api_moss_two_agent():
     provider = str(data.get("provider") or "").strip() or None
     model = str(data.get("model") or "").strip() or None
     legacy = bool(data.get("legacy")) or os.environ.get("MOSS_TWOPASS_LEGACY") == "1"
+    # 群像模式（2026-11-22）：多角色同屏合照，走 moss_agent 的群像覆写段。
+    # legacy 双段链路是写死单女主 POV 的，群像必须走 agent 链路。
+    group = bool(data.get("group"))
+    if group:
+        legacy = False
 
     # 把页面选的模型绑进 call：链路内部多次调用（成稿 / 重修）都走它。
     def bound_call(system, user, max_tokens=8000, temperature=None, tag=""):
@@ -473,7 +478,7 @@ def api_moss_two_agent():
                 moss_agent.compose_brief(moss_agent.parse_brief(brief), fallback=brief),
                 pages, bound_call)
         else:
-            spec, report = moss_agent.generate(brief, pages, bound_call)
+            spec, report = moss_agent.generate(brief, pages, bound_call, group=group)
     except BaseException as exc:                # noqa: BLE001 - 模型侧异常一律转 502
         return jsonify({"ok": False,
                         "error": "MOSS 链路失败：%s" % (str(exc) or exc.__class__.__name__)}), 502
@@ -488,7 +493,7 @@ def api_moss_two_agent():
         json.dump(rep, fh, ensure_ascii=False, indent=1)
     out = _payload(d, spec, ps)
     out["brief"] = brief
-    out["two_agent"] = {"engine": engine,
+    out["two_agent"] = {"engine": engine, "group": group,
                         "secs": report.get("secs"),
                         "pass": report.get("pass"),
                         "rounds": report.get("rounds") or [],
