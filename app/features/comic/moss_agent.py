@@ -62,7 +62,8 @@ EXAMPLE = {
             "black ink border around the whole page. Manga page, monochrome, greyscale "
             "screentones, inked lineart, bold black ink outlines, pen crosshatching. In "
             "the dominant right "
-            "panel, a girl about twelve, slender small frame, long straight dark hair "
+            "panel, a girl about twelve, slender teen proportions, long legs, small head, "
+            "long straight dark hair "
             "with soft blunt bangs pulled back by a wide fluffy pale cloth headband, "
             "large round dark eyes, round soft face, faint blush, wearing a plain "
             "short-sleeve white track shirt with a small chest number bib, loose white "
@@ -87,7 +88,8 @@ EXAMPLE = {
             "No speech bubble and no text in this panel.")},
         {"label": "character", "bbox": [-692, -262, 754, 494], "caption": (
             "Tall dominant right panel, full body shot from a low front three-quarter "
-            "angle: a girl about twelve, slender small frame, long straight dark hair "
+            "angle: a girl about twelve, slender teen proportions, long legs, small head, "
+            "long straight dark hair "
             "with soft blunt bangs pulled back by a wide fluffy pale cloth headband, "
             "large round dark eyes, round soft face, faint blush, plain short-sleeve "
             "white track shirt with a small chest number bib, loose white running "
@@ -105,12 +107,10 @@ EXAMPLE = {
             "character stacked top to bottom, 2 columns ordered left to right, short "
             "pointer tail pointing toward the girl's face.")},
         {"label": "character", "bbox": [-378, -494, 117, -272], "caption": (
-            "Small left-top panel, close-up of her face from the front: long straight "
-            "dark hair gathered back by the wide pale headband, blunt bangs, large round "
-            "dark eyes, round soft face, faint blush, brows drawn slightly together, a "
-            "bead of sweat at her temple. a girl about twelve, slender small frame, long "
-            "straight dark hair with soft blunt bangs pulled back by a wide fluffy pale "
-            "cloth headband, large round dark eyes, round soft face, faint blush. "
+            "Small left-top panel, close-up of her face from the front: teenage facial "
+            "proportions, small head, long straight dark hair gathered back by the wide "
+            "pale headband, blunt bangs, large round dark eyes, round soft face, faint "
+            "blush, brows drawn slightly together, a bead of sweat at her temple. "
             "monochrome greyscale screentone, bold black ink outline, flat shading, "
             "no color cast. No speech bubble and no text in this panel.")},
         {"label": "character", "bbox": [130, -494, 540, -272], "caption": (
@@ -118,7 +118,8 @@ EXAMPLE = {
             "the same girl, long straight dark hair over her back, white track shirt and "
             "running shorts, both hands pulling the raised ankle toward her hip, chin "
             "lifted a little, the field and fence beyond her. a girl about twelve, "
-            "slender small frame, long straight dark hair with soft blunt bangs pulled "
+            "slender teen proportions, long legs, small head, long straight dark hair "
+            "with soft blunt bangs pulled "
             "back by a wide fluffy pale cloth headband, large round dark eyes, round "
             "soft face, faint blush. monochrome greyscale screentone, bold black ink "
             "outline, flat shading, no color cast.")},
@@ -169,6 +170,10 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
 ════ 人：脸是固定的，衣服跟着这一页走 ════
 输入里的「她是谁」通常是一段现成的英文外形串。那是**角色档案**，重点是脸和身材：年龄、体型、发型发色、头带、眼睛、脸型、配饰。
 档案里写的那件衣服不要抄。衣服是她这一集穿的东西，不是她这个人。
+· **cast 里必须有一项比例锚点，固定写这一串**：`slender teen proportions, long legs, small head`。
+  档案里写 slender small frame / petite / tiny / childlike 的，**换成这一串**——年龄、发型、头带、
+  眼睛、配饰一个字都不动，只换这一项。small frame / petite 出图会把她画成小孩，
+  而这一本里她是十几岁的学生（2026-11-22 泳池话题：P1 是正常少女，P4 举拳笑那格直接画成 Q 版）。
 · **cast.girl 只写不变项**，一项都不许带 wearing / dressed in / 任何衣物。
   衣服一进 cast，这本漫画从第一页到最后一页就只能穿那一件，换装剧情永远失败。
 · 每一页先定「这一页她身上是什么」，写进 summary 的 ③。
@@ -176,7 +181,7 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
   - 看得到身体的格（全身、中景、中近景）：完整外形串 + 这一页的衣着，抄一次，不缩写不调序
   - 纯局部特写（close-up of her face / of her hand / of her feet）：只写那一处——脸就写发型、
     眼睛、表情，手就写手指和入画的袖口。**不写身材、不贴全身外形串、不写整件衣服**。
-    脸特写里写 slender small frame 或 wearing …，出图只能把镜头拉远成中景
+    脸特写里写 long legs 或 wearing …，出图只能把镜头拉远成中景
 · 一格里的衣服只提一次。先写了「背后湿透的衬衫」，结尾就不要再贴一遍外形串和衣着——
   同一格写两遍，出图会当成两件衣服。
 · 换装：换之前那页写旧衣；**脱下来那一格写「已经脱掉」**（内搭在身上、湿衣在手里），
@@ -206,6 +211,18 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
 · **写 ③ 按顺序写全**：内搭 → 外衣 → 下装 → 鞋袜。三层都在这页身上，就三层都写；
   只写外衣，等于把里面那层交给模型自己编。
 
+════ 比例是硬的：表情不会把她变小 ════
+整本只有一副身体。张嘴大笑、睁大眼睛、惊讶、害羞、委屈，都只是同一张脸上换表情。
+出图端最容易的翻车是**把可爱画成幼态**：头大了一圈、眼占半张脸、三头身——那一格就变成了 Q 版，
+跟前面几页不是一个人。防它就靠三件事：
+· cast 里那串比例锚点（`slender teen proportions, long legs, small head`）**每一格原样抄**，
+  看得到身体的格一次都不许省；情绪越大的格越要抄——大笑、蹦跳、举拳欢呼就是漂移高发格。
+· **脸特写也要写比例**：close-up of her face 里头会挤满整个格子，最容易被画成小孩。
+  脸特写里加 `teenage facial proportions, small head`，然后再写发型、眼睛、表情。
+· 情绪写在**表情**上，不写在**尺寸**上：mouth open in a wide grin / eyes wide with delight
+  是表情，不是让她变成大头娃娃。**不写 chibi / super-deformed / cute small body / childlike**。
+· 收稿前自己比一眼：这一页的头，是不是比上一页大了一圈？大了就是错的，不是风格差异。
+
 ════ 用镜头讲，别用字讲 ════
 一页只说一件事，靠换机位把它说清。想让人读出「她冷」「她脏」「她不想被碰」，
 不要写台词，换一个能看见这件事的镜头：
@@ -218,6 +235,25 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
 **S1 一格只在「这一页就是那一张脸 / 那一个对视」时才用。**
 她站着说一句话不是理由——那件事要用 D1（说之前 → 说之后），
 或者 T3（人 + 她看的东西 + 手边）来讲。
+
+════ 机位、她朝哪、目标在哪（三样一起写） ════
+一格里的空间关系只有一个写法是对的：**先定她面朝哪，再定机位站哪，最后写目标落在画面哪一侧。**
+· **机位不许站在她和目标之间。** 她要跳进泳池，机位就不能在她正前方——镜头在她正前方，
+  泳池就跑到镜头背后去了，画面里根本装不下，出图只能把水面糊到背景里，看上去就成了
+  「她背对泳池、朝镜头做准备」，方向整个反了（2026-11-22 泳池话题 P1 实测：
+  文字写的是 the lane water stretching ahead of her，画出来泳池在她身后）。
+· 目标方位**只写画面方位，不写相对她的方位**：写 `the lane water fills the lower half of the frame`、
+  `the pool surface recedes toward the top of the frame`、`the water runs along the left edge of the panel`。
+  **不写** ahead of her / in front of her / before her——模型算不出她朝哪，这一句它当没写。
+· 三种能同时装下人和目标的机位，按这一格要什么挑一个：
+  - 侧后：`seen from behind at a three-quarter back angle, only the edge of her cheek in view`
+    —— 她的背和侧脸，泳池 / 门 / 走廊在画面深处延伸。
+  - 侧面：`in profile from her right side` —— 她的朝向横穿画面，目标在同一排的远处。
+  - 高位俯拍：`high angle from above and behind` —— 台子、水面、地面在画面下方摊开。
+    （蹲在出发台上准备起跳，用侧后或高位俯拍；要脸就另给一格脸特写，别让主格去转正面。）
+· **想让她正面朝镜头，就别让她正对着要去的地方**：她可以回头、可以停下来、可以面对着镜头说话，
+  但「正在往那儿去」「正要跳出去」的那一格，不能同时又正面朝镜头。
+· 一格里的「朝哪」和「目标在哪」两句话缺一句，这一格的空间关系就交给运气了。
 
 ════ 一页怎么想 ════
 一页只放一个地点、一个动作。读者翻过这页，要能说出「她刚做了什么」。
@@ -249,6 +285,22 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
 或者我们手上，不许又回到她手里、怀里。她做过一次的反应（发现、回头、愣住）也不许再做第二遍
 ——那是同一个 beat 用了两次。
 **格数 = 状态数**。状态比格多就加页，绝不许把两个状态压进一格。
+
+════ 踩在东西上，就把接触面写出来 ════
+她站在出发台、领奖台、台阶、池边、椅子、床沿上，出图最常见的坏法是**脚陷进去**：
+方块画到脚前面，脚踝以下消失。原因是只写了 standing on the block——没写台面在哪，
+模型就自己决定台面高度，脚和台面一交叉就成了穿模（2026-11-22 泳池话题 P2 实测）。
+· 站 / 蹲 / 坐 / 跪在任何东西上，三样一起写：
+  ① 接触面：`both bare feet planted flat on the flat top of the block`（谁的什么部位 + 那个平面）
+  ② 平面看得见：`the pale top surface of the block visible under and around her feet`
+  ③ 边缘关系：`her toes a little short of the front lip, the block's side faces dropping away below her ankles`
+· 坐：`sitting with her seat and the backs of her thighs on the top surface, her lower legs hanging
+  over the front edge`。跪：`knees and shins flat on the surface, the tops of her feet on the same plane`。
+· 手撑着某个面：`both palms flat on the tile beside her hips, fingers spread on the surface`。
+· **绝不写** standing in the block / her feet sinking into / her ankles behind the block。
+· 特写格也照这个写：`close-up of her bare feet on the flat top surface of the block` 比
+  `close-up of her feet on the block` 稳得多——脚特写最容易穿模。
+· 站在**地面**上不用写这一套（地面没有边界），但站在**有高度边的东西**上一定要写。
 
 ════ 字（这些是上限，不是配额） ════
 一格页 0~1 句；两格页 0~2 句；三格页 0~3 句；五格页 0~4 句。
@@ -359,12 +411,12 @@ text：只写容器形状和字的排法，台词内容只进 text 字段。**�
 人物镜头最紧到中近景：medium close-up with head and shoulders in frame。
 只写明暗、材质、网点，不写颜色词。
 外形串是唯一事实源：看得到身体的格，cast 写了几项就抄几项，不缩写、不调序、不改词；
-纯局部特写只抄和那一处有关的项（脸：发型、头带、眼睛、脸）。
+纯局部特写只抄和那一处有关的项（脸：比例、发型、头带、眼睛、脸）。
 双人同框时第二个人开头显式互斥：In sharp contrast, the other girl has NO long hair, NO headband。
 衣服不在 cast 里：只有「这一页她穿什么」，没有「她这个人穿什么」。
 
 ════ cast 长这样（照这个抄结构，衣服一个字都不许带） ════
-"cast": {"girl": "a girl about twelve, slender small frame, long straight dark hair with soft blunt bangs pulled back by a wide fluffy pale cloth headband, large round dark eyes, round soft face, faint blush, a dark fabric scrunchie on her left wrist"}
+"cast": {"girl": "a girl about twelve, slender teen proportions, long legs, small head, long straight dark hair with soft blunt bangs pulled back by a wide fluffy pale cloth headband, large round dark eyes, round soft face, faint blush, a dark fabric scrunchie on her left wrist"}
 她这一页穿什么，不在 cast 里，而在这一页的 ③（英文）：
 "...a soaked white short-sleeve track shirt clinging to her, loose white running shorts..."
 
@@ -584,7 +636,7 @@ def _wear_hand_clash(caption):
 
 
 # 纯局部特写（脸、手、脚）：画面里没有身体，不需要全身外形串。往里塞
-# 「slender small frame / wearing …」，出图只能把镜头拉远成中景。
+# 「long legs / wearing …」，出图只能把镜头拉远成中景。
 # 判据本体在 `moss_twopass.TIGHT_CU`——那边的外形串补齐也要用同一条。
 _TIGHT = M.TIGHT_CU
 # 特写里**带脸**的那一类（脸、眼睛、嘴、头发、后颈）。只有这一类才该核对
@@ -621,6 +673,13 @@ def audit(js, cap=12, male_none=False):
     elif len(girl_segs) < 6:
         out.append("cast 的 girl 外形串只有 %d 项，太少（年龄、身材、发型+头带、眼睛、脸、配饰写满这几样）"
                    % len(girl_segs))
+    # 比例锚点：出图端靠它把「十几岁的少女」和「Q 版大头娃娃」分开。这一项不是文风，
+    # 是同一本里体型一致性的唯一锚——2026-11-22 泳池话题实测：同一份 cast，
+    # P1 是正常少女，P4 举拳大笑那一格直接画成三头身。判据只看有没有写（模型漏了这一项），
+    # 不查它用什么词——措辞是模型的活。
+    if girl_spec and "proportion" not in girl_spec.lower():
+        out.append("cast 里缺比例锚点——补一项 `slender teen proportions, long legs, small head`，"
+                   "每一格原样抄：缺了它，笑脸大动作的格子会被画成 Q 版")
     # 2026-11-21：cast 里写衣服 = 这本书换不了装。
     # 判据只认一个词「wearing」（以及 dressed in / clad in），不是衣物词表：
     # 外形串里写衣服几乎必然用这个句式，命中即事实，改法也唯一——把这段剪进本页 ③。

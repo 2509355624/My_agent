@@ -1121,7 +1121,11 @@ TIGHT_CU = re.compile(r"close[- ]up (?:of|on) "
                       r"(?:(?:her|his|the girl['’]?s?|the same girl['’]?s?) )?"
                       r"(?:[a-z-]+ ){0,2}(?:face|eyes|mouth|lips"
                       r"|hand|hands|fingers|fingertips|knuckles|toes|wrist|arm|leg"
-                      r"|foot|feet|ankle|shoulder|hair|nape)",
+                      r"|foot|feet|ankle|shoulder|hair|nape"
+                      # 2026-11-22 泳池话题 P5：举起的拳头特写被当成全身格，
+                      # autofix 把整段脸和发型补了进去，出图只能拉成半身像。
+                      r"|fist|fists|thumb|thumbs|palm|palms|sole|soles"
+                      r"|forearm|shin|shins|knee|knees)",
                       re.I)
 
 
