@@ -190,5 +190,55 @@ class GenerateGroupTest(unittest.TestCase):
         self.assertIn("只有她一个人", users[0])
 
 
+class OutfitContinuityTest(unittest.TestCase):
+    """每页 outfits：字段守卫 + 代码钉进页 caption（2026-11-22 P5/P6 穿帮）。"""
+
+    @staticmethod
+    def _page(beat="她扫了地"):
+        return {
+            "layout": "S1", "beat": beat,
+            "summary": {"canvas": "single",
+                        "caption": "A girl sweeping. " + A.STYLE_LOCK + " " + A.NO_TAIL},
+            "items": [{"label": "character",
+                       "caption": "a girl sweeping the floor",
+                       "bbox": [0, 0, 100, 100]}],
+            "bbox_coord_space": "abs_centralized", "bbox_format": "yxyx",
+        }
+
+    def test_audit_flags_missing_outfits_on_multi_page(self):
+        js = {"cast": {"girl": "a girl about twelve, slender teen proportions, "
+                               "long legs, small head, long dark hair, round eyes, "
+                               "round face, a wrist band"},
+              "pages": [self._page(), self._page()]}
+        issues, _ = A.audit(js, cap=4)
+        self.assertTrue(any("outfits" in x for x in issues), issues)
+
+    def test_audit_passes_when_every_page_has_outfits(self):
+        p1, p2 = self._page(), self._page("她换了衣服")
+        p1["outfits"] = {"girl": "navy sailor top, navy pleated skirt"}
+        p2["outfits"] = {"girl": "a plain white underlayer tank, wet skin"}
+        js = {"cast": {"girl": "a girl about twelve, slender teen proportions, "
+                               "long legs, small head, long dark hair, round eyes, "
+                               "round face, a wrist band"},
+              "pages": [p1, p2]}
+        issues, _ = A.audit(js, cap=4)
+        self.assertFalse(any("outfits" in x for x in issues), issues)
+
+    def test_stamp_appends_outfit_state_to_caption(self):
+        pj = {"summary": {"caption": "A girl in the shower."}}
+        A._stamp_outfits(pj, {"girl": "a plain white underlayer tank, wet skin"})
+        cap = pj["summary"]["caption"]
+        self.assertIn("Outfit state for this page:", cap)
+        self.assertIn("girl wears: a plain white underlayer tank", cap)
+        # 原句还在（追加不覆盖）
+        self.assertTrue(cap.startswith("A girl in the shower"))
+
+    def test_stamp_ignores_empty_or_blank(self):
+        for bad in ({}, None, {"girl": ""}, {"girl": "  "}):
+            pj = {"summary": {"caption": "unchanged"}}
+            A._stamp_outfits(pj, bad)
+            self.assertEqual(pj["summary"]["caption"], "unchanged")
+
+
 if __name__ == "__main__":
     unittest.main()

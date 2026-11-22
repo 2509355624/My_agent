@@ -155,6 +155,7 @@ SYSTEM = """你写全彩日漫整页分镜，直接输出 Layout JSON。输入�
 每页：{"layout": "L0", "scene": "1",
         "beat": "一句中文：这一页发生了什么变化，不是她做了什么动作",
         "link": "一句中文：第 1 页写这一集从哪里开始；后面每页写清接上一页的地点、人物站位、身体姿势、谁手里拿着什么",
+        "outfits": {"girl": "英文：这一页她身上每一层的衣着，按下面 ③ 的顺序写全"},
         "summary": {...}, "items": [...],
         "bbox_coord_space": "abs_centralized", "bbox_format": "yxyx"}
 summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格数核对一遍）。
@@ -247,6 +248,12 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
   **绝不写 clinging to her skin / against her bare skin**——那等于她里面什么都没穿，下一页就没得接了。
 · **写 ③ 按顺序写全**：内搭 → 外衣 → 下装 → 鞋袜。三层都在这页身上，就三层都写；
   只写外衣，等于把里面那层交给模型自己编。
+· **每一页都要写 "outfits" 字段**（{"girl": "这一页她身上每一层的英文衣着串"}）——
+  这是「这一页身上是什么」的**权威状态**，代码会把这串原文钉进这一页的出图 JSON。
+  剧情里衣服变了（变身 / 解除变身 / 脱下 / 换装 / 淋湿），**从变化那一页起 outfits
+  就换成新状态，之后每页都写新状态，绝不再出现旧衣**（实测翻车：P5 已经脱了裙子、
+  出图还穿着裙子；P6 该穿水手服、变身服又复活了）。格子里的衣着描述必须和
+  outfits 用**同一串词**；多角色同框的群像本给每个出场角色各写一条（key 照 cast 抄）。
 
 ════ 比例是硬的：表情不会把她变小 ════
 整本只有一副身体。张嘴大笑、睁大眼睛、惊讶、害羞、委屈，都只是同一张脸上换表情。
@@ -1058,6 +1065,18 @@ def audit(js, cap=12, male_none=False, group=False):
                 out.append("第%d页：没写 link——第 1 页写这一集从哪里开始，"
                            "后面每页写清接上一页的地点/站位/姿势/手里东西" % n)
 
+    # 服饰连贯（2026-11-22 魔法少女 P5 脱了裙子还穿裙子、P6 变身服复活）：
+    # 多页剧本每页必交 outfits——「这一页身上是什么」的结构化状态。缺了出图端
+    # 就退回旧衣。字段级「没交作业」记 blocking（同 link）；状态对不对、
+    # 有没有写回旧衣，由重修轮和审稿轮的模型判断，代码不猜。
+    if len(pgs) > 1:
+        for n, p in enumerate(pgs, 1):
+            of = (p or {}).get("outfits")
+            if not (isinstance(of, dict) and of
+                    and all(str(v or "").strip() for v in of.values())):
+                out.append("第%d页：没写 outfits（这一页每个出场角色身上是什么）"
+                           "——服饰连贯全靠它，缺了出图会穿回旧衣" % n)
+
     seen_lines = {}
     for n, p in enumerate(pgs, 1):
         # beat 是这一页发生了什么变化；缺了它整本就退回动作流水账。
@@ -1240,6 +1259,28 @@ def _stamp_palette(pj, palette):
                      + ". Fixed palette for every panel: " + palette + ".")
 
 
+def _stamp_outfits(pj, outfits):
+    """把这一页的衣着状态原文接到页 caption 后面（服饰连贯性）。
+
+    outfits 是编剧逐页维护的「这一页身上是什么」。靠模型在格子里自觉抄，
+    一定会有格子漏抄 / 写回旧衣（2026-11-22 魔法少女实测：P5 已经脱了裙子
+    还画成穿着裙子、P6 该穿水手服变身服又复活）。这里和 palette 同一套
+    做法：逐字复制，不猜、不改词、不替它选衣服。
+    """
+    if not isinstance(outfits, dict) or not outfits:
+        return
+    if not isinstance(pj.get("summary"), dict):
+        return
+    bits = "; ".join(
+        "%s wears: %s" % (k, str(v).strip().rstrip("."))
+        for k, v in outfits.items() if str(v or "").strip())
+    if not bits:
+        return
+    sm = pj["summary"]
+    sm["caption"] = ((sm.get("caption") or "").strip().rstrip(".")
+                     + ". Outfit state for this page: " + bits + ".")
+
+
 def _repair_user(brief, pages, js, issues):
     return ("%s\n\n目标 %d 页。\n\n"
             "下面这版稿子体检没过，问题都列出来了，逐条改掉，其余内容保持原样。\n\n"
@@ -1269,6 +1310,8 @@ def _review_user(js, cap):
         "4. 角色一致：发型/服装/年龄和 cast 完全对上；新出场角色要写明种族外形；\n"
         "5. 画面规矩：脚是脚、身体连着腿；面对敌人的格子用背对/侧后机位；"
         "不出现真实世界的地图或地名。\n"
+        "6. 服饰连贯：每页 outfits 必须是这一页真正的衣着状态；变身 / 解除变身 /"
+        "脱下 / 换装之后有没有哪页写回旧衣；格子里的衣着和 outfits 是不是同一串词。\n"
         "只改有问题的页/格，没问题的页原样保留。直接输出修正后的完整 JSON，"
         "格式与输入完全一致，不要任何解释。\n\n"
         "当前剧本（%d 页）：\n%s" % (cap, json.dumps(js, ensure_ascii=False))
@@ -1424,6 +1467,10 @@ def generate(brief, pages, call, progress=None, group=False):
                 who = it.get("who") or it.get("speaker") or ""
                 it["caption"] = M.bubble_cap(txt, str(who))
         _stamp_palette(pj, js.get("palette"))
+        # 服饰状态钉进页 caption（P5/P6 连贯性），然后把这个中间字段从
+        # 出图 JSON 里摘掉——Layout JSON 只该有出图端认得的字段。
+        _stamp_outfits(pj, p.get("outfits"))
+        pj.pop("outfits", None)
         try:
             issues_p = M.check_page(pj, n, js.get("cast"), lay, None)
         except Exception as exc:                # noqa: BLE001
