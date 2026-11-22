@@ -1916,6 +1916,43 @@ class PinApiTest(_Base):
         r = self.post("839125", qq="20002")
         self.assertEqual(r.status_code, 403)
 
+    def test_gate_allows_correct_pin_without_owner_qq(self):
+        """首页密码门不认站主身份：手机隧道没 qq 也能验（验对就放行）。"""
+        r = self.c.post("/api/gal/pin/gate", headers=self.h,
+                        json={"pin": "839125"})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["ok"])
+
+    def test_gate_rejects_wrong_pin(self):
+        r = self.c.post("/api/gal/pin/gate", headers=self.h,
+                        json={"pin": "000000"})
+        self.assertFalse(r.get_json()["ok"])
+
+    def test_gate_rejects_bad_format(self):
+        for code in ("", "123", "abcdef", "1234567"):
+            r = self.c.post("/api/gal/pin/gate", headers=self.h,
+                            json={"pin": code})
+            self.assertFalse(r.get_json()["ok"])
+
+    def test_gate_shares_fail_counter_with_hidden_wall(self):
+        """同一个密码共用一份限流：错 5 次两边都锁。"""
+        for _ in range(5):
+            self.c.post("/api/gal/pin/gate", headers=self.h,
+                        json={"pin": "000000"})
+        d = self.c.post("/api/gal/pin/gate", headers=self.h,
+                        json={"pin": "839125"}).get_json()
+        self.assertFalse(d["ok"])
+        self.assertIn("输错太多次", d["error"])
+        # 隐藏墙那边也该锁着（同一份 pin.verify 状态）
+        self.assertFalse(self.post("839125").get_json()["ok"])
+
+    def test_gate_is_503_when_no_pin_file(self):
+        self.pin._cache = None
+        os.remove(self.path)
+        r = self.c.post("/api/gal/pin/gate", headers=self.h,
+                        json={"pin": "839125"})
+        self.assertEqual(r.status_code, 503)
+
     def test_configured_endpoint(self):
         d = self.c.get("/api/gal/pin/configured?qq=10001",
                        headers=self.h).get_json()

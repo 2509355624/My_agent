@@ -72,6 +72,47 @@ class IndexMobileHeaderTest(unittest.TestCase):
                       html)
 
 
+class IndexPrivateGateTest(unittest.TestCase):
+    """面试演示怕人乱进：4 个用户相关入口必须走密码门，不能直开。"""
+
+    GATED = {
+        "/characters": "角色",
+        "/persona_admin": "扮演记录",
+        "/novel_admin": "小说记录",
+        "/output": "图片管理",
+    }
+
+    def test_four_private_entries_go_through_gate(self):
+        html = _html()
+        for path, label in self.GATED.items():
+            with self.subTest(path=path):
+                self.assertEqual(
+                    html.count('onclick="gatedOpen(\'%s\',\'%s\')"' % (path, label)),
+                    1, path)
+                self.assertNotIn("window.open('%s','_blank')" % path, html)
+
+    def test_gate_box_and_endpoint(self):
+        html = _html()
+        for piece in ('id="gatebox"', 'id="gateinput"', 'id="gateok"',
+                      "window.gatedOpen = function", 'fetch("/api/gal/pin/gate"'):
+            with self.subTest(piece=piece):
+                self.assertIn(piece, html)
+
+    def test_gate_opens_blank_synchronously_then_navigates(self):
+        # 异步 window.open 会被弹窗拦截：必须在点击的同步上下文先开空白页，
+        # 校验过了再 location.replace 填网址。
+        html = _html()
+        self.assertIn('window.open("about:blank", "_blank")', html)
+        self.assertIn("blankWin.location.replace(target)", html)
+
+    def test_other_entries_still_open_directly(self):
+        # 不该顺手把别的入口也锁了——用户只点名这 4 个
+        html = _html()
+        for path in ("/admin", "/status", "/gallery", "/novel", "/persona"):
+            with self.subTest(path=path):
+                self.assertIn("window.open('%s','_blank')" % path, html)
+
+
 class IndexGalleryEntryTest(unittest.TestCase):
     def test_gallery_entry_opens_local_same_origin(self):
         # 本机 / 内网管理端直连 5174 开画廊，不再绕公网隧道 / 5175 网关。

@@ -720,6 +720,41 @@ def api_pin_verify():
                              else "密码不对"})
 
 
+@bp.route("/pin/gate", methods=["POST"])
+def api_pin_gate():
+    """首页敏感入口（角色/扮演记录/小说记录/图片管理）的密码门。
+
+    和 `/pin/verify` 的区别：那个是隐藏墙，只认站主；这个给首页按钮用——
+    面试把手机递出去，对方翻到首页也想点进用户数据，所以他只要**输得出
+    6 位密码**就放行，不要求他是站主（手机走 5175 隧道时本来就带不上
+    站主 QQ，`_is_owner` 一定是假，用那个端点会 403）。
+
+    密码是同一份 `state/gallery_pin.json`、同一套限流：输错 5 次锁 10 分钟，
+    这里和隐藏墙共享计数（本来就是同一个密码，没必要分两份状态）。
+    仍过 `_guard()`：公网裸打 5174 没有内部 token 一律 403。
+
+    验完即弃、不发 cookie、不记会话——每次点都要重新输（用户明确要求）。
+    """
+    bad = _guard()
+    if bad:
+        return bad
+    if not pin.configured():
+        return jsonify({"ok": False, "error": "密码未启用"}), 503
+    left = pin.locked_left()
+    if left:
+        return jsonify({"ok": False, "error": "输错太多次，%d 秒后再试" % left})
+    body = request.get_json(silent=True) or {}
+    code = str(body.get("pin") or "").strip()
+    if not code.isdigit() or len(code) != 6:
+        return jsonify({"ok": False, "error": "请输入 6 位数字"})
+    ok, left = pin.verify(code)
+    if ok:
+        return jsonify({"ok": True})
+    return jsonify({"ok": False,
+                    "error": ("输错太多次，%d 秒后再试" % left) if left
+                             else "密码不对"})
+
+
 @bp.route("/pin/configured")
 def api_pin_configured():
     """前端据此决定要不要显示「看已隐藏」入口。"""

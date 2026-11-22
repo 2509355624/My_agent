@@ -78,6 +78,18 @@ class GalleryHeaderTest(unittest.TestCase):
         self.assertIn("api(\"pick-folder?initial=", html)
         self.assertIn('$("scpick").onclick = pickFolder;', html)
 
+    def test_category_bar_shows_on_phone_without_owner_flag(self):
+        """手机走隧道时后端 owner=false，分类条不能因此被藏起来。
+
+        分类只是文件夹名、作品本来就公开列出；真正的隐私在隐藏墙，
+        那里另有 owner 判定，不受这条影响。
+        """
+        html = _html()
+        self.assertIn('var show = S.tab === "owner" && !S.hiddenView', html)
+        # 显示条件里不能再有 S.owner，否则手机端永远看不到分类条
+        cond = html.split("var show = S.tab === \"owner\"", 1)[1].split(";", 1)[0]
+        self.assertNotIn("S.owner", cond)
+
     def test_original_ids_are_kept(self):
         html = _html()
         for element_id in (

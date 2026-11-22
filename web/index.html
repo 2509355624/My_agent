@@ -823,6 +823,59 @@
     display: flex;
   }
 
+  /* ── 敏感入口密码门（2026-11-22）：角色/扮演记录/小说记录/图片管理 ── */
+  .gatebox {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(6, 6, 10, .82);
+    backdrop-filter: blur(3px);
+    padding: 20px;
+  }
+  .gatebox.open { display: flex; }
+  .gatebox .sheet {
+    width: 100%;
+    max-width: 360px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 22px;
+    box-shadow: 0 18px 60px rgba(0, 0, 0, .6);
+  }
+  .gatebox .sheet h3 { font-size: 17px; margin-bottom: 8px; }
+  .gatebox .sheet p { color: var(--text-dim); font-size: 13px; line-height: 1.6; margin-bottom: 14px; }
+  .gatebox .sheet input {
+    width: 100%;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    color: var(--text);
+    font: inherit;
+    font-size: 20px;
+    letter-spacing: 6px;
+    text-align: center;
+    padding: 12px;
+  }
+  .gatebox .sheet input:focus { outline: none; border-color: var(--accent); }
+  .gatebox .sheet .gateerr { color: var(--error); font-size: 12.5px; min-height: 18px; margin: 8px 0 4px; }
+  .gatebox .sheet .row { display: flex; gap: 10px; margin-top: 10px; }
+  .gatebox .sheet .row button {
+    flex: 1;
+    border: 1px solid var(--border);
+    background: var(--bg-input);
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    padding: 10px;
+    border-radius: 9px;
+    cursor: pointer;
+  }
+  .gatebox .sheet .row button.ok { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .gatebox .sheet .row button:disabled { opacity: .5; cursor: default; }
+
   .lightbox-img {
     max-width: 92vw;
     max-height: 86vh;
@@ -1454,11 +1507,11 @@
         <button class="btn" onclick="window.open('/moss','_blank')" title="moss 漫画台：一句话剧情 → 编剧写整页分镜 → moss 一次出图，四格小漫画一步到位（新标签打开）">moss 漫画</button>
         <button class="btn" onclick="window.open('/gen','_blank')" title="跑图台：无 AI 裸跑图 —— 左边选渠道、下面写提示词、点生成直接出图（新标签打开）">跑图台</button>
         <button class="btn" onclick="window.open('/gallery','_blank')" title="画廊：本机 / 内网直连 5174 作品墙，本地免登录（站主身份）；新标签打开">画廊</button>
-        <button class="btn" onclick="window.open('/characters','_blank')" title="人设卡池：QQ 角色扮演用的人设卡 —— 外观固定块由代码原样拼在每张画面最前面，保证第 100 张还是同一个人（新标签打开）">角色</button>
-        <button class="btn persona-go" onclick="window.open('/persona_admin','_blank')" title="角色扮演查看台：谁玩过、聊了什么 —— 左边列出所有会话（QQ私聊/群聊/网页/游客），点开看完整对话（新标签打开）">扮演记录</button>
+        <button class="btn" onclick="gatedOpen('/characters','角色')" title="人设卡池：QQ 角色扮演用的人设卡 —— 外观固定块由代码原样拼在每张画面最前面，保证第 100 张还是同一个人（需密码，新标签打开）">角色</button>
+        <button class="btn persona-go" onclick="gatedOpen('/persona_admin','扮演记录')" title="角色扮演查看台：谁玩过、聊了什么 —— 左边列出所有会话（QQ私聊/群聊/网页/游客），点开看完整对话（需密码，新标签打开）">扮演记录</button>
         <button class="btn" onclick="window.open('/novel','_blank')" title="小说模式：和一对一角色扮演相互隔离的第三套 —— 世界书 + 编剧裁定 + 第三人称正文，第一版玩法是丧尸末日生存模拟（新标签打开）">小说模式</button>
-        <button class="btn" onclick="window.open('/novel_admin','_blank')" title="小说记录：谁写了什么小说 —— 按 QQ 列出所有世界书，点开看主角、第几章、多少轮和整本正文（只读，新标签打开）">小说记录</button>
-        <button class="btn" onclick="window.open('/output','_blank')" title="图片管理台：ComfyUI output 目录的网页资源管理器 —— 左边目录树点开就看，右边缩略图网格，勾选即删，整目录一键删（新标签打开）">图片管理</button>
+        <button class="btn" onclick="gatedOpen('/novel_admin','小说记录')" title="小说记录：谁写了什么小说 —— 按 QQ 列出所有世界书，点开看主角、第几章、多少轮和整本正文（需密码，只读，新标签打开）">小说记录</button>
+        <button class="btn" onclick="gatedOpen('/output','图片管理')" title="图片管理台：ComfyUI output 目录的网页资源管理器 —— 左边目录树点开就看，右边缩略图网格，勾选即删，整目录一键删（需密码，新标签打开）">图片管理</button>
         <button class="btn" onclick="window.open('/card','_blank')" title="造卡台：一句话描述 → 星陨AI 创建表单要的那五段文案 + 864×1536 竖版封面，逐框复制粘贴（新标签打开）">造卡</button>
         <button class="btn toggle-read" id="readModeBtn" onclick="toggleReadMode()">阅读</button>
         <button class="btn danger" onclick="clearChat()">清空会话</button>
@@ -3212,6 +3265,107 @@ async function clearChat() {
   });
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape") closeMore();
+  });
+})();
+</script>
+
+<!-- 敏感入口密码门：点「角色/扮演记录/小说记录/图片管理」先过这一关 -->
+<div class="gatebox" id="gatebox">
+  <div class="sheet">
+    <h3>输入 6 位密码</h3>
+    <p id="gateWhat">这是用户相关的界面，输入密码才能进入。</p>
+    <input type="text" id="gateinput" inputmode="numeric" autocomplete="off"
+           placeholder="••••••" maxlength="6">
+    <div class="gateerr" id="gateerr"></div>
+    <div class="row">
+      <button id="gatecancel">取消</button>
+      <button class="ok" id="gateok">进入</button>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  "use strict";
+  var box = document.getElementById("gatebox");
+  var input = document.getElementById("gateinput");
+  var err = document.getElementById("gateerr");
+  var what = document.getElementById("gateWhat");
+  var okBtn = document.getElementById("gateok");
+  var pendingUrl = "";
+  var blankWin = null;
+
+  // 异步校验通过后再 window.open 会被浏览器当弹窗拦掉。所以在用户点击的
+  // 同步上下文里先开一个空白页占住手势，验证过了直接给它填网址（不受拦截），
+  // 失败或取消就把它关掉。
+  window.gatedOpen = function (url, label) {
+    pendingUrl = url;
+    try { blankWin = window.open("about:blank", "_blank"); } catch (e) { blankWin = null; }
+    what.textContent = "「" + (label || "这个入口") + "」是用户相关的界面，输入 6 位密码才能进入。";
+    input.value = "";
+    err.textContent = "";
+    box.classList.add("open");
+    setTimeout(function () { input.focus(); }, 50);
+  };
+
+  function dropBlank() {
+    if (blankWin) {
+      try { blankWin.close(); } catch (e) {}
+      blankWin = null;
+    }
+  }
+
+  function close() {
+    box.classList.remove("open");
+    dropBlank();                       // 没验证过就走人，空白页不留
+    pendingUrl = "";
+  }
+
+  function submit() {
+    var code = (input.value || "").trim();
+    if (!/^\d{6}$/.test(code)) {
+      err.textContent = "请输入 6 位数字";
+      return;
+    }
+    okBtn.disabled = true;
+    err.textContent = "";
+    fetch("/api/gal/pin/gate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ pin: code })
+    })
+      .then(function (r) { return r.json().then(function (d) { return { r: r, d: d }; }); })
+      .then(function (res) {
+        if (res.r.ok && res.d.ok) {
+          var target = pendingUrl;
+          box.classList.remove("open");
+          // 空白页是点击时同步开的，这里给它填网址不算新弹窗
+          if (blankWin) {
+            try { blankWin.location.replace(target); } catch (e) { window.open(target, "_blank"); }
+          } else {
+            window.open(target, "_blank");   // 浏览器把空白页拦了，尽力而为
+          }
+          blankWin = null;
+          pendingUrl = "";
+          input.value = "";
+        } else {
+          err.textContent = res.d.error || "验证失败";
+          input.value = "";
+          input.focus();
+        }
+      })
+      .catch(function (e) {
+        err.textContent = "网络错误：" + (e.message || "验证失败");
+      })
+      .then(function () { okBtn.disabled = false; });
+  }
+
+  document.getElementById("gatecancel").onclick = close;
+  okBtn.onclick = submit;
+  input.addEventListener("keydown", function (e) { if (e.key === "Enter") submit(); });
+  box.addEventListener("click", function (e) { if (e.target === box) close(); });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && box.classList.contains("open")) close();
   });
 })();
 </script>
