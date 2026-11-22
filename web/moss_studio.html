@@ -46,8 +46,9 @@
   }
   input:focus, textarea:focus, select:focus { border-color: var(--accent); }
   textarea { width: 100%; line-height: 1.6; resize: vertical; }
-  /* ── 这一集：男主 / 女主 / 剧情（2026-11-22） ──
-     男主写「无」= 这一集没有他，全程只有女主；留空 = 有他，但能不说就不说。 */
+  /* ── 这一集：男主 / 女主 / 剧情 / 转折（2026-11-22） ──
+     男主写「无」= 这一集没有他，全程只有女主；留空 = 有他，但能不说就不说。
+     转折可不填；填了整本就围着它排 beat，没填编剧自己设计一个意外。 */
   .roles { display: grid; grid-template-columns: 84px 1fr; gap: 8px; align-items: center;
     margin-bottom: 8px; }
   .roles .lab { font-size: 12px; color: var(--text-dim); text-align: right; }
@@ -233,6 +234,10 @@
     <div class="roles" style="align-items:start">
       <span class="lab" style="padding-top:9px">剧情</span>
       <textarea id="plot" placeholder="例：她在雨里摔进泥坑，衣服全脏了；自己爬起来走回家，在门口脱掉泥鞋，进浴室冲澡。整段没有别人。"></textarea>
+    </div>
+    <div class="roles">
+      <span class="lab">转折/冲突</span>
+      <input id="twist" placeholder="可不填。填了就按它排整本节奏；留空＝编剧自己设计一个意外和收尾">
     </div>
     <div class="row" style="margin-top:10px">
       <select id="layout">
@@ -445,17 +450,20 @@ async function loadMossModels() {
 }
 
 /* ══ 编剧 ══════════════════════════════════════════════════ */
-/* 三栏拼成后端能认的固定格式；男主那行空着就整行不写，
-   后端据此按「有他、但能不说就不说」处理（不是「没有他」）。 */
+/* 四栏拼成后端能认的固定格式；男主那行空着就整行不写，
+   后端据此按「有他、但能不说就不说」处理（不是「没有他」）。
+   转折可选：填了就照它排 beat，没填才让编剧自己设计意外。 */
 function buildBrief() {
   var male = ($("male").value || "").trim();
   var female = ($("female").value || "").trim();
   var plot = ($("plot").value || "").trim();
+  var twist = ($("twist") && $("twist").value || "").trim();
   if (!plot) return "";
   var lines = [];
   if (male) lines.push("男主：" + male);
   if (female) lines.push("女主：" + female);
   lines.push("剧情：" + plot);
+  if (twist) lines.push("转折：" + twist);
   return lines.join("\n");
 }
 

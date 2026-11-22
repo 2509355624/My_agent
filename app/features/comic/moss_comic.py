@@ -1208,7 +1208,7 @@ def _bubbles(panel):
     return [x for x in out if x][:MAX_BUBBLES]
 
 
-_NO_TEXT_TAIL = ("Flat screentone shading, no text, no lettering, no speech bubbles "
+_NO_TEXT_TAIL = ("Clean flat anime coloring, no text, no lettering, no speech bubbles "
                  "anywhere on the page; leave clean empty areas where the lettering "
                  "will be placed later.")
 
@@ -1232,9 +1232,14 @@ def _strip_text_items(js_text):
     s = d.get("summary")
     if isinstance(s, dict):
         cap = (s.get("caption") or "").strip()
-        # 尾句原来是「clear Chinese text: ...」那一串，整段换掉；
-        # 前面是画风/场景/人物，原样保留。
-        head = cap.split("Flat screentone shading")[0].strip() or cap
+        # 尾句是「有字：clear Chinese text: ...」那一串，整段换掉；
+        # 前面是画风/场景/人物，原样保留。2026-11-22 彩色化后旧稿里还是
+        # 「Flat screentone shading」开头，两种都要认，不然老 spec 剥不干净。
+        low = cap.lower()
+        hits = [(low.rfind(m), m) for m in ("clean flat anime coloring",
+                                             "flat screentone shading")]
+        at, _marker = max(hits, key=lambda x: x[0])
+        head = cap[:at].strip().rstrip(".,") if at > 0 else cap
         s["caption"] = (head + " " + _NO_TEXT_TAIL).strip()
     return json.dumps(d, ensure_ascii=False)
 

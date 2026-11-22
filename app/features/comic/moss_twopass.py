@@ -475,15 +475,15 @@ __LAYOUTS__
 
 三、summary.caption 的固定顺序（不许换序）
 1. 分格句：说清一页几块、谁大谁小、白沟与墨框。**这一句丢了模型会画成无边框大图。**
-2. 画风锁：`Manga page, monochrome, greyscale screentones, dense vertical wall screentone, inked lineart, bold black ink outlines, pen crosshatching.`
+2. 画风锁：`Full-color Japanese anime comic page, clean cel shading, flat anime coloring, crisp black ink outlines, sharp hard-edged cel shadows, no screentone, no monochrome.`
 3. 主格人物的**完整外形串**（从台账逐字抄，不许改写、不许缩写）。
    **这是第一人称 POV：画面里只有女生，绝不出现 1boy / boy / 男人 / 男性的脸、身体、衣服。**
    男主是镜头后的人，只需要入画时写 `pov hands` / `disembodied hand`（镜头外伸进来的一只手），
    不写他的脸和身体。caption 里绝不许出现 `1boy`、`a boy`、`a man`、`male`。
 4. 场景串：地点 / 时间 / 光源 / 两三个具体物件。
 5. 尾句（代码按本页台词自动写死，你不用自己拼）：
-   - 只有女生说话：`Flat screentone shading, clear Chinese text: the girl's words in sharp speech bubbles with short pointer tails; no bare text, no off-screen speaker.`
-   - 剧本写了 `男「…」`（画外男主）时，才换成：`Flat screentone shading, clear Chinese text: the girl's words in sharp speech bubbles, the off-screen boy's words in a plain rectangular box with a thin black outline and no tail.`
+   - 只有女生说话：`Clean flat anime coloring, clear Chinese text: the girl's words in sharp speech bubbles with short pointer tails; no bare text, no off-screen speaker.`
+   - 剧本写了 `男「…」`（画外男主）时，才换成：`Clean flat anime coloring, clear Chinese text: the girl's words in sharp speech bubbles, the off-screen boy's words in a plain rectangular box with a thin black outline and no tail.`
    - 本页无任何文字：`no text and no speech bubbles anywhere on the page.`
    **男主画外方框不是每页标配**：用户没写男主台词时，绝不许自己加一段画外字、也不许在右下角安排男主的话。
 
@@ -491,7 +491,7 @@ __LAYOUTS__
 - 每个角色 / 空镜 / 文字各自一条，bbox 钉死。
 - label：character（有人物）/ object（空镜道具）/ text（台词旁白拟声）。
 - 人物的 caption 结尾必须再重复一次画风锁短句：
-  `monochrome greyscale screentone, bold black ink outline, flat shading, no color cast.`
+  `clean cel shading, flat anime coloring, crisp black ink outlines, hard-edged cel shadows.`
 - 文字 item 的 caption 只描述容器（形状+描边+竖排列数+尾巴指向），台词内容只进 text 字段。
   **女生的话**（user 标 女 / who=girl）：圆角气泡 + `short pointer tail pointing toward the girl's face`。
   **男生的话**（user 标 男 / who=boy）：**不许画气泡**——写 `Boy speech box: plain
@@ -625,21 +625,22 @@ SKELETONS = {
 
 # ── 画风与分格句：由代码写死，不让模型每页自己措辞 ──
 # 三页画风漂移的根因就是这段每页文字不同，等于每页重新抽一次画风。
+# 2026-11-22 改全彩：原来这段是 monochrome/greyscale/screentone/no color，
+# 但正文里保留着 navy / pale blue / white 这些衣服颜色词——技能文档说过，
+# 颜色词会穿透「no color」变成「衣服有色、背景黑白」的局部留色漫（用户实拍证实）。
+# 现在整段换成全彩赛璐璐，分格、墨线、气泡/方框的规矩一个字不动，
+# 只把上色方式从网点纸换成平涂硬边阴影；颜色本身由 spec.palette 统一给（见 moss_agent）。
 STYLE_LOCK = (
-    "manga page, monochrome, greyscale, screentones, inked lineart, "
-    "bold black ink outlines, pen crosshatching, Japanese manga illustration, "
-    "dense vertical wall screentone on every surface, flat two-tone shading, "
-    "hard-edged shadow blocks, deep crushed blacks, uniform screentone texture, "
-    # 2026-11-21 用户反馈第 8 页整页发白：建场格全白窗+白墙+白衬衫把明度拉高了。
-    # 这一句是整页明度锚，防止单靠「有网点」被模型理解成「浅灰也行」。
-    "whole page sits at a mid-grey overall value with large dark masses in every panel, "
-    "the only near-white area allowed is the window sliver, "
-    "no soft gradient, no color, no color cast."
+    "full-color Japanese anime comic page, clean cel shading, flat anime coloring, "
+    "crisp black ink outlines, sharp hard-edged cel shadows, "
+    "one clear directional key light with soft ambient fill, "
+    "rich but restrained anime palette, "
+    "no screentone, no greyscale, no monochrome, no photorealistic rendering."
 )
 
 STYLE_ITEM = (
-    "monochrome, greyscale, screentones, inked lineart, bold black ink outlines, "
-    "flat two-tone shading, hard shadow edges, mid-grey overall value, no color."
+    "clean cel shading, flat anime coloring, crisp black ink outlines, "
+    "hard-edged cel shadows, full color."
 )
 
 # 2026-11-21 拆掉：BODY_LOCK / FIXED_LOWER / stamp_cast_body。
@@ -685,9 +686,9 @@ LAYOUT_SENTENCE = {
 # 编译尾句按「本页到底有哪些人的话」生成（2026-11-21）：
 # 男主画外方框不是每页标配——只有剧本真的写了 `男「…」` 才提 boy。
 # 之前写死 boy 那句，导致只有女生对话的页也被要求画一段画外男主字（右下角那句）。
-TAIL_GIRL_ONLY = ("Flat screentone shading, clear Chinese text: the girl's words in sharp speech "
+TAIL_GIRL_ONLY = ("Clean flat anime coloring, clear Chinese text: the girl's words in sharp speech "
                   "bubbles with short pointer tails; no bare text, no off-screen speaker.")
-TAIL_WITH_BOY = ("Flat screentone shading, clear Chinese text: the girl's words in sharp speech bubbles, "
+TAIL_WITH_BOY = ("Clean flat anime coloring, clear Chinese text: the girl's words in sharp speech bubbles, "
                  "the off-screen boy's words in a plain rectangular box with a thin black outline and no tail.")
 TAIL_NO_TEXT = "no text and no speech bubbles anywhere on the page."
 
@@ -1108,7 +1109,7 @@ def grab_first(body, label):
 
 # ────────────────────── 代码闸门 ──────────────────────
 HUE = re.compile(r"\b(red|blue|brown|pink|green|yellow|orange|purple)\b", re.I)
-STYLE_LOCK_KEYS = ("screentone", "monochrome", "inked lineart")
+STYLE_LOCK_KEYS = ("cel shading", "anime coloring", "black ink outlines")
 NEG_SENT = "No speech bubble and no text in this panel."
 
 # 纯局部特写（脸、手、脚）：画面里没有身体，不需要全身外形串。往里塞
@@ -1431,7 +1432,7 @@ def retail_caption(cap, has_text, has_boy):
     模型经常照抄模板却不写对应的 text item——尾句说有方框、页面里一个都没有，
     模型收到自相矛盾的两句指令，画出来要么没字、要么给男生画气泡。
 
-    做法：从最后一个 "flat screentone shading" 处截断（那是尾句的固定开头），
+    做法：从最后一个 "clean flat anime coloring" 处截断（那是尾句的固定开头），
     换成按实际 text item 算出来的那一句。找不到就整段接在末尾。
     """
     if not has_text:
@@ -1441,7 +1442,11 @@ def retail_caption(cap, has_text, has_boy):
     else:
         tail = TAIL_GIRL_ONLY
     cap = (cap or "").strip()
-    i = cap.lower().rfind("flat screentone shading")
+    low = cap.lower()
+    # 旧稿的尾句以 Flat screentone shading 开头，也认——不然彩色化之前
+    # 写好的 spec 会被接上两句互相打架的尾句。
+    i = max(low.rfind("clean flat anime coloring"),
+            low.rfind("flat screentone shading"))
     if i <= 0:
         return (cap.rstrip(" .") + ". " + tail) if cap else tail
     head = cap[:i].rstrip().rstrip(",").rstrip(".")
@@ -1469,7 +1474,7 @@ def rebuild_summary(js, cast, layout, has_text, scene="", has_boy=False):
                       "hard directional light from one side.")
 
     s = js.setdefault("summary", {})
-    s["meta"] = ["comic", "manga", "screentone"]
+    s["meta"] = ["comic", "anime_illustration", "cel_shading"]
     # 单格页写 single：这是官方三值里「整页就是一个画面」的信号。
     # 写 multi_panel 会让模型按「分格页」重新切格，一页一格的意图就丢了。
     s["canvas"] = ("single" if len(SKELETONS.get(layout) or []) == 1
@@ -1803,7 +1808,7 @@ def autofix(js, cast=None, lines=None, layout=None, scene="", narr="",
         hit = sum(1 for x in clauses if x.lower() in low)
         if hit / len(clauses) >= 0.6:
             continue
-        marker = "monochrome greyscale screentone"
+        marker = "clean cel shading"
         idx = low.find(marker)
         if idx != -1:
             it["caption"] = cap[:idx] + cast[who] + ", " + cap[idx:]

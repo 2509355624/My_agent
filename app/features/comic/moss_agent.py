@@ -52,15 +52,16 @@ EXAMPLE = {
     "layout": "L0",
     "scene": "1",
     "summary": {
-        "meta": ["comic", "manga", "screentone"],
+        "meta": ["comic", "anime_illustration", "cel_shading"],
         "canvas": "multi_panel",
         "caption": (
-            "A black-and-white Japanese manga page divided into five panels: one tall "
+            "A full-color Japanese anime comic page divided into five panels: one tall "
             "dominant panel filling the right side from top to bottom, a narrow left "
             "column of three small stacked panels, and a thin horizontal establishing "
             "strip across the very top, all separated by thin white gutters and a thin "
-            "black ink border around the whole page. Manga page, monochrome, greyscale "
-            "screentones, inked lineart, bold black ink outlines, pen crosshatching. In "
+            "black ink border around the whole page. Full-color anime comic page, clean "
+            "cel shading, flat anime coloring, crisp black ink outlines, sharp "
+            "hard-edged cel shadows. In "
             "the dominant right "
             "panel, a girl about twelve, slender teen proportions, long legs, small head, "
             "long straight dark hair "
@@ -73,8 +74,8 @@ EXAMPLE = {
             "raised for balance. School athletic field late afternoon, a cinder running "
             "track with faded white lane lines, a low chain-link fence and a row of "
             "school buildings behind, a water bottle and a small towel on the grass "
-            "edge, paper bunting overhead, long low sun casting stretched screentone "
-            "shadows. Flat screentone shading, clear Chinese text: the girl's words in "
+            "edge, paper bunting overhead, long low sun casting long warm "
+            "shadows. Clean flat anime coloring, clear Chinese text: the girl's words in "
             "sharp speech bubbles with short pointer tails; no bare text, no off-screen "
             "speaker."
         ),
@@ -98,8 +99,8 @@ EXAMPLE = {
             "hand pulling her right ankle up behind her thigh, her left arm raised out "
             "for balance, torso upright, head turned slightly toward the viewer, cinder "
             "track and white lane lines under her standing foot, fence and school "
-            "building far behind. monochrome greyscale screentone, bold black ink "
-            "outline, flat shading, no color cast.")},
+            "building far behind. clean cel shading, flat anime coloring, crisp black "
+            "ink outlines, hard-edged cel shadows.")},
         {"label": "text", "bbox": [364, 124, 667, 441], "text": "再压一下就好",
          "caption": (
             "Tall rounded oval speech bubble in the lower right of the dominant panel, "
@@ -111,8 +112,8 @@ EXAMPLE = {
             "proportions, small head, long straight dark hair gathered back by the wide "
             "pale headband, blunt bangs, large round dark eyes, round soft face, faint "
             "blush, brows drawn slightly together, a bead of sweat at her temple. "
-            "monochrome greyscale screentone, bold black ink outline, flat shading, "
-            "no color cast. No speech bubble and no text in this panel.")},
+            "clean cel shading, flat anime coloring, crisp black ink outlines, hard-edged "
+            "cel shadows. No speech bubble and no text in this panel.")},
         {"label": "character", "bbox": [130, -494, 540, -272], "caption": (
             "Small left-middle panel, medium shot from behind at three-quarter angle: "
             "the same girl, long straight dark hair over her back, white track shirt and "
@@ -121,8 +122,8 @@ EXAMPLE = {
             "slender teen proportions, long legs, small head, long straight dark hair "
             "with soft blunt bangs pulled "
             "back by a wide fluffy pale cloth headband, large round dark eyes, round "
-            "soft face, faint blush. monochrome greyscale screentone, bold black ink "
-            "outline, flat shading, no color cast.")},
+            "soft face, faint blush. clean cel shading, flat anime coloring, crisp black "
+            "ink outlines, hard-edged cel shadows.")},
         {"label": "text", "bbox": [178, -446, 306, -366], "text": "一 二 三 四",
          "caption": (
             "Rounded oval speech bubble in the upper right of the panel, thin black "
@@ -138,20 +139,34 @@ EXAMPLE = {
     "bbox_format": "yxyx",
 }
 
-SYSTEM = """你写黑白日漫整页分镜，直接输出 Layout JSON。输入是这一本里有谁、她是谁、这一集发生什么，
+SYSTEM = """你写全彩日漫整页分镜，直接输出 Layout JSON。输入是这一本里有谁、她是谁、这一集发生什么，
 还有一个页数上限；输出是一个 JSON 对象。
 只输出 JSON，不要围栏、不要解释、不要在 JSON 前后写任何字。
 
 ════ 输出 ════
 {
   "title": "标题，12 字以内",
+  "palette": "整本固定的英文配色串，只写一次，规则见下一节",
   "cast": {"girl": "英文外形串：只写脸、身材、发型、配饰，绝不写衣服"},
   "scenes": {"1": "英文场景串", "2": "..."},
   "pages": [ 每页一个对象，字段如下 ]
 }
-每页：{"layout": "L0", "scene": "1", "summary": {...}, "items": [...],
+每页：{"layout": "L0", "scene": "1",
+        "beat": "一句中文：这一页发生了什么变化，不是她做了什么动作",
+        "summary": {...}, "items": [...],
         "bbox_coord_space": "abs_centralized", "bbox_format": "yxyx"}
 summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格数核对一遍）。
+
+════ 这一集的配色（全本只定一次，代码替你抄到每一页） ════
+这是全彩页，颜色不写进 cast，也不许每页临时改。动笔前先定好这一集的 `palette`：
+· 从这一集的衣服、头带、场景里挑 4~5 个**具体颜色**，写成一段英文串，每个颜色都带上它归谁：
+  `"navy blue sailor top, pale blue sailor collar, off-white fuzzy headband, warm brown wooden racks, cream walls"`
+· 只写画面里真会出现的东西。没有出现的颜色不要写进来；不要写抽象形容词
+  （soft / beautiful / aesthetic），也不要写 hex 码。
+· 串里的词你在每页 ③ 的衣着和 ④ 的场景里照用，**不许换同义词**：
+  这一页 navy blue，后面就不许写 dark blue / deep blue；同一件衣服换词＝模型当成两件。
+· 代码会把这段 palette 原文接到每一页 caption 后面，你不要在每页 caption 里重复抄它。
+· **palette 缺失，整本颜色就会逐页漂**：这是必填字段，不能省。
 
 ════ 这一本里有谁（先定这个，再动笔） ════
 输入开头会写清。**这一节决定整本有没有第二个人，读错了后面全错**：
@@ -166,6 +181,20 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
 **没有男主的戏，就是没有。** 不许为了把格子填满就给他编话——
 「我来我来，先回家」「衣服放门口了」这种句子，落在纯女主的一集里就是凭空多出一个人。
 她在泥里摔了一跤、自己走回家、脱鞋、冲澡，这一路本来就不需要谁开口。
+
+════ 整本怎么排：先排 beat，再拆页 ════
+输入末尾会写「这一集要出的意外」。那是这一本的脊梁，比她做了哪几个动作重要。
+· 用户填了转折 → 它必须在某一页**真的发生**，不许绕开、不许改成她心里想想就算了。
+· 用户没填 → 自己设计一个只在这一集成立的小意外（灯坏了、东西找不到、被人撞见、
+  她做了个反常的决定都行），但不要和上一集重复。
+· 先把整本拆成五段：钩子（她要做什么／卡在哪）→ 推进 → 意外（转折发生）→ 她的反应 → 收尾。
+  页数多于五页时一段可以占两页，少于五页就合并，但五段都要有落点。
+· **每一页写 `beat`**：一句中文，写这一页**发生了什么变化**。
+  「她在扫地」是动作流水账，不算 beat；「她发现灯绳断了」才算。
+· 相邻两页的 beat 不许是同一件事——连着两页都在扫同一个地，等于没写剧情。
+· 转折和情绪一律靠画面：不写旁白、不写她心里想什么、不让男主用台词解释发生了什么。
+· beat 是**页与页之间**的骨架，不塞进任何一格。拆完页之后照旧守下面的规矩：
+  一页一个地点一个动作、一格一个定格、连着两个状态用两页。
 
 ════ 人：脸是固定的，衣服跟着这一页走 ════
 输入里的「她是谁」通常是一段现成的英文外形串。那是**角色档案**，重点是脸和身材：年龄、体型、发型发色、头带、眼睛、脸型、配饰。
@@ -348,11 +377,11 @@ T3 · 三格 · 上大横格 + 下两格（上面一个主画面，下面两处�
 
 ════ summary.caption：一整段英文，连着写完，不分行不标号 ════
 依次写这五样，用逗号句号连起来：
-① 分格：A black-and-white Japanese manga page divided into five panels: one tall dominant panel filling the right side from top to bottom, a narrow left column of three small stacked panels, and a thin horizontal establishing strip across the very top, separated by thin white gutters and a thin black ink border around the whole page.
-② 画风：Manga page, monochrome, greyscale screentones, inked lineart, bold black ink outlines, pen crosshatching.
+① 分格：A full-color Japanese anime comic page divided into five panels: one tall dominant panel filling the right side from top to bottom, a narrow left column of three small stacked panels, and a thin horizontal establishing strip across the very top, separated by thin white gutters and a thin black ink border around the whole page.
+② 画风：Full-color Japanese anime comic page, clean cel shading, flat anime coloring, crisp black ink outlines, sharp hard-edged cel shadows, no screentone, no greyscale.
 ③ 主格：景别 + 她在做什么 + 完整外形串（从 cast 逐字抄，不缩写不调序）+ 本页衣着（这一页她身上穿什么，这一页在换装就写成变化）+ 构图位置
 ④ 场景：地点 + 时间 + 光源 + 两三个具体物件
-⑤ 文字：有字写 Flat screentone shading, clear Chinese text: the girl's words in sharp speech bubbles with short pointer tails；
+⑤ 文字：有字写 Clean flat anime coloring, clear Chinese text: the girl's words in sharp speech bubbles with short pointer tails；
    本页还有男主画外话，补 the off-screen boy's words in a plain rectangular box with a thin black outline and no tail
    ——**这一本没有男主时，这一句一个字都不许出现**；
    整页没有字写 no text and no speech bubbles anywhere on the page.
@@ -363,7 +392,7 @@ T3 · 三格 · 上大横格 + 下两格（上面一个主画面，下面两处�
 character：这一格画什么 —— 景别 + 定住的姿势 + 外形串（看得到身体的格：完整原样粘贴；
   纯脸 / 手的特写：只写那一处相关的项，别贴全身串和整件衣服）+ 本页衣着（照抄本页 ③ 里那一段；
   正在换装就写变化）+ 结尾固定写
-  monochrome greyscale screentone, bold black ink outline, flat shading, no color cast.
+  clean cel shading, flat anime coloring, crisp black ink outlines, hard-edged cel shadows.
 object：空镜或道具 + 结尾固定写 No speech bubble and no text in this panel.
 text：只写容器形状和字的排法，台词内容只进 text 字段。**只有两种容器，按「谁在说」选**：
   ① 她本人在这一格画面里开口 → 圆气泡，尾巴指向她的脸：
@@ -376,7 +405,7 @@ text：只写容器形状和字的排法，台词内容只进 text 字段。**�
 
 **男主的话一律用矩形方框**：他不出镜，给他画气泡，尾巴就只能指向女生，读者会把他的话当成她说的。
 方框是他的身份标记——**直角方框＝他，圆气泡＝她**，一眼分得开；不许写成压在画面上的白边裸字
-（裸字没有边界，翻页时和拟声、网点糊在一起）。方框位置固定在右上，永远不跟她的气泡重叠。
+（裸字没有边界，翻页时和拟声、色块糊在一起）。方框位置固定在右上，永远不跟她的气泡重叠。
 
 **归属不能图省事。** 男主的方框只放「他对她说的一句话」，一页最多一句，而且必须是在回应她上一格的动作或话。
 **写成一句直接的要求**：衣服给我 / 接着 / 转过来看看——而不是反问（有换的吗 / 你不冷吗）。
@@ -409,7 +438,9 @@ text：只写容器形状和字的排法，台词内容只进 text 字段。**�
 （没有男主时这一条不适用：剧本里没有「我」，就没有需要画出来的「我的动作」。）
 湿、汗、水只用材质词：soaked, translucent, clinging, dark and heavy；不要写 dark patch / black stain / wet spot（会画成一块脏）。
 人物镜头最紧到中近景：medium close-up with head and shoulders in frame。
-只写明暗、材质、网点，不写颜色词。
+**颜色写具体词，但只能从本集 palette 里抄**：navy blue / pale blue 这样带色相的词要写，
+不许再用「灰蓝调」「暗色衣服」这种模糊说法代替；palette 没写的颜色不要临时发明。
+湿、汗、水仍只写材质（soaked, translucent, clinging），不写 dark patch / black stain。
 外形串是唯一事实源：看得到身体的格，cast 写了几项就抄几项，不缩写、不调序、不改词；
 纯局部特写只抄和那一处有关的项（脸：比例、发型、头带、眼睛、脸）。
 双人同框时第二个人开头显式互斥：In sharp contrast, the other girl has NO long hair, NO headband。
@@ -436,8 +467,8 @@ text：只写容器形状和字的排法，台词内容只进 text 字段。**�
 # 和「衣服放门口了」两句——旧提示词只教了「男主的话怎么画」，从没说过「可以没有男主」。
 _ROLE_LINE = re.compile(
     r"^[\s#*\-]*"
-    r"(?:[【\[]\s*(男主|女主|剧情)\s*[】\]]"          # 【男主】无
-    r"|(男主|女主|剧情)\s*[*]{0,2}\s*[：:])"        # 男主：无 / **男主**：无
+    r"(?:[【\[]\s*(男主|女主|剧情|转折)\s*[】\]]\s*[：:]?"  # 【男主】无 / 【转折】：无
+    r"|(男主|女主|剧情|转折)\s*[*]{0,2}\s*[：:])"   # 男主：无 / **男主**：无
     r"\s*(.*)$")
 # 「无」的各种写法。空的不算：写了「男主：」却没填，是没交作业，不是没有他。
 _NO_MALE = {"无", "无男主", "没有", "没有男主", "none", "no", "n/a", "na", "null", "-", "—", "空"}
@@ -452,10 +483,11 @@ def parse_brief(text):
     提示词那边按「有他、但能不说就不说」处理。
     """
     raw = (text or "").strip()
-    out = {"male": "", "female": "", "plot": "", "labeled": False, "male_none": False}
+    out = {"male": "", "female": "", "plot": "", "twist": "",
+           "labeled": False, "male_none": False}
     if not raw:
         return out
-    buckets = {"男主": [], "女主": [], "剧情": []}
+    buckets = {"男主": [], "女主": [], "剧情": [], "转折": []}
     cur = None
     for line in raw.splitlines():
         hit = _ROLE_LINE.match(line)
@@ -467,7 +499,8 @@ def parse_brief(text):
             buckets[cur].append(line.strip())
         else:
             buckets["剧情"].append(line.strip())
-    for key, val in (("male", "男主"), ("female", "女主"), ("plot", "剧情")):
+    for key, val in (("male", "男主"), ("female", "女主"),
+                     ("plot", "剧情"), ("twist", "转折")):
         out[key] = "\n".join(x for x in buckets[val] if x).strip()
     out["male_none"] = bool(out["labeled"]) and \
         out["male"].strip().strip("。.，,").lower() in _NO_MALE
@@ -502,6 +535,17 @@ def compose_brief(parsed, fallback=""):
         body += ["== 她是谁 ==", parsed["female"].strip()]
     if (parsed.get("plot") or "").strip():
         body += ["== 这一集发生什么 ==", parsed["plot"].strip()]
+    # 转折是可选项：用户填了就照它铺 beat，一个字不许绕开；
+    # 没填才让编剧在这一集里自己设计一个意外。两种都靠画面讲，不上字。
+    twist = (parsed.get("twist") or "").strip()
+    if twist:
+        body += ["== 这一集要出的意外 ==", "转折（必须出现，不许绕开）：" + twist,
+                 "整本围着它排节奏，但不要把它写成台词或旁白——用镜头让读者看出来。"]
+    else:
+        body += ["== 这一集要出的意外 ==",
+                 "转折没指定：自己设计一个只在这一集成立的小意外，"
+                 "按「钩子 → 推进 → 意外 → 她的反应 → 收尾」铺到各页。"
+                 "不许只是把她做的动作顺序列一遍。"]
     return "\n".join(head + body)
 
 
@@ -664,6 +708,10 @@ def audit(js, cap=12, male_none=False):
         return ["没有产出任何页"], []
     if len(pgs) > cap:
         warns.append("页数 %d 超过上限 %d（会截断）" % (len(pgs), cap))
+    # 配色表缺了不会让这一本出不了图，但每页颜色会各画各的。这是事实可数，
+    # 记进报告让编剧知道；措辞、选什么颜色仍然是它的活，代码不猜不填。
+    if not str(js.get("palette") or "").strip():
+        warns.append("整本没有 palette 配色串——全彩页会逐页漂色；顶层写一次 4~5 个具体颜色")
 
     cast = js.get("cast") or {}
     girl_spec = cast.get("girl") or ""
@@ -695,6 +743,10 @@ def audit(js, cap=12, male_none=False):
 
     seen_lines = {}
     for n, p in enumerate(pgs, 1):
+        # beat 是这一页发生了什么变化；缺了它整本就退回动作流水账。
+        # 记 warns 不记 blocking：它是内容质量，不是「没交作业」。
+        if not str(p.get("beat") or "").strip():
+            warns.append("第%d页：没有 beat（这一页发生了什么变化，不是她做了什么动作）" % n)
         lay = (p.get("layout") or "").strip().upper()
         sk = M.SKELETONS.get(lay) if lay in AGENT_LAYOUTS else None
         if not sk:
@@ -851,6 +903,20 @@ def audit(js, cap=12, male_none=False):
 
 
 # ══════════════════════ 链路 ══════════════════════
+def _stamp_palette(pj, palette):
+    """把整本配色串原样接到一页 caption 后面（全彩一致性）。
+
+    让模型每页自己抄，它一定会顺手换同义词（navy → dark blue），同一件
+    衣服就变成两件。这里是逐字复制，不猜、不改词、不替它选颜色。
+    """
+    palette = str(palette or "").strip().rstrip(".")
+    if not palette or not isinstance(pj.get("summary"), dict):
+        return
+    sm = pj["summary"]
+    sm["caption"] = ((sm.get("caption") or "").strip().rstrip(".")
+                     + ". Fixed palette for every panel: " + palette + ".")
+
+
 def _repair_user(brief, pages, js, issues):
     return ("%s\n\n目标 %d 页。\n\n"
             "下面这版稿子体检没过，问题都列出来了，逐条改掉，其余内容保持原样。\n\n"
@@ -957,6 +1023,7 @@ def generate(brief, pages, call, progress=None):
                 it["caption"] = M.CAPTION_BOX
             elif k == "bubble":
                 it["caption"] = M.bubble_cap(txt)
+        _stamp_palette(pj, js.get("palette"))
         try:
             issues_p = M.check_page(pj, n, js.get("cast"), lay, None)
         except Exception as exc:                # noqa: BLE001
@@ -965,7 +1032,7 @@ def generate(brief, pages, call, progress=None):
         out_pages.append({
             "n": n, "layout": lay,
             "grid": len(M.SKELETONS.get(lay) or []),
-            "beat": "", "core": "", "hook": "",
+            "beat": str(p.get("beat") or "").strip(), "core": "", "hook": "",
             "scene": (js.get("scenes") or {}).get(p.get("scene") or "1") or "",
             "plan": M._plan_from(pj),          # noqa: SLF001
             "panels": M.layout_to_panels(pj),
@@ -987,6 +1054,7 @@ def generate(brief, pages, call, progress=None):
     brief_tail = (parsed.get("plot") or brief).replace("\n", " ").strip()
     spec = {"title": title or (brief_tail[:12] or "未命名"),
             "style": (js.get("scenes") or {}).get("1") or "",
+            "palette": (js.get("palette") or "").strip(),
             "cast": js.get("cast") or {},
             "pages": out_pages}
     return spec, {
