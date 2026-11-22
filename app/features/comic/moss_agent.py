@@ -153,6 +153,7 @@ SYSTEM = """你写全彩日漫整页分镜，直接输出 Layout JSON。输入�
 }
 每页：{"layout": "L0", "scene": "1",
         "beat": "一句中文：这一页发生了什么变化，不是她做了什么动作",
+        "link": "一句中文：第 1 页写这一集从哪里开始；后面每页写清接上一页的地点、人物站位、身体姿势、谁手里拿着什么",
         "summary": {...}, "items": [...],
         "bbox_coord_space": "abs_centralized", "bbox_format": "yxyx"}
 summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格数核对一遍）。
@@ -584,6 +585,17 @@ GROUP_OVERRIDE = """
 · 可说话的人最多四种，一页台词仍是上限不是配额；整页 0 句成立。
 · 不许旁白、不许内心独白。
 
+════ 群像：多页怎么接 ════
+· 多页时先按**时间顺序**把剧情排好：第 1 页是起点，最后一页是收尾。
+  不许把后面的场景插到前面，也不许下一页无声跳回更早的地点（门口 / 楼梯 / 天台）。
+· 每页都要写 `link`：第 1 页写这一集从哪里开始；后面每页写清「接上一页：还在哪儿、
+  谁站在哪、身体停在什么姿势、谁手里拿着什么」。代码只查这一项写没写，内容由你负责。
+· 换地点必须写进 `beat` / `link`，并让下一页第一格就发生在新地方（推门出去 /
+  走下楼梯 / 穿过走廊）；不许只换一句场景串就把人搬走。
+· 上一页出现的关键道具（纸条 / 手机 / 书包 / 饮料）下一页要么还在谁手里，
+  要么写明已经放下 / 被风吹走 / 收进口袋；不许凭空消失又冒出来。
+· 会说话的角色每页位置要接得上：上一页站在左边，下一页还在左边，除非写明两人换了位置。
+
 ════ 群像：比例与衣服 ════
 · 「比例锚点只针对少女」那条只对 girl 适用：男孩、大叔、健身者按各自身形写，
   不要把 `slender teen proportions` 套到成年男性身上。
@@ -871,6 +883,14 @@ def audit(js, cap=12, male_none=False, group=False):
     # 只比数字（about twelve / about 18 都归一成 12），不比措辞——这是事实，不是文风。
     cast_ages = _ages(girl_spec)
     cast_age = sorted(cast_ages)[0] if len(cast_ages) == 1 else None
+
+    # 多页群像的连贯：代码只查「link 交没交」，不判断它写得对不对。
+    # 没写就得回去补——这是结构事实；写了什么由编剧决定，模型自己的活。
+    if group and len(pgs) > 1:
+        for n, p in enumerate(pgs, 1):
+            if not str((p or {}).get("link") or "").strip():
+                out.append("第%d页：没写 link——第 1 页写这一集从哪里开始，"
+                           "后面每页写清接上一页的地点/站位/姿势/手里东西" % n)
 
     seen_lines = {}
     for n, p in enumerate(pgs, 1):
@@ -1181,12 +1201,14 @@ def generate(brief, pages, call, progress=None, group=False):
             "n": n, "layout": lay,
             "grid": len(M.SKELETONS.get(lay) or []),
             "beat": str(p.get("beat") or "").strip(), "core": "", "hook": "",
+            "link": str(p.get("link") or "").strip(),
             "scene": (js.get("scenes") or {}).get(p.get("scene") or "1") or "",
             "plan": M._plan_from(pj),          # noqa: SLF001
             "panels": M.layout_to_panels(pj),
             "prompt_override": json.dumps(pure, ensure_ascii=False),
         })
         report_pages.append({"n": n, "layout": lay,
+                             "link": str(p.get("link") or "").strip(),
                              "grid": len(M.SKELETONS.get(lay) or []),
                              # 只带本页的 blocking，别的页的错不该显示在这一页上
                              "issues": issues_p + [

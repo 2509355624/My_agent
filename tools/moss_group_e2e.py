@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
-"""群像模式真链路：多角色同屏合照。
+"""群像模式真链路：多角色同屏合照 / 多页连续剧情。
 
-    python tools/moss_group_e2e.py
+    python tools/moss_group_e2e.py                      # 默认四角色单页合照
+    python tools/moss_group_e2e.py --brief-file xxx.txt --pages 4
 
 用现有的 LLM 链路跑一遍 moss_agent.generate(group=True)，产物落在
 state/_selfcheck/group_<时间>/。只写 spec / 提示词，**不出图**——
 出图要走 5174 的队列（重启后在工作台点渲染）。
 """
+import argparse
 import json
 import os
 import sys
@@ -52,7 +54,15 @@ def resolve_model(base, key, model):
 
 
 def main():
-    pages = 1  # 单页合照，用户要的就是一页里四个人同屏
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--brief-file", help="UTF-8 文件，整段群像 brief（群像角色/剧情/转折）")
+    ap.add_argument("--pages", type=int, default=1, help="页数上限，默认 1（合照）")
+    args = ap.parse_args()
+    brief = BRIEF
+    if args.brief_file:
+        with open(args.brief_file, encoding="utf-8") as f:
+            brief = f.read().strip()
+    pages = max(1, args.pages)
     env = M.load_env(os.path.join(ROOT, ".env"))
     prov = {}
     try:
@@ -68,7 +78,25 @@ def main():
           % (prov.get("label") or "deepseek", model, len(A.SYSTEM + A.GROUP_OVERRIDE)))
 
     llm = M.LLM(base, key, model)
-    spec, report = A.generate(BRIEF, pages, llm, group=True)
+    raws = []
+    raw_llm = llm
+    # 真链路偶发 JSON 语法错时留一份原文，光看 traceback 查不出是截断还是模型写坏。
+    def llm_log(system, user, **kw):
+        text = raw_llm(system, user, **kw)
+        raws.append(text or "")
+        return text
+    try:
+        spec, report = A.generate(brief, pages, llm_log, group=True)
+    except Exception:
+        err_dir = os.path.join(ROOT, "state", "_selfcheck",
+                               "group_fail_%s" % time.strftime("%Y%m%d_%H%M%S"))
+        os.makedirs(err_dir, exist_ok=True)
+        for i, text in enumerate(raws):
+            with open(os.path.join(err_dir, "raw%d.txt" % i), "w",
+                      encoding="utf-8") as f:
+                f.write(text)
+        print("解析失败，原文留在 %s" % err_dir)
+        raise
 
     stamp = time.strftime("%Y%m%d_%H%M%S")
     d = os.path.join(ROOT, "state", "_selfcheck", "group_%s" % stamp)
@@ -86,7 +114,7 @@ def main():
     print("总耗时 %.1fs  最终%s" % (report["secs"],
                                   "通过" if report["pass"] else "仍有问题"))
 
-    print("\n=== cast（4 个角色）===")
+    print("\n=== cast（%d 个角色）===" % len(spec.get("cast") or {}))
     for k, v in (spec.get("cast") or {}).items():
         print(" %s: %s" % (k, v[:90]))
 
@@ -95,6 +123,8 @@ def main():
         print(" 第%d页 %s %d格  issues=%s  autofix=%s"
               % (p["n"], p["layout"], p["grid"],
                  "；".join(p["issues"]) or "0", "、".join(p["autofix"]) or "无"))
+        if p.get("link"):
+            print("   link: %s" % p["link"])
 
     print("\n=== 整页提示词（character 格）===")
     for p in spec["pages"]:

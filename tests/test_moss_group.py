@@ -98,6 +98,21 @@ class AuditGroupTest(unittest.TestCase):
         out, _ = A.audit(js, cap=2, group=True)
         self.assertTrue(any("cast.athlete 写了衣服" in x for x in out), out)
 
+    def test_multipage_group_requires_link_but_not_single_page(self):
+        """多页群像必须交代从上一拍接哪儿；代码只查有没有交，不判断写得对不对。"""
+        one = self._min_spec()
+        out, _ = A.audit(one, cap=2, group=True)
+        self.assertFalse(any("没写 link" in x for x in out), out)
+
+        two = self._min_spec()
+        two["pages"].append(json.loads(json.dumps(two["pages"][0])))
+        out, _ = A.audit(two, cap=4, group=True)
+        self.assertEqual(len([x for x in out if "没写 link" in x]), 2)
+        for p in two["pages"]:
+            p["link"] = "接上一页：还在天台，男孩站在左边，手里捏着纸条"
+        out, _ = A.audit(two, cap=4, group=True)
+        self.assertFalse(any("没写 link" in x for x in out), out)
+
 
 class GenerateGroupTest(unittest.TestCase):
     def test_group_uses_group_system_and_no_male_flag(self):
