@@ -285,6 +285,23 @@
     border-radius:20px;opacity:0;pointer-events:none;transition:.24s;z-index:99;
     border:1px solid var(--line);max-width:86vw;text-align:center}
   #toast.on{opacity:1;transform:translate(-50%,0)}
+
+  /* 翻页条（2026-11-22 群友要求）：墙面是「往下滑无限加载」，滑到第 5 页
+     关掉再进来又从第 1 页开始，中途也看不出自己在第几页。这条常驻底部：
+     上一页 / 直接输页码 / 下一页。位置记在 localStorage，下次进来直接还原。 */
+  .pager{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);
+    display:none;align-items:center;gap:2px;z-index:40;
+    background:rgba(20,20,26,.9);border:1px solid var(--line);border-radius:20px;
+    padding:4px 6px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+  .pager.on{display:flex}
+  .pager button{width:32px;height:30px;border:0;background:transparent;color:var(--tx);
+    font-size:18px;line-height:1;border-radius:50%;cursor:pointer;padding:0}
+  .pager button:disabled{opacity:.28}
+  .pager input{width:3.2em;height:30px;border:0;background:transparent;color:var(--tx);
+    font:inherit;font-size:13.5px;text-align:center;padding:0}
+  .pager input::-webkit-outer-spin-button,
+  .pager input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+  .pager .pgsum{color:var(--dim);font-size:11.5px;padding:0 6px 0 2px;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -322,6 +339,13 @@
 <div class="hint" id="hint">正在加载…</div>
 
 <main><div id="grid"></div></main>
+
+<div class="pager" id="pager">
+  <button id="pgPrev" type="button" aria-label="上一页">‹</button>
+  <input id="pgIn" type="number" inputmode="numeric" min="1" value="1" aria-label="页码">
+  <button id="pgNext" type="button" aria-label="下一页">›</button>
+  <span class="pgsum" id="pgSum"></span>
+</div>
 
 <!-- 作品集详情：先进这里看网格，点某张才全屏 -->
 <div id="detail">
@@ -417,6 +441,110 @@
             owner: false, guest: false, works: [], cur: null, idx: 0,
             items: [], likes: {}, fav: {}, layout: "2", shotEls: [],
             grp: "", grps: [] };
+
+  var PAGE_SIZE = 24;
+
+  // ── 位置记忆（2026-11-22 群友要求）────────────────────
+  // 墙面滑到第 5 页、作品集看到第 120 张，退出再进来都是从第一屏开始。
+  // 这里把「已经加载到第几页 + 视口第一个的序号」记进 localStorage，
+  // 下次进同一个 tab（同一个分类）先把它加载回来再滚过去。
+  //
+  // 为什么记序号而不是 scrollTop：详情页几百张图是 lazy 的，没加载的图
+  // 高度就是 0，scrollTop 存下来的那个数字再恢复时对不上同一个位置；
+  // 序号（第几张）跟布局无关，滚过去之后图自己会长出来。
+  var POS_KEY = "gal_pos_v1";
+  var RESTORE = null;          // 这次 load(true) 要还原到哪：{p: 页, i: 序号}
+  var RESTORE_TRIES = 0;
+
+  function posAll() {
+    try { return JSON.parse(localStorage.getItem(POS_KEY) || "{}") || {}; }
+    catch (e) { return {}; }
+  }
+  function posPut(key, val) {
+    var a = posAll();
+    a[key] = val;
+    // 只留最近 40 条：站主 370 个作品集，每本都记一条会把 localStorage 撑满
+    var ks = Object.keys(a);
+    if (ks.length > 40) {
+      ks.sort(function (x, y) { return (a[x].t || 0) - (a[y].t || 0); });
+      ks.slice(0, ks.length - 40).forEach(function (k) { delete a[k]; });
+    }
+    try { localStorage.setItem(POS_KEY, JSON.stringify(a)); } catch (e) {}
+  }
+  function posGet(key) { return posAll()[key] || null; }
+  function wallKey() { return "w|" + S.tab + "|" + S.sub + "|" + S.grp; }
+
+  // 视口里第一个还没滚过去的卡片，就是「我看到哪儿了」
+  function firstVisibleIdx() {
+    var kids = $("grid").children;
+    for (var i = 0; i < kids.length; i++) {
+      if (kids[i].getBoundingClientRect().bottom > 56) return i;
+    }
+    return Math.max(0, kids.length - 1);
+  }
+
+  function saveWallPos() {
+    if (!S.works.length || !S.page) return;
+    posPut(wallKey(), { p: S.page - 1, i: firstVisibleIdx(), t: Date.now() });
+  }
+
+  function restoreWallPos() {
+    RESTORE_TRIES = 0;
+    var p = posGet(wallKey());
+    RESTORE = (p && p.p > 1) ? { p: p.p, i: p.i || 0 } : null;
+  }
+
+  // 缺的页一页一页补回来，补够再滚过去。墙最多几百个作品集（十几页），
+  // 本地一次往返几十毫秒；走隧道的群友会慢一点，但只发生在进来的那一下。
+  function pumpRestore() {
+    if (!RESTORE) return;
+    if (RESTORE_TRIES++ > 60) { RESTORE = null; return; }
+    if (S.page - 1 < RESTORE.p) {
+      if (S.more) { load(false); return; }
+      // 已经到底（或者这一次 has_more 没给对）：退到最后已知的一屏。
+      // 这条兜底是必须的——不然人就被留在第一页顶上，正是要修的那个病。
+      RESTORE = { p: S.page - 1, i: Math.max(0, S.works.length - PAGE_SIZE) };
+    }
+    var el = $("grid").children[Math.min(RESTORE.i, S.works.length - 1)];
+    if (el) el.scrollIntoView({ block: "start" });
+    RESTORE = null;
+    renderPager();
+  }
+
+  // ── 翻页条 ────────────────────────────────────────────
+  function curPage() {
+    if (!S.works.length) return 1;
+    return Math.floor(firstVisibleIdx() / PAGE_SIZE) + 1;
+  }
+
+  function renderPager() {
+    var on = !!S.works.length && document.body.style.overflow !== "hidden";
+    $("pager").classList.toggle("on", on);
+    if (!on) return;
+    var n = curPage();
+    var inp = $("pgIn");
+    if (document.activeElement !== inp) inp.value = n;
+    $("pgPrev").disabled = (n <= 1);
+    $("pgNext").disabled = (!S.more) && (n * PAGE_SIZE >= S.works.length);
+    $("pgSum").textContent = "/ " + (S.page - 1);
+  }
+
+  function gotoPage(n) {
+    n = Math.max(1, Math.floor(n) || 1);
+    var target = (n - 1) * PAGE_SIZE;
+    if (target >= S.works.length) {
+      if (!S.more) { toast("已经到底了，最后一页是第 " + (S.page - 1) + " 页"); return; }
+      // 还没加载到那一页：补到那一页再滚
+      $("pgSum").textContent = "加载中…";
+      RESTORE = { p: n, i: target };
+      RESTORE_TRIES = 0;
+      load(false);
+      return;
+    }
+    var el = $("grid").children[target];
+    if (el) el.scrollIntoView({ block: "start" });
+    renderPager();
+  }
 
   function $(id) { return document.getElementById(id); }
 
@@ -548,10 +676,13 @@
   function isPhoto() { return S.tab === "mine" && S.sub !== "works"; }
 
   function load(reset) {
-    if (S.busy) return;
-    if (!reset && !S.more) return;
+    if (S.busy) return Promise.resolve();
+    if (!reset && !S.more) return Promise.resolve();
     S.busy = true;
-    if (reset) { S.page = 1; S.more = true; S.works = []; $("grid").innerHTML = ""; }
+    if (reset) {
+      S.page = 1; S.more = true; S.works = []; $("grid").innerHTML = "";
+      restoreWallPos();          // 上次看到第几页，这次一进来就补回去
+    }
     var photo = isPhoto();
     var q;
     if (photo) {
@@ -565,7 +696,7 @@
       if (S.grp) q += "&grp=" + encodeURIComponent(S.grp);
     }
 
-    api(q).then(function (d) {
+    var p = api(q).then(function (d) {
       S.owner = !!d.owner;
       S.grps = (!photo && S.tab !== "mine") ? (d.grps || []) : [];
       renderTools();
@@ -591,6 +722,10 @@
       $("hint").textContent = e.message || "加载失败";
     }).then(function () {
       S.busy = false;
+      renderPager();
+      // 还原位置优先：目标那页还没补齐就接着补，补齐了才滚过去；
+      // 还原期间不做「首屏没撑满就自动续载」，否则两路会打架。
+      if (RESTORE) { pumpRestore(); return; }
       // 首屏没撑满一屏时，IntersectionObserver 只会在页面刚加载时回调一次，
       // 那会儿 busy 还是 true，直接被 return 吞掉；之后 sentinel 一直没离开
       // 视口，就再也不会回调 —— 表现就是「永远只有第一页 24 个」。这里补一次。
@@ -599,6 +734,7 @@
         load(false);
       }
     });
+    return p;
   }
 
   function showEmpty() {
@@ -764,6 +900,7 @@
       if ((S.grp || "") === g) b.className = "on";
       b.onclick = function () {
         if ((S.grp || "") === g) return;
+        saveWallPos();              // 每个分类各记各的位置
         S.grp = g;
         load(true);
         renderGrps();
@@ -942,6 +1079,8 @@
   // `at` 有值时（从收藏、点赞点进来）直接替你打开全屏并停在那张，
   // 但详情页依然垫在它下面，关掉查看器不会一脚踹回首页。
   function openWork(id, at, direct) {
+    RESTORE = null;                       // 进作品集了，墙不用再往回补页
+    saveWallPos();                        // 从哪一格点进来的，回去还在那儿
     api("work/" + id).then(function (d) {
       S.cur = d.work;
       S.items = d.items || [];
@@ -958,12 +1097,52 @@
       $("detail").classList.add("on");
       document.body.style.overflow = "hidden";
       $("dgrid").scrollTop = 0;
+      // 上次在这本里看到第几张就滚回第几张。at 指定了具体某张时不还原：
+      // 那是从墙上点进来看的那一张，他要去的就是那张。
+      if (at == null) restoreDetailPos(S.cur.id);
+      $("pager").classList.remove("on");
       // 详情页一打开就把头几张的大图热起来（浏览器缓存 + 后端转码）。
       // 从网格点进去是最常见路径，那一下不该再等 0.4 秒转码加一次往返。
       var head = (at != null && at > 1) ? Math.max(0, at - 1) : 0;
       warmHd(S.items.slice(head, head + 6).map(function (it) { return it.id; }));
       if (at != null) openViewer(at);
     }).catch(function (e) { toast(e.message); });
+  }
+
+  // ── 作品集里「看到第几张」──────────────────────────────
+  // 一个作品集能装 100 张，手机上一屏三张，看到第 60 张退出再进来又回顶上。
+  // 记序号不记 scrollTop：没加载的图高度是 0，scrollTop 存下来对不上位置。
+  // 恢复也不能只滚一次——图一张张撑开会把目标往下推，所以「推一次校一次」，
+  // 位置连续两次不动才算稳；用户一碰屏幕就停，不跟他抢。
+  function saveDetailPos() {
+    if (!S.cur || !S.items.length) return;
+    var box = $("dgrid");
+    if (!box) return;
+    var top = box.getBoundingClientRect().top;
+    var best = 0;
+    for (var i = 0; i < S.shotEls.length; i++) {
+      var s = S.shotEls[i];
+      if (s && s.getBoundingClientRect().bottom > top + 8) { best = i; break; }
+    }
+    posPut("d|" + S.cur.id, { i: best, t: Date.now() });
+  }
+
+  function restoreDetailPos(id) {
+    var p = posGet("d|" + id);
+    if (!p || !p.i) return;
+    var el = S.shotEls[p.i];
+    if (!el) return;
+    var n = 0, last = -1, stop = false;
+    function halt() { stop = true; }
+    window.addEventListener("touchstart", halt, { once: true, passive: true });
+    window.addEventListener("wheel", halt, { once: true, passive: true });
+    function fix() {
+      if (stop || !S.cur || S.cur.id !== id || !el.isConnected) return;
+      var top = el.offsetTop;
+      el.scrollIntoView({ block: "start" });
+      if (Math.abs(top - last) > 6 && n++ < 25) setTimeout(fix, 140);
+    }
+    fix();
   }
 
   // 网格铺几列：手机 2、平板 3、桌面 4。按视口宽度算，别写死成两列 ——
@@ -1054,12 +1233,14 @@
   }
 
   function closeDetail() {
+    saveDetailPos();                  // 记住看到第几张，下次进来接着看
     $("detail").classList.remove("on");
     document.body.style.overflow = "";
     $("dgrid").innerHTML = "";
     S.shotEls = [];
     S.cur = null;
     S.items = [];
+    renderPager();
     if (location.hash.indexOf("#w=") === 0) {
       history.replaceState(null, "", location.pathname + location.search);
     }
@@ -1680,6 +1861,7 @@
 
   // ── tab / 滚动 ────────────────────────────────────────
   function setTab(name, sub) {
+    saveWallPos();              // 切走之前先记住这一面看到哪儿
     S.tab = name;
     S.grp = "";                 // 切 tab 先回「全部」，分类条只属于站长
     if (sub) S.sub = sub;
@@ -1693,6 +1875,7 @@
   }
 
   function setSub(name) {
+    saveWallPos();
     S.sub = name;
     renderSubtabs();
     renderTools();
@@ -1712,6 +1895,40 @@
   });
   document.querySelectorAll("#subtabs button").forEach(function (b) {
     b.onclick = function () { setSub(b.dataset.sub); };
+  });
+
+  // ── 翻页条 / 位置记忆的接线 ────────────────────────────
+  $("pgPrev").onclick = function () { gotoPage(curPage() - 1); };
+  $("pgNext").onclick = function () { gotoPage(curPage() + 1); };
+  $("pgIn").addEventListener("keydown", function (e) {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    var v = parseInt(this.value, 10);
+    this.blur();
+    gotoPage(v);
+  });
+  $("pgIn").addEventListener("change", function () {
+    gotoPage(parseInt(this.value, 10));
+  });
+
+  // 墙面滚动：节流记一次。详情页滚的是 #dgrid，别把详情的位置记成墙的。
+  var wt = null;
+  window.addEventListener("scroll", function () {
+    if (S.cur) return;
+    if (wt) return;
+    wt = setTimeout(function () { wt = null; saveWallPos(); renderPager(); }, 600);
+  }, { passive: true });
+
+  var dt = null;
+  $("dgrid").addEventListener("scroll", function () {
+    if (dt) return;
+    dt = setTimeout(function () { dt = null; saveDetailPos(); }, 600);
+  }, { passive: true });
+
+  // 关标签 / 切后台 / 手机杀进程前都存一次：scroll 那条节流会漏掉最后一屏
+  window.addEventListener("pagehide", function () { saveWallPos(); saveDetailPos(); });
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "hidden") { saveWallPos(); saveDetailPos(); }
   });
 
   var sentinel = document.createElement("div");
