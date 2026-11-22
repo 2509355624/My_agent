@@ -4077,6 +4077,31 @@ class BooruOrderTest(unittest.TestCase):
         self.assertIn("1girl, solo", t)
         self.assertIn("2girls", t)
 
+    def test_no_mosaic_words_in_positive_prompt(self):
+        """2026-11-22：正向里不写打码/审查类词，否则模型真画出马赛克。
+
+        写法是陈述后果 + 给替代动作，不列具体英文 tag——列了等于把词喂给模型照抄
+        （粉色大象）。agents/qq/prompt.md 那份人设也要同步，别两处打架。
+        """
+        t = self._t()
+        self.assertIn("打码、审查遮挡、马赛克化", t)
+        self.assertIn("模型会真在图上糊一块或加遮挡条", t)
+        self.assertIn("这类词和它们的否定式一个都不写", t)
+        # 不列举英文 tag：列出来模型反而照抄进正向
+        for tag in ("no mosaic", "no censoring", "uncensored", "pixelated"):
+            self.assertNotIn(tag, t)
+        # 人设那份同步（agents/ 被 .gitignore，换机器可能没有这份文件，
+        # 存在才查；真正生效的是上面的 _MASTER_TEMPLATE）
+        import os
+        persona = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "agents", "qq", "prompt.md")
+        if os.path.isfile(persona):
+            with open(persona, encoding="utf-8") as f:
+                body = f.read()
+            self.assertIn("打码", body)
+            self.assertIn("马赛克", body)
+            self.assertIn("否定式", body)
+
     def test_three_worked_examples_exist(self):
         """规则再多也不如一个「原话 → 成品」；示例天然带顺序。"""
         t = self._t()
