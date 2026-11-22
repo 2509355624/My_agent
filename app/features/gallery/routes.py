@@ -193,8 +193,16 @@ def api_list():
     page, size = _page_args()
     where = ["w.n > 0"]
     args = []
-    if not _is_owner(qq):
-        # 下架的只有站主和作者本人能看到；公开墙一律过滤。
+    # 站主点「看已隐藏」时只出下架那批（用来反悔）。这个开关只有站主有，
+    # 别人带了 hidden=1 也照旧走下面的公开口径。
+    hidden_only = (str(request.args.get("hidden") or "") == "1"
+                   and _is_owner(qq))
+    if _is_owner(qq):
+        # 站主自己也不看下架的（2026-11-22 用户要求）：点隐藏就和清掉扫描
+        # 结果一样，从管理页消失，不然一屏里全是已经不要的目录。
+        where.append("w.hidden=" + ("1" if hidden_only else "0"))
+    else:
+        # 下架的只有作者本人能看到；公开墙一律过滤。
         # 游客（qq 为空）只走 hidden=0 那一半，owner='' 谁也匹配不上。
         where.append("(w.hidden=0 OR (w.src='user' AND w.owner=?))")
         args.append(str(qq or ""))
@@ -235,8 +243,9 @@ def api_list():
         # 分类条只列「这个 tab 里真有的分类」：站长 tab 是磁盘目录，
         # 公开 tab 是群友上传。否则点进一个空分类会看到空白墙。
         if scope == "owner":
+            # 下架的目录不占分类条：整个分类都被隐藏时，那个标签点进去是空墙。
             gsql = ("SELECT DISTINCT grp FROM works WHERE n>0 AND grp<>''"
-                    " AND src='owner'")
+                    " AND src='owner' AND hidden=0")
         elif scope == "pub":
             gsql = ("SELECT DISTINCT grp FROM works WHERE n>0 AND grp<>''"
                     " AND src='user'")
@@ -248,7 +257,7 @@ def api_list():
         # 判据用 grp/title 两个字段：单渠道本藏在 web 组、只体现在 title 里。
         # 和上面 gsql 用同一套 scope 约束：公开墙全是群友上传，没有磁盘漫画，
         # 不能给它塞一个点进去空白的「漫画」标签。
-        comic_scope = (" AND src='owner'" if scope == "owner" else
+        comic_scope = (" AND src='owner' AND hidden=0" if scope == "owner" else
                        " AND src='user'" if scope == "pub" else "")
         has_comic = con.execute(
             "SELECT 1 FROM works WHERE n>0" + comic_scope + " AND "
@@ -691,15 +700,29 @@ def api_clean():
 
 @bp.route("/clear", methods=["POST"])
 def api_clear():
-    """清空站主扫描索引。群友上传和磁盘原图不动。"""
+    """清空站主扫描索引。群友上传和磁盘原图不动。
+
+    带 `grp` 就只清这一个分类（2026-11-22 用户要求：扫进来的临时目录
+    不该逼他整库重扫）。判据和 `/list` 的分类筛选一模一样，包括虚拟
+    标签「漫画」——界面上看到什么，清掉的就是什么。
+    """
     bad = _guard()
     if bad:
         return bad
     qq = _qq()
     if not _is_owner(qq):
         return jsonify({"ok": False, "error": "只有站主能改"}), 403
-    out = gallery.clear_scan()
-    return jsonify({"ok": True, "works": out["works"], "items": out["items"]})
+    body = request.get_json(silent=True) or {}
+    grp = str(body.get("grp") or "").strip()
+    if grp == COMIC_LABEL:
+        where, args = _COMIC_WHERE_RAW, ()
+    elif grp:
+        where, args = "grp=? AND NOT " + _COMIC_WHERE_RAW, (grp,)
+    else:
+        where, args = "1=1", ()
+    out = gallery.clear_scan(where, args)
+    return jsonify({"ok": True, "works": out["works"], "items": out["items"],
+                    "grp": grp})
 
 
 @bp.route("/work/<int:wid>", methods=["DELETE"])

@@ -58,7 +58,7 @@
     border:1px solid var(--line);border-radius:10px;
     box-shadow:0 10px 28px rgba(0,0,0,.4);flex-direction:column;gap:4px}
   .tools .tool-more.on{display:flex}
-  .tools .tool-more button{text-align:left}
+  .tools .tool-more button{text-align:left;white-space:nowrap}
   .tools button{border:1px solid var(--line);background:var(--card);color:var(--tx);
     font:inherit;font-size:13px;padding:7px 13px;border-radius:10px;cursor:pointer}
   .tools button:active{background:var(--card2)}
@@ -110,8 +110,17 @@
   .card .meta{position:absolute;left:0;right:0;bottom:0;padding:24px 10px 11px;
     background:linear-gradient(transparent,rgba(0,0,0,.85));font-size:12px}
   .card .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .card .s{color:#c9c9d4;font-size:11px;margin-top:2px;
+  .card .srow{display:flex;align-items:center;gap:8px;margin-top:2px}
+  .card .s{flex:1 1 auto;min-width:0;color:#c9c9d4;font-size:11px;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* 卡片最下面的「隐藏」：只有站主在站长 tab 看得到。字要小、底要暗，
+     别把标题和封面压下去；按下去给一下反馈，避免连点。 */
+  .card .hb{flex:0 0 auto;font:inherit;font-size:11px;line-height:1;
+    padding:5px 10px;border-radius:20px;cursor:pointer;
+    color:#dcdce6;background:rgba(0,0,0,.45);
+    border:1px solid rgba(255,255,255,.26)}
+  .card .hb:active{background:var(--pink);border-color:var(--pink);color:#fff}
+  .card .hb.back{border-color:rgba(255,92,138,.65);color:#ffd3de}
   .card .badge{position:absolute;top:7px;right:7px;background:rgba(0,0,0,.66);
     color:#fff;font-size:11px;padding:2px 7px;border-radius:20px}
   .card .off{position:absolute;top:7px;left:7px;background:rgba(255,92,138,.92);
@@ -440,7 +449,7 @@
   var S = { tab: "owner", sub: "works", page: 1, more: true, busy: false,
             owner: false, guest: false, works: [], cur: null, idx: 0,
             items: [], likes: {}, fav: {}, layout: "2", shotEls: [],
-            grp: "", grps: [] };
+            grp: "", grps: [], hiddenView: false };
 
   var PAGE_SIZE = 24;
 
@@ -472,7 +481,10 @@
     try { localStorage.setItem(POS_KEY, JSON.stringify(a)); } catch (e) {}
   }
   function posGet(key) { return posAll()[key] || null; }
-  function wallKey() { return "w|" + S.tab + "|" + S.sub + "|" + S.grp; }
+  // 「看已隐藏」是另一面墙，位置分开记，切回来不会把正常那面的进度冲掉
+  function wallKey() {
+    return "w|" + S.tab + "|" + S.sub + "|" + S.grp + (S.hiddenView ? "|h" : "");
+  }
 
   // 视口里第一个还没滚过去的卡片，就是「我看到哪儿了」
   function firstVisibleIdx() {
@@ -694,6 +706,8 @@
       q = "list?scope=" + (S.tab === "pub" ? "pub" : "owner") +
           "&page=" + S.page + "&size=24";
       if (S.grp) q += "&grp=" + encodeURIComponent(S.grp);
+      // 「看已隐藏」只出下架那批，给站主反悔用；群友点了也没有这个入口
+      if (S.hiddenView) q += "&hidden=1";
     }
 
     var p = api(q).then(function (d) {
@@ -743,7 +757,9 @@
     var d = document.createElement("div");
     d.className = "empty";
     d.style.gridColumn = "1 / -1";
-    if (S.tab === "mine" && S.sub === "favs") {
+    if (S.hiddenView) {
+      d.innerHTML = "没有隐藏的作品。<br>卡片点「隐藏」之后会收在这里，随时能放回去。";
+    } else if (S.tab === "mine" && S.sub === "favs") {
       d.innerHTML = "还没收藏过。<br>点开任意一张图，点右下角的「☆ 收藏」。";
     } else if (S.tab === "mine" && S.sub === "likes") {
       d.innerHTML = "还没点过赞。<br>看到喜欢的图点一下 ♡ 就行。";
@@ -797,10 +813,27 @@
     var t = document.createElement("div");
     t.className = "t";
     t.textContent = w.title;
+    var srow = document.createElement("div");
+    srow.className = "srow";
     var s = document.createElement("div");
     s.className = "s";
     s.textContent = (w.grp ? w.grp + " · " : "") + w.by;
-    m.appendChild(t); m.appendChild(s);
+    srow.appendChild(s);
+    // 站主的扫描目录：卡片最下面一个「隐藏」。点了就和清掉扫描结果一样
+    // 从管理页消失（2026-11-22 用户要求，不弹确认）。文件还在盘上，
+    // 重新扫那个目录还能扫回来；误点从「更多 → 看已隐藏」里捞。
+    if (S.owner && S.tab === "owner") {
+      var hb = document.createElement("button");
+      hb.type = "button";
+      hb.className = "hb" + (S.hiddenView ? " back" : "");
+      hb.textContent = S.hiddenView ? "恢复" : "隐藏";
+      hb.onclick = function (e) {
+        e.stopPropagation();        // 别顺手把作品集点开
+        setHidden(w, c, !S.hiddenView);
+      };
+      srow.appendChild(hb);
+    }
+    m.appendChild(t); m.appendChild(srow);
     c.appendChild(m);
     $("grid").appendChild(c);
   }
@@ -856,7 +889,16 @@
       more.id = "toolMore";
       more.appendChild(btn("↻ 全部重扫", "", scanAll));
       more.appendChild(btn("⌫ 清理失效", "", clean));
+      if (S.grp && !S.hiddenView) {
+        // 只清当前选中的这个文件夹。分类条上点的是哪个，清的就是哪个，
+        // 判据和列表完全一致（连虚拟标签「漫画」都一样）。
+        more.appendChild(btn("🗑 清空「" + S.grp + "」", "", function () {
+          clearGrp(S.grp);
+        }));
+      }
       more.appendChild(btn("🗑 清空扫描结果", "", clearScan));
+      more.appendChild(btn(S.hiddenView ? "← 回到未隐藏" : "👁 看已隐藏", "",
+                           toggleHidden));
       t.appendChild(more);
     }
   }
@@ -890,7 +932,8 @@
         e.preventDefault();
       }, { passive: false });
     }
-    var show = S.owner && S.tab === "owner" && (S.grps || []).length > 0;
+    var show = S.owner && S.tab === "owner" && !S.hiddenView
+               && (S.grps || []).length > 0;
     box.classList.toggle("on", show);
     if (!show) { box.innerHTML = ""; return; }
     box.innerHTML = "";
@@ -1072,6 +1115,45 @@
       S.busy = false;
       load(true);
     }).catch(function (e) { toast(e.message); S.busy = false; });
+  }
+
+  // 只清一个文件夹的扫描索引（2026-11-22 用户要求：不弹确认）。
+  // 站主扫进来一个不想留的目录，没必要为它整库重扫几个小时。原图还在盘上，
+  // 想找回来重新扫那个目录就行——这条只是把库里的记录拿掉。
+  function clearGrp(grp) {
+    if (!grp || S.busy) return;
+    S.busy = true;
+    toast("正在清空「" + grp + "」…", 4000);
+    api("clear", { method: "POST", headers: { "Content-Type": "application/json" },
+                   body: JSON.stringify({ grp: grp }) }).then(function (d) {
+      S.grp = "";
+      toast("「" + grp + "」清掉了：" + (d.works || 0) + " 个作品集、"
+            + (d.items || 0) + " 张图", 3600);
+      S.busy = false;
+      load(true);
+    }).catch(function (e) { toast(e.message); S.busy = false; });
+  }
+
+  // 单本隐藏 / 恢复。隐藏 = 公开墙和管理页都不再出现（服务端 hidden=1），
+  // 和清掉扫描结果看到的效果一样，但文件、缩略图、排序都留着，随时能放回。
+  function setHidden(w, el, hidden) {
+    api("visible", { method: "POST", headers: { "Content-Type": "application/json" },
+                     body: JSON.stringify({ work_id: w.id, hidden: hidden }) })
+      .then(function () {
+        w.hidden = hidden;
+        // 直接从这个墙面摘掉，不留空位；S.works 不动，位置记忆的序号不会错位
+        if (el) el.style.display = "none";
+        toast((hidden ? "已隐藏《" : "已放回《") + w.title + "》"
+              + (hidden ? "　更多 → 看已隐藏" : ""), 3000);
+      }).catch(function (e) { toast(e.message); });
+  }
+
+  function toggleHidden() {
+    S.hiddenView = !S.hiddenView;
+    S.grp = "";
+    renderTools();
+    renderGrps();
+    load(true);
   }
 
   // ── 作品集详情 ────────────────────────────────────────
@@ -1864,6 +1946,7 @@
     saveWallPos();              // 切走之前先记住这一面看到哪儿
     S.tab = name;
     S.grp = "";                 // 切 tab 先回「全部」，分类条只属于站长
+    S.hiddenView = false;       // 切走就别停在「看已隐藏」，那边只有站主能进
     if (sub) S.sub = sub;
     document.querySelectorAll(".tabs button").forEach(function (b) {
       b.classList.toggle("on", b.dataset.tab === name);

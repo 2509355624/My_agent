@@ -1635,3 +1635,134 @@ class MergeUploadTest(_Base):
         self.assertEqual(t, "第一个")
 
 
+
+
+class HideAndClearApiTest(_Base):
+    """下架单本 / 只清一个文件夹（2026-11-22 站主要求）。
+
+    下架是「和清掉扫描结果一样从墙上消失」，不是删除：行还留着，重扫不复活、
+    「看已隐藏」能捞回来。清文件夹只许动选中的那一个分类——站主扫进来一个
+    不要的临时目录，不能为它把整库几万张的索引一起清掉。
+    """
+
+    def setUp(self):
+        super().setUp()
+        from flask import Flask
+        self.app = Flask(__name__)
+        self.app.register_blueprint(gallery_api.bp)
+        self.c = self.app.test_client()
+        self.h = {"X-Friend-Token": "tok"}
+        for target, attr, val in ((friend_auth, "secret", lambda: "tok"),
+                                  (gallery_api, "GALLERY_OWNER_QQ", "10001")):
+            p = mock.patch.object(target, attr, val)
+            p.start()
+            self.addCleanup(p.stop)
+        self.ids = {}
+        rows = [("甲", "1", "owner", ""), ("甲", "2", "owner", ""),
+                ("乙", "3", "owner", ""),
+                ("漫画_C1_妹妹", "anima-line", "owner", ""),
+                ("web", "生图页", "owner", ""),
+                ("公开", "群友的", "user", "20002")]
+        with gallery.connect() as con:
+            for i, (grp, title, src, owner) in enumerate(rows):
+                cur = con.execute(
+                    "INSERT INTO works (key,src,owner,grp,title,path,n,sort,ord,"
+                    "ts,seen) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    ("t:%d" % i, src, owner, grp, title, "/x/%d" % i, 1, i,
+                     "", time.time(), time.time()))
+                self.ids[title] = cur.lastrowid
+
+    def j(self, r):
+        return r.get_json()
+
+    def titles(self, url="list?scope=owner&size=60", qq="10001"):
+        d = self.j(self.c.get("/api/gal/" + url + "&qq=" + qq, headers=self.h))
+        return [w["title"] for w in d["works"]]
+
+    def hide(self, title, hidden=True, qq="10001", code=200):
+        r = self.c.post("/api/gal/visible?qq=" + qq, headers=self.h,
+                        json={"work_id": self.ids[title], "hidden": hidden})
+        self.assertEqual(r.status_code, code)
+        return r
+
+    def clear(self, grp=None, qq="10001", code=200):
+        body = {} if grp is None else {"grp": grp}
+        r = self.c.post("/api/gal/clear?qq=" + qq, headers=self.h, json=body)
+        self.assertEqual(r.status_code, code)
+        return self.j(r)
+
+    def test_hide_takes_it_off_the_owner_wall(self):
+        self.assertIn("1", self.titles())
+        self.hide("1")
+        self.assertNotIn("1", self.titles())
+        self.assertIn("2", self.titles())          # 只动点的那一本
+
+    def test_hide_takes_it_off_the_public_wall(self):
+        self.assertIn("群友的", self.titles("list?scope=pub&size=60", qq="20003"))
+        self.hide("群友的")
+        self.assertNotIn("群友的", self.titles("list?scope=pub&size=60", qq="20003"))
+        # 作者本人仍然看得到自己的（原规则没变：下架砸不到作者头上）
+        self.assertIn("群友的", self.titles("list?scope=pub&size=60", qq="20002"))
+
+    def test_hidden_view_is_the_only_place_it_shows(self):
+        self.hide("1")
+        self.assertEqual(self.titles("list?scope=owner&hidden=1&size=60"), ["1"])
+
+    def test_unhide_puts_it_back(self):
+        self.hide("1")
+        self.hide("1", hidden=False)
+        self.assertIn("1", self.titles())
+
+    def test_guest_hidden_param_does_not_bypass_the_filter(self):
+        """群友带 hidden=1 也只能看到没下架的，不然那批图等于没藏。"""
+        self.hide("1")
+        d = self.j(self.c.get("/api/gal/list?hidden=1&size=60&qq=20002",
+                              headers=self.h))
+        self.assertNotIn("1", [w["title"] for w in d["works"]])
+
+    def test_non_owner_cannot_hide(self):
+        self.hide("1", qq="20002", code=403)
+
+    def test_hidden_survives_rescan(self):
+        """重扫同一个目录不许把下架的又放回墙上：hidden 不是扫描字段。"""
+        self.mk("d1", "a.png")
+        gallery.scan([("甲", os.path.join(self.root, "d1"))])
+        with gallery.connect() as con:
+            wid = con.execute("SELECT id FROM works WHERE path=?",
+                              (os.path.join(self.root, "d1"),)).fetchone()["id"]
+        self.c.post("/api/gal/visible?qq=10001", headers=self.h,
+                    json={"work_id": wid, "hidden": True})
+        gallery.scan([("甲", os.path.join(self.root, "d1"))])
+        with gallery.connect() as con:
+            self.assertEqual(
+                con.execute("SELECT hidden FROM works WHERE id=?",
+                            (wid,)).fetchone()["hidden"], 1)
+
+    def test_clear_one_grp_keeps_everything_else(self):
+        out = self.clear("甲")
+        self.assertEqual(out["works"], 2)
+        left = self.titles()
+        # 群友那本不归 scope=owner，分开验（见下面那条）
+        self.assertEqual(sorted(left), sorted(["3", "anima-line", "生图页"]))
+
+    def test_clear_does_not_touch_other_peoples_uploads(self):
+        self.clear("甲")
+        self.assertIn("群友的", self.titles("list?scope=pub&size=60", qq="20002"))
+
+    def test_clear_comic_label_matches_the_tab(self):
+        """分类条上的「漫画」是虚拟标签，清它的范围必须和点进去看到的一致。"""
+        out = self.clear("漫画")
+        self.assertEqual(out["works"], 1)
+        left = self.titles()
+        self.assertNotIn("anima-line", left)
+        self.assertIn("生图页", left)              # web 组里的真·非漫画不能连带
+
+    def test_clear_all_still_works(self):
+        out = self.clear()
+        self.assertEqual(out["works"], 5)          # 群友那本不算
+        self.assertEqual(self.titles(), [])
+        # 群友上传一个字没动
+        self.assertIn("群友的", self.titles("list?scope=pub&size=60", qq="20003"))
+
+    def test_clear_requires_owner(self):
+        self.clear("甲", qq="20002", code=403)

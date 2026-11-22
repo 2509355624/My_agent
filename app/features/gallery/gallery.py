@@ -1073,28 +1073,33 @@ def drop_orphans():
     return len(gone)
 
 
-def clear_scan():
+def clear_scan(where="1=1", args=()):
     """清空站主扫描索引，群友上传和磁盘原图都保留。
 
     站主扫错目录（例如整块盘）之后需要一键重来。这里只删 `src='owner'`
     的 works/items 和这些图的点赞收藏，**不动**磁盘文件、缩略图缓存和
     群友上传的作品集：原图归磁盘管，缓存按路径哈希，重扫同一路径还能复用。
+
+    `where` 是 works 上的附加条件（不带表别名），用来只清一个分类 ——
+    2026-11-22 站主：`new` 那种临时目录混进来，不该逼他把整库重扫一遍。
     → {"works": 清掉的作品集数, "items": 清掉的图片数}
     """
+    cond = "src='owner' AND (%s)" % where
+    args = tuple(args or ())
     with connect() as con:
         works = con.execute(
-            "SELECT COUNT(*) c FROM works WHERE src='owner'").fetchone()["c"]
+            "SELECT COUNT(*) c FROM works WHERE " + cond, args).fetchone()["c"]
         items = con.execute(
             "SELECT COUNT(*) c FROM items WHERE work_id IN"
-            " (SELECT id FROM works WHERE src='owner')").fetchone()["c"]
+            " (SELECT id FROM works WHERE " + cond + ")", args).fetchone()["c"]
         con.execute(
             "DELETE FROM marks WHERE item_id IN"
             " (SELECT id FROM items WHERE work_id IN"
-            "  (SELECT id FROM works WHERE src='owner'))")
+            "  (SELECT id FROM works WHERE " + cond + "))", args)
         con.execute(
             "DELETE FROM items WHERE work_id IN"
-            " (SELECT id FROM works WHERE src='owner')")
-        con.execute("DELETE FROM works WHERE src='owner'")
+            " (SELECT id FROM works WHERE " + cond + ")", args)
+        con.execute("DELETE FROM works WHERE " + cond, args)
     return {"works": int(works or 0), "items": int(items or 0)}
 
 
