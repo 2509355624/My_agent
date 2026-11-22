@@ -57,6 +57,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--brief-file", help="UTF-8 文件，整段群像 brief（群像角色/剧情/转折）")
     ap.add_argument("--pages", type=int, default=1, help="页数上限，默认 1（合照）")
+    ap.add_argument("--solo", action="store_true",
+                    help="走 solo 模式（男主/女主两行 brief），不套群像覆写")
     args = ap.parse_args()
     brief = BRIEF
     if args.brief_file:
@@ -86,7 +88,7 @@ def main():
         raws.append(text or "")
         return text
     try:
-        spec, report = A.generate(brief, pages, llm_log, group=True)
+        spec, report = A.generate(brief, pages, llm_log, group=not args.solo)
     except Exception:
         err_dir = os.path.join(ROOT, "state", "_selfcheck",
                                "group_fail_%s" % time.strftime("%Y%m%d_%H%M%S"))
@@ -108,7 +110,7 @@ def main():
 
     print("\n=== 轮次 ===")
     for r in report["rounds"]:
-        print(" 第%d轮 问题%d条 输出%d字" % (r["round"], len(r["issues"]), r["chars"]))
+        print(" 第%s轮 问题%d条 输出%d字" % (r["round"], len(r["issues"]), r["chars"]))
         for x in r["issues"]:
             print("    · " + x)
     print("总耗时 %.1fs  最终%s" % (report["secs"],
