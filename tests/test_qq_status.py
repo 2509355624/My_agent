@@ -69,6 +69,43 @@ class ImageJobsSnapshotTest(unittest.TestCase):
         for q in image_jobs.snapshot()["queued"]:
             self.assertLessEqual(len(q["prompt"]), 60)
 
+    def test_web_jobs_carry_source_label(self):
+        """快照每行带 src 标签（2026-11-22）：状态页要区分 moss漫画/漫画台/网页。"""
+        image_jobs.enqueue("group", "9", "qq", skill="anima_soft")
+        image_jobs.enqueue(None, None, "m", skill="anima_soft",
+                           out_dir="web/moss漫画/20261122_1956_粉衣少女与异界门")
+        image_jobs.enqueue(None, None, "c", skill="anima_soft",
+                           batch="comic", out_dir="web/漫画_20261122_x")
+        image_jobs.enqueue(None, None, "g", skill="anima_soft")
+        image_jobs.enqueue(None, None, "o", skill="anima_soft", out_dir="换装")
+        srcs = {q["prompt"]: q["src"] for q in image_jobs.snapshot()["queued"]}
+        self.assertEqual(srcs["qq"], "QQ")
+        self.assertEqual(srcs["m"], "moss漫画")
+        self.assertEqual(srcs["c"], "漫画台")
+        self.assertEqual(srcs["g"], "网页")
+        self.assertEqual(srcs["o"], "换装")
+
+
+class StatusPageWebQueueTest(unittest.TestCase):
+    """状态页 / /api/status 必须带上网页端进程内队列（2026-11-22）。"""
+
+    @staticmethod
+    def _read(*parts):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, *parts), encoding="utf-8") as f:
+            return f.read()
+
+    def test_status_page_renders_web_queue(self):
+        html = self._read("web", "status.html")
+        self.assertIn("tbodyWebJobs", html)
+        self.assertIn("renderWebJobs", html)
+        self.assertIn("网页端队列空闲", html)
+
+    def test_api_status_exposes_web_snapshot(self):
+        src = self._read("app", "main.py")
+        self.assertIn("image_jobs.snapshot()", src)
+        self.assertIn('"web": web', src)
+
 
 class QqStatusTest(unittest.TestCase):
     """状态落盘 / 读取 / 过期判定。"""

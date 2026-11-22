@@ -932,6 +932,17 @@ def get_status():
         comfy = {"online": None, "running": 0, "pending": 0,
                  "error": repr(exc)[:120]}
 
+    # 网页端队列（2026-11-22）：跑图台 / 漫画工作台 / moss 漫画 / 扮演配图
+    # 都排在本进程的 image_jobs 里，bot 的快照文件看不到它们——在这里
+    # 直接取进程内快照，状态页就能同时看到两边（谁在占 ComfyUI 一目了然）。
+    try:
+        from app.features.image import jobs as image_jobs
+        web = image_jobs.snapshot()
+    except Exception as exc:
+        web = {"running": None, "queued": [], "depth": 0,
+               "nai": {"running": [], "queued": [], "depth": 0},
+               "error": repr(exc)[:120]}
+
     ts = snap.get("ts")
     return jsonify({
         # bot 进程本身：stale = 心跳停了（卡死/没起）
@@ -942,6 +953,7 @@ def get_status():
         "sessions": snap.get("sessions") or [],
         "jobs": snap.get("jobs")
                 or {"running": None, "queued": [], "depth": 0},
+        "web": web,
         "comfy": comfy,
     })
 

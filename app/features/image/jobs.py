@@ -1061,6 +1061,26 @@ def ahead_of(job):
         return order.index(job) + len(chan.running)
 
 
+def _src_label(job):
+    """队列快照里给这张图标来源（状态页用，2026-11-22）。
+
+    QQ 侧 target 是 group/private；网页端各入口 target 全是 None，只能靠
+    入队时自己带的标记区分：moss 漫画的 out_dir 进 `web/moss漫画/`、
+    漫画工作台带 batch="comic"、换装/扮演配图 out_dir 就是现成的标签，
+    都没有的（跑图台直出）归「网页」。
+    """
+    if getattr(job, "target", None) in ("group", "private"):
+        return "QQ"
+    od = str(getattr(job, "out_dir", "") or "")
+    if "moss" in od:
+        return "moss漫画"
+    if getattr(job, "batch", "") == "comic":
+        return "漫画台"
+    if od:
+        return od.rstrip("/").split("/")[-1] or "网页"
+    return "网页"
+
+
 def snapshot():
     """给状态后台用的队列快照（只读，不改任何状态）。
 
@@ -1086,6 +1106,7 @@ def snapshot():
                 "age": round(now - job.created, 1),
                 "ahead": ahead,
                 "tag": job.tag,
+                "src": _src_label(job),
                 "prompt": (wf[:60] if isinstance(wf, str) else ""),
             }
 

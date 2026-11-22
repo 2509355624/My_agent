@@ -243,8 +243,8 @@ h1 { font-size: 20px; }
   </div>
 
   <div class="card page-panel" data-panel="jobs">
-    <h2>生图队列</h2>
-    <div class="hint">全局串行，一张一张画。</div>
+    <h2>生图队列 · QQ 进程</h2>
+    <div class="hint">两条进程内队列（QQ bot / 网页端）各自串行，跨进程靠 ComfyUI 独占锁排先后。</div>
     <table>
       <thead>
         <tr>
@@ -252,6 +252,15 @@ h1 { font-size: 20px; }
         </tr>
       </thead>
       <tbody id="tbodyJobs"></tbody>
+    </table>
+    <h2 style="margin-top:16px">生图队列 · 网页端（跑图台 / 漫画台 / moss 漫画）</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>来源</th><th>渠道</th><th>已等</th><th>前面</th><th>提示词</th>
+        </tr>
+      </thead>
+      <tbody id="tbodyWebJobs"></tbody>
     </table>
   </div>
 </div>
@@ -349,6 +358,38 @@ function renderJobs(jobs) {
   });
 }
 
+function renderWebJobs(web) {
+  var tbody = document.getElementById("tbodyWebJobs");
+  tbody.innerHTML = "";
+  var rows = [];
+  if (web && web.running) rows.push([web.running, true]);
+  (web && web.queued || []).forEach(function (j) { rows.push([j, false]); });
+  // 云端通道（NAI）在网页端进程里也有自己的并发队列
+  if (web && web.nai) {
+    (web.nai.running || []).forEach(function (j) { rows.push([j, true]); });
+    (web.nai.queued || []).forEach(function (j) { rows.push([j, false]); });
+  }
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">网页端队列空闲</td></tr>';
+    return;
+  }
+  rows.forEach(function (pair) {
+    var j = pair[0], isRunning = pair[1];
+    var tr = document.createElement("tr");
+    // 来源标签由后端算好（moss漫画 / 漫画台 / 换装 / 扮演配图 / 网页），
+    // 前端不再猜 —— 入队特征只有后端知道全。
+    tr.innerHTML =
+      '<td class="who">' + esc(j.src || "网页") + '</td>' +
+      '<td class="st">' + esc(j.skill || "—") +
+        ((j.skill || "").indexOf("nai") === 0 ? ' <span class="tag">云端</span>' : '') +
+        (isRunning ? ' <span class="tag">进行中</span>' : '') + '</td>' +
+      '<td class="num">' + fmtAgo(j.age) + '</td>' +
+      '<td class="num">' + (isRunning ? "—" : (j.ahead + " 张")) + '</td>' +
+      '<td class="preview">' + (j.prompt ? esc(j.prompt) : "—") + '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
@@ -406,6 +447,7 @@ async function refresh() {
 
   renderSessions(d.sessions);
   renderJobs(d.jobs);
+  renderWebJobs(d.web);
 }
 
 refresh();
