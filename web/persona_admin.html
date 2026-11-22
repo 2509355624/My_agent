@@ -106,6 +106,20 @@
     padding: 1px 5px; border-radius: 4px; box-decoration-break: clone;
     -webkit-box-decoration-break: clone; }
   .msg .m { font-size: calc(10.5px * var(--fs)); color: var(--text-mute); margin-top: 3px; }
+  /* 长消息折叠（2026-11-22 用户要求）：扮演记录里她一次能写十几行，手机上
+     一条就吃掉整屏，往下的记录全看不见。窄屏默认只露 8 行，点一下展开。
+     **桌面不折**——宽屏一行字数多，一条占不满屏，折了反而少看。
+     用 line-clamp 折而不是截字符串：台词高亮、〔心声〕那些 span 都还在，
+     展开就是原文，不会丢格式。 */
+  .msg .more { display: none; margin-top: 5px; font-size: calc(11px * var(--fs));
+    color: var(--accent); cursor: pointer; user-select: none; width: fit-content; }
+  .msg .more:hover { text-decoration: underline; }
+  @media (max-width: 820px) {
+    .msg .b.fold { display: -webkit-box; -webkit-box-orient: vertical;
+      -webkit-line-clamp: 8; line-clamp: 8; overflow: hidden; }
+    .msg .b.fold.open { display: block; -webkit-line-clamp: unset; line-clamp: unset; }
+    .msg .more { display: block; }
+  }
   .empty { color: var(--text-mute); text-align: center; padding: 80px 20px;
     font-size: calc(13px * var(--fs)); line-height: 2; }
   .note { margin: 0 18px 10px; padding: 10px 14px; background: var(--bg-elev);
@@ -677,6 +691,7 @@ async function refreshCurrent() {
     const frag = document.createDocumentFragment();
     msgs.slice(shown).forEach(m => frag.appendChild(makeMsg(m)));
     $("log").appendChild(frag);
+    foldLong(null, shown);                 // 新来的那几条也一样折
     if (stick) toBottom();                 // 正贴着底就继续跟到最新
     else {
       JUMP_N += msgs.length - shown;
@@ -714,6 +729,56 @@ function makeMsg(m) {
   return el;
 }
 
+// ── 长消息折叠（2026-11-22）───────────────────────────────
+// 只在窄屏折。阈值按像素而不是字数：同样的字数，一行宽一点就少几行，
+// 该折的那条不会因为宽屏没折就漏掉。
+// 展开状态记在 OPENED 里，键是「第几条 + 文本长度」——自动刷新会重画整块
+// （renderMessages），不记的话刚展开的那条每 5 秒自己收回去。
+const NARROW = window.matchMedia("(max-width: 820px)");
+const OPENED = new Set();
+const FOLD_PX = 260;
+
+function foldKey(el, i) {
+  const b = el.querySelector(".b");
+  return i + ":" + ((b && b.textContent.length) || 0);
+}
+
+function foldLong(root, base) {
+  if (!NARROW.matches) return;
+  const box = root || $("log");
+  const list = box.querySelectorAll(".msg");
+  // 两趟：先把该量的量完（中间不动 DOM，只触发一次 layout），再统一改。
+  // 一个会话两千多条消息，边量边加 class 的话每条都要重排一次，手机上直接卡住。
+  const todo = [];
+  list.forEach(function (el, k) {
+    const b = el.querySelector(".b");
+    if (!b || b.dataset.fold === "1") return;
+    // 8 行按一行 20 字算也到不了 120 字，短的根本不用量
+    if ((b.textContent || "").length < 120) return;
+    todo.push([el, b, (base || 0) + k]);
+  });
+  if (!todo.length) return;
+  const heights = todo.map(function (t) { return t[1].scrollHeight; });
+  todo.forEach(function (t, j) {
+    if (heights[j] < FOLD_PX) return;
+    const el = t[0], b = t[1], i = t[2];
+    b.dataset.fold = "1";
+    const key = foldKey(el, i);
+    b.classList.add("fold");
+    if (OPENED.has(key)) b.classList.add("open");
+
+    const btn = document.createElement("div");
+    btn.className = "more";
+    btn.textContent = b.classList.contains("open") ? "收起" : "展开全文";
+    btn.onclick = function () {
+      const open = b.classList.toggle("open");
+      btn.textContent = open ? "收起" : "展开全文";
+      if (open) OPENED.add(key); else OPENED.delete(key);
+    };
+    b.parentNode.insertBefore(btn, b.nextSibling);
+  });
+}
+
 function renderMessages(d) {
   const log = $("log");
   const msgs = d.messages || [];
@@ -725,6 +790,7 @@ function renderMessages(d) {
   const frag = document.createDocumentFragment();
   msgs.forEach(m => frag.appendChild(makeMsg(m)));
   log.appendChild(frag);
+  foldLong(log, 0);
 }
 
 $("auto").onchange = (e) => {
