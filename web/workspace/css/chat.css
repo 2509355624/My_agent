@@ -1,0 +1,280 @@
+/* 聊天页：只有消息区 + 输入栏。颜色全走 tokens.css 的语义变量，深浅色自动跟着走。 */
+
+/* base.css 的 .app 是给登录卡用的，聊天页要占满整屏 */
+.app-chat {
+  max-width: 520px;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+}
+
+@media (min-width: 600px) {
+  .app-chat {
+    height: calc(100dvh - 64px);
+    margin: 32px auto;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, .12);
+  }
+}
+
+/* ── 消息区 ─────────────────────────────────────────── */
+.chat-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 16px 8px;
+}
+
+.chat-empty {
+  margin: auto 0;
+  padding: 0 8px 6vh;
+  text-align: center;
+}
+
+.chat-empty h1 {
+  margin: 0 0 6px;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -.2px;
+}
+
+.chat-empty p {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--text-dim);
+}
+
+.chat-empty[hidden] { display: none; }
+
+/* ── 用户气泡 ───────────────────────────────────────── */
+.bubble {
+  align-self: flex-end;
+  max-width: 84%;
+  padding: 10px 14px;
+  border-radius: 18px 18px 5px 18px;
+  background: var(--brand);
+  color: var(--brand-on);
+  font-size: 15px;
+  line-height: 1.58;
+  white-space: pre-wrap;
+  word-break: break-word;
+  animation: ws-in .2s ease-out both;
+}
+
+.bubble .more {
+  display: block;
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--brand-on);
+  opacity: .82;
+  font-size: 12.5px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ── AI 卡片 ────────────────────────────────────────── */
+.card {
+  align-self: flex-start;
+  width: min(100%, 340px);
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 18px 18px 18px 5px;
+  background: var(--card-2);
+  animation: ws-in .2s ease-out both;
+}
+
+.card .ph {
+  aspect-ratio: 3 / 4;
+  border-radius: 12px;
+  background: linear-gradient(100deg, var(--card-2) 30%, var(--line) 50%, var(--card-2) 70%);
+  background-size: 220% 100%;
+  animation: ws-shimmer 1.4s linear infinite;
+}
+
+.card img {
+  display: block;
+  width: 100%;
+  border-radius: 12px;
+  background: var(--bg);
+}
+
+.card .note {
+  margin: 0;
+  padding: 6px 4px 2px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.card .note.err { color: var(--danger); }
+
+.card .acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.card .acts[hidden] { display: none; }
+
+.card .acts button {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--card);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+}
+
+.card .acts button:active { transform: scale(.94); }
+
+.card .acts .ok { color: var(--ok); font-size: 15px; }
+
+/* ── 输入栏 ─────────────────────────────────────────── */
+.composer {
+  flex: 0 0 auto;
+  padding: 0 12px calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--card);
+}
+
+.chips {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 10px 2px 8px;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.chips::-webkit-scrollbar { display: none; }
+
+.chip {
+  flex: 0 0 auto;
+  padding: 7px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card-2);
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.chip:active { background: var(--brand-soft); border-color: var(--brand-soft); }
+
+.input-row {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.icon-btn {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--card-2);
+  color: var(--text);
+  font-size: 19px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+}
+
+#say {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 38px;
+  max-height: 132px;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--card-2);
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.5;
+  resize: none;
+  overflow-y: auto;
+  outline: none;
+}
+
+#say:focus { border-color: var(--brand); }
+
+#say::placeholder { color: var(--text-dim); }
+
+.send-btn {
+  flex: 0 0 auto;
+  height: 38px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 20px;
+  background: var(--brand);
+  color: var(--brand-on);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.send-btn:disabled {
+  background: var(--card-2);
+  color: var(--text-dim);
+}
+
+/* 「＋」弹出：相机 / 相册 */
+.plus-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 10px);
+  z-index: 20;
+  min-width: 132px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .16);
+}
+
+.plus-menu[hidden] { display: none; }
+
+.plus-menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--text);
+  font-size: 14px;
+  text-align: left;
+}
+
+.plus-menu button:active { background: var(--card-2); }
+
+.plus-menu svg { flex: 0 0 auto; }
+
+@keyframes ws-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes ws-shimmer {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bubble, .card, .card .ph { animation: none; }
+}

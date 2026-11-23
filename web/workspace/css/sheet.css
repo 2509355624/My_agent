@@ -1,0 +1,220 @@
+/* 页面栈：根视图是聊天页，子页从右侧滑入、左滑或点 X 退回。
+   底部抽屉（画风）共用同一套变量，深浅色自动跟随。 */
+
+.stack {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.view {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--card);
+}
+
+.view-root { z-index: 1; }
+
+/* 子页：默认停在右侧屏外，加 .in 滑入 */
+.view-push {
+  z-index: 5;
+  transform: translateX(100%);
+  transition: transform .28s cubic-bezier(.32, .72, 0, 1);
+  will-change: transform;
+}
+
+.view-push.in { transform: translateX(0); }
+
+/* 手势拖动中关掉过渡，松手再决定去留 */
+.view-push.drag { transition: none; }
+
+/* ── 子页顶栏 ───────────────────────────────────────── */
+.vtop {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px;
+  padding-top: calc(8px + env(safe-area-inset-top));
+  border-bottom: 1px solid var(--line);
+}
+
+.vtop button {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text);
+  display: grid;
+  place-items: center;
+}
+
+.vtop button:active { background: var(--card-2); }
+
+.vtop .vtitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vbody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px;
+}
+
+/* 子页还没接入内容时的一行占位，不铺大段说明 */
+.vph {
+  margin: 24vh 0 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+/* ── 底部抽屉 ───────────────────────────────────────── */
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.sheet[hidden] { display: none; }
+
+.sheet-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, .34);
+  opacity: 0;
+  transition: opacity .2s;
+}
+
+.sheet.on .sheet-mask { opacity: 1; }
+
+.sheet-body {
+  position: relative;
+  width: 100%;
+  max-width: 520px;
+  max-height: 66vh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: env(safe-area-inset-bottom);
+  border-radius: 20px 20px 0 0;
+  background: var(--card);
+  transform: translateY(100%);
+  transition: transform .26s cubic-bezier(.32, .72, 0, 1);
+}
+
+.sheet.on .sheet-body { transform: translateY(0); }
+
+.sheet-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.sheet-head .sub {
+  font-weight: 400;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.sheet-x {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--card-2);
+  color: var(--text-dim);
+  font-size: 13px;
+  display: grid;
+  place-items: center;
+}
+
+.style-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 6px 6px;
+}
+
+.style-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--text);
+  font-size: 14.5px;
+  text-align: left;
+}
+
+.style-item:active { background: var(--card-2); }
+
+.style-item .tick {
+  flex: 0 0 auto;
+  width: 18px;
+  color: var(--brand);
+  font-size: 13px;
+  opacity: 0;
+}
+
+.style-item.on { color: var(--brand); font-weight: 600; }
+.style-item.on .tick { opacity: 1; }
+
+.style-item .sname {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.style-item .meta {
+  margin-left: auto;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-dim);
+}
+
+/* 画风太多，先露几项，点这里展开全部 */
+.style-more {
+  flex: 0 0 auto;
+  margin: 4px 12px 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card-2);
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.style-more[hidden] { display: none; }

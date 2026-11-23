@@ -1,0 +1,207 @@
+/* 页面栈 + 画风抽屉。
+   根是聊天页；子页从右侧滑入，X / 左边缘右滑 / 浏览器返回都能退回。
+   history 只当一条「退回」记录用，不参与页面内容还原。 */
+(function (global) {
+  "use strict";
+
+  var SHOW_HEAD = 6;          // 画风太多，抽屉先露这几项，其余点「展开全部」
+
+  var el = {};
+  var S = { top: null, allStyles: false };
+
+  function $(id) { return document.getElementById(id); }
+
+  // ── 页面栈 ────────────────────────────────────────────
+
+  function push(name) {
+    if (S.top) { replace(name); return S.top; }
+    var view = global.WSViews.build(name);
+    el.stack.appendChild(view);
+    // 下一帧再加 .in，否则插入与过渡撞在同一帧里，滑入动画不触发
+    global.requestAnimationFrame(function () { view.classList.add("in"); });
+    S.top = view;
+    bindView(view);
+    global.history.pushState({ ws: 1 }, "");
+    return view;
+  }
+
+  /* 换内容不换栈：个人页从子页右上角进，退回时直接回聊天页 */
+  function replace(name) {
+    if (!S.top) return push(name);
+    var next = global.WSViews.build(name);
+    next.classList.add("in");
+    el.stack.replaceChild(next, S.top);
+    S.top = next;
+    bindView(next);
+    return next;
+  }
+
+  /* 真正的出栈：播完动画再摘节点 */
+  function closeNow() {
+    var view = S.top;
+    if (!view) return;
+    S.top = null;
+    view.classList.remove("in");
+    var done = function () {
+      if (view.parentNode) view.parentNode.removeChild(view);
+    };
+    view.addEventListener("transitionend", done, { once: true });
+    setTimeout(done, 420);              // 兜底：过渡被打断也要摘掉
+  }
+
+  /* 用户要退回：优先让浏览器走 history，popstate 里统一出栈 */
+  function back() {
+    if (!S.top) return;
+    if (global.history.state && global.history.state.ws) {
+      global.history.back();
+    } else {
+      closeNow();
+    }
+  }
+
+  function bindView(view) {
+    view.addEventListener("click", function (e) {
+      if (e.target.closest("[data-close]")) { back(); return; }
+      if (e.target.closest("[data-me]")) { replace("me"); return; }
+    });
+    bindSwipe(view);
+  }
+
+  /* 左边缘右滑退回：竖向滑动交给页面自己滚动，不抢 */
+  function bindSwipe(view) {
+    var sx = 0, sy = 0, dx = 0, active = false;
+
+    view.addEventListener("touchstart", function (e) {
+      if (e.touches.length !== 1) return;
+      var t = e.touches[0];
+      if (t.clientX > 32) return;
+      sx = t.clientX; sy = t.clientY; dx = 0; active = true;
+    }, { passive: true });
+
+    view.addEventListener("touchmove", function (e) {
+      if (!active) return;
+      var t = e.touches[0];
+      var mx = t.clientX - sx, my = t.clientY - sy;
+      if (Math.abs(my) > Math.abs(mx)) { active = false; return; }
+      dx = Math.max(0, mx);
+      view.classList.add("drag");
+      view.style.transform = "translateX(" + dx + "px)";
+    }, { passive: true });
+
+    view.addEventListener("touchend", function () {
+      if (!active) return;
+      active = false;
+      view.classList.remove("drag");
+      view.style.transform = "";
+      if (dx > 90) back();
+    });
+  }
+
+  // ── 画风抽屉 ──────────────────────────────────────────
+
+  function openStyles() {
+    el.sheet.hidden = false;
+    global.requestAnimationFrame(function () { el.sheet.classList.add("on"); });
+    renderStyles();
+  }
+
+  function closeStyles() {
+    el.sheet.classList.remove("on");
+    setTimeout(function () { el.sheet.hidden = true; }, 280);
+  }
+
+  function labelOf(c) {
+    return (c.label && c.label !== c.id) ? c.label : c.id;
+  }
+
+  /* 渠道的 summary 形如 "silver · 默认生图渠道"，取后半句当一行灰字说明 */
+  function briefOf(c) {
+    var s = (c.summary || "").trim();
+    if (!s) return "";
+    var i = s.indexOf("·");
+    var rest = (i >= 0 ? s.slice(i + 1) : s).trim();
+    if (!rest || rest === c.id) return "";
+    return rest.length > 18 ? rest.slice(0, 18) + "…" : rest;
+  }
+
+  function renderStyles() {
+    global.WSGen.channels().then(function (d) {
+      var list = (d && d.ok && d.channels) || [];
+      var cur = global.WSGen.defaultSkill() || ((list[0] || {}).id || "");
+
+      el.list.innerHTML = "";
+      var show = S.allStyles ? list : list.slice(0, SHOW_HEAD);
+
+      show.forEach(function (c) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "style-item" + (c.id === cur ? " on" : "");
+
+        var tick = document.createElement("span");
+        tick.className = "tick";
+        tick.textContent = "✓";
+
+        var name = document.createElement("span");
+        name.className = "sname";
+        name.textContent = labelOf(c);
+
+        b.appendChild(tick);
+        b.appendChild(name);
+
+        var brief = briefOf(c);
+        if (brief) {
+          var meta = document.createElement("span");
+          meta.className = "meta";
+          meta.textContent = brief;
+          b.appendChild(meta);
+        }
+
+        b.addEventListener("click", function () {
+          global.WSGen.setDefaultSkill(c.id);
+          global.dispatchEvent(new global.CustomEvent("ws:skill",
+            { detail: { id: c.id } }));
+          renderStyles();
+          closeStyles();
+        });
+
+        el.list.appendChild(b);
+      });
+
+      el.more.hidden = S.allStyles || list.length <= SHOW_HEAD;
+      el.more.textContent = "▾ 展开全部 " + list.length + " 个画风";
+    });
+  }
+
+  // ── 初始化 ────────────────────────────────────────────
+
+  function init() {
+    el.stack = $("stack");
+    el.sheet = $("style-sheet");
+    el.list = $("style-list");
+    el.more = $("style-more");
+
+    Array.prototype.forEach.call(document.querySelectorAll(".chip"), function (c) {
+      c.addEventListener("click", function () {
+        var k = c.dataset.chip;
+        if (k === "style") { openStyles(); return; }
+        push(k);
+      });
+    });
+
+    el.sheet.addEventListener("click", function (e) {
+      if (e.target.closest("[data-close]")) closeStyles();
+    });
+
+    el.more.addEventListener("click", function () {
+      S.allStyles = true;
+      renderStyles();
+    });
+
+    global.history.replaceState({ ws: 0 }, "");
+    global.addEventListener("popstate", function () {
+      if (!global.history.state || !global.history.state.ws) closeNow();
+    });
+  }
+
+  global.WSStack = { init: init, push: push, back: back };
+})(window);
