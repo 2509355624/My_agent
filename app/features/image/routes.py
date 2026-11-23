@@ -100,6 +100,66 @@ def _nai_prompt(prompt, prefix):
     return prefix.rstrip(",，;； \\n") + ", " + prompt
 
 
+# ─── 中文提示词翻译（2026-11-23 修：手机端出图和描述完全对不上）──────
+#
+# 来路：新界面把用户在输入框里写的中文**原样** POST 给 `/api/gen/submit`，
+# 这条接口直通 ComfyUI，不经过 QQ 那条 `direct_gen._translate`。于是
+# `一位少女单人，留着黑色长发，戴着宽檐编织草帽` 被原样拼进英文 tag 串，
+# 本地 CLIP 读不懂中文 —— 相当于「没给提示词」，出什么全靠模板里的通用
+# 后缀，用户看到的就是「跟提示词完全不一致」。
+#
+# 分工：只翻译**读不懂中文的渠道**。qwen / moss 本来就能吃中文，翻过去反而
+# 丢信息，还白烧一次 token，所以放行。
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+# 这些渠道原生认中文（qwen 系、moss 系），不用翻。
+_CN_NATIVE_PREFIX = ("qwen", "moss")
+_TRANSLATE_TIMEOUT = 30
+
+
+def _needs_translate(skill, prompt):
+    """要不要翻：含中文 + 渠道不是原生认中文的那几个。"""
+    if not _CJK_RE.search(prompt or ""):
+        return False
+    return not str(skill or "").startswith(_CN_NATIVE_PREFIX)
+
+
+def _translate_prompt(skill, prompt):
+    """中文需求 → 该渠道认的英文写法。失败返回空串，调用方保留原文。
+
+    **不做硬编码词表**：只让模型转译，转成什么由它定。渠道写法按
+    `direct_gen` 那套口径——标签渠道给逗号分隔的英文 tag，qwen 给句子。
+    """
+    from app.integrations import llm as llm_mod
+    want = ("a comma-separated English danbooru tag string in channel `%s`'s "
+            "style" % skill)
+    content = (
+        "把下面这段中文画面需求转译成英文生图提示词，只要成品本身，"
+        "不要解释、不要引号、不要代码块。\n"
+        "写法：%s。\n"
+        "**只写画面内容**（人物、动作、服装、场景、构图、光线）。渠道的画风"
+        "前缀和 LoRA 由系统自己挂，不要写画风词、不要写渠道名、不要写质量词"
+        "（masterpiece / best quality 之类）。\n"
+        "画面里要出现的文字（招牌、台词、LOGO）保留原文不翻。\n\n"
+        "中文需求：\n%s" % (want, prompt))
+    try:
+        reply = llm_mod.call_llm([{"role": "user", "content": content}],
+                                 timeout=_TRANSLATE_TIMEOUT)
+    except Exception as e:                       # 翻不了就按原文跑，不堵队列
+        log.warning("[gen] 中文提示词翻译失败：%s", e)
+        return ""
+    text = str(reply or "").strip()
+    # 模型偶尔会套一层代码块或引号，剥掉；剥完还是中文说明没干活，按失败算。
+    text = text.strip("`").strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    if len(text) >= 2 and text[0] in "\"'" and text[-1] == text[0]:
+        text = text[1:-1].strip()
+    if not text or _CJK_RE.search(text):
+        log.warning("[gen] 翻译没拿到英文（%r）", text[:120])
+        return ""
+    return text
+
+
 # ─── 渠道清单 ────────────────────────────────────────────
 
 # 列表展示顺序：最常用的排前面，其余按名字。QQ 那边渠道词一堆，这里只挑
@@ -459,6 +519,13 @@ def api_submit():
     prompt = _nai_prompt(prompt, artist_prefix)
     if not prompt:
         return jsonify({"ok": False, "error": "提示词是空的"}), 400
+    # 中文原样进 CLIP = 等于没给提示词（见 `_translate_prompt` 那段注释）。
+    # 放进长度校验之前：翻完可能变长，得按最终串判上限。
+    if _needs_translate(skill, prompt):
+        en = _translate_prompt(skill, prompt)
+        if en:
+            prompt = en
+            data["prompt_translated"] = True
     if len(prompt) > _MAX_PROMPT:
         return jsonify({"ok": False,
                         "error": "提示词太长了（%d 字，上限 %d）"

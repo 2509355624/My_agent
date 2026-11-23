@@ -118,22 +118,32 @@ class TestGatewayRoute(unittest.TestCase):
 class TestPageLinks(unittest.TestCase):
     """页面里的跳转都指向新界面。"""
 
-    def test_home_buttons_open_workspace_in_place(self):
+    def test_home_buttons_open_the_old_pages(self):
+        """5174 首页「更多」菜单的四个按钮必须开**原始页面**。
+
+        2026-11-23 三次返工都栽在这：页面路由改回来了，但 `web/index.html`
+        里这四个按钮还写死 `location.href='/workspace/'`，点进去永远是白的新
+        界面。旧断言钉的恰恰是「跳到新界面」，所以测试全绿、需求没做。
+        现在反过来钉：必须是本机旧页，且不许出现 /workspace/。
+        """
         html = _read("web/index.html")
-        for label in ("漫画", "moss 漫画", "跑图台", "画廊"):
+        want = {"漫画": "/comic", "moss 漫画": "/moss",
+                "跑图台": "/gen", "画廊": "/gallery"}
+        for label, path in want.items():
             with self.subTest(btn=label):
                 m = re.search(r'<button[^>]*>' + re.escape(label) + r'</button>', html)
                 self.assertIsNotNone(m, "首页缺少按钮: " + label)
                 tag = m.group(0)
-                self.assertIn("location.href='/workspace/'", tag,
-                              label + " 应同页跳到新界面")
-                self.assertNotIn("_blank", tag, label + " 不该再开新标签")
+                self.assertIn("'%s'" % path, tag,
+                              "%s 应开原始页 %s" % (label, path))
+                self.assertNotIn("/workspace/", tag, label + " 不该再跳新界面")
 
-    def test_persona_entry_points_to_workspace(self):
+    def test_persona_entry_points_to_old_gallery(self):
+        """角色扮演页顶栏「← 创作」回的是本机旧画廊。"""
         html = _read("web/persona.html")
-        self.assertIn('id="btnGallery" href="/workspace/"', html)
-        self.assertNotIn('location.href = "/gallery" + q', html,
-                         "旧的双端口探测已无必要：两端都有新界面")
+        self.assertIn('id="btnGallery" href="/gallery"', html)
+        self.assertNotIn('href="/workspace/"', html)
+        self.assertIn('location.href = "/gallery"', html)
 
     def test_old_pages_do_not_push_new_ui(self):
         """原始页面里不该再把入口指向新界面（2026-11-23 改回）。
