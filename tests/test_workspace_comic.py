@@ -114,6 +114,12 @@ class TestWorkspaceComicUi(unittest.TestCase):
         i = css.index(".cslide img")
         self.assertNotIn("object-fit: cover", css[i:i + 260])
 
+    def test_thumb_matches_full_page_framing(self):
+        """底部缩略图不能裁上下，否则小图和大图构图对不上（2026-11-23）。"""
+        css = _read("css/comic.css")
+        i = css.index(".cthumb img")
+        self.assertIn("object-fit: contain", css[i:i + 200])
+
     def test_strip_scrolls_sideways(self):
         css = _read("css/comic.css")
         self.assertIn("overflow-x: auto", css)

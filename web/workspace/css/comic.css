@@ -207,14 +207,16 @@
 
 .cstrip::-webkit-scrollbar { display: none; }
 
+/* 缩略图按整图比例（9:16）做格子，图用 contain：上下不裁，
+   小图和上面的大图是同一个构图，不会出现「缩略图里人物变大」的错觉 */
 .cthumb {
   flex: 0 0 auto;
-  width: 42px;
-  aspect-ratio: 3 / 4;
+  width: 36px;
+  aspect-ratio: 9 / 16;
   padding: 0;
   overflow: hidden;
   border: 2px solid transparent;
-  border-radius: 8px;
+  border-radius: 7px;
   background: var(--card-2);
   color: var(--text-dim);
   font-size: 11px;
@@ -226,7 +228,7 @@
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .cthumb.on {
