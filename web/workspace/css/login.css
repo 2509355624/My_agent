@@ -1,0 +1,99 @@
+/* 登录页样式：欢迎标题 + 两个步骤卡。一步只露一个主按钮。 */
+.theme-toggle {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--card-2);
+  color: var(--text-dim);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.page {
+  position: relative;
+  flex: 1;
+  padding: 72px 26px 32px;
+  display: flex;
+  flex-direction: column;
+}
+
+.brand-title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: .5px;
+}
+
+.brand-sub {
+  margin: 8px 0 40px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.field { margin-bottom: 20px; }
+
+.field label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.field input {
+  width: 100%;
+  height: 48px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  outline: none;
+}
+
+.field input:focus { border-color: var(--brand); }
+
+.btn {
+  width: 100%;
+  height: 48px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--brand);
+  color: var(--brand-on);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.btn:disabled {
+  background: var(--brand-soft);
+  cursor: default;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--brand);
+  border: 1px solid var(--brand);
+  margin-top: 10px;
+}
+
+.msg {
+  min-height: 20px;
+  margin: 12px 0;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.msg.err { color: var(--danger); }
+.msg.ok { color: var(--ok); }
+
+.foot {
+  margin-top: auto;
+  padding-top: 24px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.link { color: var(--brand); }

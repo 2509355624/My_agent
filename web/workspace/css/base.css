@@ -1,0 +1,47 @@
+/* 基础重置 + 手机优先的居中容器。桌面只是把同一张卡拉宽，不另起布局。 */
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC",
+    "Microsoft YaHei", "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button, input {
+  font: inherit;
+  color: inherit;
+}
+
+button { cursor: pointer; }
+
+/* 手机占满，桌面收成一张卡居中，圆角 + 轻阴影 */
+.app {
+  width: 100%;
+  max-width: 420px;
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0 auto;
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+}
+
+@media (min-width: 600px) {
+  .app {
+    min-height: auto;
+    margin: 40px auto;
+    border-radius: var(--radius);
+    box-shadow: 0 18px 60px rgba(0, 0, 0, .18);
+  }
+}

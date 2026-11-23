@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f5f6f8">
+<title>登录 · 工作台</title>
+<script>
+  // 首屏前置定主题，避免先白后黑的闪色。手动选择优先于系统偏好。
+  (function () {
+    var t = localStorage.getItem("ws_theme");
+    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/login.css">
+</head>
+<body>
+<div class="app">
+<main class="page">
+  <button class="theme-toggle" id="btn-theme" type="button" aria-label="切换明暗主题">☾</button>
+
+  <section id="step-qq">
+    <h1 class="brand-title">欢迎回来</h1>
+    <p class="brand-sub">用 QQ 号登录你的工作台</p>
+    <div class="field">
+      <label for="qq">QQ 号</label>
+      <input id="qq" type="tel" inputmode="numeric" autocomplete="off" placeholder="输入 QQ 号">
+    </div>
+    <button class="btn" id="btn-next" type="button">下一步</button>
+    <div class="msg" id="login-msg"></div>
+    <p class="foot">登录即同意服务条款与隐私政策</p>
+  </section>
+
+  <section id="step-code" style="display:none">
+    <h1 class="brand-title">输入验证码</h1>
+    <p class="brand-sub">验证码已发到你的 QQ，5 分钟内有效</p>
+    <div class="field">
+      <label for="code">验证码</label>
+      <input id="code" type="tel" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="输入验证码">
+    </div>
+    <button class="btn" id="btn-send" type="button">获取验证码</button>
+    <button class="btn btn-ghost" id="btn-back" type="button">返回改 QQ 号</button>
+    <div class="msg" id="code-msg"></div>
+    <button class="btn" id="btn-login" type="button" disabled>登录</button>
+    <p class="foot">登录即同意服务条款与隐私政策</p>
+  </section>
+</main>
+</div>
+
+<script src="js/api.js"></script>
+<script src="js/login.js"></script>
+<script>
+  (function () {
+    var d = document.documentElement;
+    var b = document.getElementById("btn-theme");
+    function label() { b.textContent = d.getAttribute("data-theme") === "dark" ? "☀" : "☾"; }
+    label();
+    b.addEventListener("click", function () {
+      var to = d.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      d.setAttribute("data-theme", to);
+      localStorage.setItem("ws_theme", to);
+      label();
+    });
+    window.WSLogin.init();
+  })();
+</script>
+</body>
+</html>

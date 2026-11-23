@@ -1,0 +1,51 @@
+/* 设计变量：默认白色抽屉卡片风，可切深色，跟随系统偏好。
+   语义色集中在这里，其余模块只引用变量，不写死颜色。 */
+:root {
+  color-scheme: light;
+  --bg: #f5f6f8;
+  --card: #ffffff;
+  --card-2: #f0f1f4;
+  --text: #1a1c20;
+  --text-dim: #8a8f99;
+  --line: #e4e6eb;
+  --brand: #3d7bf5;
+  --brand-soft: #b9cdfa;
+  --brand-on: #ffffff;
+  --danger: #d64545;
+  --ok: #1d9e6b;
+  --radius: 16px;
+  --radius-sm: 10px;
+  --gap: 16px;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #14161a;
+  --card: #1e2126;
+  --card-2: #262a31;
+  --text: #ececf1;
+  --text-dim: #9aa0ab;
+  --line: #333842;
+  --brand: #5b90f7;
+  --brand-soft: #3a5a94;
+  --brand-on: #ffffff;
+  --danger: #ef6b6b;
+  --ok: #4fcb95;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #14161a;
+    --card: #1e2126;
+    --card-2: #262a31;
+    --text: #ececf1;
+    --text-dim: #9aa0ab;
+    --line: #333842;
+    --brand: #5b90f7;
+    --brand-soft: #3a5a94;
+    --brand-on: #ffffff;
+    --danger: #ef6b6b;
+    --ok: #4fcb95;
+  }
+}
