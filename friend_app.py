@@ -31,6 +31,7 @@ import logging
 import os
 import threading
 import time
+from urllib.parse import urlencode
 
 import requests
 from flask import (Flask, Response, g, jsonify, make_response, redirect, request,
@@ -215,13 +216,25 @@ def _gate():
     # 2026-11-13 /persona 同理：任务回执尾巴现在带「角色扮演」入口，被 fr_solo
     # 挡回 /play 就会变成「点了没反应」。
     # 2026-11-23 /workspace 同理：新界面是 QQ「/画廊」「/漫画台」的新去处。
+    # 同日起 /gallery 与 /comic 只是 302 到 /workspace/，留下的目的就是让
+    # 群里早先发出的老链接还能用——所以它们和 /workspace 一样带 from=qq 解
+    # 页面锁，且重定向时会把 query 原样带过去（两个视图里做的）。
     # 注意这里的 p 已经 rstrip("/")，所以只能写不带斜杠的形式。
     if (p in ("/gallery", "/gallery.html", "/comic", "/comic.html",
               "/novel", "/novel.html", "/runbench", "/runbench.html",
               "/workspace", "/persona", "/persona.html")
             and request.args.get("from") == "qq" and _solo_in()):
         g.clear_solo = True
-        return None
+        # clear_solo 靠**回写 cookie** 生效，只在重定向上有效。`/gallery`、
+        # `/comic` 现在是 302，没问题；但 `/workspace/` 是直接出页面的，
+        # 这里再 return None 就等于标记没清、cookie 还挂着 fr_solo。
+        # 所以凡是不打算重定向的路径，先绕一趟去掉 from=qq 的同一个地址，
+        # 让浏览器把 Set-Cookie 收下再回来（第二趟 _solo_in() 已为假）。
+        if p in ("/gallery", "/gallery.html", "/comic", "/comic.html"):
+            return None            # 这两个视图自己 302 到 /workspace/
+        clean = {k: v for k, v in request.args.items() if k != "from"}
+        qs = urlencode(clean)
+        return redirect((request.path or "/") + ("?" + qs if qs else ""))
     if (_solo_in() and not _logged_in()
             and not p.startswith("/api/")
             # `/char_intros.json` 是角色卡详情的静态数据（2026-11-09），跟
@@ -295,8 +308,11 @@ def _gzip_html(resp):
 
 @app.after_request
 def _after(resp):
+    # `_solo_in()` 直接读 cookie 头，删 cookie 不会让它在同一个请求里变假，
+    # 所以这里必须自己把标记置回，否则「那趟自指重定向」会一直绕下去。
     if getattr(g, "clear_solo", False):
         resp.delete_cookie(SOLO_COOKIE, path="/")
+        g.clear_solo = False
     return _gzip_html(_secure(resp))
 
 
@@ -436,6 +452,8 @@ def workspace_index():
 
     登录页是 `workspace/index.html`（两步：QQ 号 → 验证码），验证成功后前端
     自己跳到 `/workspace/`，服务器这时才看到 cookie，于是发聊天页。
+    旧的 `/gallery`、`/comic` 两个地址都 302 到这里（2026-11-23），
+    所以它也是 QQ 那些老链接的落地页。
     """
     if not _logged_in():
         return send_from_directory(WORKSPACE_DIR, "index.html")
@@ -454,10 +472,15 @@ def workspace_asset(sub):
 @app.route("/gallery")
 @app.route("/gallery.html")
 def gallery_page():
-    """老地址，保留：QQ 里已经发出去的链接、群友的收藏都还指着它。"""
-    if not _logged_in() and not _guest_in():
-        return send_from_directory(WEB_DIR, "friend.html")
-    return send_from_directory(WEB_DIR, "gallery.html")
+    """旧画廊地址：**302 到新界面**（2026-11-23）。
+
+    QQ 的 `/画廊` 指令发的还是这个地址，直接落到 `/workspace/`，群里发出去的
+    新链接就都是新界面了。`?from=qq` 原样带过去——`_gate` 靠它先解掉 `/play`
+    种下的 fr_solo 页面锁，不然会被挡回游客页。登录与游客态都交给
+    `/workspace/` 自己判，这里不再复制一份。
+    """
+    qs = request.query_string.decode("utf-8", "ignore")
+    return redirect("/workspace/" + ("?" + qs if qs else ""))
 
 
 # ─── 提示词工坊 ──────────────────────────────────────────
@@ -858,18 +881,18 @@ def persona_page():
 @app.route("/comic")
 @app.route("/comic.html")
 def comic_page():
-    """群友漫画工作台（2026-11-10 开放）。**必须登录**。
+    """旧漫画台入口：**302 到新界面**（2026-11-23）。
 
-    没登录时发的是 `friend.html`（它本身就是登录页，验证成功后 `location.reload()`
-    又回到这个地址，服务器这时才看到 cookie、才发漫画台）。游客态一律不给：
-    剧本生成要花站主的 Token，后续出图还要占整条 GPU 队列，不能匿名触发。
+    QQ 的 `/漫画台` 指令发的还是这个地址，直接换到 `/workspace/` 的漫画面板，
+    免得群友手上还攒着一堆旧链接。`?from=qq` 一并带过去——`_gate` 靠它先解
+    掉 `/play` 种下的 fr_solo 页面锁，否则会被挡回游客页。
 
-    接口经 `/api/comic/<path>` 反代到 5174，`_forward` 会把登录 Cookie 解出的
-    QQ 写死塞进请求；页面自己不需要也不能传 qq。
+    登录态交给 `/workspace/` 自己判（未登录发 workspace/index.html，
+    登录发 chat.html），这里不再复制一份判断。
+    接口仍经 `/api/comic/<path>` 反代到 5174，新界面的漫画链用的就是它。
     """
-    if not _logged_in():
-        return send_from_directory(WEB_DIR, "friend.html")
-    return send_from_directory(WEB_DIR, "comic_studio_friend.html")
+    qs = request.query_string.decode("utf-8", "ignore")
+    return redirect("/workspace/" + ("?" + qs if qs else ""))
 
 
 @app.route("/api/comic/<path:sub>", methods=["GET", "POST", "DELETE"])

@@ -499,6 +499,8 @@ def receipt_note_default():
 # 角色扮演 / 画廊不带令牌（页面自己按登录态处理），但都要带 `from=qq`：
 # 进过 `/play` 的浏览器会带 7 天的 fr_solo，不带这个参数会被 5175 挡回游客页，
 # 看起来像「链接发错了」（2026-11-06 踩过一次，/gallery 和 /comic 都是这样修的）。
+# 2026-11-23 画廊改指新界面 `/workspace/`：5175 的 /gallery 与 /comic 已改成
+# 302 到那边，老链接照样能进，新发的少一跳。
 def _receipt_links(target, target_id):
     """回执末尾那三行入口；隧道没开 / 开关关掉 → ""（一个字都不加）。"""
     from app.features.qq import friend_site
@@ -515,7 +517,7 @@ def _receipt_links(target, target_id):
     if k:      # 认不出会话（target_id 不是 QQ 号）时只给另外两个，不瞎签
         lines.append("跑图台 %s/runbench?k=%s" % (url, k))
     lines.append("角色扮演 %s/persona?from=qq" % url)
-    lines.append("画廊 %s/gallery?from=qq" % url)
+    lines.append("画廊 %s/workspace/?from=qq" % url)
     return "\n".join(lines)
 
 
