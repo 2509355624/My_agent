@@ -296,6 +296,7 @@ def _public(job):
     """任务记录脱敏给前端（内部字段不下发）。"""
     return {k: job.get(k) for k in ("id", "skill", "prompt", "seed",
                                     "state", "error", "file", "ts",
+                                    "phase", "pid",
                                     "steps", "steps_label", "cfg",
                                     "negative", "width", "height",
                                     "size_label", "secs", "landscape",
@@ -321,6 +322,13 @@ def _run(job):
             if queued is None:
                 raise RuntimeError(reason or "NAI 队列拒绝了这张图")
             queued.cancel = job["abort"]
+            # 让 `cancel_tag` 能按本台的任务号找到它（不然「终止」只停得住
+            # 本台这份 Event，NAI 那条队列照跑）。替身对象（测试里的 FakeJob）
+            # 不一定收得下这个属性——设不上就不设，队列照跑。
+            try:
+                queued.tag = job["id"]
+            except Exception:                   # noqa: BLE001
+                pass
             entry = queued.wait()
             paths = (entry or {}).get("images") or []
             if not paths:
@@ -385,10 +393,25 @@ def _run(job):
                 size_label = "%d×%d 横屏" % LANDSCAPE_SIZE
             # _submit_retry 只对超时重试；其余错误一次抛清。
             # with_entry=True：拿 history entry 算 ComfyUI 真跑这张图的耗时。
+            #
+            # 2026-11-23：`_submit` 多收两个关键字（都可选，不传时它自己造）：
+            #   · task_tag=本台任务号 —— 让 `image_jobs.cancel_tag` / status
+            #     的 phase 判断能对上「这是哪一张」；
+            #   · on_pid=回调 —— ComfyUI 一接单就把 prompt_id 回填到本台 job，
+            #     `/api/gen/status` 才能去 ComfyUI 那边问「它在不在队列里」。
+            #     这就是用户要的「探活」：不确定就明说掉队了，别一直写画图中。
+            def _on_pid(pid):
+                with _JOBS_LOCK:
+                    job["pid"] = pid
+
             name, entry = comic._submit_retry(
                 lambda: comic._submit(wf, job["skill"], job["prompt"], job["seed"],
-                                      with_entry=True, abort=job["abort"]),
+                                      with_entry=True, abort=job["abort"],
+                                      task_tag=job["id"], on_pid=_on_pid),
                 "[跑图台 %s]" % job["id"])
+            # 采完样才出的图，也可能已经被终止（_submit 在回调里看 abort 会抛）
+            if job["abort"].is_set():
+                raise Cancelled("用户中断了这张图")
             secs = image_jobs.exec_seconds(entry)
             file_ref = name
             seed = job["seed"]
@@ -689,15 +712,71 @@ def _new_job_id():
 
 @bp.route("/api/gen/status")
 def api_status():
-    """进行中/近期任务 + ComfyUI 队列水深（含 QQ 那边的，好解释为什么慢）。"""
+    """进行中/近期任务 + ComfyUI 队列水深（含 QQ 那边的，好解释为什么慢）。
+
+    `phase`（2026-11-23）是这一张**现在到底在哪一段**，前端不用再猜「画图中」：
+      · queued  —— 还在我们自己的队列里，前面还有 N 张；
+      · submit  —— 已被 worker 取走，正在装模型 / 等 ComfyUI，还没交出去；
+      · running —— ComfyUI 手里确有这个 prompt_id，正在采样；
+      · lost    —— **两边都没有它**（ComfyUI 重启过 / 任务被清掉了）。
+                   这一条是用户这次报的核心：「我都重启了，网页还写着画图中，
+                   我怎么知道它有没有在画？」——不知道就说不知道，别装作在跑。
+    探针只问**本台正在跑的那一张**，最多 1 次 /queue，不会因为状态轮询把
+    ComfyUI 打爆；问不到（超时、离线）返回 None，前端按「探不到」处理。
+    """
     with _JOBS_LOCK:
         jobs = sorted(_JOBS.values(), key=lambda j: j["ts"], reverse=True)
     try:
         depth = image_jobs.queue_depth()
     except Exception:
         depth = None
+    # 这一轮里本地通道真正在跑的那张（tag → 位置），一次查清所有 job
+    try:
+        snap = image_jobs.snapshot()
+    except Exception:
+        snap = {}
+    _run = snap.get("running") or {}
+    running_tag = str(_run.get("tag") or "")
+    running_pid = str(_run.get("pid") or "")
+    queued_tags = {q.get("tag") for q in (snap.get("queued") or [])}
+    _comfy_up = None                     # 三态：None=还没探 / True / False
+
+    def _probe_up():
+        """问一次 ComfyUI 在不在；一轮里只问一次（状态页 2 秒轮询一次）。"""
+        nonlocal _comfy_up
+        if _comfy_up is None:
+            try:
+                _comfy_up = image_jobs._comfy_up()
+            except Exception:            # noqa: BLE001
+                _comfy_up = None
+        return _comfy_up
+
+    def _phase_of(job):
+        """这一张现在到底在哪一段（见 docstring 那四个阶段）。"""
+        jid = job["id"]
+        pid = str(job.get("pid") or "")
+        if jid in queued_tags:
+            return "queued"
+        # 「本地通道真的有一张在跑」且就是我：worker 已经取走，还没交给 ComfyUI。
+        # ⚠️ 两边都为空**不算**对得上——否则所有没入队信息的老 job 都会被判成
+        # 正在提交，下面那条探测就永远走不到。
+        if jid == running_tag or (running_tag and running_pid and pid == running_pid):
+            return "submit"
+        if not pid:
+            return "submit"
+        if _probe_up() is False:
+            return "lost"
+        has = image_jobs._comfy_queue_has(pid)
+        # 队列里没有、但 history 有 = 画完了，回包还没到，仍算 running
+        if has is False and image_jobs.poll_once(pid) is None:
+            return "lost"
+        return "running"
+
+    for job in jobs:
+        if job["state"] == "queued":
+            job["phase"] = _phase_of(job)
     return jsonify({"ok": True, "jobs": [_public(j) for j in jobs],
-                    "queue_depth": depth})
+                    "queue_depth": depth, "comfy_online": _comfy_up})
 
 
 @bp.route("/api/gen/cancel", methods=["POST"])
@@ -707,6 +786,12 @@ def api_cancel():
     只认本台自己发出去、还没结束的任务：置位 job 的中断 Event，
     正在跑的那张由 `image_jobs` 带 prompt_id 做**定向** /interrupt
     （不会像全局 /interrupt 那样把 QQ 的图一起劈掉），排队中的直接跳过。
+
+    2026-11-23 修：原来只置位本台这份 Event，而 `image_jobs.process` 提交给
+    ComfyUI 那一段（装模型 / 等上线）根本不看它，所以「点了终止还在画完」。
+    现在除了置位本台的 Event，还按 **tag = 任务号** 去 `image_jobs` 里把真正的
+    job 标成 stopped——worker 会在提交前 / 投递前收手，已经在采样的由它定向
+    掐掉并等退场。
     """
     data = request.get_json(silent=True) or {}
     job_id = str(data.get("id") or "").strip()
@@ -717,8 +802,16 @@ def api_cancel():
         if job["state"] != "queued":
             return jsonify({"ok": False, "error": "这张已经结束了"}), 400
         job["abort"].set()
-    log.info("跑图台 %s 收到中断请求", job_id)
-    return jsonify({"ok": True, "message": "已中断，等 ComfyUI 停手"})
+        job["state"] = "cancelled"
+        job["error"] = "已中断"
+    hit = False
+    try:
+        hit = image_jobs.cancel_tag(job_id, "用户终止了这张图")
+    except Exception:
+        log.warning("跑图台 %s：掐 image_jobs 里那张失败", job_id, exc_info=True)
+    log.info("跑图台 %s 收到终止请求（image_jobs 命中=%s）", job_id, hit)
+    return jsonify({"ok": True, "hit": hit,
+                    "message": "已终止" if hit else "已停下，这张没有在画"})
 
 
 @bp.route("/api/gen/history")

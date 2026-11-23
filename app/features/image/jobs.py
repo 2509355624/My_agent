@@ -806,6 +806,14 @@ class Job:
         # 由 `wait_done(abort=...)` 每轮询一次看到，走定向 /interrupt。
         self.cancel = threading.Event()
         self.done = threading.Event()
+        # 用户主动终止（2026-11-23，单格「终止」按钮）。和 `cancel` **分工不同**：
+        #   · cancel —— 调用方「不等了」，但这一张**还要画完**（_draw 放弃等待
+        #     时自己决定要不要连 ComfyUI 一起掐）。漫画台原来就靠这个语义；
+        #   · stopped —— 用户就是不要这张了。worker 回到 _finish 之后去
+        #     ComfyUI 里定向掐掉它，**绝不投递**，也不允许 `process` 再往下
+        #     跑出图那一段——否则「终止了还在画」正是 2026-11-23 的 bug。
+        # 默认 False：老调用方（QQ / 网页单张 / 测试）行为一个字节都不变。
+        self.stopped = False
 
     def wait(self, poll=POLL_INTERVAL):
         """等到出图。中途用户点「停止」就放弃等待（图仍在后台跑完）。
@@ -841,6 +849,90 @@ def queue_depth():
     """两条通道加起来还有几个在等 / 在跑（总量，供测试与状态页用）。"""
     with _lock:
         return _COMFY.depth() + _NAI.depth()
+
+
+def queue_view(tag):
+    """这个编号的任务此刻在队列里的哪一段：'running' / 'queued' / ''（不在）。
+
+    给**前端说人话**用（2026-11-23 用户：「到底有没有任务在跑都不去探」）：
+    「排队中」和「画图中」是两件不同的事，混着说等于什么都没说。所以入队
+    时把编号顺手记在 job 上，前端拿它来问自己那一条现在到哪一步了。
+
+    `tag` 是 Job.tag（生图页的 GP-xxx、moss 的页编号用 SKILL+seed 之类由
+    调用方自己拼）。查不到返回 ''——调用方据此判断「这个任务已经不在这套
+    队列里了」，而不是猜。
+    """
+    tag = str(tag or "")
+    if not tag:
+        return ""
+    with _lock:
+        for chan in (_COMFY, _NAI):
+            for job in chan.running:
+                if getattr(job, "tag", "") == tag:
+                    return "running"
+        for chan in (_COMFY, _NAI):
+            for job in chan.queue:
+                if getattr(job, "tag", "") == tag:
+                    return "queued"
+    return ""
+
+
+def cancel_tag(tag, reason="用户中断了这张"):
+    """摘掉/打断**某一个**编号的任务（单个格子的「终止」）。
+
+    和 `cancel_batch` 的差别只在范围：那个按批次（整本漫画）一刀切，这个只认
+    一个编号，别的图一张都不动——用户要的是「这一格我不要了」，不是「全停」。
+
+    三件事与 `cancel_batch` 一致，少一件就停不干净：
+      1. 排队中的从队列摘掉（否则名额还占着，重画会被自己劝退）；
+      2. per_session 减回去；
+      3. 正在跑的那张置位 `job.cancel`，由 worker 的 `wait_done` 走**定向**
+         /interrupt（不带 prompt_id 的全局中断会劈掉 QQ 正在画的图）。
+
+    返回 True = 命中了（排队中已摘 or 正在跑已置位），False = 队列里没有它
+    （多半已经跑完了，或者根本没入队过）。
+
+    命中的那一张会置上 `job.stopped`（不只是 cancel）：见 Job.stopped 那段，
+    两者语义不同——这个是「不要了」，worker 会真去掐 ComfyUI 里的它。
+    """
+    hit_job = None
+    running = False
+    with _lock:
+        for chan in (_COMFY, _NAI):
+            for job in list(chan.running):
+                if getattr(job, "tag", "") == tag:
+                    hit_job, running = job, True
+                    break
+            if hit_job:
+                break
+        if hit_job is None:
+            for chan in (_COMFY, _NAI):
+                keep = collections.deque()
+                for job in chan.queue:
+                    if hit_job is None and getattr(job, "tag", "") == tag:
+                        hit_job = job
+                        continue
+                    keep.append(job)
+                if len(keep) != len(chan.queue):
+                    chan.queue = keep
+                    key = _key(hit_job.target, hit_job.target_id)
+                    n = chan.per_session.get(key, 0) - 1
+                    if n > 0:
+                        chan.per_session[key] = n
+                    else:
+                        chan.per_session.pop(key, None)
+                    break
+    if hit_job is None:
+        return False
+    hit_job.stopped = True
+    if running:
+        hit_job.cancel.set()
+    else:
+        hit_job.error = Cancelled(reason)
+        hit_job.done.set()
+    log.info("中断单个任务：%s（%s %s）", tag, "正在跑" if running else "排队中",
+             hit_job.skill or "?")
+    return True
 
 
 def cancel_batch(batch="comic", reason="用户中断了整批渲染"):
@@ -1108,6 +1200,10 @@ def snapshot():
                 "tag": job.tag,
                 "src": _src_label(job),
                 "prompt": (wf[:60] if isinstance(wf, str) else ""),
+                # 交给 ComfyUI 的编号（2026-11-23）。有它才能去 ComfyUI 那边
+                # 问「这一张你到底认不认识」，前端据此把「画图中」和「掉队了」
+                # 分开——用户报的就是「重启了 ComfyUI，网页还写着画图中」。
+                "pid": getattr(job, "prompt_id", None) or "",
             }
 
         def _view(chan, single):
@@ -1125,12 +1221,13 @@ def snapshot():
             }
 
         comfy = _view(_COMFY, single=True)
-        return {
+        out = {
             "running": comfy["running"],
             "queued": comfy["queued"],
             "depth": _COMFY.depth() + _NAI.depth(),
             "nai": _view(_NAI, single=False),
         }
+    return out
 
 
 def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
@@ -1482,6 +1579,17 @@ def _worker(chan):
                 log.exception("生图任务处理时抛异常 %s %s", job.target, job.target_id)
             finally:
                 _finish(job)
+            # 用户点了终止（2026-11-23）：process 那边在提交前 / 投递前都会先
+            # 看 `stopped` 收工，但「已经交给 ComfyUI、正在采样」那一段没法自己
+            # 停——这里补一刀定向 /interrupt + /queue delete。必须**等它退场**
+            # 再放下一张：串行队列下不等的话，新的一张会插进一个还在退场的
+            # 旧任务后面，看起来就像「终止了还在画」。
+            if getattr(job, "stopped", False):
+                if job.prompt_id:
+                    _abort(job.prompt_id)
+                _wait_comfy_idle()
+                log.info("终止收尾：已掐掉 ComfyUI 里的这张（%s %s）",
+                         job.skill or "?", job.tag or "")
             if chan.local:
                 # 每跑完一张看一眼内存——ComfyUI 的常驻内存是按张涨的（见
                 # _maybe_restart_for_ram）。放在这里而不是 _take 之前：_take 会阻塞
@@ -2153,6 +2261,11 @@ def process(job):
     # NAI 云端生图：完全不碰 ComfyUI（token 是群主独立的，图由 NovelAI 出）。
     if job.skill in NAI_SKILLS:
         return _process_nai(job)
+    # 用户已经终止（2026-11-23）：连「换渠道 /free」「等 ComfyUI 上线」都别做，
+    # 直接收工——见 Job.stopped。
+    if getattr(job, "stopped", False):
+        job.error = Cancelled("用户终止了这个任务")
+        return
     # 放在换渠道 /free 之前：两条重启成功后 _COMFY.last_skill 会被清成 None
     # （新进程里一个模型都没加载），换渠道那条就不会再打一次没用的 /free。
     # `clean_start` 是按水位的老机制（当前两表为空，恒不动手）；
@@ -2185,12 +2298,27 @@ def process(job):
         body = comfy_out.body_for(job)
         if body:
             wf = comfy_out.stamp(wf, body)
+        # 用户已经终止（2026-11-23）：**别提交**。上面那几步（换渠道 /free、
+        # 等 ComfyUI 上线、装 LoRA）都可能耗上一两分钟，期间点了终止的话，
+        # 原来会照样提交、照样画完、照样投递——这就是「终止了还在跑」。
+        # 提前一步接到交作业之前，比事后去 ComfyUI 里掐它干净得多。
+        if getattr(job, "stopped", False):
+            job.error = Cancelled("用户终止了这个任务")
+            return
         job.prompt_id = _queue_prompt_retry(wf, quiet=quiet)
     except Exception as exc:
         job.error = exc
         if not quiet:
             _notice(job)
         return
+    # 编号回填（2026-11-23）：跑图台要知道「这一张到底交没交给 ComfyUI」，
+    # 才能去探它还在不在队列里。回调是可选钩子，出错不影响出图。
+    _sink = getattr(job, "_pid_sink", None)
+    if callable(_sink):
+        try:
+            _sink(job.prompt_id)
+        except Exception:
+            log.warning("回填 prompt_id 失败（%s）", job.tag or "", exc_info=True)
     # 提交成功、拿到 prompt_id 之后才记账：账本要的就是这个 id，没它既认不出
     # ComfyUI 里是哪张图，也没法在重启后把结果捞回来。
     _ledger_add(job)
@@ -2218,6 +2346,8 @@ def process(job):
                 entry = wait_done(job.prompt_id, task_timeout(job))
     except Cancelled as exc:
         # 用户点「中断全部」（2026-10-22）：定向中断掉 ComfyUI 里这一张，等它
+        # ⚠️ 2026-11-23：单格 / 单张「终止」走的是 job.stopped，worker 收尾时
+        # 已经掐过一遍了；这里保持原样，只负责让 wait 立刻返回。
         # 退场，直接收工。**不走下面超时那条路**——那条会判「状态不对」然后
         # 重启 ComfyUI，可我们只是自己不想画了，重启纯属连累别人。
         _abort(job.prompt_id)
@@ -2307,6 +2437,14 @@ def process(job):
         job.error = RuntimeError("跑完了但没找到图片")
         if not quiet:
             _notice(job)
+        return
+    # 用户在我们等图的这段时间里点了终止（2026-11-23）：图刚出来、还没投递，
+    # 这时候停最省事——不置 skill_done，不写「已完成」，网页侧看到的是
+    # cancelled 而不是 done，QQ 侧也不会凭空多出这一张。
+    if getattr(job, "stopped", False):
+        job.error = Cancelled("用户终止了这个任务")
+        log.info("图刚要投递时发现已被终止，丢弃（%s %s）",
+                 job.skill or "?", job.tag or "")
         return
 
     job.entry = entry

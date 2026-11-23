@@ -1228,6 +1228,10 @@ def api_comic_abort():
     running = image_jobs.running_batch("comic")
     for job in running:
         job.cancel.set()
+        # 连 ComfyUI 里那一张也真掐掉（2026-11-23）：只置 cancel 只是「不等了」，
+        # worker 那条 wait_done 会走定向 /interrupt；同时标 stopped 让收尾时
+        # 再兜一次 /queue delete 并等它退场，免得下一格插进还在退场的旧任务。
+        job.stopped = True
 
     with _JOBS_LOCK:
         phase = (_JOBS.get(path) or {}).get("phase")

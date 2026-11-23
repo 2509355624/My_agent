@@ -115,6 +115,9 @@
   .b-running  { color: var(--info);     border-color: var(--info); }
   .b-done     { color: var(--success);  border-color: var(--success); }
   .b-error    { color: var(--error);    border-color: var(--error); }
+  /* 掉队（2026-11-23）：ComfyUI 那边已经不认这一页了——红框，配「重跑」提示 */
+  .b-bad      { color: var(--error);    border-color: var(--error);
+                background: rgba(248,113,113,.12); }
   .pb-head .seed { font-size: 11px; color: var(--text-mute); }
   .pb-body { display: grid; grid-template-columns: 1fr 470px; gap: 0; }
   @media (max-width: 1080px) { .pb-body { grid-template-columns: 1fr; } }
@@ -408,7 +411,7 @@
 
 <script>
 var S = { task: null, spec: null, pages: [], timer: null, saving: false,
-          pending: false, poll: null, aborted: false };
+          pending: false, poll: null, aborted: false, phase: {} };
 
 /* ── 阶段向导（2026-11-23）───────────────────────────────
    三步只露当前要用的控件，降低一屏几十个按钮的认知负担。
@@ -737,7 +740,11 @@ function renderPage(page) {
     '<span class="seed" data-role="seed"></span>' +
     '<div class="spacer"></div>' +
     '<button class="btn small primary" data-act="draw" data-page="' + page.n + '">出图</button>' +
-    '<button class="btn small" data-act="reroll" data-page="' + page.n + '">换 seed</button>';
+    '<button class="btn small" data-act="reroll" data-page="' + page.n + '">换 seed</button>' +
+    /* 单页终止（2026-11-23 用户要的「单个格子单独加一个终止」）：
+       只丢这一页，后面的照画——跟顶部「全部终止」不是一回事。 */
+    '<button class="btn small" data-act="stop" data-page="' + page.n + '"' +
+    ' style="display:none;color:var(--error)" title="只停这一页，后面的照画">终止</button>';
   box.appendChild(head);
 
   var body = document.createElement("div");
@@ -810,9 +817,16 @@ function patch(p) {
     var box = document.querySelector('.page-block[data-page="' + it.n + '"]');
     if (!box) return;
     var badge = box.querySelector('[data-role="badge"]');
-    badge.className = "badge b-" + (it.status || "pending");
-    badge.textContent = { pending: "未出图", running: "画图中…", done: "已完成",
-                          error: "失败", canceled: "已终止" }[it.status] || it.status;
+    var ph0 = S.phase && S.phase[String(it.n)] ? S.phase[String(it.n)].phase : "";
+    var live = ph0 === "running" ? "画图中…"
+             : ph0 === "submit" ? "准备中…"
+             : ph0 === "queued" ? "排队中…"
+             : ph0 === "lost" ? "掉队了" : "";
+    var label = live || ({ pending: "未出图", running: "画图中…", done: "已完成",
+                          error: "失败", canceled: "已终止" }[it.status] || it.status);
+    badge.className = "badge b-" + (it.status || "pending") +
+      (ph0 === "lost" ? " b-bad" : "");
+    badge.textContent = label;
     var seed = box.querySelector('[data-role="seed"]');
     seed.textContent = it.seed ? ("seed " + it.seed + (it.secs ? " · " + it.secs + "s" : "")) : "";
     var errEl = box.querySelector('[data-role="err"]');
@@ -828,12 +842,29 @@ function patch(p) {
       ph.style.display = "";
       // 画图进度就放在正在画的那页格子里（2026-11-22 用户要求）：
       // 顶部的全局状态条不再重复播报，哪页在画看哪页。
-      if (p.running && it.n === p.running.page) {
+      var ph1 = S.phase && S.phase[String(it.n)] ? S.phase[String(it.n)] : null;
+      if (ph1 && ph1.phase === "lost") {
+        /* ComfyUI 不认这一页了（重启过 / 被清掉）：明说，别装还在画。
+           这一条正是用户报的「都重启了这边还写画图中」。 */
+        ph.innerHTML = "这一页掉队了<br>ComfyUI 那边已经没它，点「出图」重跑";
+      } else if (ph1 && ph1.phase === "queued") {
+        ph.innerHTML = '<span class="spin"></span>排队中' +
+          (ph1.ahead ? " · 前面还有 " + ph1.ahead + " 张" : "");
+      } else if (ph1 && (ph1.phase === "running" || ph1.phase === "submit")) {
+        ph.innerHTML = '<span class="spin"></span>画图中 · 已等 ' +
+          Math.round(p.running ? p.running.waited : 0) + " 秒（一页约 150~200 秒）";
+      } else if (p.running && it.n === p.running.page) {
         ph.innerHTML = '<span class="spin"></span>画图中 · 已等 ' +
           Math.round(p.running.waited) + " 秒（一页约 150~200 秒）";
       } else {
         ph.innerHTML = "还没出图<br>点右上角「出图」";
       }
+    }
+    /* 单页「终止」按钮：这一页正在排队或在画时才露出来 */
+    var stp = box.querySelector('[data-act="stop"]');
+    if (stp) {
+      var on = ph0 === "running" || ph0 === "submit" || ph0 === "queued";
+      stp.style.display = on ? "" : "none";
     }
     var pt = box.querySelector('[data-role="prompt"]');
     if (pt && document.activeElement !== pt) pt.value = it.prompt || "";
@@ -869,12 +900,36 @@ function renderIssues(list) {
     list.map(function (x) { return '<div class="it">· ' + esc(x) + "</div>"; }).join("");
 }
 
+/* 单页终止（2026-11-23）：只丢这一页，后面的照画。
+   服务端会三件事一起做——排队中的摘掉、正在画的那张定向 /interrupt 且不投递、
+   页号落成「已终止」；这里只负责把按钮按下后的即时反馈给出来。 */
+async function stopPage(n, btn) {
+  if (!S.task || !n) return;
+  btn.disabled = true;
+  btn.textContent = "停止中…";
+  var r = await api("/api/moss/abort_page", { task: S.task, page: n });
+  btn.textContent = "终止";
+  if (!r.ok) toast(r.error || "终止失败", true);
+  else toast(r.message || ("第 " + n + " 页已终止"));
+  refreshStatus();
+}
+
 function startPoll() {
   if (S.poll) return;
   S.poll = setInterval(async function () {
     if (!S.task) return;
     var r = await api("/api/moss/status?task=" + encodeURIComponent(S.task));
-    if (r.ok) patch(r);
+    /* 每页「现在到底在哪」单独问一次（2026-11-23）：status 里那个 running
+       只能说明「这个任务有个线程在跑」，说明不了第 3 页是在排队还是在
+       ComfyUI 手里，更说明不了「ComfyUI 重启过、两边都没这一页了」。
+       问不到就当没这回事（不猜）。 */
+    if (r.ok) {
+      try {
+        var q = await api("/api/moss/pages_state?task=" + encodeURIComponent(S.task));
+        if (q.ok) S.phase = q.pages || {};
+      } catch (err) { /* 老版本后端没有这条接口：保持旧显示 */ }
+      patch(r);
+    }
     if (!r.running) { clearInterval(S.poll); S.poll = null; loadList(); }
   }, 2500);
 }
@@ -1038,8 +1093,8 @@ async function draw(pageNo, reroll) {
   var r = await api("/api/moss/render", body);
   btns.forEach(function (b) { b.disabled = false; });
   if (!r.ok) { toast(r.error || "没排上队", true); return; }
-  if (!EXPERT) setStage(3);   // 出图入队了，直接把人带到能看进度的那一步
-  if (reroll) toast("换种子重抽，" + (r.seed ? "seed " + r.seed : "") + "，约 3 分钟");
+  S.aborted = false;          // 重新开跑：上一次的「已终止」不带到这一批
+  if (!EXPERT) setStage(3);   // 出图入队了，直接把人带到能看进度的那一步  if (reroll) toast("换种子重抽，" + (r.seed ? "seed " + r.seed : "") + "，约 3 分钟");
   bar('<span class="spin"></span>已入队，等出图…');
   startPoll();
   setTimeout(startPoll, 3000);
@@ -1083,6 +1138,7 @@ document.addEventListener("click", function (e) {
   var b = e.target.closest && e.target.closest("button[data-act]");
   if (b) {
     var n = parseInt(b.dataset.page, 10) || 0;
+    if (b.dataset.act === "stop") { stopPage(n, b); return; }
     draw(n || null, b.dataset.act === "reroll");
     return;
   }

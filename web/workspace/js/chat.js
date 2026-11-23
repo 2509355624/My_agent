@@ -185,8 +185,17 @@
     acts.className = "acts";
     acts.hidden = true;
 
+    /* 「终止」放在 note 旁边（2026-11-23 用户：「这里一直挂着，我都不知道
+       有没有在跑图」）。它只在排队 / 出图中出现，出图或失败后自动收起来。 */
+    var stop = document.createElement("button");
+    stop.type = "button";
+    stop.className = "stop-run";
+    stop.hidden = true;
+    stop.textContent = "终止";
+
     node.appendChild(body);
     node.appendChild(note);
+    node.appendChild(stop);
     node.appendChild(acts);
     box().appendChild(node);
     scrollBottom();
@@ -195,6 +204,7 @@
       node: node,
       body: body,
       note: note,
+      stop: stop,
       acts: acts,
       say: function (text, bad) {
         note.hidden = false;
@@ -217,8 +227,8 @@
     c.body.appendChild(ph);
     c.say("排队中…");
 
-    return { node: c.node, body: c.body, ph: ph, note: c.note, acts: c.acts,
-             prompt: prompt, skill: skill, job: "", rec: rec };
+    return { node: c.node, body: c.body, ph: ph, note: c.note, stop: c.stop,
+             acts: c.acts, prompt: prompt, skill: skill, job: "", rec: rec };
   }
 
   var ICON_COPY =
@@ -334,6 +344,7 @@
   }
 
   function fail(card, msg) {
+    disarmStop(card);
     card.note.hidden = false;
     card.note.className = "note err";
     card.note.textContent = msg || "这张没出来，点重画再来一次";
@@ -374,9 +385,45 @@
       }
       card.job = d.job.id;
       rec.job = card.job;
+      armStop(card);
       S.pending[card.job] = card;
       startPoll();
     });
+  }
+
+  /* 挂上「终止」：只有在卡片真的还挂着任务时才露出来（出图 / 失败时
+     `disarmStop` 收起来）。点了就把本台的 job 取消——服务端会把排队中那张
+     摘掉、正在跑那张定向掐停，并且**不投递**。 */
+  function armStop(card) {
+    var b = card.stop;
+    if (!b) return;
+    b.hidden = false;
+    b.disabled = false;
+    b.textContent = "终止";
+    b.onclick = function () {
+      if (!card.job) { b.hidden = true; return; }
+      b.disabled = true;
+      b.textContent = "停止中…";
+      global.WSGen.cancel(card.job).then(function (d) {
+        if (!d || !d.ok) {
+          b.disabled = false;
+          b.textContent = "终止";
+          if (d && /结束了/.test(d.error || "")) disarmStop(card);
+          return;
+        }
+        card.note.hidden = false;
+        card.note.className = "note";
+        card.note.textContent = "正在停，稍等…";
+      })["catch"](function () {
+        b.disabled = false;
+        b.textContent = "终止";
+      });
+    };
+  }
+
+  function disarmStop(card) {
+    if (card.stop) { card.stop.hidden = true; card.stop.onclick = null; }
+    card.job = "";
   }
 
   function startPoll() {
@@ -416,21 +463,37 @@
         if (!job) { delete S.pending[id]; fail(card, "服务重启过，这张没了，点重画"); return; }
         if (job.state === "done") {
           delete S.pending[id];
+          disarmStop(card);
           showImage(card, job);
         } else if (job.state === "error" || job.state === "cancelled") {
           delete S.pending[id];
+          disarmStop(card);
           fail(card, job.error || "这张没出来");
         } else {
-          var n = d.queue_depth;
-          card.note.hidden = false;
-          card.note.className = "note";
           // 带上参考图时把它读图的结果说清楚：读到了就说「照着参考图画」，
           // 没读到就说「按描述画」——用户不该猜这张图到底用没用上。
           var refs = job.ref_note || "";
-          card.note.textContent = (typeof n === "number" && n > 0)
-            ? "前面还有 " + n + " 人排队" + (refs ? "（" + refs + "）" : "")
-            : "正在生成…" + (refs ? "　" + refs : "");
-          if (card.rec) card.rec.note = card.note.textContent;
+          var tail = refs ? "（" + refs + "）" : "";
+          // 说清楚它**现在到底在哪**（2026-11-23）：`phase` 是后端去 ComfyUI
+          // 现问的——排队 / 准备中 / 真在画 / 掉队了。原来一律写「正在生成」，
+          // ComfyUI 重启后还挂在那儿转圈，用户根本不知道它是不是死了。
+          var ph = job.phase || "";
+          var text;
+          if (ph === "lost") {
+            text = "ComfyUI 那边已经没有这张了（重启过），重新发一次吧";
+          } else if (ph === "running") {
+            text = "正在画…" + tail;
+          } else if (ph === "queued") {
+            var n = d.queue_depth;
+            text = (typeof n === "number" && n > 0)
+              ? "排队中，前面还有 " + n + " 张" + tail : "排队中…" + tail;
+          } else {
+            text = "准备中（等显卡空出来）" + tail;
+          }
+          card.note.hidden = false;
+          card.note.className = "note" + (ph === "lost" ? " err" : "");
+          card.note.textContent = text;
+          if (card.rec) card.rec.note = text;
         }
       });
 

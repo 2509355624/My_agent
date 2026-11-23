@@ -130,6 +130,11 @@ _RUN_LOCK = threading.Lock()
 _ABORT = {}
 # state.json 的读写互斥：后台线程写、HTTP 线程读，同一个文件。
 _STATE_LOCK = threading.Lock()
+# 单页终止（2026-11-23 用户要的「单个格子也给我一个终止」）：
+# {任务目录: set(页号)}。和 `_ABORT`（整批停）是**两回事**——这个只丢一页，
+# 后面几页照画。出图线程每页开工前看一眼，正在跑的那一页由 `_draw` 把
+# 同一个 Event 挂到 job 上，走定向 /interrupt。
+_PAGE_STOP = {}
 
 
 # ══════════════════════════════════════════════════════════
@@ -600,10 +605,18 @@ def _draw(page, prompt, base_wf, seed, out_dir, title, letter_info="",
     except Exception:                           # noqa: BLE001  散文/坏 JSON 都走这里
         pass
 
+    # tag 用「任务页号」而不是随机编号（2026-11-23）：页面上要单页终止、
+    # 要显示这一页到底在排队还是在画，得有一个能对上号的字段。
     job, why = image_jobs.enqueue(None, None, wf, skill=SKILL, prompt=ledger,
                                   seed=seed, out_dir=out_dir)
     if job is None:
         return None, why or "队列没接"
+    # 让 `cancel_tag` 认得这一页（2026-11-23 单页终止）。用「任务名#页号」：
+    # 同一个任务重抽时页号不变，两条任务不会撞。
+    try:
+        job.tag = "%s#%s" % (os.path.basename(out_dir), n)
+    except Exception:                           # noqa: BLE001
+        pass
     # 中止信号转交：置位后 wait() 抛 Cancelled → process() 走定向 /interrupt
     if abort is not None:
         job.cancel = abort
@@ -657,6 +670,11 @@ def _run(d, spec, nums, seed_base, loras=None, steps=None, abort=None):
             if abort is not None and abort.is_set():
                 _set_page(d, n, status="canceled", error="用户终止")
                 continue
+            # 单页终止（2026-11-23）：这一页被点名了就直接跳过，**后面的页照画**
+            # ——这正是「单个格子单独终止」和「整批中断」的区别。
+            if _page_stopped(d, n):
+                _set_page(d, n, status="canceled", error="用户终止了这一页")
+                continue
             with _RUN_LOCK:
                 if d in _RUNNING:
                     _RUNNING[d]["n"] = n
@@ -687,6 +705,12 @@ def _run(d, spec, nums, seed_base, loras=None, steps=None, abort=None):
                 for m in nums[i + 1:]:
                     _set_page(d, m, status="canceled", error="用户终止")
                 break
+            elif _page_stopped(d, n):
+                # 只是这一页被终止：标掉它，**接着画下一页**（不 break）。
+                # 和上面整批中断那条严格区分——混在一起就成了「停一格全停」。
+                _set_page(d, n, status="canceled", error="用户终止了这一页",
+                          seed=seed, secs=round(time.time() - t0, 1),
+                          rev=int(time.time()))
             else:
                 _set_page(d, n, status="error", error=err or "没出图", seed=seed,
                           secs=round(time.time() - t0, 1), rev=int(time.time()))
@@ -700,6 +724,113 @@ def _run(d, spec, nums, seed_base, loras=None, steps=None, abort=None):
         with _RUN_LOCK:
             _RUNNING.pop(d, None)
             _ABORT.pop(d, None)
+            _PAGE_STOP.pop(d, None)
+
+
+def _page_stopped(d, n):
+    """这一页是不是被用户点名终止了（2026-11-23 单页「终止」按钮）。"""
+    with _RUN_LOCK:
+        return n in (_PAGE_STOP.get(d) or ())
+
+
+@bp.route("/api/moss/abort_page", methods=["POST"])
+def api_moss_abort_page():
+    """**只终止这一页**（2026-11-23 用户：「单个格子给我单独加一个终止可以吗」）。
+
+    和 `/api/moss/abort`（整批停）是两回事：
+      · 排队中的这一页 → 从 `image_jobs` 队列里摘掉；
+      · 正在画的这一页 → 置位它自己的 Event / stopped，worker 走定向
+        /interrupt 并等它退场，**图不会被投递**；
+      · 后面还没开始的页 → **照画**（这就是「单格」的意义）。
+
+    页号在 state.json 里落成 canceled，所以刷新页面看到的也是「终止了」，
+    而不是又回到 pending 让人以为还要跑。
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        d = _task_dir(data.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    try:
+        n = int(data.get("page"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "没指定哪一页"}), 400
+    tag = "%s#%s" % (os.path.basename(d), n)
+    hit = False
+    try:
+        hit = image_jobs.cancel_tag(tag, "用户终止了这一页")
+    except Exception:                           # noqa: BLE001
+        log.warning("moss 第 %s 页：掐 image_jobs 里那张失败", n, exc_info=True)
+    with _RUN_LOCK:
+        _PAGE_STOP.setdefault(d, set()).add(n)
+    _set_page(d, n, status="canceled", error="用户终止了这一页",
+              rev=int(time.time()))
+    log.info("moss 任务 %s：终止第 %s 页（队列命中=%s）",
+             os.path.basename(d), n, hit)
+    return jsonify({"ok": True, "page": n, "hit": hit,
+                    "message": "这一页已终止，后面的照画"} if hit else
+                   {"ok": True, "page": n, "hit": False,
+                    "message": "这一页已经标掉了"})
+
+
+@bp.route("/api/moss/pages_state", methods=["GET"])
+def api_moss_pages_state():
+    """每一页**此刻到底在哪**（2026-11-23）。
+
+    state.json 里的 status 是出图线程写的，只能说明「开始画了 / 画完了」；
+    用户真正想知道的是「它还在队列里排着？在 ComfyUI 手里画着？还是两边都
+    没它了（ComfyUI 重启过）」——这三种情况原先都显示成同一句「画图中」。
+    这里按页号去 `image_jobs` 现查，并顺手问一次 ComfyUI：它认不认识这个
+    prompt_id。问不到就说 `unknown`，不猜。
+    """
+    try:
+        d = _task_dir(request.args.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    spec = _read_json(os.path.join(d, "spec.json"), {})
+    st = (_load_state(d).get("pages") or {})
+    base = os.path.basename(d)
+    try:
+        snap = image_jobs.snapshot()
+    except Exception:                           # noqa: BLE001
+        snap = {}
+    running = {j.get("tag"): j for j in
+               ([snap.get("running")] if snap.get("running") else [])}
+    queued = {j.get("tag"): j for j in (snap.get("queued") or [])}
+    out = {}
+    comfy_up = None
+    for page in spec.get("pages") or []:
+        n = page.get("n")
+        tag = "%s#%s" % (base, n)
+        rec = st.get(str(n)) or {}
+        phase = ""
+        ahead = None
+        if tag in running:
+            phase, ahead = "submit", 0
+            pid = running[tag].get("pid")
+            if pid:
+                if comfy_up is None:
+                    try:
+                        comfy_up = image_jobs._comfy_up()
+                    except Exception:           # noqa: BLE001
+                        comfy_up = None
+                if comfy_up is False:
+                    phase = "lost"
+                elif image_jobs._comfy_queue_has(pid) or image_jobs.poll_once(pid):
+                    phase = "running"
+                else:
+                    phase = "lost"
+        elif tag in queued:
+            phase = "queued"
+            ahead = queued[tag].get("ahead")
+        else:
+            phase = {"done": "done", "error": "error",
+                     "canceled": "canceled"}.get(rec.get("status") or "", "idle")
+        out[str(n)] = {"phase": phase, "ahead": ahead,
+                       "error": rec.get("error") or "",
+                       "secs": rec.get("secs")}
+    return jsonify({"ok": True, "task": base,
+                    "comfy_online": comfy_up, "pages": out})
 
 
 @bp.route("/api/moss/render", methods=["POST"])
@@ -793,7 +924,20 @@ def api_moss_abort():
         return jsonify({"ok": True, "aborted": False,
                         "message": "这个任务没在跑"})
     ev.set()
-    return jsonify({"ok": True, "aborted": True,
+    # 整批停要**同时**把队列里这一本还没开始的那几页摘掉（2026-11-23）：
+    # 光置位 Event 的话，正在画的那张要等它收尾，队列里那几张还占着名额，
+    # 用户重新点「开始画」会被自己刚才那批挡住。逐页按 tag 掐，别的任务
+    # 一张都不碰。
+    spec = _read_json(os.path.join(d, "spec.json"), {})
+    dropped = 0
+    for page in spec.get("pages") or []:
+        try:
+            if image_jobs.cancel_tag("%s#%s" % (os.path.basename(d), page.get("n")),
+                                     "用户终止了这一批"):
+                dropped += 1
+        except Exception:                       # noqa: BLE001
+            pass
+    return jsonify({"ok": True, "aborted": True, "dropped": dropped,
                     "message": "已发终止信号，当前这一页会停下"})
 
 

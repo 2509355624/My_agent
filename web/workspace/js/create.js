@@ -97,6 +97,7 @@
 
   function giveUp(run, msg) {
     stop(run);
+    disarmStop(run);
     run.card.say(msg || "这一步没走通，再发一次试试", true);
     run.rec.note = msg || "这一步没走通";
     run.rec.err = true;
@@ -141,6 +142,7 @@
     global.WSApi.post("/api/comic/start", { task: task }).then(function (d) {
       if (!d || !d.ok) return giveUp(run, (d && d.error) || "没开起来");
       acts(run, false);
+      armStop(run);
       later(run, function () { pollDraw(run); }, 1200);
     });
   }
@@ -215,6 +217,7 @@
 
   function finish(run, ps) {
     stop(run);
+    disarmStop(run);
     run.card.say(ps.length + " 页都画好了，点一格翻整本");
     run.rec.note = run.card.note.textContent;
     run.rec.done = true;
@@ -225,6 +228,7 @@
 
   function finishBad(run, msg) {
     stop(run);
+    disarmStop(run);
     run.card.say(msg || "画到中途停了，去「我的漫画作品」看哪页没出来", true);
     run.rec.note = run.card.note.textContent;
     run.rec.done = true;
@@ -252,6 +256,7 @@
     card.body.appendChild(run.grid);
     if (rec.note) card.say(rec.note, rec.err);
     acts(run, !!rec.done && !rec.err);
+    if (!rec.done) armStop(run);
     later(run, function () { pollDraw(run); }, 600);
   }
 
@@ -286,6 +291,44 @@
     b.textContent = text;
     b.addEventListener("click", fn);
     return b;
+  }
+
+  /* 「终止这一本」（2026-11-23 用户：「漫画生成这一块也是这样子」）：
+     服务端 `/api/comic/abort` 会把正在画的那格定向停掉、排队中的整批摘掉、
+     逐格循环退出，已经出好的格子一张都不动。 */
+  function stopBook(run) {
+    if (!run.task) return;
+    var b = run.card.stop;
+    if (b) { b.disabled = true; b.textContent = "停止中…"; }
+    global.WSApi.post("/api/comic/abort", { task: run.task })
+      .then(function (d) {
+        if (b) { b.hidden = true; b.disabled = false; b.textContent = "终止"; }
+        stop(run);
+        run.card.say((d && d.ok)
+          ? "已终止，已经画好的格子都留着" : "终止没发出去，再点一次");
+        run.rec.note = run.card.note.textContent;
+        run.rec.done = true;
+        run.rec.err = true;
+        push(run);
+        acts(run, true);
+      })["catch"](function () {
+        if (b) { b.hidden = false; b.disabled = false; b.textContent = "终止"; }
+      });
+  }
+
+  /* 画的过程中露出来，画完 / 失败就收起来 */
+  function armStop(run) {
+    var b = run.card.stop;
+    if (!b) return;
+    b.hidden = false;
+    b.disabled = false;
+    b.textContent = "终止";
+    b.onclick = function () { stopBook(run); };
+  }
+
+  function disarmStop(run) {
+    var b = run.card.stop;
+    if (b) { b.hidden = true; b.onclick = null; }
   }
 
   function acts(run, withZip) {

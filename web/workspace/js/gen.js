@@ -28,6 +28,12 @@
     return global.WSApi.get(BASE + "/status");
   }
 
+  /* 终止一张（2026-11-23 用户：「加个终止按钮」）。和服务端同一个口子：
+     排队中的从队列摘掉，正在画的走定向 /interrupt 并且**不会投递**。 */
+  function cancel(id) {
+    return global.WSApi.post(BASE + "/cancel", { id: id });
+  }
+
   function img(file) {
     return BASE + "/img?f=" + encodeURIComponent(file || "");
   }
@@ -44,6 +50,7 @@
     channels: channels,
     submit: submit,
     status: status,
+    cancel: cancel,
     img: img,
     defaultSkill: defaultSkill,
     setDefaultSkill: setDefaultSkill

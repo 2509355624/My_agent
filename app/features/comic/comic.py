@@ -940,7 +940,8 @@ def _out_dir_for(task):
 
 
 def _submit(workflow, skill, prompt, seed, task=None, out_dir=None, abort=None,
-            with_entry=False, priority=False, wait=True):
+            with_entry=False, priority=False, wait=True, task_tag=None,
+            on_pid=None):
     """排进全局串行队列并等出图，返回 ComfyUI 那边的输出图（相对路径）。
 
     target=None 是「网页侧」路径：worker 出图后只把 history entry 挂到 job 上，
@@ -982,6 +983,20 @@ def _submit(workflow, skill, prompt, seed, task=None, out_dir=None, abort=None,
         # 直接挂同一个 Event（不是 copy）：任务一中断，这一张立刻能看见。
         # 挂在 enqueue 之后是没法避免的：job 对象要等入队才有。
         job.cancel = abort
+    # 本台任务号 / ComfyUI 编号回填（2026-11-23，都可选）：
+    #   · task_tag —— 换成这个编号，`image_jobs.cancel_tag()` 与
+    #     `/api/gen/status` 的 phase 判断才认得出「这是哪一张」；
+    #   · on_pid  —— ComfyUI 一接单就回调，跑图台拿它去探「它到底在不在
+    #     队列里」，把「画图中」和「掉队了」分开。不传 = 行为和从前一样。
+    if task_tag:
+        job.tag = str(task_tag)
+        if callable(on_pid):
+            # 存在 _pid_sink 而不是 pid_sink：别和 Job 的任何公开字段撞名，
+            # 也方便 grep 到「谁在用这个回调」。
+            job._pid_sink = on_pid
+    if abort is not None and abort.is_set():
+        # 入队与挂信号之间那几毫秒里被中断了：别交给 ComfyUI，直接收工。
+        raise Cancelled("用户中断了整批渲染")
     if not wait:
         return job
     return _collect(job, with_entry=with_entry)
