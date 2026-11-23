@@ -66,3 +66,32 @@ button { cursor: pointer; }
     box-shadow: var(--shadow-3);
   }
 }
+
+/* 轻提示：一次性的「已排队 / 没排上」，1.8 秒自己消失，不打断操作 */
+.wstoast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(28px + env(safe-area-inset-bottom));
+  z-index: 90;
+  max-width: 76vw;
+  padding: 9px 16px;
+  border-radius: 999px;
+  background: rgba(24, 28, 36, .9);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+  box-shadow: var(--shadow-3);
+  opacity: 0;
+  transform: translate(-50%, 10px);
+  transition: opacity .18s, transform .18s;
+  pointer-events: none;
+}
+
+.wstoast.on {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.wstoast.bad { background: var(--danger); }
+

@@ -7,16 +7,18 @@
   var TITLES = {
     gallery: "AI 创作",
     comic: "我的漫画作品",
+    book: "",
     me: "我的"
   };
 
   var PLACEHOLDER = {
     gallery: "画廊还在接，先回聊天页生图",
     comic: "我的漫画作品还在接",
+    book: "这本打不开",
     me: "作品和收藏还在接"
   };
 
-  // name → { top: fn(中段节点), mount: fn(内容区节点) }
+  // name → { top: fn(中段节点, opts), mount: fn(内容区节点, opts) }
   var CUSTOM = {};
 
   var ICON_ME =
@@ -38,8 +40,10 @@
     CUSTOM[name] = spec || {};
   }
 
-  function build(name) {
+  /* opts：push 时带进来的参数（例如打开哪一本漫画），子页自己决定怎么用 */
+  function build(name, opts) {
     var spec = CUSTOM[name] || {};
+    var arg = opts || {};
 
     var view = document.createElement("section");
     view.className = "view view-push";
@@ -65,10 +69,11 @@
     body.className = "vbody";
     body.dataset.host = name;
 
-    if (typeof spec.top === "function") spec.top(mid);
+    if (typeof spec.top === "function") spec.top(mid, arg);
 
     if (typeof spec.mount === "function") {
-      spec.mount(body);
+      spec.mount(body, arg);
+
     } else {
       var ph = document.createElement("p");
       ph.className = "vph";

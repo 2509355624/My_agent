@@ -13,9 +13,10 @@
 
   // ── 页面栈 ────────────────────────────────────────────
 
-  function push(name) {
-    if (S.top) { replace(name); return S.top; }
-    var view = global.WSViews.build(name);
+  function push(name, opts) {
+    if (S.top) { replace(name, opts); return S.top; }
+    var view = global.WSViews.build(name, opts);
+
     el.stack.appendChild(view);
     // 下一帧再加 .in，否则插入与过渡撞在同一帧里，滑入动画不触发
     global.requestAnimationFrame(function () { view.classList.add("in"); });
@@ -26,9 +27,9 @@
   }
 
   /* 换内容不换栈：个人页从子页右上角进，退回时直接回聊天页 */
-  function replace(name) {
-    if (!S.top) return push(name);
-    var next = global.WSViews.build(name);
+  function replace(name, opts) {
+    if (!S.top) return push(name, opts);
+    var next = global.WSViews.build(name, opts);
     next.classList.add("in");
     el.stack.replaceChild(next, S.top);
     S.top = next;

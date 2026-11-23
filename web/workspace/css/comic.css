@@ -1,0 +1,283 @@
+/* 我的漫画作品：作品列表 + 单本翻页。
+   颜色、阴影、玻璃全部走 tokens.css，深浅色自动跟随。 */
+
+/* ── 列表 ───────────────────────────────────────────── */
+.cbody { padding: 12px 12px 24px; }
+
+/* 红字提醒：图在本机、不长期保留。放在最上面，不跟卡片混在一起 */
+.cwarn {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: rgba(214, 69, 69, .08);
+  color: var(--danger);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.clist {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cwork {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--hair);
+  border-radius: 16px;
+  background: var(--glass-2);
+  color: var(--text);
+  text-align: left;
+  box-shadow: var(--shadow-1);
+  transition: transform .14s ease, box-shadow .16s ease;
+}
+
+.cwork:active {
+  transform: scale(.99);
+  box-shadow: var(--shadow-2);
+}
+
+.cpic {
+  flex: 0 0 auto;
+  width: 74px;
+  aspect-ratio: 3 / 4;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--card-2);
+  display: grid;
+  place-items: center;
+}
+
+.cpic img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cpic.nopic span {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.cinfo {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 7px;
+  padding-right: 2px;
+}
+
+.cname {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.cmeta {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
+.cbar {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.cbar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--brand-2), var(--brand));
+  transition: width .3s ease;
+}
+
+/* 骨架：还没拿到列表时先占两行，别让页面空一下再跳 */
+.csk {
+  height: 116px;
+  border-color: transparent;
+  background: linear-gradient(100deg, var(--card-2) 30%, var(--line) 50%,
+              var(--card-2) 70%);
+  background-size: 220% 100%;
+  animation: c-shimmer 1.4s linear infinite;
+  box-shadow: none;
+}
+
+.cnote {
+  margin: 14vh 0 0;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+/* ── 单本 ───────────────────────────────────────────── */
+.cbook {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.cstage {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  padding: 6px 0 0;
+}
+
+.ctrack {
+  display: flex;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ctrack::-webkit-scrollbar { display: none; }
+
+.cslide {
+  flex: 0 0 100%;
+  scroll-snap-align: center;
+  display: grid;
+  place-items: center;
+  padding: 2px 14px;
+}
+
+.cslide img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 12px;
+  object-fit: contain;
+  box-shadow: var(--shadow-2);
+}
+
+/* 这页还没有图 / 画失败了 */
+.cwait {
+  max-width: 84%;
+  padding: 18px 16px;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.cwait.bad {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.cpageno {
+  flex: 0 0 auto;
+  padding: 2px 0 6px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.cstrip {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  padding: 2px 12px 10px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cstrip::-webkit-scrollbar { display: none; }
+
+.cthumb {
+  flex: 0 0 auto;
+  width: 42px;
+  aspect-ratio: 3 / 4;
+  padding: 0;
+  overflow: hidden;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: var(--card-2);
+  color: var(--text-dim);
+  font-size: 11px;
+  display: grid;
+  place-items: center;
+}
+
+.cthumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cthumb.on {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.cthumb.bad:not(.on) { border-color: var(--danger); }
+
+.cacts {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  padding: 6px 12px calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--hair);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(18px) saturate(170%);
+  backdrop-filter: blur(18px) saturate(170%);
+}
+
+.cbtn {
+  padding: 9px 4px;
+  border: 1px solid var(--hair);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 12.5px;
+  white-space: nowrap;
+  box-shadow: var(--shadow-1);
+}
+
+.cbtn:active { background: var(--brand-soft); }
+
+.cbtn:disabled {
+  background: var(--card-2);
+  color: var(--text-dim);
+  box-shadow: none;
+}
+
+/* 列表里的「重试」是胶囊，不占满整行 */
+.cnote .cbtn {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 7px 18px;
+  border-radius: 999px;
+}
+
+@keyframes c-shimmer {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .csk { animation: none; }
+  .cwork, .cbar i { transition: none; }
+}
