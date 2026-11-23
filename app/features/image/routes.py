@@ -72,6 +72,9 @@ _LORA_SAVE_LOCK = threading.Lock()   # 「存为默认」是改模板文件，�
 # 跑 moss 小漫画的分镜提示词动辄几千字，4000 会直接吃 400 把稿子挡在外面。
 # 原来那句「防手滑贴进一整篇小说」的顾虑交给用户自己判断，代码不再替他砍。
 _MAX_PROMPT = 100000
+# 一次最多认几张参考图。每张都要走一次识图（几秒 + 一份额度），挂十张等于
+# 让用户干等半分钟；超过的部分直接忽略，不报错。
+MAX_REFS = 3
 
 # 账本与「清空截止」（测试进程经 state_path 自动落临时目录，互不污染）。
 _LEDGER = state_path("gen_pad.jsonl")
@@ -230,7 +233,8 @@ def _public(job):
                                     "state", "error", "file", "ts",
                                     "steps", "steps_label", "cfg",
                                     "negative", "width", "height",
-                                    "size_label", "secs", "landscape")}
+                                    "size_label", "secs", "landscape",
+                                    "ref_note")}
 
 
 def _enabled_loras(job):
@@ -508,6 +512,25 @@ def api_submit():
                      for s in lora_slots.read_slots(wf)}
             for s in slots:
                 s["name"] = names.get(s["slot"], "")
+    # 参考图（2026-11-23）：把图读成描述再拼进提示词，不做像素级的图生图。
+    # 放在这里拼是因为后面紧跟的就是长度校验与建 job，拼完超长会被一起管住。
+    # 读图失败不拦提交：图读不出来不该让用户整条消息白写——明确说一声、按
+    # 纯文字出图，并把这件事记在 job 上让前端显示出来。
+    ref_ids, ref_note = _ref_ids(data.get("refs"))
+    if ref_ids:
+        ref_text = _describe_refs(ref_ids)
+        if ref_text:
+            prompt = "%s\n\n画面参考（来自用户上传的图，请照着画）：%s" % (
+                prompt, ref_text)
+            ref_note = "已带上 %d 张参考图" % len(ref_ids)
+        else:
+            ref_note = "参考图没读出来，这张按你的描述来"
+    if not prompt:
+        return jsonify({"ok": False, "error": "提示词是空的"}), 400
+    if len(prompt) > _MAX_PROMPT:
+        return jsonify({"ok": False,
+                        "error": "提示词太长了（%d 字，上限 %d）"
+                                 % (len(prompt), _MAX_PROMPT)}), 400
     with _JOBS_LOCK:
         active = sum(1 for j in _JOBS.values() if j["state"] == "queued")
         if active >= _MAX_ACTIVE:
@@ -524,6 +547,7 @@ def api_submit():
                "height": size[1] if size else None,
                "landscape": landscape,
                "size_label": "",
+               "ref_note": ref_note,
                "secs": None,
                "state": "queued", "error": "", "file": "",
                "ts": time.time(),
@@ -538,6 +562,45 @@ def api_submit():
                 _JOBS.pop(old, None)
     threading.Thread(target=_run, args=(job,), daemon=True).start()
     return jsonify({"ok": True, "job": _public(job)})
+
+
+def _ref_ids(raw):
+    """前端传来的参考图 id 列表 → 干净的整数列表。返回 (ids, 空串)。
+
+    只做**格式**校验：非整数、超出上限一律丢掉。是不是自己的图，交给读图
+    那一步按 /img 同一套权限判（别人私有的图读不出来，就按没参考出图）。
+    """
+    if not isinstance(raw, (list, tuple)):
+        return [], ""
+    ids = []
+    for x in raw[:MAX_REFS]:
+        try:
+            i = int(x)
+        except (TypeError, ValueError):
+            continue
+        if i > 0 and i not in ids:
+            ids.append(i)
+    return ids, ""
+
+
+def _describe_refs(ids):
+    """把几张参考图读成描述，拼成一段。读不出来的跳过（不回退、不拦提交）。
+
+    复用画廊那边的读图口径（同一套权限、同一段反推提示词），所以画同款和
+    聊天里挂参考图得到的是同一种文字，用户看到的效果一致。
+    """
+    from app.features.gallery.routes import DESCRIBE_PROMPT, _read_image_text
+
+    texts = []
+    for i in ids:
+        t = _read_image_text(i, DESCRIBE_PROMPT)
+        if t:
+            texts.append(t)
+    if not texts:
+        return ""
+    if len(texts) == 1:
+        return texts[0]
+    return "；".join("参考图%d：%s" % (n, t) for n, t in enumerate(texts, 1))
 
 
 def _new_job_id():

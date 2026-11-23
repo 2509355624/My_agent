@@ -85,11 +85,28 @@
     p.textContent = text;
     box().appendChild(p);
     scrollBottom();
+    return p;
   }
 
   function sysNote(text) {
-    paintNote(text);
+    var p = paintNote(text);
     log({ k: "note", t: text });
+    return p;
+  }
+
+  /* 一条会自己消失的提示（「正在传参考图…」「正在看图…」这类）。
+     跟 sysNote 分开：sysNote 是对话记录的一部分，要进存档；这种过场提示
+     不该进存档，刷新后也不该再出现一条「正在看图…」。返回的句柄用来提前
+     收掉（传完了、看完了），到点也会自己走。 */
+  function busyNote(text, ms) {
+    var p = paintNote(text);
+    var t = setTimeout(function () { if (p.parentNode) p.remove(); }, ms || 20000);
+    return {
+      remove: function () {
+        clearTimeout(t);
+        if (p.parentNode) p.remove();
+      }
+    };
   }
 
   function paintUser(text) {
@@ -186,30 +203,37 @@
     'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
     '<path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4.6V10h-5.4"/></svg>';
 
-  /* card 只要能提供 {acts, prompt, skill} 就够了：恢复出来的卡也走这里 */
+  /* 卡片底部两个按钮：复制提示词 | 换种子重画。
+     它们原来紧贴在一起（都是小圆圈、间距 8px），用户反馈「很容易误触」——
+     改成左边一个纯文字按钮、右边一个图标按钮，中间留空推开，一个管复制
+     一个管重画，手指不会点串。 */
   function buildActs(card) {
     if (card.acts.childElementCount) return;
     card.acts.hidden = false;
 
     var copy = document.createElement("button");
     copy.type = "button";
+    copy.className = "act act-text";
     copy.title = "复制提示词";
     copy.setAttribute("aria-label", "复制提示词");
-    copy.innerHTML = ICON_COPY;
+    copy.innerHTML = ICON_COPY + "<span>复制</span>";
     copy.addEventListener("click", function () {
       copyText(card.prompt).then(function (ok) {
-        copy.innerHTML = ok ? '<span class="ok">✓</span>' : "!";
-        setTimeout(function () { copy.innerHTML = ICON_COPY; }, 1200);
+        copy.innerHTML = ok ? '<span class="ok">✓ 已复制</span>' : "复制失败";
+        setTimeout(function () {
+          copy.innerHTML = ICON_COPY + "<span>复制</span>";
+        }, 1200);
       });
     });
 
     var again = document.createElement("button");
     again.type = "button";
+    again.className = "act act-icon";
     again.title = "换种子重画";
-    again.setAttribute("aria-label", "重画");
-    again.innerHTML = ICON_AGAIN;
+    again.setAttribute("aria-label", "换种子重画");
+    again.innerHTML = ICON_AGAIN + "<span>重画</span>";
     again.addEventListener("click", function () {
-      submitJob(card.prompt, card.skill, []);
+      submitJob(card.prompt, card.skill, card.refs || []);
     });
 
     card.acts.appendChild(copy);
@@ -266,9 +290,12 @@
       return;
     }
     var rec = { k: "img", cls: "", prompt: prompt, skill: skill,
+                refs: (refs || []).slice(),
                 job: "", file: "", note: "排队中…", err: false };
     var card = newCard(prompt, skill, rec);
     card.rec = rec;
+    // 卡片自己记住参考图：点「重画」要按同一份角色重来，不能悄悄丢图
+    card.refs = rec.refs;
     log(rec);
     var body = { skill: skill, prompt: prompt };
     if (refs && refs.length) body.refs = refs;
@@ -329,9 +356,12 @@
           var n = d.queue_depth;
           card.note.hidden = false;
           card.note.className = "note";
+          // 带上参考图时把它读图的结果说清楚：读到了就说「照着参考图画」，
+          // 没读到就说「按描述画」——用户不该猜这张图到底用没用上。
+          var refs = job.ref_note || "";
           card.note.textContent = (typeof n === "number" && n > 0)
-            ? "前面还有 " + n + " 人排队"
-            : "正在生成…";
+            ? "前面还有 " + n + " 人排队" + (refs ? "（" + refs + "）" : "")
+            : "正在生成…" + (refs ? "　" + refs : "");
           if (card.rec) card.rec.note = card.note.textContent;
         }
       });
@@ -522,6 +552,7 @@
   global.WSChat = {
     init: init,
     sysNote: sysNote,
+    busyNote: busyNote,      // 过场提示，不进存档、会用完自己消失
     card: shell,
     remember: remember,
     touch: touch,

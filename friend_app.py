@@ -477,15 +477,15 @@ def workspace_asset(sub):
 @app.route("/gallery")
 @app.route("/gallery.html")
 def gallery_page():
-    """旧画廊地址：**302 到新界面**（2026-11-23）。
+    """老地址，保留：QQ 里已经发出去的链接、群友的收藏都还指着它。
 
-    QQ 的 `/画廊` 指令发的还是这个地址，直接落到 `/workspace/`，群里发出去的
-    新链接就都是新界面了。`?from=qq` 原样带过去——`_gate` 靠它先解掉 `/play`
-    种下的 fr_solo 页面锁，不然会被挡回游客页。登录与游客态都交给
-    `/workspace/` 自己判，这里不再复制一份。
+    2026-11-23 曾 302 到 `/workspace/`，当天又改回原来的页面（用户明确
+    要「5174 用原始网页」）：新界面还没定性，群友手上那套已经用熟了。
+    `/workspace/` 仍然在，只是不再从旧地址跳过去。
     """
-    qs = request.query_string.decode("utf-8", "ignore")
-    return redirect("/workspace/" + ("?" + qs if qs else ""))
+    if not _logged_in() and not _guest_in():
+        return send_from_directory(WEB_DIR, "friend.html")
+    return send_from_directory(WEB_DIR, "gallery.html")
 
 
 # ─── 提示词工坊 ──────────────────────────────────────────
@@ -903,18 +903,20 @@ def persona_page():
 @app.route("/comic")
 @app.route("/comic.html")
 def comic_page():
-    """旧漫画台入口：**302 到新界面**（2026-11-23）。
+    """群友漫画工作台（2026-11-10 开放）。**必须登录**。
 
-    QQ 的 `/漫画台` 指令发的还是这个地址，直接换到 `/workspace/` 的漫画面板，
-    免得群友手上还攒着一堆旧链接。`?from=qq` 一并带过去——`_gate` 靠它先解
-    掉 `/play` 种下的 fr_solo 页面锁，否则会被挡回游客页。
+    没登录时发的是 `friend.html`（它本身就是登录页，验证成功后 `location.reload()`
+    又回到这个地址，服务器这时才看到 cookie、才发漫画台）。游客态一律不给：
+    剧本生成要花站主的 Token，后续出图还要占整条 GPU 队列，不能匿名触发。
 
-    登录态交给 `/workspace/` 自己判（未登录发 workspace/index.html，
-    登录发 chat.html），这里不再复制一份判断。
-    接口仍经 `/api/comic/<path>` 反代到 5174，新界面的漫画链用的就是它。
+    接口经 `/api/comic/<path>` 反代到 5174，`_forward` 会把登录 Cookie 解出的
+    QQ 写死塞进请求；页面自己不需要也不能传 qq。
+
+    2026-11-23 曾短暂 302 到 `/workspace/`，当天改回这页（用户要原始网页）。
     """
-    qs = request.query_string.decode("utf-8", "ignore")
-    return redirect("/workspace/" + ("?" + qs if qs else ""))
+    if not _logged_in():
+        return send_from_directory(WEB_DIR, "friend.html")
+    return send_from_directory(WEB_DIR, "comic_studio_friend.html")
 
 
 @app.route("/api/comic/<path:sub>", methods=["GET", "POST", "DELETE"])

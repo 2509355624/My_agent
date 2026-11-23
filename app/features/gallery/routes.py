@@ -44,6 +44,21 @@ UPLOAD_MAX = 10                     # 一次最多传几张（单个作品集上
 UPLOAD_BYTES = 25 << 20             # 单张上限 25MB
 UPLOAD_TOTAL = 250 << 20            # 一次合计上限 250MB
 
+# 「画同款」读图用的提示词：要的是**能再去生成一遍**的描述，不是通用识图
+# 那种逐字念画面文字。所以明说要写主体/构图/画风/光线，不要念字、不要
+# 评价、不要寒暄——多一句「这张图很好」就白占了提示词的位置。
+DESCRIBE_PROMPT = (
+    "请把这张图反推成一段可以直接用来再生成一次的绘画提示词。\n"
+    "- 用中文，一段话写到底，不要分行、不要列点、不要加标题。\n"
+    "- 依次说清：主体与人数、人物外观（发型发色、表情、服装）、动作姿态、"
+    "场景与背景、构图与镜头（近景/中景/全身、视角）、画风（如动漫/厚涂/水彩/"
+    "赛博朋克等）、色调与光线。\n"
+    "- 画风与色调是重点，要具体到能复现的程度。\n"
+    "- 不要评价这张图，不要说「这是一张」「画面中」这类空话。\n"
+    "- 画面里的文字直接忽略，不要转写。\n"
+    "只输出这段话本身。"
+)
+
 # 图片缓存一年。item id 是一次性的：重传会 DELETE 再 INSERT 拿到新 id，
 # 所以同一个 URL 的字节永远不会变，可以 immutable。原先只给 10 分钟——
 # 换算下来每次重新打开画廊，几十张缩略图全要从这台机器重传一遍。
@@ -968,7 +983,16 @@ def api_upload_one():
     with gallery.connect() as con:
         trow = con.execute("SELECT title FROM works WHERE id=?",
                            (wid,)).fetchone()
+        # 直接把刚拷进去那张的 item id 查出来给前端。
+        # 为什么要多这一步：`append_upload` 返回的 idx 是 1 基（第几张），
+        # 而 items.idx 在库里是 0 基，前端拿返回的号去 items 里按 idx 找
+        # 会差一位，于是每次都报「参考图传上去了，但没找到它」
+        # （2026-11-23 用户报的就是这个）。让服务端自己说 id，别让前端猜。
+        irow = con.execute(
+            "SELECT id FROM items WHERE work_id=? AND idx=?",
+            (wid, idx - 1)).fetchone()
     return jsonify({"ok": True, "work_id": wid, "n": n, "idx": idx,
+                    "item_id": (irow["id"] if irow else 0),
                     "left": max(0, gallery.WORK_MAX - n),
                     "new": made,
                     "title": (trow["title"] or "") if trow else ""})
@@ -1002,3 +1026,61 @@ def api_me():
         return jsonify({"ok": False, "error": "参数不对"}), 400
     return jsonify({"ok": True, "owner": _is_owner(qq),
                     "alias": "站长" if _is_owner(qq) else gallery.alias(qq)})
+
+
+def _read_image_text(iid, prompt):
+    """图 id → 用识图模型读出来的一段文字；读不出来返回 ""。
+
+    权限判据与 `/img` 完全一致：别人隐藏的作品读不到。调用方有两条
+    （本文件的 /describe、生图提交时的参考图），所以放在这里共用一份——
+    分散两处迟早会有一条忘了判权限。
+
+    **不抛异常**：读图失败对调用方来说只意味着「这次没有参考」，不该把
+    整条消息拦下来。
+    """
+    qq = _qq()
+    with gallery.connect() as con:
+        row = con.execute(
+            "SELECT i.path, w.hidden, w.owner FROM items i"
+            " JOIN works w ON w.id=i.work_id WHERE i.id=?", (iid,)).fetchone()
+    if not row:
+        return ""
+    if row["hidden"] and row["owner"] != str(qq or "") and not _is_owner(qq):
+        return ""
+    src = row["path"]
+    if not src or not os.path.isfile(src):
+        return ""
+    try:
+        with open(src, "rb") as f:
+            raw = f.read()
+        from app.integrations import vision as vision_mod
+        text = vision_mod.describe(vision_mod.to_data_url(raw), prompt=prompt)
+    except Exception as exc:                        # noqa: BLE001
+        log.warning("读图失败（id=%s）：%s", iid, exc)
+        return ""
+    return (text or "").strip()
+
+
+@bp.route("/describe")
+def api_describe():
+    """把库里某张图读成一段描述，给「画同款」和聊天里的参考图当提示词用。
+
+    `?id=` 是图 id（items.id）。只读用户自己的图或公开图，跟 `/img` 同一条
+    权限判据——不能让这个口子变成「随便填个 id 就读别人私有作品的画面」。
+
+    为什么放在后端做：识图要密钥、要走管理页上选好的那家（失败会依次降级），
+    这些都在服务端。前端只拿文字。
+    """
+    bad = _guard()
+    if bad:
+        return bad
+    try:
+        iid = int(request.args.get("id") or 0)
+    except ValueError:
+        iid = 0
+    if not iid:
+        return jsonify({"ok": False, "error": "没指定哪张图"}), 400
+    text = _read_image_text(iid, DESCRIBE_PROMPT)
+    if not text:
+        return jsonify({"ok": False, "error": "这张没读出来，换个说法描述一下"}), 502
+    return jsonify({"ok": True, "id": iid, "text": text})

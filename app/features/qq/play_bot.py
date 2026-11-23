@@ -42,7 +42,7 @@ def _bot_identity():
 def _gallery_link():
     """画廊链接（隧道地址）。读不到就返回空串，卡片里照实说。
 
-    2026-11-23 起画廊就是新界面 `/workspace/`（5175 的 /gallery 已 302 过去）。
+    画廊是原始那页（5175 的 /gallery），2026-11-23 改成发它。
     """
     try:
         return friend_site.url()
@@ -95,7 +95,7 @@ def head_text():
                 "（Quick Tunnel 每次重启都会换域名）。\n"
                 "让群主双击「启动群友隧道.bat」，起来之后就有了。")
     return ("🎮 玩法 · 生图渠道一览\n"
-            "画廊：%s/workspace/?from=qq\n"
+            "画廊：%s/gallery?from=qq\n"
             "不提渠道就跑默认 silver；想换就说下面这些点名，"
             "认得的角色会自动挂 LoRA。" % url)
 

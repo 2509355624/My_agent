@@ -517,7 +517,7 @@ def _receipt_links(target, target_id):
     if k:      # 认不出会话（target_id 不是 QQ 号）时只给另外两个，不瞎签
         lines.append("跑图台 %s/runbench?k=%s" % (url, k))
     lines.append("角色扮演 %s/persona?from=qq" % url)
-    lines.append("画廊 %s/workspace/?from=qq" % url)
+    lines.append("画廊 %s/gallery?from=qq" % url)
     return "\n".join(lines)
 
 

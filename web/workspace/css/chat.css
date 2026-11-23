@@ -137,30 +137,44 @@
 
 .card .acts {
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
+  align-items: center;
+  /* 一个左、一个右，中间自然空出来：原来两个小圆圈贴着放，手指一点就是
+     「复制」和「重画」一起挨（用户 2026-11-23 反馈很容易误触）。 */
+  justify-content: space-between;
+  gap: 16px;
   padding: 8px 2px 0;
 }
 
 .card .acts[hidden] { display: none; }
 
 .card .acts button {
-  width: 34px;
-  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
   border: 1px solid var(--hair);
-  border-radius: 50%;
+  border-radius: 999px;
   background: var(--card);
   color: var(--text);
-  font-size: 14px;
+  font-size: 12.5px;
   line-height: 1;
-  display: grid;
-  place-items: center;
   box-shadow: var(--shadow-1);
 }
 
-.card .acts button:active { transform: scale(.94); }
+/* 复制：左边，带文字，点错了也看得出点的是哪个 */
+.card .acts .act-text {
+  padding: 0 12px 0 10px;
+}
 
-.card .acts .ok { color: var(--ok); font-size: 15px; }
+/* 重画：右边，图标 + 文字。不给它主色——重画是破坏性动作（上一张已经
+   出了，再来一张就顶掉了），不该比「复制」更抢眼。 */
+.card .acts .act-icon {
+  padding: 0 11px 0 9px;
+}
+
+.card .acts button:active { transform: scale(.96); }
+
+.card .acts .ok { color: var(--ok); font-size: 12.5px; }
 
 /* ── 输入栏：悬在消息上面的一层玻璃 ─────────────────── */
 .composer {
@@ -252,6 +266,11 @@
      再把 overflow 收干净，只有真超出一行才滚。 */
   line-height: 22px;
   overflow-y: auto;
+  /* 高度由脚本按内容算、封顶 132px，滚动条本身没有信息量，反而会在框里
+     顶出一条灰线（用户 2026-11-23 截图里那条）。scrollbar-width 管标准
+     属性（Edge/Firefox 认），下面那两条管 WebKit 遗留实现——只写一个不够，
+     两个引擎各认各的。 */
+  scrollbar-width: none;
   outline: none;
   box-shadow: inset 0 1px 2px rgba(16, 24, 40, .04), var(--shadow-1);
   transition: border-color .15s, box-shadow .15s;

@@ -881,7 +881,13 @@ def append_upload(qq, wid, name, raw, idx=None):
 
     size = os.path.getsize(p)
     with connect() as con:
-        # 同一个序号重传（上一张失败后重试）就顶掉旧行，不留重复
+        # 同一个序号重传（上一张失败后重试）就顶掉旧行，不留重复。
+        # items.idx 在库里是 **0 基**（批量上传那条路用 enumerate(files) 也是
+        # 0 基，`test_gallery` 把它当库内约定锁着）。所以写库写 i-1。
+        # ⚠️ 但本函数**返回**的是 i（1 基，第几张），调用方拿它去 items 里
+        #    按 idx 找会差一位——这就是「参考图上传后报没找到它」的根因。
+        #    修法在调用方：接口额外返回 item_id，前端别再去猜序号（见
+        #    api_upload_one 与 ref.js）。这里不能改库内语义，改了老数据全错位。
         con.execute("DELETE FROM items WHERE work_id=? AND idx=?", (wid, i - 1))
         con.execute("INSERT INTO items(work_id, idx, path, bytes)"
                     " VALUES(?,?,?,?)", (wid, i - 1, p, size))

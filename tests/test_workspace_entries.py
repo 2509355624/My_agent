@@ -1,8 +1,10 @@
-"""新界面入口接入的静态守卫（2026-11-23 用户拍板）。
+"""入口路由的静态守卫（2026-11-23，口径当天改过一次）。
 
 约定：
-- 5174 旧路由 /gallery /comic /moss /gen 直接 302 到 /workspace，旧页面文件保留
-  （回退只需把 redirect 换回 send_from_directory）。
+- 5174 的 /gallery /comic /moss 发**原始页面**。上午一度改 302 到 /workspace，
+  当天用户明确要求「5174 使用原始的网页，不要使用新版的」，于是改回
+  send_from_directory；/workspace/ 仍可直达，只是不再从这些旧地址跳过去。
+- /gen 仍 302 到 /workspace/：那个入口本来就没有「原始页面」一说。
 - 5175 也接：/workspace 未登录发登录页、登录后发聊天页；且必须有一条静态资源
   路由——5175 是 static_folder=None，不会自己发 css/js。
 - 页面里的旧跳转改成指向 /workspace，不再开到老界面。
@@ -30,16 +32,21 @@ def _func_body(src, name):
     return rest[:end.start()] if end else rest
 
 
-class TestOldRoutesRedirect(unittest.TestCase):
-    """5174 的四个旧路由全指向新界面。"""
+class TestOldRoutesServeOriginal(unittest.TestCase):
+    """5174 的 /gallery /comic /moss 发原始页面，不再跳新界面。"""
 
-    def test_pages_modules_redirect(self):
+    def test_pages_modules_serve_original(self):
         pages = _read("app/web/pages.py")
-        for fn in ("gallery_page", "comic_page", "moss_comic_page"):
+        want = {"gallery_page": "gallery.html",
+                "comic_page": "comic_studio.html",
+                "moss_comic_page": "moss_studio.html"}
+        for fn, html in want.items():
             with self.subTest(fn=fn):
                 body = _func_body(pages, fn)
-                self.assertIn('redirect("/workspace/")', body,
-                              fn + " 应 302 到新界面（带尾斜杠）")
+                self.assertIn('send_from_directory(WEB_DIR, "%s")' % html, body,
+                              fn + " 应发原始页面")
+                self.assertNotIn('redirect("/workspace/"', body,
+                                 fn + " 不该再跳新界面")
 
     def test_gen_route_redirects(self):
         src = _read("app/features/image/routes.py")
@@ -119,9 +126,15 @@ class TestPageLinks(unittest.TestCase):
         self.assertNotIn('location.href = "/gallery" + q', html,
                          "旧的双端口探测已无必要：两端都有新界面")
 
-    def test_old_pages_link_to_workspace(self):
-        self.assertIn('href="/workspace/"', _read("web/gallery.html"))
-        self.assertIn('href="/workspace/"', _read("web/comic_studio.html"))
+    def test_old_pages_do_not_push_new_ui(self):
+        """原始页面里不该再把入口指向新界面（2026-11-23 改回）。
+
+        画廊的「更多」菜单原来放的是「AI 创作 → /workspace/」，用户要求
+        5174 用原始网页之后，这里恢复成「漫画台 → /comic」。
+        """
+        gal = _read("web/gallery.html")
+        self.assertNotIn('href="/workspace/"', gal)
+        self.assertIn('href="/comic"', gal, "画廊菜单要能进漫画台")
 
 
 if __name__ == "__main__":

@@ -68,11 +68,12 @@ def status_page():
     return send_from_directory(WEB_DIR, "status.html")
 @bp.route("/comic")
 def comic_page():
-    """旧漫画工作台入口 → 新界面（2026-11-23 改发新界面）。
+    """漫画工作台（站主直连 5174 用的是这个原始页）。
 
-    旧页面 web/comic_studio.html 保留，回退换回 send_from_directory 即可。
+    2026-11-23 上午曾改发新界面，当天用户就要求「5174 用原始网页」——
+    新界面还没定性，管理侧还是原来这套顺手。`/workspace/` 仍可直达。
     """
-    return redirect("/workspace/")
+    return send_from_directory(WEB_DIR, "comic_studio.html")
 @bp.route("/comic_admin")
 def comic_admin_page():
     """群友漫画台管理：独立页面，不塞在 /admin 的 QQ 机器人卡片里。
@@ -90,11 +91,8 @@ def comic_works_page():
     return send_from_directory(WEB_DIR, "comic_works.html")
 @bp.route("/moss")
 def moss_comic_page():
-    """旧 moss 漫画台入口 → 新界面（2026-11-23 改发新界面）。
-
-    旧页面 web/moss_studio.html 保留，回退换回 send_from_directory 即可。
-    """
-    return redirect("/workspace/")
+    """moss 漫画台（原始页，2026-11-23 改回）。"""
+    return send_from_directory(WEB_DIR, "moss_studio.html")
 @bp.route("/persona")
 def persona_page():
     """网页端角色扮演（2026-11-03）。
@@ -147,12 +145,12 @@ def characters_page():
 
 @bp.route("/gallery")
 def gallery_page():
-    """旧画廊入口 → 新界面（2026-11-23 用户拍板改发新界面）。
+    """画廊（原始页）。
 
-    旧页面 web/gallery.html 仍在仓库里，回退只需把这里换回
-    `send_from_directory(WEB_DIR, "gallery.html")`。
+    2026-11-23 上午曾改发新界面，当天用户要求改回原始网页：「我 5174 使用
+    原始的网页，不要使用新版的」。新界面仍在 `/workspace/`，要试直接去那。
     """
-    return redirect("/workspace/")
+    return send_from_directory(WEB_DIR, "gallery.html")
 
 
 # ─── 新界面（聊天优先 workspace）────────────────────────────

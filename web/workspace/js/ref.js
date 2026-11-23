@@ -85,7 +85,33 @@
       say.placeholder = "说说这张怎么改，照着它重画";
       say.focus();
     }
+    // 立刻把这张读成一段描述填进输入框：用户点「画同款」要的是「照着它」，
+    // 光挂一张缩略图什么都不会发生。读出来就填，读不出来就让用户自己写一句
+    // ——两种情况都给明确反馈，不留「点了没反应」的空档。
+    if (itemId) describeInto(itemId, say);
     global.dispatchEvent(new Event("resize"));
+  }
+
+  /* 读图反推 → 填进输入框。已有内容就不覆盖（那是用户自己写的）。 */
+  function describeInto(itemId, say) {
+    if (!say) return;
+    var tag = global.WSChat.busyNote("正在看图…");
+    global.WSApi.get("/api/gal/describe?id=" + encodeURIComponent(itemId))
+      .then(function (d) {
+        if (tag) tag.remove();
+        if (!d || !d.ok) {
+          global.WSChat.sysNote((d && d.error) || "这张没读出来，自己写一句就行");
+          return;
+        }
+        if (say.value.trim()) return;          // 用户已经在写了，别顶掉
+        say.value = d.text || "";
+        say.dispatchEvent(new Event("input"));
+        say.focus();
+      })
+      .catch(function () {
+        if (tag) tag.remove();
+        global.WSChat.sysNote("读图没连上，自己写一句就行");
+      });
   }
 
   /* 撤掉一张：输入栏的缩略图、消息里那张参考卡、存档里那条记录一起删 */
@@ -174,7 +200,7 @@
 
   function upload(file) {
     if (!file) return;
-    var tip = global.WSChat.sysNote("正在传参考图…");
+    var tip = global.WSChat.busyNote("正在传参考图…");
     shrink(file).then(function (blob) {
       var fd = new FormData();
       fd.append("file", blob, (file.name || "ref").replace(/\.[^.]+$/, "") + ".webp");
@@ -182,15 +208,29 @@
         method: "POST", body: fd, credentials: "same-origin"
       }).then(function (r) { return r.json().catch(function () { return {}; }); });
     }).then(function (d) {
-      if (tip && tip.parentNode) tip.remove();
+      if (tip) tip.remove();
       if (!d || !d.ok) {
         global.WSChat.sysNote("参考图没传上去：" + ((d && d.error) || "网络断了"));
         return;
       }
-      // 上传后拿到的是第几张（idx），真正的图 id 得回作品集里取
+      // 服务端现在直接给 item_id，不再靠序号去猜；老服务端没有这个字段时
+      // 退回去按序号找（那时也是 0 基：返回的 idx 是第几张，减一正好对上）。
+      if (d.item_id) {
+        addRef({ wid: d.work_id, id: d.item_id,
+                 url: "/api/gal/img/" + d.item_id + "?s=t" });
+        syncHint();
+        var s0 = document.getElementById("say");
+        if (s0 && !s0.value.trim()) describeInto(d.item_id, s0);
+        return;
+      }
       return global.WSApi.get("/api/gal/work/" + d.work_id).then(function (w) {
-        var items = (w && w.ok && w.items) || [];
-        var hit = items.filter(function (it) { return it.idx === d.idx; })[0];
+        if (!w || !w.ok) {
+          global.WSChat.sysNote("参考图传上去了，但没读到作品集：" +
+                                ((w && w.error) || "重试一次"));
+          return;
+        }
+        var items = w.items || [];
+        var hit = items.filter(function (it) { return it.idx === d.idx - 1; })[0];
         if (!hit) {
           global.WSChat.sysNote("参考图传上去了，但没找到它，再传一次试试");
           return;
@@ -198,9 +238,11 @@
         addRef({ wid: d.work_id, id: hit.id,
                  url: "/api/gal/img/" + hit.id + "?s=t" });
         syncHint();
+        var say = document.getElementById("say");
+        if (say && !say.value.trim()) describeInto(hit.id, say);
       });
     }).catch(function () {
-      if (tip && tip.parentNode) tip.remove();
+      if (tip) tip.remove();
       global.WSChat.sysNote("参考图没传上去，网络断了一下");
     });
   }
