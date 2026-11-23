@@ -445,6 +445,15 @@ textarea { min-height: 180px; }
   background: rgba(124, 92, 255, 0.16);
   border-color: rgba(124, 92, 255, 0.45);
 }
+/* 2026-11-23：七个平铺 tab 先按「设置 / 内容 / 数据」分组，
+   再配一句白话说明当前分区是干什么的，省得靠英文标题猜。 */
+.view-tabs .view-group { flex: 0 0 auto; align-self: center; padding-left: 4px;
+  color: var(--text-mute); font-size: 11px; letter-spacing: .05em; }
+.view-tabs .view-sep { flex: 0 0 auto; width: 1px; height: 20px; margin: 0 4px;
+  background: var(--border); }
+.view-guide { margin: -4px 0 12px; padding: 7px 12px; font-size: 12px;
+  color: var(--text-dim); background: var(--bg-elev);
+  border: 1px solid var(--border-soft); border-radius: 8px; line-height: 1.6; }
 
 .panel > [data-view] { display: none !important; }
 .panel > [data-view].is-on { display: block !important; }
@@ -505,14 +514,20 @@ textarea { min-height: 180px; }
   </header>
 
   <nav class="view-tabs" id="adminTabs" aria-label="管理页分区">
+    <span class="view-group">设置</span>
     <button type="button" data-view="basic" class="on">基础</button>
     <button type="button" data-view="global">全局</button>
+    <span class="view-sep"></span>
+    <span class="view-group">内容</span>
     <button type="button" data-view="group">群聊</button>
     <button type="button" data-view="private">私聊</button>
     <button type="button" data-view="audit">审核</button>
+    <span class="view-sep"></span>
+    <span class="view-group">数据</span>
     <button type="button" data-view="usage">用量</button>
     <button type="button" data-view="sessions">会话</button>
   </nav>
+  <div class="view-guide" id="viewGuide" role="note"></div>
 
   <div class="layout">
     <div class="list" id="list"></div>
@@ -3706,6 +3721,16 @@ boot();
   var layout = document.querySelector(".layout");
   if (!tabs || !panel || !layout) return;
   var views = ["basic", "global", "group", "private", "audit", "usage", "sessions"];
+  // 白话指引：每个分区一句话说清「来这儿能干什么」，别让人从标题猜。
+  var GUIDE = {
+    basic: "改这个 agent 的人设和模型：它怎么说话、用哪个模型。保存后下一轮对话就生效。",
+    global: "整站共用的开关：LLM 降级链、超时、识图与附言。这里会影响所有 agent。",
+    group: "看群里聊了什么、接话判断怎么判；群消息相关的设置都在这一页。",
+    private: "看私聊记录，给单个会话改人设或备注。",
+    audit: "人工二审：处理媒体审核和空回复兜底留下来的问题回复。",
+    usage: "查 token 花在哪、花了多少；QQ 账单也在这里导出。",
+    sessions: "按会话逐条看消息和上下文，排障时来这里。"
+  };
 
   function pick(view) {
     if (views.indexOf(view) < 0) view = "basic";
@@ -3716,6 +3741,8 @@ boot();
       el.classList.toggle("is-on", el.getAttribute("data-view") === view);
     });
     layout.classList.toggle("view-sessions", view === "sessions");
+    var guide = document.getElementById("viewGuide");
+    if (guide) guide.textContent = GUIDE[view] || "";
   }
 
   tabs.addEventListener("click", function (e) {

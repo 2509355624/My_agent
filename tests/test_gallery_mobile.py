@@ -124,5 +124,27 @@ class GalleryHeaderTest(unittest.TestCase):
             self.assertIn('id="%s"' % element_id, html)
 
 
+class GalleryGuideTest(unittest.TestCase):
+    """2026-11-23：每面墙配白话说明，整理类入口标清再点。"""
+
+    def test_wall_guide_follows_tab_and_hidden_state(self):
+        html = _html()
+        self.assertIn('id="wallGuide"', html)
+        guide = html[html.index("function updateGuide()"):html.index("function btn(")]
+        self.assertIn("if (S.hiddenView)", guide)
+        self.assertIn("box.textContent = texts[S.tab] || \"\"", guide)
+        for tab in ('owner: "', 'pub: "', 'mine: "'):
+            self.assertIn(tab, guide)
+        tools = html[html.index("function renderTools()"):html.index("function btn(")]
+        self.assertIn("updateGuide();", tools)
+
+    def test_more_dropdown_labels_low_frequency_actions(self):
+        html = _html()
+        self.assertIn("function moreLabel(text)", html)
+        tools = html[html.index("function renderTools()"):html.index("function btn(")]
+        self.assertIn('more.appendChild(moreLabel("整理（清空类操作不可撤销）"))', tools)
+        self.assertIn('pm.appendChild(moreLabel("隐私（进墙要密码）"))', tools)
+
+
 if __name__ == "__main__":
     unittest.main()

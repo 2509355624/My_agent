@@ -7,6 +7,7 @@
 """
 
 import os
+import re
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -79,6 +80,28 @@ class AdminMobileTest(unittest.TestCase):
         before = html[:html.index("@media (max-width: 640px)")]
         self.assertIn("width: 200px; flex: 0 0 200px;", before)
         self.assertIn("width: 320px; flex: 0 0 320px;", before)
+
+
+class AdminNavigationGuideTest(unittest.TestCase):
+    """2026-11-23：七个平铺 tab 分组，配一句白话说明当前分区干什么。"""
+
+    def test_tabs_are_grouped_without_losing_any_view(self):
+        html = _html()
+        nav = html[html.index('<nav class="view-tabs"'):html.index("</nav>")]
+        for group in ("设置", "内容", "数据"):
+            self.assertIn('class="view-group">%s<' % group, nav)
+        self.assertEqual(re.findall(r'data-view="(\w+)"', nav),
+                         ["basic", "global", "group", "private", "audit",
+                          "usage", "sessions"])
+
+    def test_guide_is_wired_to_view_switch(self):
+        html = _html()
+        self.assertIn('id="viewGuide"', html)
+        js = html[html.index("var views = ["):html.index("</script>", html.index("var views = ["))]
+        for view in ("basic", "global", "group", "private", "audit", "usage", "sessions"):
+            self.assertIn("%s:" % view, js)
+        self.assertIn('guide.textContent = GUIDE[view] || ""', js)
+        self.assertIn('document.getElementById("viewGuide")', js)
 
 
 if __name__ == "__main__":

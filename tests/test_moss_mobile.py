@@ -122,5 +122,35 @@ class MossStudioSimpleTest(unittest.TestCase):
         self.assertIn('e.key === "Escape"', html)
 
 
+class MossStudioWizardTest(unittest.TestCase):
+    """2026-11-23：按「写这一集 → 看剧本 → 出图调整」三步分层。"""
+
+    def test_three_stage_panes(self):
+        html = _html()
+        for marker in ('class="stage-pane active" data-pane="1"',
+                       'class="stage-pane" data-pane="2"',
+                       'class="stage-pane" data-pane="3"'):
+            self.assertIn(marker, html)
+        self.assertEqual(html.count("/stage-pane"), 3)
+
+    def test_stepbar_keeps_expert_escape_hatch(self):
+        html = _html()
+        for label in ("① 写这一集", "② 看剧本", "③ 出图与调整"):
+            self.assertIn(label, html)
+        self.assertIn('id="expertMode" onchange="setExpert(this.checked)"', html)
+        self.assertIn("if (lor) lor.open = EXPERT", html)
+        # 折叠区还在，专家模式只是把它展开，功能没删
+        self.assertIn('id="lora-card"', html)
+
+    def test_auto_advance_without_hijacking_polling(self):
+        html = _html()
+        self.assertIn("function setStage(n)", html)
+        self.assertIn("setStage(started ? 3 : 2)", html)   # 载入任务
+        self.assertIn("if (!EXPERT) setStage(3)", html)    # 出图入队
+        # patch() 只更新状态，不负责跳步，否则轮询会把人从编辑中拽走
+        patch = html[html.index("function patch(p) {"):html.index("function renderIssues(")]
+        self.assertNotIn("setStage(", patch)
+
+
 if __name__ == "__main__":
     unittest.main()

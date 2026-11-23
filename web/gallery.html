@@ -59,6 +59,8 @@
     box-shadow:0 10px 28px rgba(0,0,0,.4);flex-direction:column;gap:4px}
   .tools .tool-more.on{display:flex}
   .tools .tool-more button{text-align:left;white-space:nowrap}
+  .tools .tool-more-label{font-size:11px;color:var(--dim);padding:2px 8px 5px;
+    border-bottom:1px solid var(--line);margin-bottom:2px;white-space:nowrap}
   .tools button{border:1px solid var(--line);background:var(--card);color:var(--tx);
     font:inherit;font-size:13px;padding:7px 13px;border-radius:10px;cursor:pointer}
   .tools button:active{background:var(--card2)}
@@ -90,6 +92,10 @@
     height:2px;background:var(--pink);border-radius:2px}
 
   .hint{padding:0 14px 6px;color:var(--dim);font-size:12.5px;line-height:1.6}
+  /* 2026-11-23：每个 tab 一句白话说明，先说清「这面墙是什么」再看按钮。 */
+  .wall-guide{margin:6px 14px 0;padding:8px 12px;font-size:12.5px;line-height:1.6;
+    color:var(--dim);background:var(--card);border:1px solid var(--line);
+    border-radius:10px}
 
   /* ── 网格 ── */
   main{padding:6px 14px calc(40px + env(safe-area-inset-bottom,0))}
@@ -350,6 +356,8 @@
   <button data-sub="favs">收藏</button>
   <button data-sub="likes">点赞</button>
 </div>
+
+<div class="wall-guide" id="wallGuide" role="note"></div>
 
 <div class="tools" id="tools"></div>
 <!-- 分类条：按主文件夹切换（2026-11-05）。只在「站长」tab 显示 -->
@@ -894,8 +902,26 @@
     $("grid").appendChild(c);
   }
 
+  // 每个 tab 一句白话说明：先说清这面墙是什么，再说按钮干什么。
+  // 隐藏墙没有密码缓存，退出后指引立刻跟着变回去。
+  function updateGuide() {
+    var box = $("wallGuide");
+    if (!box) return;
+    if (S.hiddenView) {
+      box.textContent = "隐藏墙：已隐藏的作品集中列在这里（不分来源）。看完点「← 返回画廊」，不用再输密码。";
+      return;
+    }
+    var texts = {
+      owner: "站长墙：扫描进来的本机作品。要传图点「＋ 上传作品集」，整理目录类操作收在「更多」里。",
+      pub: "公开墙：群友传上来的作品。点开看图，详情里能收藏、点赞、下载。",
+      mine: "我的墙：你自己传的作品；收藏和点赞在下面的小标签里。"
+    };
+    box.textContent = texts[S.tab] || "";
+  }
+
   // ── 工具条 ────────────────────────────────────────────
   function renderTools() {
+    updateGuide();
     var t = $("tools");
     t.innerHTML = "";
     if (S.tab === "mine" && S.sub === "works") {
@@ -920,6 +946,7 @@
       var more = document.createElement("div");
       more.className = "tool-more";
       more.id = "toolMore";
+      more.appendChild(moreLabel("整理（清空类操作不可撤销）"));
       more.appendChild(btn("↻ 全部重扫", "", scanAll));
       more.appendChild(btn("⌫ 清理失效", "", clean));
       if (S.grp && !S.hiddenView) {
@@ -946,6 +973,7 @@
       var pm = document.createElement("div");
       pm.className = "tool-more";
       pm.id = "toolMore";
+      pm.appendChild(moreLabel("隐私（进墙要密码）"));
       pm.appendChild(btn("👁 看已隐藏（需密码）", "", askPin));
       t.appendChild(pm);
     }
@@ -957,6 +985,13 @@
     if (cls) b.className = cls;
     b.onclick = fn;
     return b;
+  }
+
+  function moreLabel(text) {
+    var d = document.createElement("div");
+    d.className = "tool-more-label";
+    d.textContent = text;
+    return d;
   }
 
   // 分类条：`全部` + 接口返回的各主文件夹名。只在「站长」tab 显示——
@@ -2163,6 +2198,7 @@
       b.classList.toggle("on", b.dataset.tab === S.tab);
     });
     renderSubtabs();
+    updateGuide();
   })();
   // 排版沿用上次选的（两列 / 单列），默认两列
   (function () {

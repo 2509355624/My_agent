@@ -68,6 +68,21 @@
   .btn.small { padding: 5px 10px; font-size: 12px; }
   .hint { font-size: 11px; color: var(--text-mute); line-height: 1.7; margin-top: 8px; }
 
+  /* 阶段向导（2026-11-23）：一次只显示当前步需要的控件。
+     stage-pane 只是外层壳，内部元素原有的 display 逻辑不动。 */
+  .stepbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    padding: 10px 14px; margin-bottom: 16px; background: var(--bg-elev);
+    border: 1px solid var(--border-soft); border-radius: var(--radius); }
+  .stepbar .step { background: none; border: 1px solid transparent; color: var(--text-dim);
+    border-radius: 18px; padding: 6px 13px; cursor: pointer; font: inherit; font-size: 13px; }
+  .stepbar .step:hover { border-color: var(--border); }
+  .stepbar .step.active { background: var(--accent); border-color: var(--accent); color: #06231a; }
+  .stepbar .arrow { color: var(--text-mute); font-size: 12px; }
+  .stepbar .spacer { flex: 1; }
+  .stepbar .expert { font-size: 12px; color: var(--text-dim); white-space: nowrap; cursor: pointer; }
+  .stage-pane[data-pane]:not(.active) { display: none; }
+  .stage-hint { color: var(--text-dim); font-size: 12px; margin-bottom: 12px; line-height: 1.6; }
+
   /* ── LoRA 槽位（2026-10-28）：勾选 = 参与本次出图，强度 0~2 ── */
   .lora-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
   .lora-row label { display: flex; align-items: center; gap: 6px; flex: 1;
@@ -233,6 +248,21 @@
 
   <div id="jobbar"></div>
 
+  <!-- 阶段向导：写这一集 → 看剧本 → 出图与调整。老手可勾「专家模式」一次看全。 -->
+  <div class="stepbar" id="stepbar">
+    <button class="step active" data-pane="1" onclick="setStage(1)">① 写这一集</button>
+    <span class="arrow">→</span>
+    <button class="step" data-pane="2" onclick="setStage(2)">② 看剧本</button>
+    <span class="arrow">→</span>
+    <button class="step" data-pane="3" onclick="setStage(3)">③ 出图与调整</button>
+    <span class="spacer"></span>
+    <label class="expert" title="勾上后三步控件一次全开，和改版前一样；老手调参用">
+      <input type="checkbox" id="expertMode" onchange="setExpert(this.checked)"> 专家模式（展开全部）
+    </label>
+  </div>
+
+  <div class="stage-pane active" data-pane="1">
+  <div class="stage-hint">先填主角和一段剧情；分集大纲可以留空，交给编剧排页。写完自动进第 ② 步。</div>
   <!-- ── 1. 这一集 ── -->
   <div class="card">
     <h2>这一集</h2>
@@ -312,6 +342,10 @@
     </details>
   </div>
 
+  </div><!-- /stage-pane 1 -->
+
+  <div class="stage-pane" data-pane="2">
+  <div class="stage-hint" id="specHint">剧本还没写出来。点上面的「① 写这一集」填好剧情，编剧写完后会自动停在这里给你看。</div>
   <!-- ── 2. 剧本 ── -->
   <div class="card" id="spec-card" style="display:none">
     <h2>剧本 <span id="spec-task" style="color:var(--text-mute);font-size:11px"></span></h2>
@@ -341,8 +375,12 @@
       <span class="hint" id="steps-hint" style="margin:0"></span>
       <span class="hint" id="save-hint" style="margin:0"></span>
     </div>
-  </div>
+  </div><!-- /spec-card -->
 
+  </div><!-- /stage-pane 2 -->
+
+  <div class="stage-pane" data-pane="3">
+  <div class="stage-hint">逐页看图和改格子；要重画就点每页页头的「出图 / 换 seed」。LoRA 这类参数收在下面，一般不用动。</div>
   <!-- ── 2.5 LoRA 槽位 ── -->
   <details class="card adv" id="lora-card">
     <summary>LoRA 槽位 <span style="color:var(--text-mute);font-size:11px;font-weight:400">勾选才会挂上 · 只影响这次出图</span></summary>
@@ -355,6 +393,8 @@
 
   <!-- ── 3. 每页 ── -->
   <div id="pages-wrap"></div>
+
+  </div><!-- /stage-pane 3 -->
 
 </div>
 
@@ -369,6 +409,32 @@
 <script>
 var S = { task: null, spec: null, pages: [], timer: null, saving: false,
           pending: false, poll: null, aborted: false };
+
+/* ── 阶段向导（2026-11-23）───────────────────────────────
+   三步只露当前要用的控件，降低一屏几十个按钮的认知负担。
+   stage-pane 是外层壳，内部元素自己的 display 逻辑（比如 spec-card）
+   仍照旧，两层正交。专家模式把三步和 LoRA 折叠区一起展开。 */
+var STAGE = 1;
+var EXPERT = false;
+
+function setStage(n) {
+  STAGE = Math.max(1, Math.min(3, +n || 1));
+  document.querySelectorAll('.stage-pane').forEach(function (el) {
+    el.classList.toggle('active', EXPERT || +el.dataset.pane === STAGE);
+  });
+  document.querySelectorAll('.stepbar .step').forEach(function (el) {
+    el.classList.toggle('active', !EXPERT && +el.dataset.pane === STAGE);
+  });
+  var hint = $("specHint");
+  if (hint) hint.style.display = (!EXPERT && STAGE === 2 && !S.spec) ? "" : "none";
+}
+
+function setExpert(on) {
+  EXPERT = !!on;
+  var lor = $("lora-card");
+  if (lor) lor.open = EXPERT;
+  setStage(STAGE);
+}
 
 /* agent 链路的骨架名与旧链路不同（L0–L5 / S1 / D1 / D2）。这里两套都列，
    否则 spec 里是 L0、下拉却只认 single/2h，选中状态全空、看起来像选错了。 */
@@ -618,10 +684,17 @@ function loadPayload(p) {
   S.pages = p.pages || [];
   renderSpec();
   patch(p);
+  // 载入任务：还没出图停在第②步改剧本，已经画过的直接进第③步看图。
+  var started = (p.pages || []).some(function (x) {
+    return x.status === "done" || x.status === "running";
+  });
+  setStage(started ? 3 : 2);
 }
 
 function renderSpec() {
   $("spec-card").style.display = "";
+  var hint = $("specHint");
+  if (hint) hint.style.display = "none";
   $("spec-task").textContent = S.task || "";
   $("spec-title").value = S.spec.title;
   $("spec-style").value = S.spec.style;
@@ -965,6 +1038,7 @@ async function draw(pageNo, reroll) {
   var r = await api("/api/moss/render", body);
   btns.forEach(function (b) { b.disabled = false; });
   if (!r.ok) { toast(r.error || "没排上队", true); return; }
+  if (!EXPERT) setStage(3);   // 出图入队了，直接把人带到能看进度的那一步
   if (reroll) toast("换种子重抽，" + (r.seed ? "seed " + r.seed : "") + "，约 3 分钟");
   bar('<span class="spin"></span>已入队，等出图…');
   startPoll();
