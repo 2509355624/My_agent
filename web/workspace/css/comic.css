@@ -136,7 +136,7 @@
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
-  padding: 6px 0 0;
+  padding: 0;
 }
 
 .ctrack {
@@ -151,16 +151,17 @@
 
 .ctrack::-webkit-scrollbar { display: none; }
 
+/* 一页一屏：整张图按原比例缩到框里，上下左右都看得见，不裁边、不拉伸。
+   长图也一样缩，不靠滚动——用户要的是打开就能看全整页。 */
 .cslide {
   flex: 0 0 100%;
   height: 100%;
-  scroll-snap-align: center;
+  scroll-snap-align: start;
   display: grid;
   place-items: center;
-  padding: 2px 12px;
+  padding: 0;
 }
 
-/* 整张图必须完整落在框里：只给框定尺寸、由 contain 自己缩，不裁边不拉伸 */
 .cslide img {
   display: block;
   width: 100%;

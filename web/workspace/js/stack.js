@@ -7,22 +7,23 @@
   var SHOW_HEAD = 6;          // 画风太多，抽屉先露这几项，其余点「展开全部」
 
   var el = {};
-  var S = { top: null, allStyles: false };
+  var S = { top: null, allStyles: false, depth: 0 };
 
   function $(id) { return document.getElementById(id); }
 
   // ── 页面栈 ────────────────────────────────────────────
 
+  /* 真叠层：作品列表上再压一本漫画，X 一层层退回去（用户 2026-11-23 定） */
   function push(name, opts) {
-    if (S.top) { replace(name, opts); return S.top; }
     var view = global.WSViews.build(name, opts);
 
     el.stack.appendChild(view);
     // 下一帧再加 .in，否则插入与过渡撞在同一帧里，滑入动画不触发
     global.requestAnimationFrame(function () { view.classList.add("in"); });
     S.top = view;
+    S.depth += 1;
     bindView(view);
-    global.history.pushState({ ws: 1 }, "");
+    global.history.pushState({ ws: S.depth }, "");
     return view;
   }
 
@@ -51,7 +52,9 @@
     var view = S.top;
     if (!view) return;
     S.top = underOf(view);
+    S.depth = Math.max(0, S.depth - 1);
     view.classList.remove("in");
+
 
     var done = function () {
       if (view.parentNode) view.parentNode.removeChild(view);
@@ -210,7 +213,10 @@
 
     global.history.replaceState({ ws: 0 }, "");
     global.addEventListener("popstate", function () {
-      if (!global.history.state || !global.history.state.ws) closeNow();
+      // 栈深按 history 里的记录走：两层时点一次返回只退一层，
+      // 不能像以前那样「只要还有 ws 就不动」，否则按了返回没反应
+      var want = (global.history.state && global.history.state.ws) || 0;
+      while (S.depth > want) closeNow();
     });
   }
 

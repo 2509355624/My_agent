@@ -40,13 +40,15 @@ class TestWorkspaceComicFiles(unittest.TestCase):
         self.assertIn('register("comic"', js)
         self.assertIn('register("book"', js)
 
-    def test_book_opens_without_stacking(self):
-        """单本页不叠在列表上：左上角 ✕ 要直接回聊天页（用户 2026-11-23 定）。"""
+    def test_book_is_pushed_so_close_goes_back_to_list(self):
+        """单本压在列表上：✕ 退一层回作品列表，不是一步跳回聊天页。"""
         js = _read("js/comic.js")
         stack = _read("js/stack.js")
-        self.assertIn('WSStack.replace("book"', js)
-        self.assertNotIn('WSStack.push("book"', js)
-        self.assertIn("replace: replace", stack, "栈要导出 replace，否则点了没反应")
+        self.assertIn('WSStack.push("book"', js)
+        self.assertNotIn('WSStack.replace("book"', js)
+        # 多层栈：history 里记层数，返回一次只退一层
+        self.assertIn("S.depth", stack)
+        self.assertIn("while (S.depth > want) closeNow()", stack)
 
 
 class TestWorkspaceComicApi(unittest.TestCase):
@@ -101,12 +103,16 @@ class TestWorkspaceComicUi(unittest.TestCase):
         self.assertIn("var(--shadow", css)
 
     def test_pictures_are_not_cropped(self):
-        """封面和整页都得整张显示（用户 2026-11-23：比例不对，要完整显示全图）。"""
+        """封面和整页都得整张显示：整页按原比例缩进框里，不裁边（2026-11-23）。"""
         css = _read("css/comic.css")
         for block in (".cpic img", ".cslide img"):
             i = css.index(block)
-            seg = css[i:i + 260]
-            self.assertIn("object-fit: contain", seg, block + " 不能裁边")
+            self.assertIn("object-fit: contain", css[i:i + 260], block)
+
+    def test_no_cover_crop_on_pages(self):
+        css = _read("css/comic.css")
+        i = css.index(".cslide img")
+        self.assertNotIn("object-fit: cover", css[i:i + 260])
 
     def test_strip_scrolls_sideways(self):
         css = _read("css/comic.css")

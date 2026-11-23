@@ -105,8 +105,8 @@
     b.appendChild(cover(t.task));
     b.appendChild(info);
     b.addEventListener("click", function () {
-      // 用 replace 不叠栈：单本页左上角的 ✕ 直接回聊天页，不先进作品列表
-      global.WSStack.replace("book", { task: t.task, title: t.title || t.task });
+      // 压一层：单本页的 ✕ 退回作品列表，再点一次才回聊天页
+      global.WSStack.push("book", { task: t.task, title: t.title || t.task });
     });
     return b;
   }
