@@ -37,12 +37,22 @@
     return next;
   }
 
+  /* 底下还压着别的子页时，摘掉这层要把栈顶还回去——不然节点还在、S.top
+     却是 null，下一次 push 会叠出两层。正常路径是一层，这条是兜底。 */
+  function underOf(view) {
+    var nodes = Array.prototype.slice.call(
+      el.stack.querySelectorAll(".view-push"));
+    var rest = nodes.filter(function (n) { return n !== view; });
+    return rest.length ? rest[rest.length - 1] : null;
+  }
+
   /* 真正的出栈：播完动画再摘节点 */
   function closeNow() {
     var view = S.top;
     if (!view) return;
-    S.top = null;
+    S.top = underOf(view);
     view.classList.remove("in");
+
     var done = function () {
       if (view.parentNode) view.parentNode.removeChild(view);
     };
@@ -204,5 +214,5 @@
     });
   }
 
-  global.WSStack = { init: init, push: push, back: back };
+  global.WSStack = { init: init, push: push, replace: replace, back: back };
 })(window);

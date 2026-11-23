@@ -105,7 +105,8 @@
     b.appendChild(cover(t.task));
     b.appendChild(info);
     b.addEventListener("click", function () {
-      global.WSStack.push("book", { task: t.task, title: t.title || t.task });
+      // 用 replace 不叠栈：单本页左上角的 ✕ 直接回聊天页，不先进作品列表
+      global.WSStack.replace("book", { task: t.task, title: t.title || t.task });
     });
     return b;
   }
@@ -348,7 +349,7 @@
     var p = current();
     if (!p) return;
     post("/api/comic/rerender", { task: B.task, no: p.no },
-         "第 " + p.no + " 页换种子重画中");
+         "第 " + p.no + " 页重画中，出来就盖掉这页");
   }
 
   function bubble() {

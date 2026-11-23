@@ -40,6 +40,14 @@ class TestWorkspaceComicFiles(unittest.TestCase):
         self.assertIn('register("comic"', js)
         self.assertIn('register("book"', js)
 
+    def test_book_opens_without_stacking(self):
+        """单本页不叠在列表上：左上角 ✕ 要直接回聊天页（用户 2026-11-23 定）。"""
+        js = _read("js/comic.js")
+        stack = _read("js/stack.js")
+        self.assertIn('WSStack.replace("book"', js)
+        self.assertNotIn('WSStack.push("book"', js)
+        self.assertIn("replace: replace", stack, "栈要导出 replace，否则点了没反应")
+
 
 class TestWorkspaceComicApi(unittest.TestCase):
 
@@ -91,6 +99,14 @@ class TestWorkspaceComicUi(unittest.TestCase):
         self.assertIn("var(--card", css)
         self.assertIn("var(--text", css)
         self.assertIn("var(--shadow", css)
+
+    def test_pictures_are_not_cropped(self):
+        """封面和整页都得整张显示（用户 2026-11-23：比例不对，要完整显示全图）。"""
+        css = _read("css/comic.css")
+        for block in (".cpic img", ".cslide img"):
+            i = css.index(block)
+            seg = css[i:i + 260]
+            self.assertIn("object-fit: contain", seg, block + " 不能裁边")
 
     def test_strip_scrolls_sideways(self):
         css = _read("css/comic.css")
