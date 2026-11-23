@@ -82,6 +82,18 @@ class TestWorkspaceGalleryUi(unittest.TestCase):
         self.assertIn("grid-template-columns", css)
         self.assertIn("repeat(2", css)
 
+    def test_viewer_image_shows_whole_picture(self):
+        """查看器大图要整张缩进一屏，不能被裁成脸部特写（用户 2026-11-23）。"""
+        css = _read("css/gallery.css")
+        i = css.index(".gv-slide img")
+        seg = css[i:i + 380]
+        self.assertIn("height: calc(100% - 12px)", seg,
+                      "必须给图片框一个确定高度，百分比在 grid 里会失效")
+        self.assertIn("object-fit: contain", seg)
+        self.assertNotIn("object-fit: cover", seg)
+        j = css.index(".gv-slide {")
+        self.assertIn("position: relative", css[j:i])
+
     def test_styles_use_tokens(self):
         css = _read("css/gallery.css")
         self.assertIn("var(--card", css)

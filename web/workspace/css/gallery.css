@@ -210,17 +210,26 @@ body.g-lock { overflow: hidden; }
 
 .gv-slide {
   flex: 0 0 100%;
+  height: 100%;
   scroll-snap-align: center;
-  display: grid;
-  place-items: center;
-  padding: 6px 14px;
+  position: relative;
+  padding: 0;
 }
 
+/* 整张图按原比例缩进这一屏，不裁边。
+   不能用 grid 里的百分比高度：隐式行高由内容撑开，img 的 height:100%
+   解析不出来，竖图会按宽度等比撑到 1800px 高，被 overflow-y:hidden 裁成脸部特写。
+   绝对定位给 img 一个尺寸确定的框，contain 才能把整图缩进框里。 */
 .gv-slide img {
-  max-width: 100%;
-  max-height: 100%;
-  border-radius: 12px;
+  position: absolute;
+  left: 14px;
+  top: 6px;
+  display: block;
+  width: calc(100% - 28px);
+  height: calc(100% - 12px);
   object-fit: contain;
+  object-position: center;
+  border-radius: 12px;
   box-shadow: 0 20px 50px -20px rgba(0, 0, 0, .85);
 }
 
