@@ -84,7 +84,8 @@ class TestWorkspaceLoginTheme(unittest.TestCase):
         self.assertIn("--bg", css)
         self.assertIn("--card", css)
         self.assertIn("--text", css)
-        self.assertIn("prefers-color-scheme", css, "应跟随系统深浅色偏好")
+        # 默认必须白：不跟随系统深色偏好，只有手动 data-theme="dark" 才变深
+        self.assertNotIn("prefers-color-scheme", css)
 
     def test_theme_script_before_paint(self):
         html = _read("index.html")
