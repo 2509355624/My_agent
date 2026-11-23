@@ -1,21 +1,29 @@
 /* 画廊（AI 创作）：文件夹横滑 + 两列缩略图墙 + 全屏查看器。
    颜色/阴影只引用 tokens.css，深浅色自动跟随。 */
 
-/* 顶栏中段被换成文件夹标签条（views.js 的 top 钩子） */
+/* 顶栏中段被换成文件夹标签条（views.js 的 top 钩子）
+   顶栏两端的 ✕ / 人形按钮固定 38px，中间这条要真的能横滑：
+   `flex: 1 1 auto` + `min-width: 0` 让它吃掉剩余宽度，`overscroll-behavior-x:
+   contain` 防止滑到头把整页带走。两个轴都留给浏览器原生处理（pan-x pan-y）：
+   早先只写 pan-x，横向滑到头时垂直方向也被锁住，整页跟着卡一下；而且
+   页面栈那边已经不再在页面中间抢横向手势了，这里不用再自己兜。 */
 .gtabs {
   flex: 1 1 auto;
   min-width: 0;
+  max-width: 100%;
   display: flex;
   align-items: center;
   gap: 8px;
   overflow-x: auto;
-  /* 横滑只滚这条标签带，别被浏览器当成左右手势（用户 2026-11-23 反馈
-     标签条滑几次就卡住，是被页面栈的边缘手势抢了） */
+  overflow-y: hidden;
   overscroll-behavior-x: contain;
-  touch-action: pan-x;
+  touch-action: pan-x pan-y;
   padding: 2px;
   scrollbar-width: none;
+  scroll-behavior: auto;
   -webkit-overflow-scrolling: touch;
+  /* 这一条现在也吃竖滑（pan-y），手指在这里上下划时表现为页面不滚——
+     顶栏本来就钉死的，不算退化；总比竖滑被吞掉好。 */
 }
 
 .gtabs::-webkit-scrollbar { display: none; }
@@ -30,7 +38,6 @@
   font-size: 13px;
   white-space: nowrap;
   box-shadow: var(--shadow-1);
-  transition: color .15s, background .15s;
 }
 
 .gtab.on {

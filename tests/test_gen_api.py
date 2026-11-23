@@ -583,8 +583,12 @@ class ImgTest(unittest.TestCase):
             r = self.c.get("/api/gen/img?f=nai:nai_ab12.png")
             self.assertEqual(r.status_code, 200)
             self.assertEqual(r.data, b"png")
+            # 2026-11-23 晚：出图不再 no-store，改成 conditional + 长缓存
+            # （同一文件名内容不变，浏览器能直接拿缓存 / 回 304）
             send.assert_called_once_with("C:/safe/nai", "nai_ab12.png",
-                                         mimetype="image/png", conditional=False)
+                                         mimetype="image/png", conditional=True,
+                                         max_age=gen_api._IMG_MAX_AGE)
+            self.assertIn("max-age=", sent.headers["Cache-Control"])
 
     def test_nai_absolute_path_is_rejected(self):
         r = self.c.get("/api/gen/img?f=nai:C:/Windows/win.ini")

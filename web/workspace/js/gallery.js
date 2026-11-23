@@ -19,11 +19,18 @@
 
   // ── 顶栏：文件夹横滑标签 ──────────────────────────────
 
+  /* 重建标签栏时必须把滚动位置还回去。
+     2026-11-23 用户第三次报「AI 创作页头顶那条滑动条滑不动」——根因就在这：
+     `fillTabs` 每次列表加载完都会 `innerHTML = ""` 整条重建，滚动位置
+     随之归零。用户手正按着往右滑的时候正好赶上一次加载回包，标签条就
+     「弹回最左边」，手感上就是卡死、白滑。现在记下 scrollLeft，重建完
+     立刻写回去（新内容还没排版时写不进就下一帧再补一次）。 */
   function fillTabs(grps) {
     if (!el.tabs) return;
     var list = [""].concat(grps || []);
     if (el.tabs.dataset.key === list.join("|")) return;
     el.tabs.dataset.key = list.join("|");
+    var keep = el.tabs.scrollLeft;
     el.tabs.innerHTML = "";
 
     list.forEach(function (g) {
@@ -41,6 +48,23 @@
       });
       el.tabs.appendChild(b);
     });
+
+    el.tabs.scrollLeft = keep;
+    global.requestAnimationFrame(function () {
+      if (el.tabs && el.tabs.scrollLeft !== keep) el.tabs.scrollLeft = keep;
+      markTabIntoView();
+    });
+  }
+
+  /* 选中的那个标签要自己露出来：从深层文件夹跳回来时它可能滚在屏外 */
+  function markTabIntoView() {
+    if (!el.tabs) return;
+    var on = el.tabs.querySelector(".gtab.on");
+    if (!on) return;
+    var l = on.offsetLeft, r = l + on.offsetWidth;
+    var vw = el.tabs.clientWidth;
+    if (l < el.tabs.scrollLeft) el.tabs.scrollLeft = l - 8;
+    else if (r > el.tabs.scrollLeft + vw) el.tabs.scrollLeft = r - vw + 8;
   }
 
   // ── 卡片 ──────────────────────────────────────────────

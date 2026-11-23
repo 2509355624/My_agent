@@ -3,7 +3,13 @@
 
    口径（用户 2026-11-23 定的）：这里没有图生图。相册上传是一张「参考」，
    「画同款」是把那张图读成一段描述再生成——所以两者都只往输入栏挂缩略图，
-   真正的生成仍由 chat.js 按用户这句话去打 /api/gen/submit。 */
+   真正的生成仍由 chat.js 按用户这句话去打 /api/gen/submit。
+
+   **识图时机（2026-11-23 晚用户第二次纠正）**：上传只是「选了一张图」，
+   不许立刻去读；等用户点了发送，`ensureDescribed()` 才把这一轮的几张图
+   读成描述，跟用户那句话一起拼给大模型。理由是用户上传完往往还要想一秒
+   才写需求，立刻读出来的描述会先一步填进输入框，把用户想说的话顶掉；
+   而且那时白白烧一次视觉模型的钱。 */
 (function (global) {
   "use strict";
 
@@ -92,26 +98,56 @@
     global.dispatchEvent(new Event("resize"));
   }
 
-  /* 读图反推 → 填进输入框。已有内容就不覆盖（那是用户自己写的）。 */
+  /* 读图反推 → 填进输入框。已有内容就不覆盖（那是用户自己写的）。
+     只给「画同款」用：那是用户明确点了一下「照着这张画」，填进去才叫反馈。
+     相册上传不走这里（见文件头的识图时机说明）。 */
   function describeInto(itemId, say) {
-    if (!say) return;
+    if (!say) return Promise.resolve("");
     var tag = global.WSChat.busyNote("正在看图…");
-    global.WSApi.get("/api/gal/describe?id=" + encodeURIComponent(itemId))
+    return global.WSApi.get("/api/gal/describe?id=" + encodeURIComponent(itemId))
       .then(function (d) {
         if (tag) tag.remove();
         if (!d || !d.ok) {
           global.WSChat.sysNote((d && d.error) || "这张没读出来，自己写一句就行");
-          return;
+          return "";
         }
-        if (say.value.trim()) return;          // 用户已经在写了，别顶掉
+        if (say.value.trim()) return d.text || "";   // 用户已经在写了，别顶掉
         say.value = d.text || "";
         say.dispatchEvent(new Event("input"));
         say.focus();
+        return d.text || "";
       })
       .catch(function () {
         if (tag) tag.remove();
         global.WSChat.sysNote("读图没连上，自己写一句就行");
+        return "";
       });
+  }
+
+  /* 只读、不填输入框：发送那一刻用。成功才记进 item.text，失败的返回空串
+     （后端也没有描述时由 submit 那边说「没读到，按描述画」）。 */
+  function describeOnly(item) {
+    return global.WSApi.get("/api/gal/describe?id=" + encodeURIComponent(item.id))
+      .then(function (d) {
+        if (d && d.ok && d.text) { item.text = d.text; return d.text; }
+        return "";
+      })
+      .catch(function () { return ""; });
+  }
+
+  /* 发送时把这一轮还没读过的参考图读出来，返回带描述的数组。
+     全部在本地读完再发，不是一个一个等——几张图并行，用户只等最慢的那张。
+     读不出来不算失败：图仍然带着走，让后端按「只有图、没描述」处理。 */
+  function ensureDescribed(list) {
+    var items = (list || S.refs).slice();
+    var todo = items.filter(function (r) { return r.id && !r.text; });
+    if (!todo.length) return Promise.resolve(items);
+    var tag = global.WSChat.busyNote(
+      todo.length > 1 ? "正在看 " + todo.length + " 张参考图…" : "正在看图…");
+    return Promise.all(todo.map(describeOnly)).then(function () {
+      if (tag) tag.remove();
+      return items;
+    });
   }
 
   /* 撤掉一张：输入栏的缩略图、消息里那张参考卡、存档里那条记录一起删 */
@@ -215,12 +251,11 @@
       }
       // 服务端现在直接给 item_id，不再靠序号去猜；老服务端没有这个字段时
       // 退回去按序号找（那时也是 0 基：返回的 idx 是第几张，减一正好对上）。
+      // 注意这里**不读图**：挂上缩略图就完了，等用户点发送（见文件头）。
       if (d.item_id) {
         addRef({ wid: d.work_id, id: d.item_id,
                  url: "/api/gal/img/" + d.item_id + "?s=t" });
         syncHint();
-        var s0 = document.getElementById("say");
-        if (s0 && !s0.value.trim()) describeInto(d.item_id, s0);
         return;
       }
       return global.WSApi.get("/api/gal/work/" + d.work_id).then(function (w) {
@@ -238,8 +273,6 @@
         addRef({ wid: d.work_id, id: hit.id,
                  url: "/api/gal/img/" + hit.id + "?s=t" });
         syncHint();
-        var say = document.getElementById("say");
-        if (say && !say.value.trim()) describeInto(hit.id, say);
       });
     }).catch(function () {
       if (tip) tip.remove();
@@ -257,10 +290,11 @@
     init: init,
     add: addRef,
     clear: clearRefs,
-    commit: commit,
+    commit: function () { commit(); },
     list: function () { return S.refs.slice(); },
     useSame: useSame,
     upload: upload,
+    ensureDescribed: ensureDescribed,
     syncHint: syncHint,
     rehydrate: rehydrate
   };

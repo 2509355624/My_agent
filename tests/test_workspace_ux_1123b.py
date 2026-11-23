@@ -63,16 +63,33 @@ class TestSwipeIsNotBrowserHistory(unittest.TestCase):
         self.assertIn("overscroll-behavior: none", block)
 
     def test_edge_swipe_needs_clear_horizontal(self):
-        """边缘右滑要同时满足「够远」且「没怎么竖向跑」。"""
+        """退页手势只认「从左边缘起手」，中间起手一律不接管。
+
+        2026-11-23 用户第三次报：在页面中间往右滑也会退回聊天页。旧判据
+        `dx > 90 && dy < 90` 是松手那一刻的累计位移，横向标签条 / 缩略图
+        横滑本身就能凑够 90，加上回拉能把 dy 抹小，于是屏幕中间随便一划
+        就退出。现在钉的是新规则：起点必须在 EDGE 内、方向要一次性钉死、
+        松手要过半或快甩。**这条测试以前钉的正是有 bug 的旧判据。**
+        """
         js = _read("js/stack.js")
-        self.assertIn("var go = dx > 90 && dy < 90;", js)
         self.assertIn("var EDGE = 24;", js)
+        # 起点必须在左边缘：中间起手直接不接管
+        self.assertIn("if (t.clientX > EDGE) { active = false; return; }", js)
+        # 方向判定只看第一次明显位移，之后不再翻转
+        self.assertIn("if (!decided) {", js)
+        # 松手：过半或快甩，且要求 decided 才可能退
+        self.assertIn("var far = dx >= view.clientWidth * 0.5;", js)
+        self.assertIn("var flick = quick && dx > 70;", js)
+        self.assertIn("var go = decided && (far || flick)", js)
+        self.assertNotIn("var go = dx > 90 && dy < 90;", js)
 
     def test_horizontal_strips_own_their_scroll(self):
+        """标签条两个轴都交给浏览器原生滚，不再单锁 pan-x。"""
         css = _read("css/gallery.css")
         idx = css.index(".gtabs {")
         block = css[idx:css.index("}", idx)]
-        self.assertIn("touch-action: pan-x", block)
+        self.assertIn("overflow-x: auto", block)
+        self.assertIn("touch-action: pan-x pan-y", block)
 
 
 class TestComposerStaysPut(unittest.TestCase):

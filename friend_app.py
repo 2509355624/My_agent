@@ -174,10 +174,24 @@ def _secure(resp):
     # private 不能去掉：图片要过登录态，存到 Cloudflare 边缘就等于泄漏。
     # 页面和接口一律 no-store——共享设备上退出登录后不该还能翻到东西。
     ctype = str(resp.headers.get("Content-Type") or "")
+    path = request.path or ""
     if ctype.startswith("image/"):
         resp.headers["Cache-Control"] = (
             "private, max-age=31536000, immutable")
-    elif (request.path or "").startswith("/workshop"):
+    elif path.startswith("/workspace/") and (
+            ctype.startswith("text/css") or "javascript" in ctype
+            or ctype.startswith("font/")):
+        # workspace 的 css / js（2026-11-23 晚）：原来跟着页面一起 no-store，
+        # 等于**每进一次页面就把十几个文件重新穿过隧道拉一遍**——这条线路
+        # 往返 Cloudflare 边缘就要 0.8~2 秒，十来个小文件叠起来就是用户说
+        # 的「太慢、老是卡」。
+        #
+        # 这里给 no-cache（不是 no-store）：**允许存，但每次用之前必须
+        # 回请求校验**。文件没改就走 304（几百字节），改了立刻拿到新的，
+        # 不存在「改了代码群友还看旧样式」的坑。要不要放开成 max-age 是
+        # 另一回事，前端目前还靠 `?v=` 手改版本号，先只做最稳的这一层。
+        resp.headers["Cache-Control"] = "no-cache"
+    elif path.startswith("/workshop"):
         # 提示词工坊是 4.6MB 的单文件，no-store 等于每次刷新都从这台机器
         # 重新传一遍。文件换没换由 ETag 判（mtime 变 → ETag 变），这里只
         # 负责别让同一个人每进一次就重下一遍。

@@ -93,6 +93,31 @@
   cursor: pointer;
 }
 
+/* 发出去的那条消息里带的参考图（2026-11-23 用户：我那条消息应该能看到
+   当时喂的是哪张）。排在文字上面，最多两行，横向能划——图多也不把气泡
+   撑成一堵墙。 */
+.bubble-refs {
+  display: flex;
+  gap: 6px;
+  max-width: 100%;
+  margin: -2px 0 8px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.bubble-refs::-webkit-scrollbar { display: none; }
+
+.bubble-refs img {
+  flex: 0 0 auto;
+  width: 66px;
+  height: 66px;
+  border-radius: 10px;
+  object-fit: cover;
+  background: rgba(255, 255, 255, .18);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .16);
+}
+
 /* ── AI 卡片 ────────────────────────────────────────── */
 .card {
   align-self: flex-start;
@@ -138,10 +163,12 @@
 .card .acts {
   display: flex;
   align-items: center;
-  /* 一个左、一个右，中间自然空出来：原来两个小圆圈贴着放，手指一点就是
-     「复制」和「重画」一起挨（用户 2026-11-23 反馈很容易误触）。 */
+  /* 复制 | 下载 | 重画 三个键分到两头和中间：原来两个小圆圈贴着放，
+     手指一点就是「复制」和「重画」一起挨（用户 2026-11-23 反馈很容易
+     误触）。中间这个下载（同日又要的）夹在中间，两头仍是复制 / 重画，
+     谁也不会被手指带偏。 */
   justify-content: space-between;
-  gap: 16px;
+  gap: 10px;
   padding: 8px 2px 0;
 }
 

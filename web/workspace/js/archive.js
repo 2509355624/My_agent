@@ -38,6 +38,8 @@
     wrap.dataset.ref = m.id || "";
     var img = document.createElement("img");
     img.alt = "参考图";
+    img.loading = "lazy";
+    img.decoding = "async";
     img.src = m.url || ("/api/gal/img/" + m.id + "?s=t");
     img.addEventListener("click", function () {
       if (global.WSGallery) global.WSGallery.open({ id: m.wid }, m.id);
@@ -64,7 +66,9 @@
       global.WSChat.msgs().push(m);
 
       if (m.k === "user") {
-        global.WSChat.paintUser(m.t);
+        // 发出去的那条可能带着参考图，重放时一起铺回来（用户 2026-11-23：
+        // 「我那条消息应该包含参考图，因为我能够看到之前的参考图是什么」）
+        global.WSChat.paintUser(m.t, m.refs || []);
       } else if (m.k === "note") {
         global.WSChat.paintNote(m.t);
       } else if (m.k === "ref") {
@@ -75,9 +79,16 @@
         if (m.file) {
           var img = document.createElement("img");
           img.alt = "生成结果";
+          img.loading = "lazy";
+          img.decoding = "async";
           img.src = global.WSGen.img(m.file);
           c.body.appendChild(img);
-          global.WSChat.buildActs({ acts: c.acts, prompt: m.prompt || "", skill: m.skill || "" });
+          // 重放时把 prompt / skill 一起交给 buildActs：不带的话「复制」
+          // 复制的是空串、「重画」也排不上队（新版多了下载，同样要 file）
+          global.WSChat.buildActs({
+            acts: c.acts, prompt: m.prompt || "", skill: m.skill || "",
+            refs: m.refs || [], file: m.file, rec: m
+          });
         } else {
           var ph = document.createElement("div");
           ph.className = "ph";

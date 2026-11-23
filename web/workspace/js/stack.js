@@ -112,24 +112,45 @@
   }
 
   /* 左边缘右滑退回：竖向滑动交给页面自己滚动，不抢。
-     回弹的条件分清三态——竖向多就不再接管，横向多才当滑动退页，
-     两轴都不过阈值的轻点一律不动（用户 2026-11-23：「滑动几次就卡死，
-     再滑就退回主页面」，就是这里把横向滑图的劲儿当成了退页手势）。 */
+
+     **这里以前在页面中间的任意位置右滑也会退页**（2026-11-23 用户第三次报：
+     「我在页面中间往右滑，它就自动退出了」）。原因是收尾判据 `dx > 90 &&
+     dy < 90` 是松手那一刻的累计位移：先往右下斜着划、再往回拉一下，dy 就
+     被拉小，一个纯横向的戳就退页了；而横向的标签条、缩略图横滑本身也会
+     产生几十像素的横移，凑够 90 就退。两点一起看，屏幕中间随便一划就退出。
+
+     现在的规则：
+     1. **起点必须在屏幕左边缘**（EDGE 内）。中间起手一律不接管——微信、
+        Safari 的返回手势也是这么定的，页面中间是内容的。
+     2. 起手后**第一次有明显位移**就把方向钉死（`h`）：竖向多就彻底不管；
+       横向多才进入拖动，且要求横向位移明显大于竖向（1.2 倍）。
+     3. 松手判据用**起始阈值 + 距离**：位移过半才走，或者快速一甩（时间
+        短、距离够）也算。绝不能一点回拉就触发。
+     拖动过程中手指移出左边缘也不算，只看位移。 */
   function bindSwipe(view) {
-    var sx = 0, sy = 0, dx = 0, dy = 0, active = false;
+    var sx = 0, sy = 0, dx = 0, dy = 0, active = false, decided = false;
+    var t0 = 0;
 
     view.addEventListener("touchstart", function (e) {
-      if (e.touches.length !== 1) return;
+      // 多指（双指缩放）不算手势
+      if (e.touches.length !== 1) { active = false; return; }
       var t = e.touches[0];
-      if (t.clientX > EDGE) return;
-      sx = t.clientX; sy = t.clientY; dx = 0; dy = 0; active = true;
+      // 起手点必须在左边缘；中间起手直接不管，避免把横向滚动当成退页
+      if (t.clientX > EDGE) { active = false; return; }
+      sx = t.clientX; sy = t.clientY; dx = 0; dy = 0;
+      active = true; decided = false; t0 = Date.now();
     }, { passive: true });
 
     view.addEventListener("touchmove", function (e) {
       if (!active) return;
       var t = e.touches[0];
       var mx = t.clientX - sx, my = t.clientY - sy;
-      if (Math.abs(my) > Math.abs(mx) && Math.abs(my) > 12) { active = false; return; }
+      if (!decided) {
+        if (Math.abs(mx) < 10 && Math.abs(my) < 10) return;
+        // 第一次判定：竖向为主（或向左划）就彻底放手，这一趟不再管
+        if (Math.abs(my) >= Math.abs(mx) || mx < -8) { active = false; return; }
+        decided = true;
+      }
       dx = Math.max(0, mx);
       dy = Math.max(0, my);
       if (dx < 6) return;                 // 抖动不算滑动，别让子页跳一下
@@ -137,13 +158,22 @@
       view.style.transform = "translateX(" + dx + "px)";
     }, { passive: true });
 
+    view.addEventListener("touchcancel", function () {
+      active = false; decided = false;
+      dx = 0; dy = 0;
+      view.classList.remove("drag");
+      view.style.transform = "";
+    }, { passive: true });
+
     view.addEventListener("touchend", function () {
       if (!active) return;
       active = false;
-      /* 斜着划出去也算「不走了」：向右超过 90 且竖向没跑太远才退页。
-         纯横向的短促一划也接受（dx 够大、dy 很小），保证手感还在。 */
-      var go = dx > 90 && dy < 90;
-      dx = 0; dy = 0;
+      var quick = Date.now() - t0 < 380;
+      // 位移过半（多半）或者「快速一甩」才退；dy 必须明显小，斜划不算
+      var far = dx >= view.clientWidth * 0.5;
+      var flick = quick && dx > 70;
+      var go = decided && (far || flick) && dy < dx * 0.8;
+      dx = 0; dy = 0; decided = false;
       view.classList.remove("drag");
       view.style.transform = "";
       if (go) back();

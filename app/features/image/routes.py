@@ -83,6 +83,11 @@ _ledger_lock = threading.Lock()
 
 # ComfyUI 输出文件名：纯文件名（output 目录是平的），挡死一切路径形态。
 _IMG_NAME_RE = re.compile(r"[A-Za-z0-9._\- ]{1,120}")
+
+# 出图缓存：同一个文件名内容永远不会变（ComfyUI 不会覆盖同名），所以可以给
+# 一年 + immutable，浏览器发 If-None-Match 时还能拿 304。见 api_img 的说明。
+_IMG_MAX_AGE = 31536000
+_IMG_CACHE_CTL = "private, max-age=%d, immutable" % _IMG_MAX_AGE
 _NAI_REF_RE = re.compile(r"nai:([A-Za-z0-9._\- ]{1,120})")
 _NAI_PREFIX_MAX = 2000
 
@@ -742,6 +747,17 @@ def api_img():
 
     两条路径都只接受文件名/受控相对路径，不接受绝对路径；NAI 的绝对落盘路径
     永远不会下发给浏览器。
+
+    ## 缓存（2026-11-23 用户：「都说了 localStorage 去存储，不要让服务器老传」）
+
+    出图路径里带文件夹名，**文件名就是唯一的**（ComfyUI 的 `ComfyUI_00042_.png`
+    在同一目录下不会重名），下发给浏览器的那条地址永远不会变内容。所以这里
+    直接给长缓存 + `immutable`，配合带 `If-None-Match` 的请求还能拿 304：
+    群友手机重新打开页面时，图上一次已经躺在浏览器缓存里，一个字节都不用
+    再过隧道——这是「服务器带宽老被图片吃掉」里最直接的省法。
+
+    以前写的是 `no-store`，等于每刷一次页面所有图都从 origin 重下一遍，
+    走 Cloudflare 隧道时就是美国绕一圈回来。
     """
     f = str(request.args.get("f") or "").replace("\\", "/").strip("/")
     if f.startswith("nai:"):
@@ -750,9 +766,11 @@ def api_img():
             return jsonify({"ok": False, "error": "非法文件名"}), 400
         try:
             # send_from_directory 自带目录约束；这里只传 basename，避免路径穿越。
+            # conditional=True 才会按 ETag 回 304（见上面 docstring 的缓存说明）
             resp = send_from_directory(image_out._out_dir(), name,
-                                       mimetype="image/png", conditional=False)
-            resp.headers["Cache-Control"] = "no-store"
+                                       mimetype="image/png", conditional=True,
+                                       max_age=_IMG_MAX_AGE)
+            resp.headers["Cache-Control"] = _IMG_CACHE_CTL
             return resp
         except Exception:
             return jsonify({"ok": False,
@@ -766,8 +784,8 @@ def api_img():
     # 和主站 /api/image 共用同一套路径校验，磁盘上没有才走下面的代理。
     local = comfy_out.local_output_file(f)
     if local:
-        resp = send_file(local, conditional=True)
-        resp.headers["Cache-Control"] = "no-store"
+        resp = send_file(local, conditional=True, max_age=_IMG_MAX_AGE)
+        resp.headers["Cache-Control"] = _IMG_CACHE_CTL
         return resp
     params = {"filename": parts[-1]}
     if len(parts) > 1:
@@ -781,6 +799,7 @@ def api_img():
     if resp.status_code != 200 or not resp.content:
         return jsonify({"ok": False,
                         "error": "ComfyUI 没有这张图（output 被清过？）"}), 404
+    # 代理这一路没有 ETag，只能给长缓存；同一文件名内容不会变，够用
     out = Response(resp.content, mimetype="image/png")
-    out.headers["Cache-Control"] = "no-store"
+    out.headers["Cache-Control"] = _IMG_CACHE_CTL
     return out

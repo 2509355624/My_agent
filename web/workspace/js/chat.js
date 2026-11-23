@@ -109,10 +109,30 @@
     };
   }
 
-  function paintUser(text) {
+  /* 用户气泡。refs 非空时把这一轮的参考图缩略图排在上面——豆包也是这样：
+     发出去的那条消息里能看见自己当时喂的是哪张图，回头翻记录还知道。
+     气泡是消息的一部分，所以图地址走同一个 item id，刷新后照样能显示。 */
+  function paintUser(text, refs) {
     hideEmpty();
     var b = document.createElement("div");
     b.className = "bubble";
+    var list = (refs || []).filter(function (r) { return r && r.id; });
+    if (list.length) {
+      var strip = document.createElement("div");
+      strip.className = "bubble-refs";
+      list.forEach(function (r) {
+        var im = document.createElement("img");
+        im.alt = "参考图";
+        im.loading = "lazy";
+        im.decoding = "async";
+        im.src = r.url || ("/api/gal/img/" + r.id + "?s=t");
+        im.addEventListener("click", function () {
+          if (global.WSGallery) global.WSGallery.open({ id: r.wid }, r.id);
+        });
+        strip.appendChild(im);
+      });
+      b.appendChild(strip);
+    }
     var span = document.createElement("span");
     b.appendChild(span);
 
@@ -133,11 +153,20 @@
 
     box().appendChild(b);
     scrollBottom();
+    return b;
   }
 
-  function addUser(text) {
-    paintUser(text);
-    log({ k: "user", t: text });
+  /* 存档里的 refs 只留 id / wid / url：text 是那一轮读出来的描述，已经在
+     提示词里了，留着只是白占 localStorage。 */
+  function briefRefs(refs) {
+    return (refs || []).map(function (r) {
+      return { id: r.id, wid: r.wid, url: r.url || "" };
+    });
+  }
+
+  function addUser(text, refs) {
+    paintUser(text, refs);
+    log({ k: "user", t: text, refs: briefRefs(refs) });
   }
 
   /* 通用卡片壳：图卡和漫画卡共用一套外观（谁用谁往里塞内容） */
@@ -203,10 +232,18 @@
     'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
     '<path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4.6V10h-5.4"/></svg>';
 
-  /* 卡片底部两个按钮：复制提示词 | 换种子重画。
+  var ICON_DOWN =
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M12 4.5v10.4"/><path d="M7.8 11.4L12 15.6l4.2-4.2"/>' +
+    '<path d="M4.8 18.4v1.1h14.4v-1.1"/></svg>';
+
+  /* 卡片底部三个按钮：复制提示词 | 下载到本机 | 换种子重画。
      它们原来紧贴在一起（都是小圆圈、间距 8px），用户反馈「很容易误触」——
-     改成左边一个纯文字按钮、右边一个图标按钮，中间留空推开，一个管复制
-     一个管重画，手指不会点串。 */
+     改成两边是纯文字按钮、中间是图标按钮，中间留空推开，一个管复制
+     一个管下载一个管重画，手指不会点串。
+     下载（2026-11-23 用户要的）：走 `<a download>` 拉原始尺寸那张，
+     不经过 canvas，手机浏览器会直接落到「下载」目录。 */
   function buildActs(card) {
     if (card.acts.childElementCount) return;
     card.acts.hidden = false;
@@ -226,9 +263,19 @@
       });
     });
 
+    var save = document.createElement("button");
+    save.type = "button";
+    save.className = "act act-icon";
+    save.title = "下载到本机";
+    save.setAttribute("aria-label", "下载到本机");
+    save.innerHTML = ICON_DOWN + "<span>下载</span>";
+    save.addEventListener("click", function () {
+      downloadImage(card);
+    });
+
     var again = document.createElement("button");
     again.type = "button";
-    again.className = "act act-icon";
+    again.className = "act act-text";
     again.title = "换种子重画";
     again.setAttribute("aria-label", "换种子重画");
     again.innerHTML = ICON_AGAIN + "<span>重画</span>";
@@ -237,7 +284,27 @@
     });
 
     card.acts.appendChild(copy);
+    card.acts.appendChild(save);
     card.acts.appendChild(again);
+  }
+
+  /* 下载这张图。地址还是 /api/gen/img 那条（同源、带登录 cookie），
+     `download` 属性让浏览器存成文件而不是打开它；文件名用 img 字段，
+     ComfyUI 的原始名带上时间戳，重画几次也不会互相覆盖。
+    图还没出来（card.file 为空）时提示一句，不静默失败。 */
+  function downloadImage(card) {
+    var file = card.file || (card.rec && card.rec.file) || "";
+    if (!file) {
+      sysNote("这张还没出来，等它画完再点下载");
+      return;
+    }
+    var a = document.createElement("a");
+    a.href = global.WSGen.img(file);
+    a.download = String(file).split("/").pop() || "image.png";
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }
 
   function showImage(card, job) {
@@ -254,6 +321,7 @@
       card.ph = null;
     }
     card.note.hidden = true;
+    card.file = job.file || "";
     buildActs(card);
     if (card.rec) {
       card.rec.file = job.file;
@@ -402,23 +470,36 @@
     el.send.disabled = !el.say.value.trim() || el.say.disabled;
   }
 
+  /* 发送。参考图的识图挪到这一步（2026-11-23 用户：上传不许立刻实图，
+     点发送才实图）：
+       1. 先把用户气泡和一起来的参考图铺上去——用户要能看见自己喂了哪张；
+       2. 再读这一轮的参考图（`ensureDescribed`，读过的跳过，并行读）；
+       3. 读到的描述交给 submit，跟用户这句话一起拼成最终提示词。
+     第 2 步的等待有「正在看图…」顶着，且这时输入框已经清空，不会再被
+     读出来的描述顶掉。
+     第 3 步原先是在点发送的同一帧去取 refIds；现在识图要等，所以不能先
+     commit（commit 会清空待发送列表），等识图完再清。 */
   function send() {
     var text = el.say.value.trim();
     if (!text) return;
-    addUser(text);
+    var refs = global.WSRef.list();
+    addUser(text, refs);
     el.say.value = "";
     grow();
     syncSend();
 
-    var refIds = global.WSRef.list().map(function (r) { return r.id; });
-    // 发出去就把它从输入栏移走（消息里那张卡留着，还能点开看）
-    global.WSRef.commit();
     // 漫画模式：这句话是剧情需求，交给创作面板去跑「编剧 → 分页画」
+    // 漫画那条链自己会读参考，不需要在这里等识图
     if (global.WSCreate && global.WSCreate.mode() === "comic") {
-      global.WSCreate.runComic(text, refIds);
+      global.WSRef.commit();
+      global.WSCreate.runComic(text, refs.map(function (r) { return r.id; }));
       return;
     }
-    submitJob(text, S.skill, refIds);
+
+    global.WSRef.ensureDescribed(refs).then(function (read) {
+      global.WSRef.commit();
+      submitJob(text, S.skill, read.map(function (r) { return r.id; }));
+    });
   }
 
   function copyText(text) {
