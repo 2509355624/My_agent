@@ -12,8 +12,16 @@
 
   function $(id) { return document.getElementById(id); }
 
+  /* 消息区：正常是聊天页那个；子页（AI 创作）把输入栏借过去之后，
+     发送出去的气泡要落在子页自己那一层，不能写进被子页盖住的聊天页。 */
+  function box() {
+    return (global.WSViews && global.WSViews.scroll)
+      ? global.WSViews.scroll() : el.scroll;
+  }
+
   function scrollBottom() {
-    el.scroll.scrollTop = el.scroll.scrollHeight;
+    var b = box();
+    if (b) b.scrollTop = b.scrollHeight;
   }
 
   function hideEmpty() {
@@ -29,7 +37,7 @@
     p.style.alignSelf = "center";
     p.style.border = "0";
     p.textContent = text;
-    el.scroll.appendChild(p);
+    box().appendChild(p);
     scrollBottom();
   }
 
@@ -55,10 +63,9 @@
       span.textContent = text;
     }
 
-    el.scroll.appendChild(b);
+    box().appendChild(b);
     scrollBottom();
   }
-
   /* 通用卡片壳：图卡和漫画卡共用一套外观（谁用谁往里塞内容） */
   function shell(cls) {
     hideEmpty();
@@ -78,7 +85,7 @@
     node.appendChild(body);
     node.appendChild(note);
     node.appendChild(acts);
-    el.scroll.appendChild(node);
+    box().appendChild(node);
     scrollBottom();
 
     return {
@@ -258,11 +265,36 @@
     fitComposer();
   }
 
+  /* 把「正在看的这张图」交给生图链路：渠道沿用当前选中的，提示词用这张的。
+     AI 创作页的查看器点「画同款」走这里（gallery.js）。这里**只填输入框**：
+     页面留在原地（用户点的是「照这个来」，不是「回聊天页」），
+     查看器由 gallery.js 自己关掉。
+     画廊的 /api/gal/work 只回图本身（id / idx / ext），没有当初的提示词；
+     作品名也只是编号（"1"、"2"），不能当提示词用——宁可空着让人自己写，
+     也不要往输入框塞一个"1"骗人。 */
+  function useSame(work) {
+    var title = (work && work.title) || "";
+    if (title && !/^\d+$/.test(title)) el.say.value = title;
+    grow();
+    syncSend();
+    el.say.focus();
+  }
+
   // 输入栏是浮在消息上的玻璃层，消息区底部得留出它的实际高度
   function fitComposer() {
     if (!el.composer) return;
     document.documentElement.style.setProperty(
       "--composer-h", el.composer.offsetHeight + "px");
+  }
+
+  /* 输入栏被挪进子页（视图构建时移的）那一刻还没有尺寸，上面量到的是 0。
+     这里补量一次，并替子页盯着：宿主一出现就补，别停在 0。 */
+  function fitWhenSized() {
+    if (!el.composer) return;
+    if (el.composer.offsetHeight) { fitComposer(); return; }
+    global.requestAnimationFrame(function () {
+      if (el.composer.offsetHeight) fitComposer();
+    });
   }
 
   function syncSend() {
@@ -346,7 +378,7 @@
     el.cam = $("file-camera");
     el.album = $("file-album");
 
-    global.addEventListener("resize", fitComposer);
+    global.addEventListener("resize", fitWhenSized);
 
     el.send.addEventListener("click", send);
     el.say.addEventListener("input", function () { grow(); syncSend(); });
@@ -401,5 +433,5 @@
     bootChannels();
   }
 
-  global.WSChat = { init: init, sysNote: sysNote, card: shell };
+  global.WSChat = { init: init, sysNote: sysNote, card: shell, useSame: useSame };
 })(window);

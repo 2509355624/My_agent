@@ -8,7 +8,7 @@
   var S = { grp: "", page: 1, more: true, busy: false, works: [] };
   var el = {};
   var io = null;
-  var v = { list: [], idx: 0, jump: 0, faved: false, node: null };
+  var v = { list: [], idx: 0, jump: 0, faved: false, node: null, work: null };
 
   function $(id) { return document.getElementById(id); }
 
@@ -174,6 +174,13 @@
     'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
     '<path d="M12 4v10"/><path d="M8 10.6 12 14.6l4-4"/><path d="M5 19h14"/></svg>';
 
+  /* 「画同款」：拿这张的提示词回到聊天页接着出图（用户 2026-11-23 要的） */
+  var ICON_SAME =
+    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M4.5 9.5h11.2"/><path d="M12.6 6.4 15.7 9.5l-3.1 3.1"/>' +
+    '<path d="M19.5 14.5H8.3"/><path d="M11.4 11.4 8.3 14.5l3.1 3.1"/></svg>';
+
   function buildViewer() {
     var box = document.createElement("div");
     box.className = "gviewer";
@@ -220,7 +227,18 @@
     dl.innerHTML = ICON_DL + "<span>下载</span>";
     dl.addEventListener("click", download);
 
+    var same = document.createElement("button");
+    same.type = "button";
+    same.className = "gv-act gv-same";
+    same.innerHTML = ICON_SAME + "<span>画同款</span>";
+    same.addEventListener("click", function () {
+      if (!global.WSChat || !global.WSChat.useSame) return;
+      closeViewer();
+      global.WSChat.useSame(v.work);
+    });
+
     acts.appendChild(fav);
+    acts.appendChild(same);
     acts.appendChild(dl);
 
     box.appendChild(top);
@@ -244,6 +262,7 @@
   function open(work, itemId) {
     // 「我的」页可以直接 push 出来，不一定先逛过画廊；查看器得能自己建
     if (!v.node) buildViewer();
+    v.work = work;
     v.node.box.hidden = false;
     document.body.classList.add("g-lock");
     v.node.track.innerHTML = "";
@@ -339,6 +358,12 @@
     el.body = body;
     body.classList.add("gbody");
 
+    // 从这一页发的话要落在这一页：输入栏被借到这里（见 views.js 的 dock），
+    // 聊天页那层消息区被盖住了，写进去等于石沉大海。
+    el.chat = document.createElement("div");
+    el.chat.className = "gchat";
+    el.chat.setAttribute("data-chat-scroll", "");
+
     el.grid = document.createElement("div");
     el.grid.className = "ggrid";
 
@@ -351,6 +376,7 @@
 
     body.appendChild(el.grid);
     body.appendChild(el.more);
+    body.appendChild(el.chat);
 
     buildViewer();
     load(true);

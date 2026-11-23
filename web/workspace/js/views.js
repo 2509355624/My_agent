@@ -36,8 +36,46 @@
     return b;
   }
 
-  function register(name, spec) {
-    CUSTOM[name] = spec || {};
+  function register(name, spec) { CUSTOM[name] = spec || {}; }
+
+  /* 输入栏在页面上只有一份（聊天页根部）。子页盖上来时它没被摘掉，只是
+     被不透明的子页压住了——所以子页里「看不见输入栏」不是没元素，是被盖住。
+     这里给「要接着聊 / 接着出图」的子页把输入栏挪进自己的内容区底部，
+     退回时再挪回聊天页原位（用户 2026-11-23：进 AI 创作也得能直接发话）。
+     输入栏本身是绝对定位，所以宿主必须 position: relative。 */
+  var HOME = null;          // { composer, before }：聊天页里的原位置
+  var CHATTY = { gallery: true };  // 漫画单本页是全屏读图，不借输入栏
+
+  function dockComposer(host, name) {
+    var composer = document.getElementById("composer");
+    if (!composer) return;
+    if (!HOME) {
+      HOME = { composer: composer, before: composer.nextSibling };
+    }
+    if (!CHATTY[name]) return;
+    host.classList.add("v-dock");
+    host.appendChild(composer);
+    // 输入栏挪了家，高度基准也变了（宿主滚动条、安全区都可能不同），
+    // 让聊天页重算一次 --composer-h：子页靠它给底部留白，差几十像素就会
+    // 把最后一行压在玻璃下面。
+    global.dispatchEvent(new Event("resize"));
+  }
+
+  function undockComposer() {
+    if (!HOME || !HOME.composer.parentNode) return;
+    var home = document.getElementById("chat-scroll");
+    if (!home) return;
+    home.parentNode.insertBefore(HOME.composer, HOME.before || home.nextSibling);
+    global.dispatchEvent(new Event("resize"));
+  }
+
+  /* 子页里的输入栏发出去的话，气泡得落在用户眼前这一页（聊天页那层的
+     消息区被子页盖着，写进去等于石沉大海）。子页自己声明一个消息区就投给它，
+     没声明就还是回聊天页。 */
+  function scrollOf() {
+    var v = document.querySelector(".view-push.in");
+    var own = v && v.querySelector("[data-chat-scroll]");
+    return own || document.getElementById("chat-scroll");
   }
 
   /* opts：push 时带进来的参数（例如打开哪一本漫画），子页自己决定怎么用 */
@@ -83,8 +121,16 @@
 
     view.appendChild(top);
     view.appendChild(body);
+    dockComposer(body, name);
+    view.dataset.dock = CHATTY[name] ? "1" : "";
     return view;
   }
 
-  global.WSViews = { build: build, register: register, titles: TITLES };
+  global.WSViews = {
+    build: build,
+    register: register,
+    titles: TITLES,
+    undock: undockComposer,
+    scroll: scrollOf
+  };
 })(window);

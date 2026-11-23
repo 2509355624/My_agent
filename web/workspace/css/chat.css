@@ -242,6 +242,11 @@
   font-size: 15px;
   line-height: 1.5;
   resize: none;
+  /* 一行时不滚：padding 10+10 + 行高 22.5 刚好撑满 44px 的框。
+     以前 line-height 1.5 在部分机器上算出 22.5 + 上下 padding 会顶出
+     半个像素，于是在输入框右边冒出一条 4px 的滚动条。锁死 line-height，
+     再把 overflow 收干净，只有真超出一行才滚。 */
+  line-height: 22px;
   overflow-y: auto;
   outline: none;
   box-shadow: inset 0 1px 2px rgba(16, 24, 40, .04), var(--shadow-1);
@@ -249,12 +254,9 @@
 }
 
 /* 长文时才出细滚动条，平时不占位也不描边 */
-#say::-webkit-scrollbar { width: 4px; }
+#say::-webkit-scrollbar { width: 0; }
 #say::-webkit-scrollbar-track { background: transparent; }
-#say::-webkit-scrollbar-thumb {
-  background: var(--scroll);
-  border-radius: 999px;
-}
+#say::-webkit-scrollbar-thumb { background: transparent; border-radius: 999px; }
 
 #say:focus {
   border-color: var(--brand);
@@ -285,8 +287,13 @@
   box-shadow: none;
 }
 
+/* 输入栏被借到子页里（AI 创作）：宿主是子页内容区，跟着子页一起滑入滑出。
+   滚动仍由内容区管，底部留白各子页自己按 --composer-h 算（画廊在 gallery.css）。 */
+.vbody.v-dock {
+  position: relative;
+}
+
 /* 「＋」弹出：相机 / 相册 */
-.plus-menu {
   position: absolute;
   left: 0;
   bottom: calc(100% + 10px);

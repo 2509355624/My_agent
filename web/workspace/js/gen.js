@@ -1,29 +1,35 @@
 /* 生图接口：渠道清单、提交、轮询状态、取图、默认画风。
-   只管发请求和存偏好，不碰 DOM。全部同源相对路径。 */
+   只管发请求和存偏好，不碰 DOM。全部同源相对路径。
+
+   ⚠️ 前缀走 `/api/gen/*`：5174（站主直连）本来挂的就是这个前缀，5175（群友
+   网关，只反代白名单）为此新加了 `/api/gen/<path>` 反代——读接口放行、
+   提交要登录。同一个地址在本机、网关、Cloudflare 隧道下都能走通；
+   换成别的前缀两边必有一边 404，表现就是「没拿到渠道列表」。 */
 (function (global) {
   "use strict";
 
+  var BASE = "/api/gen";
   var SKILL_KEY = "ws_skill";
   var CACHE = null;          // 渠道清单一次会话拿一次就够，画风抽屉与发送共用
 
   function channels(force) {
     if (CACHE && !force) return Promise.resolve(CACHE);
-    return global.WSApi.get("/api/gen/channels").then(function (d) {
+    return global.WSApi.get(BASE + "/channels").then(function (d) {
       if (d && d.ok) CACHE = d;
       return d;
     });
   }
 
   function submit(body) {
-    return global.WSApi.post("/api/gen/submit", body);
+    return global.WSApi.post(BASE + "/submit", body);
   }
 
   function status() {
-    return global.WSApi.get("/api/gen/status");
+    return global.WSApi.get(BASE + "/status");
   }
 
   function img(file) {
-    return "/api/gen/img?f=" + encodeURIComponent(file || "");
+    return BASE + "/img?f=" + encodeURIComponent(file || "");
   }
 
   function defaultSkill() {

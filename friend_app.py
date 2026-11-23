@@ -205,7 +205,11 @@ def _gate():
         return _secure(jsonify({"ok": False, "error": "请求太频繁，歇一下"})), 429
     # 独立游客页的隔离：只圈「没登录 + 进过 /play」的人，且只挡页面导航。
     # API 一律放行——聊天要靠它，其余接口本来就要求登录（见 _forward）。
+    # 2026-11-23「AI 创作」那几个子页也要能发图，所以排第二。
     p = (request.path or "/").rstrip("/") or "/"
+    # 带子路径的也一起放行（/workspace/js/chat.js），否则子页里点开新界面
+    # 再刷资源仍会被自己的页面锁挡回 /play。
+    _ws_page = p == "/workspace" or p.startswith("/workspace/")
     # QQ「/画廊」「/漫画台」发出来的正式入口：先把 /play 的页面锁解开再按
     # 正常鉴权走。2026-11-06 回归：站主自己点过一次 /play 后，浏览器带着
     # 7 天的 fr_solo，再点 QQ 给的 /gallery 会被下面这条挡回游客页，看起来
@@ -251,7 +255,8 @@ def _gate():
                           "/showcase", "/showcase.html")
             # 新界面的样式和脚本也在 /workspace/ 下，不能一起挡回 /play，
             # 否则 index.html 发出去但 css/js 全被重定向成 HTML。
-            and not p.startswith("/workspace/")):
+            # `_ws_page` 同时覆盖 `/workspace` 与 `/workspace/<任意子路径>`。
+            and not _ws_page):
         return redirect(SOLO_PATH)
     return None
 
@@ -717,6 +722,23 @@ def _relay_guest_cookie(resp, upstream):
 @app.route("/api/friend/<path:sub>", methods=["GET", "POST", "DELETE"])
 def proxy(sub):
     return _forward("/api/friend", sub)
+
+
+@app.route("/api/gen/<path:sub>", methods=["GET", "POST"])
+def proxy_gen(sub):
+    """跑图台那套接口（渠道清单 / 提交 / 轮询 / 取图）给新界面用。
+
+    新界面的聊天页和 `AI 创作` 子页都在 5175 下，而 5175 只反代白名单里的
+    前缀——`/api/gen/*` 原来根本不存在（群友页那边直接 404），于是聊天页
+    永远「没拿到渠道列表」，渠道抽屉也是空的（2026-11-23 用户反馈）。
+
+    读接口放行，提交必须登录：提交能直接占 GPU 队列，不能匿名打。
+    不套 `/api/friend` 那一份 per-QQ 额度——那是群友页 LoRA 面板专用的，
+    它要求请求里带 qq；新界面这条只借用「提清单 + 提交 + 轮询」的最小面。
+    """
+    if request.method == "POST" and not _logged_in():
+        return _secure(jsonify({"ok": False, "error": "没登录"})), 401
+    return _forward("/api/gen", sub)
 
 
 # ─── 游客会话查看（管理员只读，2026-11-08）─────────────────

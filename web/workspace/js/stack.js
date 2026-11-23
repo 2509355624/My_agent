@@ -30,9 +30,13 @@
   /* 换内容不换栈：不做退回的一层，当前无调用方（个人页已改成真叠层） */
   function replace(name, opts) {
     if (!S.top) return push(name, opts);
+    var old = S.top;
     var next = global.WSViews.build(name, opts);
     next.classList.add("in");
-    el.stack.replaceChild(next, S.top);
+    el.stack.replaceChild(next, old);
+    if (old.dataset && old.dataset.dock && !next.dataset.dock) {
+      global.WSViews.undock();
+    }
     S.top = next;
     bindView(next);
     return next;
@@ -55,6 +59,8 @@
     S.depth = Math.max(0, S.depth - 1);
     view.classList.remove("in");
 
+    // 子页把输入栏借走了（AI 创作页要接着出图），退回时先还回聊天页
+    if (view.dataset && view.dataset.dock) global.WSViews.undock();
 
     var done = function () {
       if (view.parentNode) view.parentNode.removeChild(view);

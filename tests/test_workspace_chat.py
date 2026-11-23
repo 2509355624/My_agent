@@ -92,10 +92,17 @@ class TestWorkspaceChatComposer(unittest.TestCase):
 class TestWorkspaceChatGen(unittest.TestCase):
 
     def test_same_origin_gen_paths(self):
+        """渠道/提交/轮询/取图都拼在同一个前缀上，不写死域名。
+
+        gen.js 改成 `BASE + "/channels"` 这种拼法之后，字面量断言要跟着变——
+        但「四个接口都在、前缀是 /api/gen」这件事照样得钉住：5175 网关只反代
+        这个前缀，换成别的（比如早先写过的 /api/friend/gen）那边直接 404，
+        表现就是「没拿到渠道列表」。
+        """
         js = _read("js/gen.js")
-        for path in ("/api/gen/channels", "/api/gen/submit",
-                     "/api/gen/status", "/api/gen/img"):
-            self.assertIn(path, js, "缺少接口: " + path)
+        self.assertIn('var BASE = "/api/gen";', js, "生图接口前缀必须是 /api/gen")
+        for seg in ('"/channels"', '"/submit"', '"/status"', '"/img?f="'):
+            self.assertIn(seg, js, "缺少接口: " + seg)
         self.assertNotIn("http://", js, "接口不能写死域名")
         self.assertNotIn("https://", js, "接口不能写死域名")
 

@@ -91,8 +91,12 @@ class TestGatewayRoute(unittest.TestCase):
     def test_solo_gate_lets_workspace_through(self):
         """带 fr_solo 的浏览器点 QQ 给的入口，不能被挡回 /play。"""
         self.assertIn('"/workspace",', self.src)
-        # 静态资源也不能被挡回 /play，否则 index 发出去但 css/js 全变 HTML
-        self.assertIn('not p.startswith("/workspace/")', self.src)
+        # 静态资源也不能被挡回 /play，否则 index 发出去但 css/js 全变 HTML。
+        # 2026-11-23 起统一由 `_ws_page` 一个判据覆盖 `/workspace` 与
+        # `/workspace/<子路径>`，所以断言改成钉住这个判据本身。
+        self.assertIn("_ws_page = p ==", self.src)
+        self.assertIn('p.startswith("/workspace/")', self.src)
+        self.assertIn("and not _ws_page", self.src)
 
 
 class TestPageLinks(unittest.TestCase):
