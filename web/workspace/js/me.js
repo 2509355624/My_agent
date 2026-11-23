@@ -144,6 +144,72 @@
     io.observe(el.more);
   }
 
+  // ── 账号 ──────────────────────────────────────────────
+
+  /* 顶栏这段是「我是谁 + 怎么换人」。页面进来就显示登录按钮（用户
+     2026-11-23：进来之后没有任何入口也没有退出），登录态从 /me 读——
+     5175 才有这个接口，站主直连 5174 时它 404，那就直接当站主处理。 */
+  function mountAccount() {
+    var box = document.createElement("div");
+    box.className = "meacc";
+
+    var who = document.createElement("div");
+    who.className = "meacc-who";
+    var badge = document.createElement("span");
+    badge.className = "meacc-badge";
+    badge.textContent = "我";
+    var name = document.createElement("span");
+    name.className = "meacc-name";
+    name.textContent = "未登录";
+    who.appendChild(badge);
+    who.appendChild(name);
+
+    var out = document.createElement("button");
+    out.type = "button";
+    out.className = "meacc-btn";
+    out.textContent = "登录";
+    out.addEventListener("click", function () {
+      if (out.dataset.act === "logout") {
+        out.disabled = true;
+        global.WSApi.post("/logout", {}).then(function () {
+          /* 聊天记录是这台设备的，退出登录就该一起清掉——换个人登录
+             看到上一个人的对话比「丢了记录」更糟。 */
+          if (global.WSStore) global.WSStore.clear();
+          /* reload 而不是跳地址：/workspace/ 自己看 cookie 决定发登录页还是
+             聊天页，跟登录成功那边的做法一致（login.js 也是 reload）。 */
+          global.location.reload();
+        });
+        return;
+      }
+      global.location.reload();
+    });
+
+    
+    box.appendChild(out);
+    // 账号条放在 tab 下面：tab 是「看什么」，账号是「我是谁」，先看东西
+    if (el.tabs && el.tabs.parentNode) {
+      el.tabs.parentNode.insertBefore(box, el.tabs.nextSibling);
+    } else {
+      el.scroll.appendChild(box);
+    }
+
+    global.WSApi.get("/me").then(function (d) {
+      if (!d || !d.ok) {
+        // 5174 直连没有 /me：站主本人，不用登录也不给退出
+        name.textContent = "站主直连";
+        out.hidden = true;
+        return;
+      }
+      var qq = d.qq || "";
+      name.textContent = qq ? ("QQ " + qq) : "游客";
+      badge.textContent = qq ? qq.slice(-2) : "游";
+      if (qq) {
+        out.textContent = "退出登录";
+        out.dataset.act = "logout";
+      }
+    });
+  }
+
   // ── 挂到子页 ──────────────────────────────────────────
 
   function mountTop(mid) {
@@ -185,6 +251,7 @@
     el.more.addEventListener("click", function () { load(false); });
 
     el.scroll.appendChild(el.tabs);
+    mountAccount();
     el.scroll.appendChild(el.grid);
     el.scroll.appendChild(el.more);
     body.appendChild(el.scroll);

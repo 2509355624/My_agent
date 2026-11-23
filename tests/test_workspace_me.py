@@ -96,7 +96,8 @@ class TestMeStack(unittest.TestCase):
         不能看创建节点时的那一页——「我的」页里的 view 也是 "me"。
         """
         js = _read("js/stack.js")
-        self.assertIn('if (S.top && S.top.dataset.view === "me") return;', js)
+        # 现在由 push() 统一拦（同页不叠第二层），「我的」也在其中
+        self.assertIn('if (S.top && S.top.dataset.view === name', js)
 
 
 class TestGalleryJump(unittest.TestCase):

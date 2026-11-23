@@ -139,3 +139,61 @@
 @media (prefers-reduced-motion: reduce) {
   .mpic, .metabs button { transition: none; }
 }
+
+/* ── 账号条 ──────────────────────────────────────────── */
+/* 放在 tab 下面一行：左边是谁，右边登录/退出 */
+.meacc {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--hair);
+  border-radius: 15px;
+  background: var(--card);
+  box-shadow: var(--shadow-1);
+}
+
+.meacc-who {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.meacc-badge {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.meacc-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+  color: var(--text);
+}
+
+.meacc-btn {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 13px;
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.meacc-btn:active { background: var(--brand-soft); border-color: var(--brand-soft); }
+.meacc-btn:disabled { opacity: .5; }

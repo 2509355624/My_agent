@@ -231,11 +231,7 @@
     same.type = "button";
     same.className = "gv-act gv-same";
     same.innerHTML = ICON_SAME + "<span>画同款</span>";
-    same.addEventListener("click", function () {
-      if (!global.WSChat || !global.WSChat.useSame) return;
-      closeViewer();
-      global.WSChat.useSame(v.work);
-    });
+    same.addEventListener("click", sameAs);
 
     acts.appendChild(fav);
     acts.appendChild(same);
@@ -313,6 +309,19 @@
     v.node.box.hidden = true;
     v.node.track.innerHTML = "";
     document.body.classList.remove("g-lock");
+  }
+
+  /* 「画同款」（用户 2026-11-23 定）：不是图生图，是把这张读成一段描述再生成。
+     所以要做三件事——关查看器、退回聊天页、把这张挂成参考图。
+     以前只把作品名填进输入框就完了，而作品名是「1」「2」这种编号，
+     用户看到的就是「弹了内容，什么都没发生」。 */
+  function sameAs() {
+    var it = current();
+    if (!it) return;
+    var work = v.work || {};
+    closeViewer();
+    if (global.WSStack) global.WSStack.back();
+    if (global.WSRef) global.WSRef.useSame(work, it.id);
   }
 
   function current() { return v.list[v.idx] || null; }

@@ -245,7 +245,6 @@
   background: var(--card);
   color: var(--text);
   font-size: 15px;
-  line-height: 1.5;
   resize: none;
   /* 一行时不滚：padding 10+10 + 行高 22.5 刚好撑满 44px 的框。
      以前 line-height 1.5 在部分机器上算出 22.5 + 上下 padding 会顶出
@@ -362,3 +361,13 @@
 @media (prefers-reduced-motion: reduce) {
   .bubble, .card, .card .ph, .plus-menu { animation: none; }
 }
+
+/* 画风按钮上的当前画风名：选了就是默认，靠这里显示，不再弹一条提示 */
+.chip .chip-sub {
+  margin-left: 3px;
+  font-size: 12px;
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+.chip:active .chip-sub { color: var(--brand); }

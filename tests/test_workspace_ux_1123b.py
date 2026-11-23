@@ -46,8 +46,10 @@ class TestMeDoesNotSelfStack(unittest.TestCase):
 
     def test_guard_uses_stack_top(self):
         js = _read("js/stack.js")
-        # 判据必须是当前栈顶，不能是建节点时的那个 view
-        self.assertIn('if (S.top && S.top.dataset.view === "me") return;', js)
+        # 判据必须是当前栈顶，不能是建节点时的那个 view。
+        # 2026-11-23 用户报「一直点 AI 创作会叠到卡死」之后，这条从「只拦
+        # 我的」提升成 push() 里的通用规则：任何同页都不会叠第二层。
+        self.assertIn('if (S.top && S.top.dataset.view === name', js)
         self.assertNotIn('if (view.dataset.view !== "me") push("me");', js)
 
 

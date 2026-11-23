@@ -16,6 +16,15 @@
 
   /* 真叠层：作品列表上再压一本漫画，X 一层层退回去（用户 2026-11-23 定） */
   function push(name, opts) {
+    /* 同一页已经在栈顶就别再压一层（用户 2026-11-23：一直点「AI 创作」
+       会叠出无数层直到卡死）。这里统一拦，不靠每个入口各自记得判断——
+       以前「我的」是自己拦的，画廊漏了，连点就叠成一摞。
+       真需要同页两层（我的 → 我的 已经不这么走了）时传 force。 */
+    if (S.top && S.top.dataset.view === name && !(opts && opts.force)) {
+      var sc = S.top.querySelector("[data-scroll]");
+      if (sc) sc.scrollTop = 0;
+      return S.top;
+    }
     var view = global.WSViews.build(name, opts);
 
     el.stack.appendChild(view);
@@ -93,12 +102,8 @@
       if (e.target.closest("[data-close]")) { back(); return; }
       // 右上角人形进「我的」也要真叠一层：这样 ✕ 退回的是刚才那一页，
       // 不直接跳回聊天页（跟漫画页同一条规则，用户 2026-11-23 定）
-      /* 已经在「我的」里就别再压一层「我的」：连点就会叠出一串一模一样的页，
-         ✕ 按几次看着都像没反应（用户 2026-11-23：一直点头像就一直进我的）。
-         ⚠️ 判据必须看「当前栈顶」，不能看 view —— view 是建这个节点时的那一页，
-         「我的」页里再点一次人形，view 仍然是「我的」，但那已经是另一层了。 */
+      /* 已经在「我的」里就别再压一层（push 里已统一拦同类页，这里不用重复判） */
       if (e.target.closest("[data-me]")) {
-        if (S.top && S.top.dataset.view === "me") return;
         push("me");
         return;
       }
@@ -256,5 +261,14 @@
     });
   }
 
-  global.WSStack = { init: init, push: push, replace: replace, back: back };
+  /* top()：当前真正在眼前的子页（没有就是 null）。聊天页靠它决定消息该
+     落在哪——退页动画还没播完时，那一页虽然还在 DOM 里、也还带着 .in，
+     但已经不在栈上了，不能往里面写东西。 */
+  global.WSStack = {
+    init: init,
+    push: push,
+    replace: replace,
+    back: back,
+    top: function () { return S.top; }
+  };
 })(window);

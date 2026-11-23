@@ -43,11 +43,21 @@ class TestComposerDocking(unittest.TestCase):
         js = _read("js/stack.js")
         self.assertIn("WSViews.undock()", js)
 
-    def test_gallery_has_own_message_area(self):
-        """子页里发的话要落在子页，不能写进被子页盖住的聊天页。"""
-        self.assertIn('data-chat-scroll', _read("js/gallery.js"))
+    def test_messages_go_to_the_root_area_only(self):
+        """消息一律写根消息区，不能按「哪一页在下层」去猜。
+
+        2026-11-23 的坑：判据原来是「最后一个带 [data-chat-scroll] 的子页」。
+        点「画同款」时会先退页、再挂参考卡，那一刻画廊页还在 DOM 里没被摘掉
+        （closeNow 先摘 .in，节点要等 transitionend 才 remove），参考卡就挂进
+        了正在消失的那一页，节点一回收卡片凭空不见——用户看到的正是
+        「点了画同款什么都没发生」。所以现在固定写根消息区，子页不再收消息。
+        """
         chat = _read("js/chat.js")
-        self.assertIn("WSViews.scroll()", chat)
+        i = chat.index("function box()")
+        seg = chat[i:chat.index("function scrollBottom", i)]
+        self.assertIn("return el.scroll;", seg)
+        self.assertNotIn("querySelectorAll", seg, "不许再按查询结果挑消息区")
+        self.assertNotIn("WSViews.scroll()", chat)
 
     def test_composer_h_recomputed_after_docking(self):
         """量不到高度时会停在 0，底部留白就没了。"""
@@ -63,15 +73,21 @@ class TestDrawSame(unittest.TestCase):
         js = _read("js/gallery.js")
         self.assertIn("gv-same", js)
         self.assertIn("画同款", js)
-        self.assertIn("WSChat.useSame", js)
+        self.assertIn("WSRef.useSame", js)
 
-    def test_use_same_stays_on_page(self):
-        """画同款只填输入框，不许把页面退掉（点的是「照这个来」）。"""
-        js = _read("js/chat.js")
-        self.assertIn("function useSame", js)
-        start = js.index("function useSame")
-        end = js.index("// 输入栏是浮在消息上的", start)
-        self.assertNotIn("WSStack.back", js[start:end])
+    def test_use_same_goes_back_to_chat(self):
+        """画同款 = 反推提示词后回聊天页生成（2026-11-23 用户改的口径）。
+
+        早先的规矩是「只填输入框、留在 AI 创作页」，用户当场否了：
+        画廊里点一张只是想拿它当参考接着出图，不该困在浏览页里。
+        现在由 gallery.js 负责退出子页并挂参考图，chat.js 只管收。
+        """
+        js = _read("js/gallery.js")
+        self.assertIn("function sameAs", js)
+        start = js.index("function sameAs")
+        end = js.index("function current()", start)
+        self.assertIn("WSStack.back", js[start:end], "画同款必须退回聊天页")
+        self.assertIn("useSame", js[start:end], "画同款要把这张当参考交给聊天页")
 
 
 class TestChannelAndScrollbar(unittest.TestCase):

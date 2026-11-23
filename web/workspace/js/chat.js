@@ -1,4 +1,7 @@
-/* 聊天页：用户气泡 + AI 结果卡。生图走 /api/gen/*，轮询有上限，停了能重试。 */
+/* 聊天页：用户气泡 + 参考卡 + AI 结果卡。
+   生图走 /api/gen/*，轮询有上限，停了能重试；消息进 localStorage，刷新接得回来。
+   看图反推提示词走「图片生成」模式（用户 2026-11-23 的口径：画同款是把这张
+   读成一段描述再生成，这里不做像素级的图片二次生成）。 */
 (function (global) {
   "use strict";
 
@@ -8,15 +11,24 @@
   var MAX_FAIL = 5;         // 连续失败这么多次就停轮询，别无限打接口
 
   var el = {};
-  var S = { skill: "", channels: [], pending: {}, timer: null, fails: 0 };
+  var S = {
+    skill: "", channels: [], pending: {}, timer: null, fails: 0,
+    msgs: []       // 存档：每条消息一条记录，见 archive.js
+  };
 
   function $(id) { return document.getElementById(id); }
 
-  /* 消息区：正常是聊天页那个；子页（AI 创作）把输入栏借过去之后，
-     发送出去的气泡要落在子页自己那一层，不能写进被子页盖住的聊天页。 */
+  /* 消息区一律是根那一个（#chat-scroll）。
+     AI 创作页早先借走过输入栏、也自带过一块 .gchat 收消息，那是为「在浏览页
+     里直接对话」准备的；现在口径变了——创作回聊天页做，子页只负责浏览。
+     所以「发送气泡」「挂参考卡」都写回根，子页那份历史消息区不再收新东西。
+
+     ⚠️ 别再用「哪个 .view-push 里带 [data-chat-scroll]」来挑：退页动画播完
+     之前那一页还在 DOM 里（连 .in 都还挂着，closeNow 先摘 .in、节点要等
+     transitionend 才移除），这时候写进去的消息会跟着节点一起被回收——
+     「画同款」的参考卡就是这么凭空消失的（2026-11-23 实测）。 */
   function box() {
-    return (global.WSViews && global.WSViews.scroll)
-      ? global.WSViews.scroll() : el.scroll;
+    return el.scroll;
   }
 
   function scrollBottom() {
@@ -28,9 +40,43 @@
     if (el.empty) el.empty.hidden = true;
   }
 
+  // ── 存档 ──────────────────────────────────────────────
+  // 形状由 archive.js 重放时按原样读回来，所以这里只负责「加一条、存一次」。
+
+  function log(m) {
+    S.msgs.push(m);
+    if (S.msgs.length > 200) S.msgs = S.msgs.slice(-160);
+    if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
+    return m;
+  }
+
+  /* 漫画卡片的记录由 create.js 改字段、这里统一落盘，免得两边各存一份 */
+  function remember(rec) {
+    log(rec);
+    return rec;
+  }
+
+  function touch(rec) {
+    if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
+    return rec;
+  }
+
+  /* 撤掉一张参考图：消息区里那张卡片和存档里那条记录一起删 */
+  function dropRef(id) {
+    var sc = box();
+    Array.prototype.forEach.call(
+      sc ? sc.querySelectorAll("[data-ref]") : [], function (n) {
+        if (n.dataset.ref === String(id)) n.remove();
+      });
+    S.msgs = S.msgs.filter(function (m) {
+      return !(m.k === "ref" && m.id === id);
+    });
+    if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
+  }
+
   // ── 消息区 ────────────────────────────────────────────
 
-  function sysNote(text) {
+  function paintNote(text) {
     hideEmpty();
     var p = document.createElement("p");
     p.className = "card note";
@@ -41,7 +87,12 @@
     scrollBottom();
   }
 
-  function addUser(text) {
+  function sysNote(text) {
+    paintNote(text);
+    log({ k: "note", t: text });
+  }
+
+  function paintUser(text) {
     hideEmpty();
     var b = document.createElement("div");
     b.className = "bubble";
@@ -66,6 +117,12 @@
     box().appendChild(b);
     scrollBottom();
   }
+
+  function addUser(text) {
+    paintUser(text);
+    log({ k: "user", t: text });
+  }
+
   /* 通用卡片壳：图卡和漫画卡共用一套外观（谁用谁往里塞内容） */
   function shell(cls) {
     hideEmpty();
@@ -107,7 +164,7 @@
     };
   }
 
-  function newCard(prompt, skill) {
+  function newCard(prompt, skill, rec) {
     var c = shell();
     var ph = document.createElement("div");
     ph.className = "ph";
@@ -115,7 +172,7 @@
     c.say("排队中…");
 
     return { node: c.node, body: c.body, ph: ph, note: c.note, acts: c.acts,
-             prompt: prompt, skill: skill, job: "" };
+             prompt: prompt, skill: skill, job: "", rec: rec };
   }
 
   var ICON_COPY =
@@ -129,6 +186,7 @@
     'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
     '<path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4.6V10h-5.4"/></svg>';
 
+  /* card 只要能提供 {acts, prompt, skill} 就够了：恢复出来的卡也走这里 */
   function buildActs(card) {
     if (card.acts.childElementCount) return;
     card.acts.hidden = false;
@@ -150,7 +208,9 @@
     again.title = "换种子重画";
     again.setAttribute("aria-label", "重画");
     again.innerHTML = ICON_AGAIN;
-    again.addEventListener("click", function () { submitJob(card.prompt, card.skill); });
+    again.addEventListener("click", function () {
+      submitJob(card.prompt, card.skill, []);
+    });
 
     card.acts.appendChild(copy);
     card.acts.appendChild(again);
@@ -171,6 +231,13 @@
     }
     card.note.hidden = true;
     buildActs(card);
+    if (card.rec) {
+      card.rec.file = job.file;
+      card.rec.note = "";
+      card.rec.err = false;
+      card.rec.job = "";
+      if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
+    }
     scrollBottom();
   }
 
@@ -180,23 +247,38 @@
     card.note.textContent = msg || "这张没出来，点重画再来一次";
     if (card.ph) card.ph.style.opacity = ".3";
     buildActs(card);
+    if (card.rec) {
+      card.rec.note = card.note.textContent;
+      card.rec.err = true;
+      card.rec.job = "";
+      if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
+    }
     scrollBottom();
   }
 
   // ── 生图 ──────────────────────────────────────────────
 
-  function submitJob(prompt, skill) {
+  /* refs：这一轮要带上的参考图 id。生图接口本身是按描述出图，参考图随请求
+     一起交给后端（它按渠道能力决定用不用），前端不自己拼提示词。 */
+  function submitJob(prompt, skill, refs) {
     if (!skill) {
       sysNote("还没拿到渠道列表，去跑图台看一眼再回来");
       return;
     }
-    var card = newCard(prompt, skill);
-    global.WSGen.submit({ skill: skill, prompt: prompt }).then(function (d) {
+    var rec = { k: "img", cls: "", prompt: prompt, skill: skill,
+                job: "", file: "", note: "排队中…", err: false };
+    var card = newCard(prompt, skill, rec);
+    card.rec = rec;
+    log(rec);
+    var body = { skill: skill, prompt: prompt };
+    if (refs && refs.length) body.refs = refs;
+    global.WSGen.submit(body).then(function (d) {
       if (!d || !d.ok) {
         fail(card, (d && d.error) || "没排上队");
         return;
       }
       card.job = d.job.id;
+      rec.job = card.job;
       S.pending[card.job] = card;
       startPoll();
     });
@@ -215,10 +297,7 @@
   function markStuck() {
     Object.keys(S.pending).forEach(function (id) {
       var card = S.pending[id];
-      card.note.hidden = false;
-      card.note.className = "note err";
-      card.note.textContent = "状态断了，点重画再来一次";
-      buildActs(card);
+      fail(card, "状态断了，点重画再来一次");
     });
     S.pending = {};
   }
@@ -238,22 +317,29 @@
       Object.keys(S.pending).forEach(function (id) {
         var card = S.pending[id];
         var job = byId[id];
-        if (!job) { delete S.pending[id]; return; }
+        // 任务不在列表里 = 进程重启过，这张再也回不来，别让它一直转
+        if (!job) { delete S.pending[id]; fail(card, "服务重启过，这张没了，点重画"); return; }
         if (job.state === "done") {
           delete S.pending[id];
           showImage(card, job);
-        } else if (job.state === "error") {
+        } else if (job.state === "error" || job.state === "cancelled") {
           delete S.pending[id];
           fail(card, job.error || "这张没出来");
         } else {
           var n = d.queue_depth;
+          card.note.hidden = false;
+          card.note.className = "note";
           card.note.textContent = (typeof n === "number" && n > 0)
             ? "前面还有 " + n + " 人排队"
             : "正在生成…";
+          if (card.rec) card.rec.note = card.note.textContent;
         }
       });
 
-      if (!Object.keys(S.pending).length) stopPoll();
+      if (!Object.keys(S.pending).length) {
+        stopPoll();
+        if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
+      }
     });
   }
 
@@ -263,21 +349,6 @@
     el.say.style.height = "auto";
     el.say.style.height = Math.min(el.say.scrollHeight, 132) + "px";
     fitComposer();
-  }
-
-  /* 把「正在看的这张图」交给生图链路：渠道沿用当前选中的，提示词用这张的。
-     AI 创作页的查看器点「画同款」走这里（gallery.js）。这里**只填输入框**：
-     页面留在原地（用户点的是「照这个来」，不是「回聊天页」），
-     查看器由 gallery.js 自己关掉。
-     画廊的 /api/gal/work 只回图本身（id / idx / ext），没有当初的提示词；
-     作品名也只是编号（"1"、"2"），不能当提示词用——宁可空着让人自己写，
-     也不要往输入框塞一个"1"骗人。 */
-  function useSame(work) {
-    var title = (work && work.title) || "";
-    if (title && !/^\d+$/.test(title)) el.say.value = title;
-    grow();
-    syncSend();
-    el.say.focus();
   }
 
   // 输入栏是浮在消息上的玻璃层，消息区底部得留出它的实际高度
@@ -309,12 +380,15 @@
     grow();
     syncSend();
 
+    var refIds = global.WSRef.list().map(function (r) { return r.id; });
+    // 发出去就把它从输入栏移走（消息里那张卡留着，还能点开看）
+    global.WSRef.commit();
     // 漫画模式：这句话是剧情需求，交给创作面板去跑「编剧 → 分页画」
     if (global.WSCreate && global.WSCreate.mode() === "comic") {
-      global.WSCreate.runComic(text);
+      global.WSCreate.runComic(text, refIds);
       return;
     }
-    submitJob(text, S.skill);
+    submitJob(text, S.skill, refIds);
   }
 
   function copyText(text) {
@@ -339,14 +413,21 @@
     return ok;
   }
 
-  // ── 画风 / 参考图 ─────────────────────────────────────
+  // ── 画风 ──────────────────────────────────────────────
 
+  /* 选画风不弹提示（用户 2026-11-23：选了就是默认了，别每次都跳一条
+     「已更换 XX 渠道」）。名字由输入栏上的画风按钮自己显示。 */
   function pickSkill(id) {
-    if (!id || id === S.skill) return;
+    if (!id || id === S.skill) { syncSkillName(); return; }
     S.skill = id;
     global.WSGen.setDefaultSkill(id);
-    var c = S.channels.filter(function (x) { return x.id === id; })[0];
-    if (c) sysNote("画风换成「" + (c.label || c.id) + "」");
+    syncSkillName();
+  }
+
+  function syncSkillName() {
+    if (!el.skillName) return;
+    var c = S.channels.filter(function (x) { return x.id === S.skill; })[0] || {};
+    el.skillName.textContent = (c.label && c.label !== c.id) ? c.label : (c.id || "画风");
   }
 
   function bootChannels() {
@@ -362,6 +443,7 @@
       var saved = global.WSGen.defaultSkill();
       var hit = S.channels.filter(function (c) { return c.id === saved; })[0];
       S.skill = (hit || S.channels[0] || {}).id || "";
+      syncSkillName();
     });
   }
 
@@ -377,6 +459,7 @@
     el.menu = $("plus-menu");
     el.cam = $("file-camera");
     el.album = $("file-album");
+    el.skillName = $("skill-name");
 
     global.addEventListener("resize", fitWhenSized);
 
@@ -419,8 +502,9 @@
     [el.cam, el.album].forEach(function (input) {
       input.addEventListener("change", function () {
         if (!input.files || !input.files.length) return;
+        var f = input.files[0];
         input.value = "";
-        sysNote("参考图反推要等 P1 接上，现在先直接描述你要的内容");
+        global.WSRef.upload(f);
       });
     });
 
@@ -430,8 +514,29 @@
 
     grow();
     syncSend();
+    if (global.WSArchive) global.WSArchive.restore();
+    global.WSRef.init();
     bootChannels();
   }
 
-  global.WSChat = { init: init, sysNote: sysNote, card: shell, useSame: useSame };
+  global.WSChat = {
+    init: init,
+    sysNote: sysNote,
+    card: shell,
+    remember: remember,
+    touch: touch,
+    log: log,
+    dropRef: dropRef,
+    /* 参考图拆到 ref.js 了，这里留个转发：旧的调用点还在的话不会炸 */
+    syncHint: function () { if (global.WSRef) global.WSRef.syncHint(); },
+    paintUser: paintUser,
+    paintNote: paintNote,
+    buildActs: buildActs,
+    box: box,
+    hideEmpty: hideEmpty,
+    scrollBottom: scrollBottom,
+    pending: S.pending,
+    msgs: function () { return S.msgs; },
+    startPoll: startPoll
+  };
 })(window);
