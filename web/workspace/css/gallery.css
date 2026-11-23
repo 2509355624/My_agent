@@ -9,6 +9,10 @@
   align-items: center;
   gap: 8px;
   overflow-x: auto;
+  /* 横滑只滚这条标签带，别被浏览器当成左右手势（用户 2026-11-23 反馈
+     标签条滑几次就卡住，是被页面栈的边缘手势抢了） */
+  overscroll-behavior-x: contain;
+  touch-action: pan-x;
   padding: 2px;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
@@ -39,10 +43,23 @@
 
 /* ── 两列墙 ─────────────────────────────────────────── */
 /* 这一页也能直接发话（输入栏被借过来），所以底部要让出输入栏那一截；
-   发出去的气泡和结果卡排在缩略图墙后面（.gchat）。 */
+   发出去的气泡和结果卡排在缩略图墙后面（.gchat）。
+   外层 .gbody 不滚，滚动交给里层 .gscroll——留白做在滚动容器里才会跟着内容
+   一起到底，做在外层就会变成「滚动时输入栏跟着动」。 */
 .gbody {
-  padding: 12px 12px 20px;
-  padding-bottom: calc(var(--composer-h, 128px) + 20px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
+.gscroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: 12px 12px calc(var(--composer-h, 128px) + 20px);
 }
 
 .gchat {

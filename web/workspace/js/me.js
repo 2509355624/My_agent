@@ -137,9 +137,10 @@
   // 滑到底接着加页，跟画廊一个手感；不另做页码
   function watchMore() {
     if (!global.IntersectionObserver || !el.more) return;
+    if (io) io.disconnect();
     io = new global.IntersectionObserver(function (rows) {
       if (rows[0] && rows[0].isIntersecting && !S.busy) load(false);
-    }, { root: el.body, rootMargin: "200px" });
+    }, { root: el.scroll, rootMargin: "200px" });
     io.observe(el.more);
   }
 
@@ -151,7 +152,16 @@
 
   function mountBody(body) {
     el.body = body;
+    /* 两层：外层是子页内容区（不滚），里层 .mescroll 才是滚动容器。
+       子页内容区本身 overflow-y:auto，一旦它自己滚，任何 padding-bottom 都会
+       变成滚动内容跟着走，输入栏就会被拖着上下动（画廊那边同样处理）。
+       另存一份滚动位置：从「我的」再进「我的」时（右上角人形会再叠一层）
+       回来还能停在刚才那一屏，不会突然掉到顶上。 */
     body.classList.add("mebody");
+
+    el.scroll = document.createElement("div");
+    el.scroll.className = "mescroll";
+    el.scroll.setAttribute("data-scroll", "");
 
     el.tabs = document.createElement("div");
     el.tabs.className = "metabs";
@@ -174,9 +184,10 @@
     el.more.hidden = true;
     el.more.addEventListener("click", function () { load(false); });
 
-    body.appendChild(el.tabs);
-    body.appendChild(el.grid);
-    body.appendChild(el.more);
+    el.scroll.appendChild(el.tabs);
+    el.scroll.appendChild(el.grid);
+    el.scroll.appendChild(el.more);
+    body.appendChild(el.scroll);
 
     S.tab = "works";
     S.page = 1;
@@ -185,7 +196,13 @@
     S.total = 0;
     syncTabs();
     load(true);
+
+    el.scroll.addEventListener("scroll", function () { POS = el.scroll.scrollTop; });
+    global.requestAnimationFrame(function () { el.scroll.scrollTop = POS; });
   }
+
+  /* 上一层的浏览位置：模块级的，换页/退出再进来都能接上 */
+  var POS = 0;
 
   global.WSViews.register("me", { top: mountTop, mount: mountBody });
 })(window);

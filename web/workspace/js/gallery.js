@@ -153,7 +153,7 @@
     if (io) io.disconnect();
     io = new global.IntersectionObserver(function (rows) {
       if (rows[0] && rows[0].isIntersecting && !S.busy) load(false);
-    }, { root: el.body, rootMargin: "200px" });
+    }, { root: el.scroll, rootMargin: "200px" });
     io.observe(el.more);
   }
 
@@ -262,6 +262,9 @@
   function open(work, itemId) {
     // 「我的」页可以直接 push 出来，不一定先逛过画廊；查看器得能自己建
     if (!v.node) buildViewer();
+    /* 同一本正在看就别再开一遍：这张卡片被连点两下时，第二次会把 track 清空
+       重灌，图片全白一下（用户说的「卡死」有一半就是这样来的）。 */
+    if (!v.node.box.hidden && v.work && v.work.id === work.id && !itemId) return;
     v.work = work;
     v.node.box.hidden = false;
     document.body.classList.add("g-lock");
@@ -358,6 +361,12 @@
     el.body = body;
     body.classList.add("gbody");
 
+    /* 两层：外层是子页内容区（不滚，见 chat.css 的 .vbody.v-dock），里层才是
+       滚动容器。这样底部留白不会跟着滚动跑，输入栏钉在底下不动。 */
+    el.scroll = document.createElement("div");
+    el.scroll.className = "gscroll";
+    el.scroll.setAttribute("data-scroll", "");
+
     // 从这一页发的话要落在这一页：输入栏被借到这里（见 views.js 的 dock），
     // 聊天页那层消息区被盖住了，写进去等于石沉大海。
     el.chat = document.createElement("div");
@@ -374,9 +383,10 @@
     el.more.hidden = true;
     el.more.addEventListener("click", function () { load(false); });
 
-    body.appendChild(el.grid);
-    body.appendChild(el.more);
-    body.appendChild(el.chat);
+    el.scroll.appendChild(el.grid);
+    el.scroll.appendChild(el.more);
+    el.scroll.appendChild(el.chat);
+    body.appendChild(el.scroll);
 
     buildViewer();
     load(true);

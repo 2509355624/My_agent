@@ -32,6 +32,9 @@
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
+  /* 竖向滑动归消息区自己滚，不交给浏览器做下拉刷新 / 返回手势，
+     否则页面底部一滑就被当成浏览器导航 */
+  touch-action: pan-y;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -178,6 +181,8 @@
   display: flex;
   gap: 8px;
   overflow-x: auto;
+  overscroll-behavior-x: contain;   /* 横滑到头别把浏览器手势带出来 */
+  touch-action: pan-x;
   padding: 10px 2px 8px;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
@@ -288,12 +293,20 @@
 }
 
 /* 输入栏被借到子页里（AI 创作）：宿主是子页内容区，跟着子页一起滑入滑出。
-   滚动仍由内容区管，底部留白各子页自己按 --composer-h 算（画廊在 gallery.css）。 */
+   ⚠️ 底部留白只能做在这里：.vbody 是滚动容器，padding-bottom 就是滚动内容的
+   终点留白，滚动时那块空白也跟着走，输入栏因此钉在原地（用户 2026-11-23：
+   「滑动页面输入栏也跟着滑动了」）。所以 .vbody.v-dock 必须满高、不能滚；
+   真正滚的是子页自己包的那层 [data-scroll]（画廊的 .gscroll、我的的 .mescroll）。 */
 .vbody.v-dock {
   position: relative;
+  overflow: hidden;
+  padding: 0;
 }
 
-/* 「＋」弹出：相机 / 相册 */
+/* 「＋」弹出：图片生成 / 漫画生成 + 相机 / 相册。
+   这块以前丢过选择器头，整段成了废声明，于是面板变成输入框里的一行流式排版
+   （用户 2026-11-23 截图：两个入口挤在输入框上方）。 */
+.plus-menu {
   position: absolute;
   left: 0;
   bottom: calc(100% + 10px);

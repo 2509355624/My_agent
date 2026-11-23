@@ -65,17 +65,23 @@
     if (!HOME || !HOME.composer.parentNode) return;
     var home = document.getElementById("chat-scroll");
     if (!home) return;
-    home.parentNode.insertBefore(HOME.composer, HOME.before || home.nextSibling);
+    /* 已经在原位就别再插一遍：insertBefore 对同一个节点是「先挪后插」，
+       索引算错一位就会把输入栏塞到消息区前面去。 */
+    var before = HOME.before && HOME.before.parentNode === home.parentNode
+      ? HOME.before : home.nextSibling;
+    if (HOME.composer.parentNode === home.parentNode &&
+        HOME.composer.nextSibling === before) return;
+    home.parentNode.insertBefore(HOME.composer, before);
     global.dispatchEvent(new Event("resize"));
   }
 
   /* 子页里的输入栏发出去的话，气泡得落在用户眼前这一页（聊天页那层的
      消息区被子页盖着，写进去等于石沉大海）。子页自己声明一个消息区就投给它，
-     没声明就还是回聊天页。 */
+     没声明就还是回聊天页。取最后一个：连叠两层时最上面那页才是眼前的。 */
   function scrollOf() {
-    var v = document.querySelector(".view-push.in");
-    var own = v && v.querySelector("[data-chat-scroll]");
-    return own || document.getElementById("chat-scroll");
+    var all = document.querySelectorAll(".view-push [data-chat-scroll]");
+    if (all.length) return all[all.length - 1];
+    return document.getElementById("chat-scroll");
   }
 
   /* opts：push 时带进来的参数（例如打开哪一本漫画），子页自己决定怎么用 */
@@ -122,7 +128,11 @@
     view.appendChild(top);
     view.appendChild(body);
     dockComposer(body, name);
-    view.dataset.dock = CHATTY[name] ? "1" : "";
+    /* 输入栏是从聊天页「借」来的，只有借到才需要标记；以前不管借没借都写
+       dataset.dock=""，退回时对每一页都调 undock()，而 undock 按 HOME 记忆
+       的原位置插回去——连着叠两层（我的 → 我的）就会把输入栏插到错的地方，
+       极端情况是插进已经被摘掉的节点所在位置，DOM 结构跟着乱。 */
+    if (CHATTY[name]) view.dataset.dock = "1";
     return view;
   }
 

@@ -1,6 +1,22 @@
 /* 「我的」：只有作品 / 收藏两个 tab。颜色/阴影/玻璃只走 tokens.css。 */
 
-.mebody { padding: 12px 12px 24px; }
+/* 外层是子页内容区（不滚），里层 .mescroll 才是滚动容器——见 me.js 的说明。
+   底部留白做在滚动容器内部，输入栏才能钉在底下不动。 */
+.mebody {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
+.mescroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: 12px 12px calc(24px + env(safe-area-inset-bottom));
+}
 
 .metabs {
   display: flex;

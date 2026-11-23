@@ -5,6 +5,7 @@
   "use strict";
 
   var SHOW_HEAD = 6;          // 画风太多，抽屉先露这几项，其余点「展开全部」
+  var EDGE = 24;              // 触屏：手指起点离左边缘多少像素内才算「边缘右滑」
 
   var el = {};
   var S = { top: null, allStyles: false, depth: 0 };
@@ -23,6 +24,10 @@
     S.top = view;
     S.depth += 1;
     bindView(view);
+    /* 一条子页 = 一条历史记录，state.ws 必须等于它当时的层数。
+       以前这里有登录页残留的历史（登录后前端 pushState 跳过来），层数从 1 起算，
+       但栈深从 0 起算，popstate 里 want(1) ≥ depth(1) 就一层都不退——
+       用户看到的是「点返回没反应、再点直接跳回聊天页」（2026-11-23 实测）。 */
     global.history.pushState({ ws: S.depth }, "");
     return view;
   }
@@ -72,7 +77,11 @@
   /* 用户要退回：优先让浏览器走 history，popstate 里统一出栈 */
   function back() {
     if (!S.top) return;
-    if (global.history.state && global.history.state.ws) {
+    /* 平时 pushState 与 depth 一一对应，history.state.ws 一定大于 0（打底那条是
+       {ws:0}），所以「state 里没有 ws」不代表栈是空的——那是别处留下的历史记录，
+       走 history.back() 会退到一个根本没有记录过页面栈的位置，层数就对不上了。
+       只有真的没有子页时才需要就地摘掉（兜底）。 */
+    if (Number((global.history.state || {}).ws) > 0) {
       global.history.back();
     } else {
       closeNow();
@@ -84,28 +93,41 @@
       if (e.target.closest("[data-close]")) { back(); return; }
       // 右上角人形进「我的」也要真叠一层：这样 ✕ 退回的是刚才那一页，
       // 不直接跳回聊天页（跟漫画页同一条规则，用户 2026-11-23 定）
-      if (e.target.closest("[data-me]")) { push("me"); return; }
+      /* 已经在「我的」里就别再压一层「我的」：连点就会叠出一串一模一样的页，
+         ✕ 按几次看着都像没反应（用户 2026-11-23：一直点头像就一直进我的）。
+         ⚠️ 判据必须看「当前栈顶」，不能看 view —— view 是建这个节点时的那一页，
+         「我的」页里再点一次人形，view 仍然是「我的」，但那已经是另一层了。 */
+      if (e.target.closest("[data-me]")) {
+        if (S.top && S.top.dataset.view === "me") return;
+        push("me");
+        return;
+      }
     });
     bindSwipe(view);
   }
 
-  /* 左边缘右滑退回：竖向滑动交给页面自己滚动，不抢 */
+  /* 左边缘右滑退回：竖向滑动交给页面自己滚动，不抢。
+     回弹的条件分清三态——竖向多就不再接管，横向多才当滑动退页，
+     两轴都不过阈值的轻点一律不动（用户 2026-11-23：「滑动几次就卡死，
+     再滑就退回主页面」，就是这里把横向滑图的劲儿当成了退页手势）。 */
   function bindSwipe(view) {
-    var sx = 0, sy = 0, dx = 0, active = false;
+    var sx = 0, sy = 0, dx = 0, dy = 0, active = false;
 
     view.addEventListener("touchstart", function (e) {
       if (e.touches.length !== 1) return;
       var t = e.touches[0];
-      if (t.clientX > 32) return;
-      sx = t.clientX; sy = t.clientY; dx = 0; active = true;
+      if (t.clientX > EDGE) return;
+      sx = t.clientX; sy = t.clientY; dx = 0; dy = 0; active = true;
     }, { passive: true });
 
     view.addEventListener("touchmove", function (e) {
       if (!active) return;
       var t = e.touches[0];
       var mx = t.clientX - sx, my = t.clientY - sy;
-      if (Math.abs(my) > Math.abs(mx)) { active = false; return; }
+      if (Math.abs(my) > Math.abs(mx) && Math.abs(my) > 12) { active = false; return; }
       dx = Math.max(0, mx);
+      dy = Math.max(0, my);
+      if (dx < 6) return;                 // 抖动不算滑动，别让子页跳一下
       view.classList.add("drag");
       view.style.transform = "translateX(" + dx + "px)";
     }, { passive: true });
@@ -113,9 +135,13 @@
     view.addEventListener("touchend", function () {
       if (!active) return;
       active = false;
+      /* 斜着划出去也算「不走了」：向右超过 90 且竖向没跑太远才退页。
+         纯横向的短促一划也接受（dx 够大、dy 很小），保证手感还在。 */
+      var go = dx > 90 && dy < 90;
+      dx = 0; dy = 0;
       view.classList.remove("drag");
       view.style.transform = "";
-      if (dx > 90) back();
+      if (go) back();
     });
   }
 
@@ -220,10 +246,12 @@
     });
 
     global.history.replaceState({ ws: 0 }, "");
+    /* 打底这条是「聊天页」。登录页是前端自己 pushState 跳过来的，历史里可能还压着
+       更早的记录，state 里没有 ws——那种情况也要认成层数 0，否则层数永远比实际多。 */
     global.addEventListener("popstate", function () {
       // 栈深按 history 里的记录走：两层时点一次返回只退一层，
       // 不能像以前那样「只要还有 ws 就不动」，否则按了返回没反应
-      var want = (global.history.state && global.history.state.ws) || 0;
+      var want = Number((global.history.state || {}).ws) || 0;
       while (S.depth > want) closeNow();
     });
   }

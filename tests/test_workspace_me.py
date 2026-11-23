@@ -85,8 +85,18 @@ class TestMeStack(unittest.TestCase):
     def test_enter_me_pushes_a_layer(self):
         """右上角人形进「我的」要真叠一层，✕ 退回刚才那页，不跳回聊天页。"""
         js = _read("js/stack.js")
-        self.assertIn('if (e.target.closest("[data-me]")) { push("me"); return; }', js)
+        self.assertIn('push("me")', js)
         self.assertNotIn('replace("me")', js)
+
+    def test_me_does_not_stack_itself(self):
+        """已经在「我的」里再点人形不得再压一层「我的」。
+
+        连点会叠出一串一模一样的页，✕ 按几次看着都像没反应
+        （用户 2026-11-23：一直点头像就一直进我的）。判据必须看当前栈顶，
+        不能看创建节点时的那一页——「我的」页里的 view 也是 "me"。
+        """
+        js = _read("js/stack.js")
+        self.assertIn('if (S.top && S.top.dataset.view === "me") return;', js)
 
 
 class TestGalleryJump(unittest.TestCase):
