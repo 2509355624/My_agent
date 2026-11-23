@@ -104,6 +104,9 @@
   animation: ws-in .2s ease-out both;
 }
 
+/* 卡片内容区：图卡、漫画卡共用这一层壳 */
+.card-body { min-width: 0; }
+
 .card .ph {
   aspect-ratio: 3 / 4;
   border-radius: 14px;
@@ -301,21 +304,23 @@
 
 .plus-menu[hidden] { display: none; }
 
-.plus-menu button {
+/* 面板底部那一行：相机 / 相册（两个创作入口的样式在 create.css） */
+.plus-menu .pm-row button {
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 10px;
+  justify-content: center;
+  gap: 8px;
+  flex: 1 1 0;
+  padding: 9px 8px;
   border: 0;
   border-radius: 11px;
   background: none;
   color: var(--text);
-  font-size: 14px;
+  font-size: 13px;
   text-align: left;
 }
 
-.plus-menu button:active { background: var(--card-2); }
+.plus-menu .pm-row button:active { background: var(--card-2); }
 
 .plus-menu svg { flex: 0 0 auto; }
 

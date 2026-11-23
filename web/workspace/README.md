@@ -1,7 +1,7 @@
 # workspace — 全新界面
 
-V3 聊天优先界面的独立功能文件夹。当前有两块：登录页、聊天页壳。画廊/漫画/个人页在
-`js/views.js` 里只有空壳，内容按 P1/P2 往里填。
+V3 聊天优先界面的独立功能文件夹。当前已接：登录页、聊天页壳、画廊（AI 创作）、
+我的漫画作品、创作面板（图片生成 / 漫画生成）。「我的」页还是空壳。
 
 ## 模块边界
 
@@ -15,13 +15,17 @@ V3 聊天优先界面的独立功能文件夹。当前有两块：登录页、�
 | `css/chat.css` | 气泡、AI 卡片、悬浮玻璃输入栏、chip |
 | `css/sheet.css` | 页面栈视图 + 底部玻璃抽屉 |
 | `css/gallery.css` | 画廊：文件夹标签条、两列墙、骨架屏、全屏查看器 |
+| `css/comic.css` | 我的漫画作品：作品列表、整本翻页、缩略条、底部动作 |
+| `css/create.css` | 创作面板：「图片生成 / 漫画生成」两个入口、漫画模式标记、结果卡缩略格 |
 | `js/api.js` | 同源 JSON 请求（`get`/`post`）+ 登录接口 |
 | `js/login.js` | 两步流程、QQ/验证码校验、60s 倒计时、`sessionStorage` 暂存 QQ |
 | `js/gen.js` | 生图接口：渠道 / 提交 / 状态 / 取图 / 默认画风 |
-| `js/chat.js` | 消息渲染、折叠、复制、重画、轮询 |
-| `js/stack.js` | 页面栈 push/back、左滑退回、画风抽屉 |
-| `js/views.js` | 子页壳（左 X、中段、右「我的」）+ 子页注册口 |
+| `js/chat.js` | 消息渲染、折叠、复制、重画、轮询；导出通用卡片壳 `WSChat.card()` |
+| `js/stack.js` | 页面栈 push/replace/back、左滑退回、画风抽屉 |
+| `js/views.js` | 子页壳（左 X、中段、右「我的」）+ 子页注册口，`push` 可带 `opts` |
 | `js/gallery.js` | 画廊：列表 / 分类 / 翻页 / 查看器（收藏、下载） |
+| `js/comic.js` | 我的漫画作品：列表 / 整本翻页 / 重画 / 加气泡 / 下载 |
+| `js/create.js` | 创作面板：模式切换 + 漫画生成全链路（编剧 → 开画 → 逐页出图） |
 
 依赖方向：页面 → `chat.js`/`stack.js` → `gen.js` → `api.js`。
 `api.js` 不碰 DOM，`chat.js` 不拼接口地址，`views.js` 不认识接口。
@@ -78,6 +82,25 @@ WSViews.register("gallery", { top: fn(中段节点), mount: fn(内容区节点) 
 - **渠道中文名**取自 `/api/gen/channels` 的 `label`；`label` 缺失时退回 id，并在右侧显示
   `summary` 后半句当一行说明。想让抽屉显示中文名，去 `skills/<id>/skill.md` 补 `label`。
 
+## 创作面板（输入栏「＋」）
+
+两个入口是**平级**的，选谁只决定「这句话拿去干什么」：
+
+- **图片生成**（默认）：`chat.js` 直接 `POST /api/gen/submit`，一回一图。
+- **漫画生成**：选完之后输入栏上方出现蓝色「漫画生成」标记（点 ✕ 退出），
+  发送的那句话会被当成剧情 brief，交给 `create.js` 走完整条漫画链：
+  `POST /api/comic/script` → 轮询 `script_status` → 剧本好了**直接** `POST /api/comic/start`
+  → 轮询 `status`，卡片里每画好一页就补一格 3 列缩略图 → 全部出来了给「打开整本 / 下载全部」。
+
+约定：
+
+- **不插「看剧本 / 点确认」这一步**。用户跑漫画只看结果（2026-11-23 原话），
+  剧本在后台落盘但不摆在界面上；想看剧本去旧漫画台。
+- 一话默认 10 页（`PANELS`），与漫画台默认值一致；页数选择器这一期不做。
+- 卡片的缩略格按 9:16 **完整显示**（`object-fit: contain`），不裁边，和大图同一个构图。
+- 轮询靠 `setTimeout` 链 + `MAX_FAIL` / `IDLE_MAX` 双保险收手；页面退出不影响后台任务，
+  结果在「我的漫画作品」里还在。
+
 ## 校验规则（与后端一致）
 
 - QQ 号：`^[1-9][0-9]{4,11}$`（5–12 位，不以 0 开头）
@@ -87,6 +110,7 @@ WSViews.register("gallery", { top: fn(中段节点), mount: fn(内容区节点) 
 ## 测试
 
 ```
-D:\AI\confyui_env\Scripts\python.exe tests/test_workspace_login.py
-D:\AI\confyui_env\Scripts\python.exe tests/test_workspace_chat.py
+D:\AI\confyui_env\Scripts\python.exe -m unittest discover -s tests -p "test_workspace_*.py"
 ```
+
+`tests/` 没有 `__init__.py`，只能走 `discover` 或整文件路径，不要 `-m unittest tests.xxx`。

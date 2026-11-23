@@ -72,9 +72,13 @@ class TestWorkspaceChatComposer(unittest.TestCase):
         js = _read("js/chat.js")
         self.assertIn("1000", js, "超过 1 千字要折叠")
 
-    def test_plus_menu_has_camera_and_album_only(self):
+    def test_plus_menu_has_two_create_entries(self):
+        """「＋」里先是两个平级创作入口，相机/相册退到下面一条。"""
         html = _read("chat.html")
         self.assertIn('id="btn-plus"', html)
+        self.assertIn("图片生成", html)
+        self.assertIn("漫画生成", html)
+        self.assertIn('class="pm-grid"', html)
         self.assertIn("相机", html)
         self.assertIn("相册", html)
         # 只收图片，不收文档

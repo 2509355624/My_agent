@@ -59,29 +59,55 @@
     scrollBottom();
   }
 
-  function newCard(prompt, skill) {
+  /* 通用卡片壳：图卡和漫画卡共用一套外观（谁用谁往里塞内容） */
+  function shell(cls) {
     hideEmpty();
-    var card = document.createElement("div");
-    card.className = "card";
+    var node = document.createElement("div");
+    node.className = "card" + (cls ? " " + cls : "");
 
-    var ph = document.createElement("div");
-    ph.className = "ph";
+    var body = document.createElement("div");
+    body.className = "card-body";
 
     var note = document.createElement("p");
     note.className = "note";
-    note.textContent = "排队中…";
 
     var acts = document.createElement("div");
     acts.className = "acts";
     acts.hidden = true;
 
-    card.appendChild(ph);
-    card.appendChild(note);
-    card.appendChild(acts);
-    el.scroll.appendChild(card);
+    node.appendChild(body);
+    node.appendChild(note);
+    node.appendChild(acts);
+    el.scroll.appendChild(node);
     scrollBottom();
 
-    return { node: card, ph: ph, note: note, acts: acts,
+    return {
+      node: node,
+      body: body,
+      note: note,
+      acts: acts,
+      say: function (text, bad) {
+        note.hidden = false;
+        note.className = "note" + (bad ? " err" : "");
+        note.textContent = text;
+        scrollBottom();
+      },
+      show: function () {
+        if (!acts.hidden) return;
+        acts.hidden = false;
+        scrollBottom();
+      }
+    };
+  }
+
+  function newCard(prompt, skill) {
+    var c = shell();
+    var ph = document.createElement("div");
+    ph.className = "ph";
+    c.body.appendChild(ph);
+    c.say("排队中…");
+
+    return { node: c.node, body: c.body, ph: ph, note: c.note, acts: c.acts,
              prompt: prompt, skill: skill, job: "" };
   }
 
@@ -133,7 +159,7 @@
         card.note.className = "note err";
         card.note.textContent = "图不在了，重画一张";
       });
-      card.node.replaceChild(img, card.ph);
+      card.ph.parentNode.replaceChild(img, card.ph);
       card.ph = null;
     }
     card.note.hidden = true;
@@ -250,6 +276,12 @@
     el.say.value = "";
     grow();
     syncSend();
+
+    // 漫画模式：这句话是剧情需求，交给创作面板去跑「编剧 → 分页画」
+    if (global.WSCreate && global.WSCreate.mode() === "comic") {
+      global.WSCreate.runComic(text);
+      return;
+    }
     submitJob(text, S.skill);
   }
 
@@ -334,6 +366,16 @@
         el.menu.hidden = true;
       }
     });
+
+    // 两个平级创作入口：只切模式，发什么由下面 send() 决定
+    $("pick-img").addEventListener("click", function () {
+      el.menu.hidden = true;
+      global.WSCreate.setMode("img");
+    });
+    $("pick-comic").addEventListener("click", function () {
+      el.menu.hidden = true;
+      global.WSCreate.setMode("comic");
+    });
     $("pick-camera").addEventListener("click", function () {
       el.menu.hidden = true;
       el.cam.click();
@@ -359,5 +401,5 @@
     bootChannels();
   }
 
-  global.WSChat = { init: init, sysNote: sysNote };
+  global.WSChat = { init: init, sysNote: sysNote, card: shell };
 })(window);
