@@ -1,0 +1,125 @@
+/* 「我的」：只有作品 / 收藏两个 tab。颜色/阴影/玻璃只走 tokens.css。 */
+
+.mebody { padding: 12px 12px 24px; }
+
+.metabs {
+  display: flex;
+  gap: 8px;
+  padding: 2px 2px 14px;
+}
+
+.metabs button {
+  flex: 1 1 0;
+  height: 38px;
+  border: 1px solid var(--hair);
+  border-radius: 19px;
+  background: var(--card);
+  color: var(--text-dim);
+  font-size: 14px;
+  box-shadow: var(--shadow-1);
+  transition: color .15s, background .15s;
+}
+
+.metabs button.on {
+  border-color: transparent;
+  background: linear-gradient(160deg, var(--brand-2), var(--brand));
+  color: var(--brand-on);
+  font-weight: 600;
+  box-shadow: var(--shadow-brand);
+}
+
+.megrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 10px;
+}
+
+.mcard {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+}
+
+.mpic {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--card-2);
+  box-shadow: var(--shadow-1);
+  transition: transform .18s ease;
+}
+
+.mpic img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.mcard:active .mpic { transform: scale(.98); }
+
+.mname {
+  min-width: 0;
+  padding: 0 2px;
+  font-size: 13.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mmeta {
+  padding: 0 2px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mempty {
+  grid-column: 1 / -1;
+  margin: 54px 12px;
+  color: var(--text-dim);
+  font-size: 13.5px;
+  line-height: 1.7;
+  text-align: center;
+}
+
+.mretry {
+  display: block;
+  margin: 12px auto 0;
+  padding: 7px 18px;
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 13px;
+  box-shadow: var(--shadow-1);
+}
+
+.memore {
+  display: block;
+  width: 100%;
+  margin-top: 18px;
+  padding: 11px;
+  border: 1px solid var(--hair);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--text-dim);
+  font-size: 13px;
+  box-shadow: var(--shadow-1);
+}
+
+.memore[hidden] { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .mpic, .metabs button { transition: none; }
+}

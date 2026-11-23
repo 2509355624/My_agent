@@ -8,7 +8,7 @@
   var S = { grp: "", page: 1, more: true, busy: false, works: [] };
   var el = {};
   var io = null;
-  var v = { list: [], idx: 0, faved: false, node: null };
+  var v = { list: [], idx: 0, jump: 0, faved: false, node: null };
 
   function $(id) { return document.getElementById(id); }
 
@@ -240,13 +240,16 @@
     v.node = { box: box, count: count, track: track, fav: fav };
   }
 
-  function open(work) {
-    if (!v.node) return;
+  /* work：作品集；itemId：可选，从收藏那张直接跳到它在集里的位置 */
+  function open(work, itemId) {
+    // 「我的」页可以直接 push 出来，不一定先逛过画廊；查看器得能自己建
+    if (!v.node) buildViewer();
     v.node.box.hidden = false;
     document.body.classList.add("g-lock");
     v.node.track.innerHTML = "";
     v.node.count.textContent = "";
     v.idx = 0;
+    v.jump = itemId || 0;
     v.list = [];
     v.faved = false;
 
@@ -265,7 +268,20 @@
         slide.appendChild(img);
         v.node.track.appendChild(slide);
       });
-      v.node.count.textContent = v.list.length ? "1 / " + v.list.length : "";
+
+      // 从「我的 → 收藏」进来时定位到收藏的那张。各来源 idx 口径不一，
+      // 按 item id 找位置最稳。
+      if (v.jump) {
+        for (var i = 0; i < v.list.length; i++) {
+          if (v.list[i].id === v.jump) { v.idx = i; break; }
+        }
+      }
+      v.jump = 0;
+      v.node.count.textContent = v.list.length
+        ? (v.idx + 1) + " / " + v.list.length : "";
+      global.requestAnimationFrame(function () {
+        v.node.track.scrollLeft = v.node.track.clientWidth * v.idx;
+      });
       syncFav();
     });
   }
