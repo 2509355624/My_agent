@@ -42,6 +42,26 @@
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .btn.small { padding: 4px 10px; font-size: 12px; }
   .btn.danger { color: var(--error); }
+  /* 阶段向导：把控件按「写剧本 → 确认分镜 → 出图调整」三步分层，一次只看当前步。
+     stage-pane 是外层壳，内部元素自身的 display 仍归 applyMode 管，两层正交不打架。 */
+  .stepbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    padding: 10px 14px; margin-bottom: 16px; background: var(--bg-elev);
+    border: 1px solid var(--border-soft); border-radius: var(--radius); }
+  .stepbar .step { background: none; border: 1px solid transparent; color: var(--text-dim);
+    border-radius: 18px; padding: 6px 13px; cursor: pointer; font: inherit; font-size: 13px; }
+  .stepbar .step:hover { border-color: var(--border); }
+  .stepbar .step.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .stepbar .arrow { color: var(--text-mute); font-size: 12px; }
+  .stepbar .spacer { flex: 1; }
+  .stepbar .expert { font-size: 12px; color: var(--text-dim); white-space: nowrap; cursor: pointer; }
+  .stage-pane[data-pane]:not(.active) { display: none; }
+  .stage-hint { color: var(--text-dim); font-size: 12px; margin-bottom: 12px; line-height: 1.6; }
+  details.adv { margin-bottom: 10px; }
+  details.adv > summary { cursor: pointer; color: var(--text-dim); font-size: 12px;
+    padding: 6px 0; list-style: none; }
+  details.adv > summary::-webkit-details-marker { display: none; }
+  details.adv > summary::before { content: '▸ '; }
+  details.adv[open] > summary::before { content: '▾ '; }
   #jobbar { display: none; padding: 8px 12px; border-radius: var(--radius-sm);
     background: var(--bg-input); border: 1px solid var(--border); font-size: 13px;
     color: var(--info); margin-bottom: 12px; }
@@ -183,8 +203,24 @@
     </div>
   </details>
 
+  <!-- 阶段向导：一次只展示当前步骤需要的控件，高级能力收进「详细设置」。
+       老手勾「专家模式」可一次看全（等同改版前的整页平铺），功能一点没删。 -->
+  <div class="stepbar hidden-by-friend" id="stepbar" style="display:none">
+    <button class="step active" data-pane="1" onclick="setStage(1)">① 写剧本</button>
+    <span class="arrow">→</span>
+    <button class="step" data-pane="2" onclick="setStage(2)">② 确认分镜</button>
+    <span class="arrow">→</span>
+    <button class="step" data-pane="3" onclick="setStage(3)">③ 出图与调整</button>
+    <span class="spacer"></span>
+    <label class="expert" title="勾选后三步控件一次全展开，和改版前的整页一样；老手调参用">
+      <input type="checkbox" id="expertMode" onchange="setExpert(this.checked)"> 专家模式（展开全部）
+    </label>
+  </div>
+
+  <div class="stage-pane active" data-pane="1">
   <div class="card">
-    <h2>① 需求 → 出内容</h2>
+    <h2>① 写剧本</h2>
+    <div class="stage-hint">写清楚「视角 / 主角 / 剧情」，AI 会据此出分镜。一般不用动下面的详细设置。</div>
     <div class="mode-tabs" id="modeTabs">
       <label class="mode-tab on"><input type="radio" name="mode" value="script" checked onchange="switchMode()">
         <span>📖 跑漫画</span><small>写设定 → 出图 → 加台词</small></label>
@@ -198,7 +234,6 @@
         <option value="">（当前没有任务）</option>
       </select>
       <button class="btn small" onclick="loadTasks()" title="重新扫一遍 comics/ 目录">↻</button>
-      <span style="color:var(--text-dim);font-size:12px">切过去只是打开它，不改内容</span>
     </div>
     <div class="row hidden-by-friend" style="margin-bottom:10px">
       <span style="color:var(--text-dim);font-size:12px">生图渠道</span>
@@ -297,7 +332,9 @@
     </div>
     <div class="inline-status" id="lsRun"></div>
   </div>
+  </div><!-- /stage-pane 2 -->
 
+  <div class="stage-pane" data-pane="3">
   <!-- 写真卡放在①卡正下方（2026-10-18）：原来它在整页最底下，切到生图模式后
        上面还压着剧本正文 / 补正报告 / 修订助手 / 渲染参数 / 槽位五块，用户要
        「往下拖好久才能看到写真」。剧本模式下它是 display:none，位置在这里不
@@ -315,6 +352,8 @@
     <div id="portraitGrid" class="grid"><div class="empty">还没有写真——在上面切到「生图」模式写句需求，或对已有任务点下方刷新</div></div>
   </div>
 
+  <details class="adv" id="renderAdvanced" style="margin:0 0 16px">
+    <summary>渲染参数 · 放大 / 采样 / 附加提示词（已按渠道记住，一般不用改）</summary>
   <div class="card hidden-by-friend" id="renderCard">
     <h2 id="renderTitle">⚙ 渲染参数</h2>
     <div style="color:var(--text-dim);font-size:12px;margin-bottom:10px">
@@ -398,6 +437,7 @@
       <span id="suffixMsg" style="color:var(--text-dim);font-size:12px"></span>
     </div>
   </div>
+  </details>
 
   <div class="card" id="friendRenderCard">
     <h2>⚙ 画幅 <span style="color:var(--text-dim);font-size:12px;font-weight:400">改动即时生效，只影响之后画的格子</span></h2>
@@ -412,7 +452,7 @@
   </div>
 
   <div class="card" id="slotCard">
-    <h2>② 槽位 · 逐格生成与修补</h2>
+    <h2>③ 槽位 · 逐格生成与修补</h2>
     <div style="color:var(--text-dim);font-size:12px;margin-bottom:10px">
       点图可放大看细节。每格能手输一句「要 Qwen 改什么」——源图是这一格**当前成品**，
       所以可以一次次往上改（改坏了点「加气泡」从底图重画，底图不动）。
@@ -437,7 +477,7 @@
       <span id="progress" style="color:var(--text-dim);font-size:12px"></span>
     </div>
     <div class="inline-status" id="lsBubble"></div>
-    <div id="grid" class="grid"><div class="empty">还没有任务——先在上面生成剧本</div></div>
+    <div id="grid" class="grid"><div class="empty">还没有任务——先在上面写剧本、确认开跑</div></div>
   </div>
 
   <div class="card" id="sendCard">
@@ -454,12 +494,48 @@
     <div class="inline-status" id="lsSend"></div>
     <div id="packs" style="margin-top:10px"></div>
   </div>
+
+  </div><!-- /stage-pane 3 -->
 </div>
 <div id="zoom" onclick="zoomClose()"><img alt=""></div>
 <div id="toast"></div>
 
 <script>
 let TASK = null;          // 任务 id（C<日期>-<序号>）
+
+// ── 阶段向导（2026-11-23）────────────────────────────────────────
+// 三步只显示当前步需要的控件，降低「一屏 44 个按钮」的认知负担。
+// stage-pane 是外层壳：它的显隐和内部元素自身的 display（归 applyMode 管）
+// 正交，互不覆盖。专家模式勾上后三个 pane 全开 = 改版前的整页平铺。
+let STAGE = 1;
+let EXPERT = false;
+
+function setStage(n) {
+  STAGE = Math.max(1, Math.min(3, +n || 1));
+  document.querySelectorAll('.stage-pane').forEach(function (el) {
+    el.classList.toggle('active', EXPERT || +el.dataset.pane === STAGE);
+  });
+  document.querySelectorAll('.stepbar .step').forEach(function (el) {
+    el.classList.toggle('active', !EXPERT && +el.dataset.pane === STAGE);
+  });
+  const bar = document.getElementById('stepbar');
+  if (bar) bar.classList.toggle('expert-on', EXPERT);
+  // 顶部按钮文案跟着阶段走：根按钮永远在，但旁注告诉用户现在该干嘛。
+  const hint = document.getElementById('stage1Hint');
+  if (hint) hint.style.display = (!EXPERT && STAGE === 1) ? '' : 'none';
+  const intro = document.getElementById('scriptIntro');
+  if (intro) intro.style.display = (!EXPERT && STAGE === 2) ? '' : 'none';
+}
+
+function setExpert(on) {
+  EXPERT = !!on;
+  const d1 = document.getElementById('advancedSetup');
+  const d2 = document.getElementById('renderAdvanced');
+  if (d1) d1.open = EXPERT;
+  if (d2) d2.open = EXPERT;
+  setStage(STAGE);   // 重算 pane/step 的 active
+}
+
 // 记住最近一个任务（2026-10-18）：TASK 原来只在内存里，刷新就丢——参数卡、
 // 槽位、剧本全回到空白，得重新生成一遍剧本才接得上。存 localStorage，
 // 刷新后自动恢复；任务目录被删了就把这条忘掉（restoreSession 里处理）。
@@ -865,6 +941,7 @@ async function pollScript() {
   loadChatHistory();
   loadRenderOpts();                       // 渲染参数卡（这个任务的 render.json）
   applyMode();                            // 编剧期间可能被切到生图模式，这里再收一次
+  if (!EXPERT && curMode() === 'script') setStage(2);   // 剧本好了，自动进第 ② 步
   toast('剧本已生成：' + TASK);
   finishScript();
   refresh();
@@ -1220,6 +1297,7 @@ async function saveScript(andRun) {
                                              character_lora: characterLoraKey()});
     if (excl) document.getElementById('exclusiveOn').checked = false;   // 推完自动取消
     setBusy(true, 'scene');
+    if (!EXPERT) setStage(3);   // 开跑了，自动进第 ③ 步看格子
     toast(d.exclusive
       ? '已独占开跑：待跑底图一次入队，前 10 张优先票连跑（' + (channel() || '默认渠道') + '）'
       : '已开跑：逐格渲染场景图（' + (channel() || '默认渠道') + '）');
@@ -2231,6 +2309,7 @@ async function loadTaskUI(name, prefix) {
   await loadChannels();          // 渠道下拉 + 当前值（任务自己的 scene_skill）
   await loadRenderOpts(true);
   applyMode();
+  if (!EXPERT) setStage(ta.value.trim() ? 2 : 1);   // 有剧本从第②步进，空的从第①步
   syncTaskPick();
   if (prefix) toast(prefix + '：' + name);
   refresh();
@@ -2306,6 +2385,8 @@ function switchMode() {
   try { localStorage.setItem(LS_MODE, curMode()); } catch (e) { }
   syncModeInputs();
   applyMode();
+  if (!EXPERT) setStage(curMode() === 'portrait' ? 1
+                         : (document.getElementById('script').value.trim() ? 2 : 1));
 }
 
 /**
@@ -2422,6 +2503,7 @@ function renderPortraits(shots) {
     return;
   }
   applyMode();
+  if (!EXPERT && curMode() === 'portrait') setStage(3);   // 写真出来了，进第 ③ 步看结果
   const sig = JSON.stringify(shots.map(s => [s.no, s.state, s.seed, s.rev, s.error]));
   if (grid.dataset.sig === sig) return;      // 没变就别重建，避免闪烁
   grid.dataset.sig = sig;
@@ -2663,6 +2745,7 @@ async function wmSubmit() {
   } finally { btn.disabled = false; }
 }
 
+document.querySelectorAll('.stage-pane').forEach(function(e){e.style.display='block';});
 
 /* ═══════════════════════════════════════════════════════════════════════
    群友版补丁（母本：web/comic_studio.html，由 tools/comic_friend_patch.py 注入）

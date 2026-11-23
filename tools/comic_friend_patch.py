@@ -666,15 +666,15 @@ def main():
             "<button class=\"btn hidden-by-friend\" id=\"btnSave\" onclick=\"saveScript(false)\">只保存</button>",
             "只保存隐藏")
 
-    # ⑧ 各按钮正下方的就地状态条
+    # ⑧ 各按钮正下方的就地状态条（2026-11-23 母本加阶段向导后锚点跟着改）
     s = rep(s,
             "      <button class=\"btn primary\" id=\"btnScript\" onclick=\"genScript()\">生成剧本</button>\n"
-            "    </div>\n"
-            "    <textarea id=\"script\" style=\"display:none\" spellcheck=\"false\"></textarea>",
+            "      <span id=\"stage1Hint\" style=\"color:var(--text-dim);font-size:12px\">写好上面的需求，点这里让编剧 AI 出分镜剧本</span>\n"
+            "    </div>",
             "      <button class=\"btn primary\" id=\"btnScript\" onclick=\"genScript()\">生成剧本</button>\n"
+            "      <span id=\"stage1Hint\" style=\"color:var(--text-dim);font-size:12px\">写好上面的需求，点这里让编剧 AI 出分镜剧本</span>\n"
             "    </div>\n"
-            "    <div class=\"inline-status\" id=\"lsScript\"></div>\n"
-            "    <textarea id=\"script\" style=\"display:none\" spellcheck=\"false\"></textarea>",
+            "    <div class=\"inline-status\" id=\"lsScript\"></div>",
             "生成剧本状态条")
     s = rep(s,
             "      <button class=\"btn primary\" id=\"btnStart\" onclick=\"saveScript(true)\">确认开跑（渲染全部场景图）</button>\n"
@@ -712,10 +712,13 @@ def main():
 
     # ⑩ QQ 发送卡：放在槽位卡下面，不放在页面顶端
     s = rep(s,
-            "    <div id=\"grid\" class=\"grid\"><div class=\"empty\">还没有任务——先在上面生成剧本</div></div>\n"
-            "  </div>\n</div>\n<div id=\"zoom\"",
-            "    <div id=\"grid\" class=\"grid\"><div class=\"empty\">还没有任务——先在上面生成剧本</div></div>\n"
-            "  </div>\n" + SEND_CARD + "</div>\n<div id=\"zoom\"", "QQ 发送卡")
+            "    <div id=\"grid\" class=\"grid\"><div class=\"empty\">还没有任务——先在上面写剧本、确认开跑</div></div>\n"
+            "  </div>\n"
+            "  </div><!-- /stage-pane 3 -->\n"
+            "</div>\n<div id=\"zoom\"",
+            "    <div id=\"grid\" class=\"grid\"><div class=\"empty\">还没有任务——先在上面写剧本、确认开跑</div></div>\n"
+            "  </div>\n" + SEND_CARD + "\n  </div><!-- /stage-pane 3 -->\n"
+            "</div>\n<div id=\"zoom\"", "QQ 发送卡")
 
     s = rep(s, "<dialog id=\"provDlg\"", "<dialog id=\"provDlg\" class=\"hidden-by-friend\"",
             "自定义中转站弹窗")
@@ -735,7 +738,24 @@ def main():
             "  if (window.friendOnStatus) friendOnStatus(d);\n  renderFix(d.fix);",
             "status 钩子")
 
-    # ⑫ 补丁 JS 插在母本初始化三行之前：函数已声明完、初始化还没跑。
+    s = rep(s,
+            "    <details class=\"adv\" id=\"advancedSetup\">\n"
+            "      <summary>详细设置 · 渠道 / 编剧模型 / 视角 / 接上一集（一般不用改，已记住上次的选择）</summary>\n"
+            "    <div class=\"row hidden-by-friend\" style=\"margin-bottom:10px\">",
+            "    <div class=\"row hidden-by-friend\" style=\"margin-bottom:10px\">",
+            "群友去掉母本 advancedSetup 开标签（下面 NEW_FORM 自带 details）")
+    #    三个 pane 全展开，退回平铺，一屏能看到全部只读内容。
+    s = rep(s,
+            "  <div class=\"stepbar\" id=\"stepbar\">",
+            "  <div class=\"stepbar hidden-by-friend\" id=\"stepbar\" style=\"display:none\">",
+            "群友隐藏步骤条")
+    s = rep(s,
+            "poll();\nloadProviders();\nrestoreSession();\n</script>",
+            "document.querySelectorAll('.stage-pane').forEach(function(e){e.style.display='block';});\n"
+            "poll();\nloadProviders();\nrestoreSession();\n</script>",
+            "群友展开全部 pane")
+
+    # ⑬ 补丁 JS 插在母本初始化三行之前：函数已声明完、初始化还没跑。
     s = rep(s,
             "poll();\nloadProviders();\nrestoreSession();\n</script>",
             JS + "poll();\nloadProviders();\nrestoreSession();\n</script>", "补丁 JS")
