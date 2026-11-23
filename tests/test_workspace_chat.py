@@ -121,9 +121,13 @@ class TestWorkspaceChatStack(unittest.TestCase):
 
     def test_styles_use_tokens(self):
         css = _read("css/chat.css")
-        self.assertIn("var(--bg)", css)
-        self.assertIn("var(--card)", css)
+        self.assertIn("var(--card", css)
+        self.assertIn("var(--text", css)
         self.assertIn("safe-area-inset-bottom", css, "输入栏要避开手机安全区")
+        self.assertIn("backdrop-filter", css, "玻璃层要真的模糊背景")
+        tokens = _read("css/tokens.css")
+        self.assertIn("--glass", tokens)
+        self.assertIn("--shadow-2", tokens)
 
 
 if __name__ == "__main__":

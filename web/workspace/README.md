@@ -9,11 +9,11 @@ V3 聊天优先界面的独立功能文件夹。当前有两块：登录页、�
 | --- | --- |
 | `index.html` | 登录页，两个步骤 section（QQ 号 → 验证码），一步一个主按钮 |
 | `chat.html` | 聊天页，只有消息区 + 输入栏（无顶栏、无底栏） |
-| `css/tokens.css` | 明暗主题变量，默认白色（不跟随系统），可手动切深色并记住 |
-| `css/base.css` | 重置 + 手机优先居中容器 |
+| `css/tokens.css` | 颜色 / 玻璃层 / 三档阴影 / 滚动条变量，默认白色（不跟随系统），可手动切深色并记住 |
+| `css/base.css` | 重置 + 手机优先居中容器 + 背景光晕 + 细滚动条 |
 | `css/login.css` | 登录页样式 |
-| `css/chat.css` | 气泡、AI 卡片、输入栏、chip |
-| `css/sheet.css` | 页面栈视图 + 底部抽屉 |
+| `css/chat.css` | 气泡、AI 卡片、悬浮玻璃输入栏、chip |
+| `css/sheet.css` | 页面栈视图 + 底部玻璃抽屉 |
 | `js/api.js` | 同源 JSON 请求（`get`/`post`）+ 登录接口 |
 | `js/login.js` | 两步流程、QQ/验证码校验、60s 倒计时、`sessionStorage` 暂存 QQ |
 | `js/gen.js` | 生图接口：渠道 / 提交 / 状态 / 取图 / 默认画风 |
@@ -41,6 +41,18 @@ def workspace_page():
 def workspace_chat():
     return send_from_directory(WEB_DIR, "workspace/chat.html")
 ```
+
+## 视觉约定
+
+- **白色玻璃风**：`--glass / --glass-2` 是半透明底，配 `backdrop-filter: blur()` 才有层次；
+  单独用半透明会显脏。`--hair` 是细边框（比 `--line` 淡），`--shadow-1/2/3` 是贴边/悬浮/浮层三档。
+- **输入栏是浮层**：`.composer` 绝对定位在底部，消息从它下面滚过去，模糊才看得出来。
+  消息区底部靠 `--composer-h` 留白，这个值由 `chat.js` 的 `fitComposer()` 按输入栏实际高度写回，
+  输入框长高、旋转屏幕时会重算。改输入栏高度不用手动同步 padding。
+- **滚动条全站收细**（`base.css` 里的 `*::-webkit-scrollbar`）；输入框内高按「一行文字 + 内边距 + 边框」
+  精确给到 44px，不留 1~2px 溢出，否则会一直冒出原生灰条。
+- **层级顺序**：`chat.css` 在 `sheet.css` 之前加载，`.view-root` 的透明底必须写在 `sheet.css`
+  （否则被 `.view` 的实色底盖掉，整页会白成一片）。
 
 ## 聊天页的几个约定
 

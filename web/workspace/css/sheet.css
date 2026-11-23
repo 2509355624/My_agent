@@ -17,7 +17,11 @@
   background: var(--card);
 }
 
-.view-root { z-index: 1; }
+/* 根视图透明，露出 body 的光晕和悬浮输入栏；子页不透明，滑上来才盖得住 */
+.view-root {
+  z-index: 1;
+  background: transparent;
+}
 
 /* 子页：默认停在右侧屏外，加 .in 滑入 */
 .view-push {
@@ -25,6 +29,7 @@
   transform: translateX(100%);
   transition: transform .28s cubic-bezier(.32, .72, 0, 1);
   will-change: transform;
+  box-shadow: -18px 0 40px -24px rgba(16, 24, 40, .4);
 }
 
 .view-push.in { transform: translateX(0); }
@@ -40,7 +45,10 @@
   gap: 8px;
   padding: 8px 8px 8px;
   padding-top: calc(8px + env(safe-area-inset-top));
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--hair);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(18px) saturate(170%);
+  backdrop-filter: blur(18px) saturate(170%);
 }
 
 .vtop button {
@@ -100,7 +108,9 @@
 .sheet-mask {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, .34);
+  background: rgba(16, 24, 40, .3);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
   opacity: 0;
   transition: opacity .2s;
 }
@@ -115,20 +125,35 @@
   display: flex;
   flex-direction: column;
   padding-bottom: env(safe-area-inset-bottom);
-  border-radius: 20px 20px 0 0;
-  background: var(--card);
+  border: 1px solid var(--glass-line);
+  border-bottom: 0;
+  border-radius: 24px 24px 0 0;
+  background: var(--glass-2);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  backdrop-filter: blur(28px) saturate(180%);
+  box-shadow: var(--shadow-3);
   transform: translateY(100%);
   transition: transform .26s cubic-bezier(.32, .72, 0, 1);
 }
 
 .sheet.on .sheet-body { transform: translateY(0); }
 
+/* 顶上一道小横条，暗示这块能往下拖 */
+.sheet-grip {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 4px;
+  margin: 8px auto 0;
+  border-radius: 999px;
+  background: var(--line);
+}
+
 .sheet-head {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 18px 10px;
+  padding: 12px 18px 8px;
   font-size: 14px;
   font-weight: 600;
 }
@@ -184,7 +209,12 @@
   opacity: 0;
 }
 
-.style-item.on { color: var(--brand); font-weight: 600; }
+.style-item.on {
+  color: var(--brand);
+  font-weight: 600;
+  background: var(--brand-soft);
+}
+
 .style-item.on .tick { opacity: 1; }
 
 .style-item .sname {
@@ -210,11 +240,12 @@
   flex: 0 0 auto;
   margin: 4px 12px 10px;
   padding: 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--hair);
   border-radius: 12px;
-  background: var(--card-2);
+  background: var(--card);
   color: var(--text-dim);
   font-size: 13px;
+  box-shadow: var(--shadow-1);
 }
 
 .style-more[hidden] { display: none; }

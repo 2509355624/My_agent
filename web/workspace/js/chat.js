@@ -229,6 +229,14 @@
   function grow() {
     el.say.style.height = "auto";
     el.say.style.height = Math.min(el.say.scrollHeight, 132) + "px";
+    fitComposer();
+  }
+
+  // 输入栏是浮在消息上的玻璃层，消息区底部得留出它的实际高度
+  function fitComposer() {
+    if (!el.composer) return;
+    document.documentElement.style.setProperty(
+      "--composer-h", el.composer.offsetHeight + "px");
   }
 
   function syncSend() {
@@ -298,12 +306,15 @@
   function init() {
     el.scroll = $("chat-scroll");
     el.empty = $("chat-empty");
+    el.composer = $("composer");
     el.say = $("say");
     el.send = $("btn-send");
     el.plus = $("btn-plus");
     el.menu = $("plus-menu");
     el.cam = $("file-camera");
     el.album = $("file-album");
+
+    global.addEventListener("resize", fitComposer);
 
     el.send.addEventListener("click", send);
     el.say.addEventListener("input", function () { grow(); syncSend(); });

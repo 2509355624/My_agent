@@ -1,18 +1,27 @@
-/* 聊天页：只有消息区 + 输入栏。颜色全走 tokens.css 的语义变量，深浅色自动跟着走。 */
+/* 聊天页：消息区 + 悬浮输入栏。颜色/阴影/玻璃全走 tokens.css，深浅色自动跟着走。 */
 
 /* base.css 的 .app 是给登录卡用的，聊天页要占满整屏 */
 .app-chat {
+  position: relative;
   max-width: 520px;
   height: 100vh;
   height: 100dvh;
   min-height: 0;
+  background: transparent;
 }
 
+/* 桌面：同一张卡拉宽，做成一块玻璃浮在光晕上 */
 @media (min-width: 600px) {
   .app-chat {
     height: calc(100dvh - 64px);
     margin: 32px auto;
-    box-shadow: 0 24px 70px rgba(0, 0, 0, .12);
+    overflow: hidden;
+    border: 1px solid var(--glass-line);
+    border-radius: 26px;
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(26px) saturate(170%);
+    backdrop-filter: blur(26px) saturate(170%);
+    box-shadow: var(--shadow-3);
   }
 }
 
@@ -26,20 +35,22 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 20px 16px 8px;
+  /* 底部留出悬浮输入栏的高度，最后一条消息不会被压在玻璃下面 */
+  padding: calc(20px + env(safe-area-inset-top)) 16px
+           calc(var(--composer-h, 128px) + 16px);
 }
 
 .chat-empty {
   margin: auto 0;
-  padding: 0 8px 6vh;
+  padding: 0 8px 4vh;
   text-align: center;
 }
 
 .chat-empty h1 {
   margin: 0 0 6px;
-  font-size: 20px;
+  font-size: 21px;
   font-weight: 600;
-  letter-spacing: -.2px;
+  letter-spacing: -.3px;
 }
 
 .chat-empty p {
@@ -55,13 +66,14 @@
   align-self: flex-end;
   max-width: 84%;
   padding: 10px 14px;
-  border-radius: 18px 18px 5px 18px;
-  background: var(--brand);
+  border-radius: 18px 18px 6px 18px;
+  background: linear-gradient(160deg, var(--brand-2), var(--brand));
   color: var(--brand-on);
   font-size: 15px;
   line-height: 1.58;
   white-space: pre-wrap;
   word-break: break-word;
+  box-shadow: var(--shadow-brand);
   animation: ws-in .2s ease-out both;
 }
 
@@ -83,15 +95,18 @@
   align-self: flex-start;
   width: min(100%, 340px);
   padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 18px 18px 18px 5px;
-  background: var(--card-2);
+  border: 1px solid var(--hair);
+  border-radius: 20px 20px 20px 8px;
+  background: var(--glass-2);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  backdrop-filter: blur(14px) saturate(160%);
+  box-shadow: var(--shadow-2);
   animation: ws-in .2s ease-out both;
 }
 
 .card .ph {
   aspect-ratio: 3 / 4;
-  border-radius: 12px;
+  border-radius: 14px;
   background: linear-gradient(100deg, var(--card-2) 30%, var(--line) 50%, var(--card-2) 70%);
   background-size: 220% 100%;
   animation: ws-shimmer 1.4s linear infinite;
@@ -100,8 +115,8 @@
 .card img {
   display: block;
   width: 100%;
-  border-radius: 12px;
-  background: var(--bg);
+  border-radius: 14px;
+  background: var(--card-2);
 }
 
 .card .note {
@@ -109,6 +124,7 @@
   padding: 6px 4px 2px;
   font-size: 13px;
   color: var(--text-dim);
+  text-align: center;
 }
 
 .card .note.err { color: var(--danger); }
@@ -117,7 +133,7 @@
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding-top: 8px;
+  padding: 8px 2px 0;
 }
 
 .card .acts[hidden] { display: none; }
@@ -125,7 +141,7 @@
 .card .acts button {
   width: 34px;
   height: 34px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--hair);
   border-radius: 50%;
   background: var(--card);
   color: var(--text);
@@ -133,18 +149,26 @@
   line-height: 1;
   display: grid;
   place-items: center;
+  box-shadow: var(--shadow-1);
 }
 
 .card .acts button:active { transform: scale(.94); }
 
 .card .acts .ok { color: var(--ok); font-size: 15px; }
 
-/* ── 输入栏 ─────────────────────────────────────────── */
+/* ── 输入栏：悬在消息上面的一层玻璃 ─────────────────── */
 .composer {
-  flex: 0 0 auto;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
   padding: 0 12px calc(10px + env(safe-area-inset-bottom));
-  border-top: 1px solid var(--line);
-  background: var(--card);
+  border-top: 1px solid var(--glass-line);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+  box-shadow: 0 -10px 30px -18px rgba(16, 24, 40, .35);
 }
 
 .chips {
@@ -161,15 +185,20 @@
 .chip {
   flex: 0 0 auto;
   padding: 7px 14px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--hair);
   border-radius: 999px;
-  background: var(--card-2);
+  background: var(--card);
   color: var(--text);
   font-size: 13px;
   white-space: nowrap;
+  box-shadow: var(--shadow-1);
 }
 
-.chip:active { background: var(--brand-soft); border-color: var(--brand-soft); }
+.chip:active {
+  background: var(--brand-soft);
+  border-color: var(--brand-soft);
+  box-shadow: none;
+}
 
 .input-row {
   position: relative;
@@ -180,55 +209,77 @@
 
 .icon-btn {
   flex: 0 0 auto;
-  width: 38px;
-  height: 38px;
+  width: 44px;
+  height: 44px;
   padding: 0;
-  border: 1px solid var(--line);
+  border: 1px solid var(--hair);
   border-radius: 50%;
-  background: var(--card-2);
+  background: var(--card);
   color: var(--text);
-  font-size: 19px;
+  font-size: 20px;
   line-height: 1;
   display: grid;
   place-items: center;
+  box-shadow: var(--shadow-1);
 }
 
+.icon-btn:active { transform: scale(.95); }
+
+/* 输入框：内高刚好放一行，不溢出就不会冒原生滚动条 */
 #say {
   flex: 1 1 0;
   min-width: 0;
-  min-height: 38px;
+  min-height: 44px;
   max-height: 132px;
-  padding: 8px 14px;
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  background: var(--card-2);
+  padding: 10px 14px;
+  border: 1px solid var(--hair);
+  border-radius: 22px;
+  background: var(--card);
   color: var(--text);
   font-size: 15px;
   line-height: 1.5;
   resize: none;
   overflow-y: auto;
   outline: none;
+  box-shadow: inset 0 1px 2px rgba(16, 24, 40, .04), var(--shadow-1);
+  transition: border-color .15s, box-shadow .15s;
 }
 
-#say:focus { border-color: var(--brand); }
+/* 长文时才出细滚动条，平时不占位也不描边 */
+#say::-webkit-scrollbar { width: 4px; }
+#say::-webkit-scrollbar-track { background: transparent; }
+#say::-webkit-scrollbar-thumb {
+  background: var(--scroll);
+  border-radius: 999px;
+}
+
+#say:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 4px var(--ring), inset 0 1px 2px rgba(16, 24, 40, .03);
+}
 
 #say::placeholder { color: var(--text-dim); }
 
 .send-btn {
   flex: 0 0 auto;
-  height: 38px;
-  padding: 0 16px;
+  height: 44px;
+  padding: 0 18px;
   border: 0;
-  border-radius: 20px;
-  background: var(--brand);
+  border-radius: 22px;
+  background: linear-gradient(160deg, var(--brand-2), var(--brand));
   color: var(--brand-on);
   font-size: 14px;
   font-weight: 500;
+  box-shadow: var(--shadow-brand);
+  transition: transform .12s, box-shadow .15s;
 }
+
+.send-btn:active { transform: scale(.96); }
 
 .send-btn:disabled {
   background: var(--card-2);
   color: var(--text-dim);
+  box-shadow: none;
 }
 
 /* 「＋」弹出：相机 / 相册 */
@@ -237,12 +288,15 @@
   left: 0;
   bottom: calc(100% + 10px);
   z-index: 20;
-  min-width: 132px;
+  min-width: 136px;
   padding: 6px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--card);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, .16);
+  border: 1px solid var(--glass-line);
+  border-radius: 16px;
+  background: var(--glass-2);
+  -webkit-backdrop-filter: blur(20px) saturate(170%);
+  backdrop-filter: blur(20px) saturate(170%);
+  box-shadow: var(--shadow-3);
+  animation: ws-pop .16s ease-out both;
 }
 
 .plus-menu[hidden] { display: none; }
@@ -252,9 +306,9 @@
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 9px 10px;
+  padding: 10px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 11px;
   background: none;
   color: var(--text);
   font-size: 14px;
@@ -270,11 +324,16 @@
   to { opacity: 1; transform: none; }
 }
 
+@keyframes ws-pop {
+  from { opacity: 0; transform: translateY(6px) scale(.97); }
+  to { opacity: 1; transform: none; }
+}
+
 @keyframes ws-shimmer {
   from { background-position: 120% 0; }
   to { background-position: -120% 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .bubble, .card, .card .ph { animation: none; }
+  .bubble, .card, .card .ph, .plus-menu { animation: none; }
 }
