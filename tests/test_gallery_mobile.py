@@ -19,14 +19,25 @@ def _html():
 
 
 class GalleryHeaderTest(unittest.TestCase):
-    def test_header_only_keeps_three_tabs_and_one_more_button(self):
+    def test_header_keeps_three_tabs_theme_toggle_and_more(self):
         html = _html()
         start = html.index("<header")
         end = html.index("</header>")
         block = html[start:end]
-        self.assertEqual(block.count("<button"), 4)  # 3 个 tab + 更多
+        self.assertEqual(block.count("<button"), 5)  # 3 个 tab + 主题 + 更多
         for tab in ('data-tab="owner"', 'data-tab="pub"', 'id="tabMine"'):
             self.assertIn(tab, block)
+        self.assertIn('id="themeToggle"', block)
+
+    def test_light_and_dark_tokens_are_both_defined(self):
+        html = _html()
+        self.assertIn('<script>\n(function () {\n  var t = "dark";', html)
+        self.assertIn('document.documentElement.dataset.theme = t;', html)
+        self.assertIn(':root[data-theme="light"]{', html)
+        for token in ("--bg:", "--card:", "--tx:", "--dim:", "--line:"):
+            self.assertIn(token, html)
+        self.assertIn("localStorage.setItem(\"gal_theme\", next)", html)
+        self.assertIn("t === \"dark\" ? \"☀\" : \"☾\"", html)
 
     def test_secondary_entries_live_in_the_more_menu(self):
         html = _html()

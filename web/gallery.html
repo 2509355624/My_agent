@@ -3,12 +3,35 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#0d0d10">
+<meta name="theme-color" content="#0c0d10">
+<!-- 主题先于样式落地，避免白天模式闪一下黑底。localStorage 记用户选择，
+     没选过就跟系统偏好；页面内切换按钮只改这一个属性。 -->
+<script>
+(function () {
+  var t = "dark";
+  try { t = localStorage.getItem("gal_theme") || ""; } catch (e) {}
+  if (t !== "light" && t !== "dark") {
+    t = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
+      ? "light" : "dark";
+  }
+  document.documentElement.dataset.theme = t;
+})();
+</script>
 <title>画廊</title>
 <style>
   :root{
-    --bg:#0d0d10; --card:#17171c; --card2:#1e1e25; --line:#2a2a33;
-    --tx:#ececf1; --dim:#8a8a99; --pink:#ff5c8a; --gold:#ffc453;
+    --bg:#0c0d10; --card:#171a20; --card2:#20242c; --line:#2a2f39;
+    --line-soft:#20242c; --tx:#f2f3f7; --dim:#9aa0ad; --mute:#6e7482;
+    --pink:#ff5c8a; --pink-soft:rgba(255,92,138,.15); --gold:#ffc453;
+    --topbar:rgba(12,13,16,.92); --scrim:rgba(8,9,12,.86);
+    --on-image:#f5f5f7; --shadow:0 16px 44px rgba(0,0,0,.45);
+  }
+  :root[data-theme="light"]{
+    --bg:#f5f6f8; --card:#ffffff; --card2:#eef1f5; --line:#dfe3ea;
+    --line-soft:#e9ecf1; --tx:#1b1e24; --dim:#67707e; --mute:#929aa6;
+    --pink:#e0456f; --pink-soft:rgba(224,69,111,.1); --gold:#c08a15;
+    --topbar:rgba(245,246,248,.92); --scrim:rgba(12,14,18,.82);
+    --on-image:#ffffff; --shadow:0 16px 44px rgba(24,32,48,.14);
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;padding:0;background:var(--bg);color:var(--tx);
@@ -33,10 +56,11 @@
     border-radius:9px;white-space:nowrap;flex:0 0 auto;background:transparent;
     cursor:pointer;font-family:inherit}
   .go:hover{color:var(--tx);border-color:var(--pink)}
+  .go.theme{width:34px;padding:6px 0;text-align:center;font-size:16px;line-height:1}
   .more-menu{display:none;position:absolute;right:12px;top:calc(100% + 8px);
     z-index:30;width:210px;padding:8px;background:var(--card);
     border:1px solid var(--line);border-radius:12px;
-    box-shadow:0 14px 40px rgba(0,0,0,.45)}
+    box-shadow:var(--shadow)}
   header.more-open .more-menu{display:grid;gap:2px}
   .menu-item{display:block;padding:10px 12px;border-radius:8px;
     color:var(--dim);font-size:13px}
@@ -49,6 +73,13 @@
     .more-menu{left:12px;right:12px;width:auto;
       grid-template-columns:1fr 1fr}
   }
+  /* 加上主题按钮后，320px 上四个标题挤不下；这个宽度页面身份已经由 tab
+     说清楚了，品牌字让位给操作。 */
+  @media(max-width:380px){
+    .brand{display:none}
+    .tabs{margin-left:auto}
+    .go.theme{width:30px}
+  }
 
   /* ── 工具条 ── */
   .tools{display:flex;gap:8px;flex-wrap:wrap;padding:12px 14px 4px;
@@ -56,7 +87,7 @@
   .tools .tool-more{display:none;position:absolute;left:14px;top:calc(100% + 2px);
     z-index:25;min-width:132px;padding:6px;background:var(--card);
     border:1px solid var(--line);border-radius:10px;
-    box-shadow:0 10px 28px rgba(0,0,0,.4);flex-direction:column;gap:4px}
+    box-shadow:var(--shadow);flex-direction:column;gap:4px}
   .tools .tool-more.on{display:flex}
   .tools .tool-more button{text-align:left;white-space:nowrap}
   .tools .tool-more-label{font-size:11px;color:var(--dim);padding:2px 8px 5px;
@@ -92,10 +123,8 @@
     height:2px;background:var(--pink);border-radius:2px}
 
   .hint{padding:0 14px 6px;color:var(--dim);font-size:12.5px;line-height:1.6}
-  /* 2026-11-23：每个 tab 一句白话说明，先说清「这面墙是什么」再看按钮。 */
-  .wall-guide{margin:6px 14px 0;padding:8px 12px;font-size:12.5px;line-height:1.6;
-    color:var(--dim);background:var(--card);border:1px solid var(--line);
-    border-radius:10px}
+  /* 一句话就够：这面墙是什么、主操作在哪。不再做一张说明卡占首屏。 */
+  .wall-guide{margin:8px 14px 0;color:var(--mute);font-size:12px;line-height:1.5}
 
   /* ── 网格 ── */
   main{padding:6px 14px calc(40px + env(safe-area-inset-bottom,0))}
@@ -108,27 +137,27 @@
   /* 桌面才有 hover，触摸设备上按住就亮会很脏（:hover 在手机上会粘住） */
   @media(hover:hover) and (pointer:fine){
     .card:hover{transform:translateY(-3px);
-      box-shadow:0 10px 28px rgba(0,0,0,.5),0 0 0 1px var(--line)}
+      box-shadow:var(--shadow),0 0 0 1px var(--line)}
   }
   .card .ph{width:100%;aspect-ratio:3/4;display:block;object-fit:cover;
-    background:linear-gradient(135deg,#1a1a21,#22222b);opacity:0;transition:opacity .35s}
+    background:linear-gradient(135deg,var(--card2),var(--line-soft));opacity:0;transition:opacity .35s}
   .card .ph.ok{opacity:1}
   .card .meta{position:absolute;left:0;right:0;bottom:0;padding:24px 10px 11px;
-    background:linear-gradient(transparent,rgba(0,0,0,.85));font-size:12px}
+    background:linear-gradient(transparent,var(--scrim));font-size:12px}
   .card .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .card .srow{display:flex;align-items:center;gap:8px;margin-top:2px}
-  .card .s{flex:1 1 auto;min-width:0;color:#c9c9d4;font-size:11px;
+  .card .s{flex:1 1 auto;min-width:0;color:var(--on-image);font-size:11px;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   /* 卡片最下面的「隐藏」：只有站主在站长 tab 看得到。字要小、底要暗，
      别把标题和封面压下去；按下去给一下反馈，避免连点。 */
   .card .hb{flex:0 0 auto;font:inherit;font-size:11px;line-height:1;
     padding:5px 10px;border-radius:20px;cursor:pointer;
-    color:#dcdce6;background:rgba(0,0,0,.45);
+    color:var(--on-image);background:rgba(0,0,0,.45);
     border:1px solid rgba(255,255,255,.26)}
   .card .hb:active{background:var(--pink);border-color:var(--pink);color:#fff}
   .card .hb.back{border-color:rgba(255,92,138,.65);color:#ffd3de}
   .card .badge{position:absolute;top:7px;right:7px;background:rgba(0,0,0,.66);
-    color:#fff;font-size:11px;padding:2px 7px;border-radius:20px}
+    color:var(--on-image);font-size:11px;padding:2px 7px;border-radius:20px}
   .card .off{position:absolute;top:7px;left:7px;background:rgba(255,92,138,.92);
     color:#fff;font-size:11px;padding:2px 7px;border-radius:20px}
 
@@ -140,9 +169,9 @@
   #detail.on{display:flex}
   .dtop{display:flex;align-items:center;gap:10px;padding:12px 14px;
     padding-top:calc(12px + env(safe-area-inset-top,0));flex:0 0 auto;
-    background:rgba(13,13,16,.9);backdrop-filter:blur(14px);
+    background:var(--topbar);backdrop-filter:blur(14px);
     border-bottom:1px solid var(--line)}
-  .dtop button{border:0;background:rgba(255,255,255,.08);color:var(--tx);
+  .dtop button{border:0;background:var(--card2);color:var(--tx);
     font:inherit;font-size:20px;line-height:1;width:36px;height:36px;
     border-radius:50%;cursor:pointer;flex:0 0 auto}
   .dinfo{flex:1;min-width:0}
@@ -155,7 +184,7 @@
   /* 「加图」单独占一行放在左上：36px 的圆形按钮里塞三个字点不准，
      而且在顶栏里还得跟标题抢位置。给个 44px 高的大按钮，拇指一按就到。 */
   .daddbar{display:none;align-items:center;gap:10px;padding:10px 14px 12px;
-    flex:0 0 auto;background:rgba(13,13,16,.9);backdrop-filter:blur(14px);
+    flex:0 0 auto;background:var(--topbar);backdrop-filter:blur(14px);
     border-bottom:1px solid var(--line)}
   .daddbar.on{display:flex}
   #dadd{height:44px;border:0;border-radius:12px;padding:0 22px;font:inherit;
@@ -191,7 +220,7 @@
     transition:opacity .3s;aspect-ratio:3/4;background:var(--card)}
   .shot img.ok{opacity:1}
   .shot .pg{position:absolute;left:6px;top:6px;background:rgba(0,0,0,.62);
-    color:#fff;font-size:11px;line-height:16px;padding:1px 6px;
+    color:var(--on-image);font-size:11px;line-height:16px;padding:1px 6px;
     border-radius:20px;backdrop-filter:blur(4px)}
   .shot .mk{position:absolute;right:7px;top:6px;font-size:14px;line-height:1;
     text-shadow:0 1px 4px rgba(0,0,0,.9)}
@@ -221,7 +250,7 @@
   .vbot{display:flex;align-items:center;gap:6px;padding:10px 14px;
     padding-bottom:calc(10px + env(safe-area-inset-bottom,0));
     background:linear-gradient(transparent,rgba(0,0,0,.9));position:relative;z-index:2}
-  .vbot .pg{font-size:13px;color:#b9b9c7;min-width:64px}
+  .vbot .pg{font-size:13px;color:var(--dim);min-width:64px}
   .vbot .sp{flex:1}
   .act{border:0;background:rgba(255,255,255,.1);color:#fff;font:inherit;font-size:13px;
     padding:8px 13px;border-radius:10px;cursor:pointer;display:flex;align-items:center;gap:5px}
@@ -305,7 +334,7 @@
   .nowline b{color:var(--tx);font-weight:600}
 
   #toast{position:fixed;left:50%;bottom:32px;transform:translate(-50%,20px);
-    background:rgba(30,30,38,.97);color:#fff;font-size:13px;padding:10px 18px;
+    background:var(--card2);color:var(--tx);font-size:13px;padding:10px 18px;
     border-radius:20px;opacity:0;pointer-events:none;transition:.24s;z-index:99;
     border:1px solid var(--line);max-width:86vw;text-align:center}
   #toast.on{opacity:1;transform:translate(-50%,0)}
@@ -315,7 +344,7 @@
      上一页 / 直接输页码 / 下一页。位置记在 localStorage，下次进来直接还原。 */
   .pager{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);
     display:none;align-items:center;gap:2px;z-index:40;
-    background:rgba(20,20,26,.9);border:1px solid var(--line);border-radius:20px;
+    background:var(--topbar);border:1px solid var(--line);border-radius:20px;
     padding:4px 6px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
   .pager.on{display:flex}
   .pager button{width:32px;height:30px;border:0;background:transparent;color:var(--tx);
@@ -337,6 +366,8 @@
     <button data-tab="pub">公开</button>
     <button data-tab="mine" id="tabMine">我的</button>
   </div>
+  <button class="go theme" id="themeToggle" type="button"
+          aria-label="切换白天/黑夜模式" title="切换白天/黑夜模式">☀</button>
   <button class="go more-btn" id="moreBtn" type="button"
           aria-haspopup="true" aria-expanded="false">更多 ▾</button>
   <div class="more-menu" id="moreMenu">
@@ -484,6 +515,28 @@
             grp: "", grps: [], hiddenView: false };
 
   var PAGE_SIZE = 24;
+
+  // ── 白天 / 黑夜 ────────────────────────────────────────
+  // 主题在 <head> 里已经先落到 <html data-theme>，这里只同步按钮和浏览器配色。
+  function applyTheme(t) {
+    document.documentElement.dataset.theme = t;
+    var btn = $("themeToggle");
+    if (btn) {
+      btn.textContent = t === "dark" ? "☀" : "☾";
+      var label = t === "dark" ? "切到白天模式" : "切到黑夜模式";
+      btn.setAttribute("aria-label", label);
+      btn.title = label;
+    }
+    var meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.content = t === "light" ? "#f5f6f8" : "#0c0d10";
+  }
+  applyTheme(document.documentElement.dataset.theme || "dark");
+  var themeBtn = $("themeToggle");
+  if (themeBtn) themeBtn.onclick = function () {
+    var next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("gal_theme", next); } catch (e) {}
+    applyTheme(next);
+  };
 
   // ── 位置记忆（2026-11-22 群友要求）────────────────────
   // 墙面滑到第 5 页、作品集看到第 120 张，退出再进来都是从第一屏开始。
@@ -908,13 +961,13 @@
     var box = $("wallGuide");
     if (!box) return;
     if (S.hiddenView) {
-      box.textContent = "隐藏墙：已隐藏的作品集中列在这里（不分来源）。看完点「← 返回画廊」，不用再输密码。";
+      box.textContent = "已隐藏的作品 · 点「← 返回画廊」退出";
       return;
     }
     var texts = {
-      owner: "站长墙：扫描进来的本机作品。要传图点「＋ 上传作品集」，整理目录类操作收在「更多」里。",
-      pub: "公开墙：群友传上来的作品。点开看图，详情里能收藏、点赞、下载。",
-      mine: "我的墙：你自己传的作品；收藏和点赞在下面的小标签里。"
+      owner: "本机作品 · 上传 / 整理在下方",
+      pub: "群友公开作品 · 点开看图",
+      mine: "我的作品 · 收藏 / 点赞可切换"
     };
     box.textContent = texts[S.tab] || "";
   }
