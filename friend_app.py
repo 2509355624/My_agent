@@ -214,9 +214,11 @@ def _gate():
     # 2026-11-12 /novel 同理：小说页上架后若加 QQ 直达链接，别让 fr_solo 挡回游客页。
     # 2026-11-13 /persona 同理：任务回执尾巴现在带「角色扮演」入口，被 fr_solo
     # 挡回 /play 就会变成「点了没反应」。
+    # 2026-11-23 /workspace 同理：新界面是 QQ「/画廊」「/漫画台」的新去处。
+    # 注意这里的 p 已经 rstrip("/")，所以只能写不带斜杠的形式。
     if (p in ("/gallery", "/gallery.html", "/comic", "/comic.html",
               "/novel", "/novel.html", "/runbench", "/runbench.html",
-              "/persona", "/persona.html")
+              "/workspace", "/persona", "/persona.html")
             and request.args.get("from") == "qq" and _solo_in()):
         g.clear_solo = True
         return None
@@ -232,7 +234,11 @@ def _gate():
                           "/login/send", "/login/verify",
                           "/char_intros.json", "/outfit", "/outfit.html",
                           "/runbench", "/runbench.html",
-                          "/showcase", "/showcase.html")):
+                          "/workspace",
+                          "/showcase", "/showcase.html")
+            # 新界面的样式和脚本也在 /workspace/ 下，不能一起挡回 /play，
+            # 否则 index.html 发出去但 css/js 全被重定向成 HTML。
+            and not p.startswith("/workspace/")):
         return redirect(SOLO_PATH)
     return None
 
@@ -401,6 +407,48 @@ def preset_page():
     已登录/未登录都发同一个文件，它自己按 `/me` 的结果切两态。
     """
     return send_from_directory(WEB_DIR, "friend.html")
+
+
+# ─── 新界面（聊天优先 workspace）────────────────────────────
+#
+# 2026-11-23 用户拍板：5175 也接新界面，登录走现有验证码。
+# 注意 5175 是 **static_folder=None**，它从不发静态文件——只一个个
+# send_from_directory 发页面。而新界面把样式和脚本拆成了 css/、js/ 多个文件，
+# 所以这里必须补一条资源路由，否则页面发出去是一张没样式的白纸。
+
+WORKSPACE_DIR = os.path.join(WEB_DIR, "workspace")
+
+
+@app.route("/workspace")
+def workspace_page():
+    """新界面入口（无尾斜杠）：先 302 到 /workspace/ 再判断登录态。
+
+    页面里都是相对路径 `css/tokens.css`。若停在 `/workspace`，浏览器会把它
+    解析成 `/css/tokens.css`——5175 没有静态服务，那个地址只有 404，页面就
+    成了没样式的白纸。所以入口统一带斜杠。
+    """
+    return redirect("/workspace/")
+
+
+@app.route("/workspace/")
+def workspace_index():
+    """新界面：没登录发登录页，登录后发聊天页。
+
+    登录页是 `workspace/index.html`（两步：QQ 号 → 验证码），验证成功后前端
+    自己跳到 `/workspace/`，服务器这时才看到 cookie，于是发聊天页。
+    """
+    if not _logged_in():
+        return send_from_directory(WORKSPACE_DIR, "index.html")
+    return send_from_directory(WORKSPACE_DIR, "chat.html")
+
+
+@app.route("/workspace/<path:sub>")
+def workspace_asset(sub):
+    """workspace 下的静态资源（css/、js/）。
+
+    `send_from_directory` 自带路径穿越防护（`safe_join`），`../` 会被拒。
+    """
+    return send_from_directory(WORKSPACE_DIR, sub)
 
 
 @app.route("/gallery")

@@ -9,7 +9,7 @@ import socket
 import time
 import requests
 from flask import (Flask, request, jsonify, send_from_directory, send_file,
-                   Response, stream_with_context)
+                   Response, stream_with_context, redirect)
 from app.core import agents
 from app.core import agents as agent_store
 from app.core import cancel as cancel_mod
@@ -68,8 +68,11 @@ def status_page():
     return send_from_directory(WEB_DIR, "status.html")
 @bp.route("/comic")
 def comic_page():
-    """漫画工作台：编剧 → 逐格渲染 → 加气泡（见 app/comic_api.py）。"""
-    return send_from_directory(WEB_DIR, "comic_studio.html")
+    """旧漫画工作台入口 → 新界面（2026-11-23 改发新界面）。
+
+    旧页面 web/comic_studio.html 保留，回退换回 send_from_directory 即可。
+    """
+    return redirect("/workspace/")
 @bp.route("/comic_admin")
 def comic_admin_page():
     """群友漫画台管理：独立页面，不塞在 /admin 的 QQ 机器人卡片里。
@@ -87,8 +90,11 @@ def comic_works_page():
     return send_from_directory(WEB_DIR, "comic_works.html")
 @bp.route("/moss")
 def moss_comic_page():
-    """moss 漫画台：一句话 → 编剧写整页 → 一次出图（见 app/moss_api.py）。"""
-    return send_from_directory(WEB_DIR, "moss_studio.html")
+    """旧 moss 漫画台入口 → 新界面（2026-11-23 改发新界面）。
+
+    旧页面 web/moss_studio.html 保留，回退换回 send_from_directory 即可。
+    """
+    return redirect("/workspace/")
 @bp.route("/persona")
 def persona_page():
     """网页端角色扮演（2026-11-03）。
@@ -141,6 +147,47 @@ def characters_page():
 
 @bp.route("/gallery")
 def gallery_page():
-    """作品墙。本机 / 内网管理端直连 5174 打开，后端按站主身份免登录；
-    公网群友仍走 5175 隧道带 token。"""
-    return send_from_directory(WEB_DIR, "gallery.html")
+    """旧画廊入口 → 新界面（2026-11-23 用户拍板改发新界面）。
+
+    旧页面 web/gallery.html 仍在仓库里，回退只需把这里换回
+    `send_from_directory(WEB_DIR, "gallery.html")`。
+    """
+    return redirect("/workspace/")
+
+
+# ─── 新界面（聊天优先 workspace）────────────────────────────
+#
+# 2026-11-23 用户拍板：旧路由直接改发新界面，旧页面文件保留不删——
+# 想回退只需把下面的 redirect 换成原来那行 send_from_directory。
+# 新界面是单页 App（chat.html 里用页面栈切子页），所以这里只发一个壳，
+# 具体是画廊还是漫画由界面内部决定，路由层不再区分。
+
+WORKSPACE_DIR = os.path.join(WEB_DIR, "workspace")
+
+
+@bp.route("/workspace")
+def workspace_page():
+    """新界面入口（无尾斜杠）：302 到带斜杠的地址再发页面。
+
+    页面里写成相对路径 `css/tokens.css`。若停在 `/workspace`，浏览器会把它
+    解析成 `/css/tokens.css`——撞上 5174 把 web/ 当静态根的设置（那是别的
+    css），样式和脚本全 404。所以入口统一带斜杠。
+    """
+    return redirect("/workspace/")
+
+
+@bp.route("/workspace/")
+def workspace_index():
+    """新界面壳体。登录页在 /workspace/index.html。"""
+    return send_from_directory(WORKSPACE_DIR, "chat.html")
+
+
+@bp.route("/workspace/<path:sub>")
+def workspace_asset(sub):
+    """workspace 下的静态资源（css/、js/）。
+
+    5174 的 static_folder 指向 web/，本来能直接取到这些文件；这条路由是为了
+    让路径口径和 5175 一致（那边没有静态服务，必须显式发），也顺手挡掉路径穿越。
+    """
+    return send_from_directory(WORKSPACE_DIR, sub)
+

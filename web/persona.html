@@ -1262,8 +1262,8 @@
   <main class="mid" id="mid">
     <div class="top">
       <button class="btn sm burger drawer-btn" id="btnBurger" title="打开角色列表">角色</button>
-      <a class="btn sm back" id="btnGallery" href="/gallery"
-         title="回到画廊">← 画廊</a>
+      <a class="btn sm back" id="btnGallery" href="/workspace/"
+         title="回到 AI 创作">← 创作</a>
       <!-- 「清空存档」不再放顶栏（2026-11-05 用户要求）：手机端塞在 ☰ 和
            画廊之间太挤，而且它是个低频危险动作，混在导航里容易误点。
            入口统一挪进右栏状态区（#affBox 里的 #btnAffRestart）——
@@ -2033,20 +2033,10 @@ let AFF = null;          // 攻略模式状态（session/chat 带回来；null=�
   if (!a) return;
   a.addEventListener("click", function (e) {
     e.preventDefault();
-    const q = QQ ? ("?qq=" + encodeURIComponent(QQ)) : "";
-    // 已经在 5175（有 /gallery）就直接走
-    fetch("/gallery", { method: "HEAD" }).then(function (r) {
-      if (r.ok) { location.href = "/gallery" + q; return; }
-      // 5174 上：换端口试 5175，再不行回首页
-      const h = location.hostname;
-      if (location.port === "5174") {
-        location.href = location.protocol + "//" + h + ":5175/gallery" + q;
-      } else {
-        location.href = "/" + q;
-      }
-    }).catch(function () {
-      location.href = "/" + q;
-    });
+    // 2026-11-23：新界面（workspace）两端都有 —— 5175 有、5174 也有（本地免登录）。
+    // 旧逻辑先探 5174 再换端口探 5175，是因为当时 5174 没有这个页面；现在两边
+    // 同源都能直接取，保持同源就是对的，登录态也由各自那一层自己判断。
+    location.href = "/workspace/";
   });
 })();
 
