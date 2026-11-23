@@ -1,10 +1,13 @@
-"""入口路由的静态守卫（2026-11-23，口径当天改过一次）。
+"""入口路由的静态守卫（2026-11-23，口径当天改过两次）。
+
+定稿分工：**5174 本机 = 站主自用，发原始页；5175 隧道 = 群友页，发新界面。**
 
 约定：
-- 5174 的 /gallery /comic /moss 发**原始页面**。上午一度改 302 到 /workspace，
-  当天用户明确要求「5174 使用原始的网页，不要使用新版的」，于是改回
-  send_from_directory；/workspace/ 仍可直达，只是不再从这些旧地址跳过去。
-- /gen 仍 302 到 /workspace/：那个入口本来就没有「原始页面」一说。
+- 5174 的 /gallery /comic /moss **以及 /gen（跑图台）**都发原始页面。
+  上午一度全改成 302 到 /workspace，用户明确要求「5174 使用原始的网页，
+  不要使用新版的」，于是全部改回 send_from_directory；/workspace/ 仍可
+  直达，只是不再从这些旧地址跳过去。
+- 5175 的 /gallery /comic 只是 302 跳板，落地是新界面。
 - 5175 也接：/workspace 未登录发登录页、登录后发聊天页；且必须有一条静态资源
   路由——5175 是 static_folder=None，不会自己发 css/js。
 - 页面里的旧跳转改成指向 /workspace，不再开到老界面。
@@ -48,15 +51,21 @@ class TestOldRoutesServeOriginal(unittest.TestCase):
                 self.assertNotIn('redirect("/workspace/"', body,
                                  fn + " 不该再跳新界面")
 
-    def test_gen_route_redirects(self):
+    def test_gen_route_serves_original(self):
         src = _read("app/features/image/routes.py")
         body = _func_body(src, "page")
-        self.assertIn('redirect("/workspace/")', body, "/gen 应 302 到新界面")
+        self.assertIn('send_from_directory(WEB_DIR, "gen_pad.html")', body,
+                      "/gen 应发原始跑图台")
+        self.assertNotIn('redirect("/workspace/"', body,
+                         "/gen 不该再跳新界面")
 
-    def test_redirect_is_imported(self):
-        for rel in ("app/web/pages.py", "app/features/image/routes.py"):
-            with self.subTest(f=rel):
-                self.assertIn("redirect", _read(rel).split("\n")[0:60].__str__())
+    def test_5175_old_links_redirect_to_workspace(self):
+        """群友页那边反过来：旧地址只当跳板，落地是新界面。"""
+        src = _read("friend_app.py")
+        for fn in ("gallery_page", "comic_page"):
+            with self.subTest(fn=fn):
+                body = _func_body(src, fn)
+                self.assertIn('return redirect("/workspace/")', body)
 
 
 class TestWorkspaceRoute(unittest.TestCase):

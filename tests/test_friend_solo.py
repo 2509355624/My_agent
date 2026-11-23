@@ -88,38 +88,43 @@ class SoloGatewayTest(unittest.TestCase):
                             path)
 
     def test_qq_gallery_link_unlocks_solo_and_clears_marker(self):
-        """QQ /画廊 发来的链接要进登录页/画廊，不能被 /play 的页面锁劫持。
+        """QQ /画廊 发来的链接要解开 /play 的页面锁，不能被劫持回游客页。
 
         2026-11-06 回归：站主点过一次 /play 后，浏览器带着 7 天 fr_solo，
         再点 QQ 给的 /gallery 会被挡回游客页，看起来像「链接发错了」。
+
+        2026-11-23 定稿：5175 的 /gallery 是 302 跳板，落地是 /workspace/。
+        所以这里断言「跳 /workspace/、且这一趟把 fr_solo 清掉」——不再要求
+        它自己出页面；旧作品墙只在 5174 本机。
         """
         r = self._solo("/gallery?from=qq")
-        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(r.headers["Location"], "/workspace/")
         cookies = " ".join(r.headers.getlist("Set-Cookie"))
         self.assertIn("fr_solo=", cookies)
         r.close()
-        # 标记清掉后，这个浏览器再访问 /gallery 也不该被挡回 /play
-        r2 = self.client.get("/gallery")
+        # 标记清掉后，跟着跳到的新界面不该再被挡回 /play
+        r2 = self.client.get("/workspace/")
         self.assertEqual(r2.status_code, 200)
         r2.close()
 
     def test_qq_gallery_html_alias_also_unlocks(self):
         r = self._solo("/gallery.html?from=qq")
-        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(r.headers["Location"], "/workspace/")
         r.close()
 
     def test_qq_comic_link_unlocks_solo_and_clears_marker(self):
         """QQ /漫画台 发来的 /comic?from=qq 同样要解开 /play 页面锁（2026-11-11）。
 
         与 /画廊 同一个坑：带 fr_solo 的浏览器点 QQ 给的 /comic，不该被挡回
-        /play；标记清掉后不带参数再访问也照常。
+        /play；落地同样是新界面（2026-11-23 定稿）。
         """
         r = self._solo("/comic?from=qq")
-        self.assertEqual(r.status_code, 200)
-        cookies = " ".join(r.headers.getlist("Set-Cookie"))
-        self.assertIn("fr_solo=", cookies)
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(r.headers["Location"], "/workspace/")
         r.close()
-        r2 = self.client.get("/comic")
+        r2 = self.client.get("/workspace/")
         self.assertEqual(r2.status_code, 200)
         r2.close()
 

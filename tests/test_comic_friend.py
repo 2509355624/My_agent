@@ -653,15 +653,18 @@ class TestFriendGateway(_TempMixin, unittest.TestCase):
         self.c = friend_app.app.test_client()
 
     def test_漫画页必须登录(self):
-        with mock.patch.object(self.gw, "_logged_in", return_value=False):
-            r = self.c.get("/comic")
-        self.assertEqual(r.status_code, 200)
-        self.assertNotIn('id="friendNote"', r.get_data(as_text=True))
-        with mock.patch.object(self.gw, "_logged_in", return_value=True):
-            r = self.c.get("/comic")
-        self.assertIn('id="friendNote"', r.get_data(as_text=True))
-        self.assertIn("缩略图", r.get_data(as_text=True))
-        self.assertIn("跑写真", r.get_data(as_text=True))
+        """5175 的 /comic 现在只是跳板：无论登没登录，302 到新界面。
+
+        新界面自己管登录（`/workspace/` 未登录发登录页），所以「必须登录」
+        这条闸从网关视图挪到了 `/workspace/` 那侧，见
+        `test_workspace_qq_links.FriendAppRedirectsToWorkspaceTest`。
+        """
+        for logged in (False, True):
+            with self.subTest(logged=logged):
+                with mock.patch.object(self.gw, "_logged_in", return_value=logged):
+                    r = self.c.get("/comic")
+                self.assertEqual(r.status_code, 302)
+                self.assertEqual(r.headers["Location"], "/workspace/")
 
     def test_接口未登录401登录后注入qq(self):
         r = self.c.get("/api/comic/friend_config")

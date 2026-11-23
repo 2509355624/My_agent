@@ -234,7 +234,7 @@ _GALLERY_RE = re.compile(r"^\s*[\/／]\s*画廊")
 # 与 `_GALLERY_RE` 一字不差地挂在 decide 的零成本直回段，正则两份要同步。
 _OUTFIT_RE = re.compile(r"^\s*[\/／]\s*换装")
 # 「/漫画台」= 群友漫画工作台地址（2026-11-11）。同样斜杠即命令、不用 @、
-# 零 LLM 直回隧道地址；正文与门控解锁（/comic?from=qq）跟 /画廊 一字不差
+# 零 LLM 直回隧道地址；正文与门控解锁（/workspace/?from=qq）跟 /画廊 一字不差
 # 地同口径，正则三份要同步。
 _COMIC_STUDIO_RE = re.compile(r"^\s*[\/／]\s*漫画台")
 # 「/存预设」= 把最近一次随心配配方存成命名预设（2026-11-13）。斜杠即命令、
@@ -1383,12 +1383,12 @@ def _preset_web_text():
 def _gallery_text():
     """`/画廊` 的正文。零 LLM：只读一个文件，拼上 `/gallery`。
 
-    画廊没有独立域名——它就是群友页（5175）下的一个路由，
-    地址 = `state/friend_url.txt` 里的隧道地址 + `/gallery`。
+    画廊在群友页里；5175 群友页的入口统一是新界面 `/workspace/`。
+    地址 = `state/friend_url.txt` 里的隧道地址 + `/workspace/`。
     隧道没开就照实说，不猜旧地址（旧域名早就 1033 了）。
 
-    2026-11-23 一度改发新界面 `/workspace/`，当天按用户要求改回 `/gallery`
-    （5174、5175 都恢复成原始页面）。`/workspace/` 仍可直达，只是不再发它。
+    2026-11-23 定稿：**5174 本机跑原始页给站主，5175 隧道跑新界面给群友**。
+    `/gallery` 在 5175 只是留给旧收藏的 302 跳板，不该再往群里发它。
     """
     from app.features.qq import friend_site
     url = friend_site.url()
@@ -1404,7 +1404,7 @@ def _gallery_text():
     # `?from=qq` 是给 5175 的解锁标记：/play 会在浏览器里种 7 天的 fr_solo，
     # 之后访问 /workspace/ 会被 _gate 挡回游客页。带这个参数的只可能是刚从
     # QQ 指令拿到的链接，网关会先清标记再按正常鉴权走（未登录 → 登录页）。
-    return ("画廊：%s/gallery?from=qq\n"
+    return ("画廊：%s/workspace/?from=qq\n"
             "打开后填你的 QQ 号，点「获取验证码」，验证码会发到这个私聊里。\n"
             "进去是作品墙，点开一张能收藏、下载；右上角能切文件夹。" % url)
 
@@ -1412,12 +1412,13 @@ def _gallery_text():
 def _comic_studio_text():
     """`/漫画台` 的正文。零 LLM：只读一个文件，拼上 `/comic`。
 
-    群友漫画工作台就是原始那页 `comic_studio_friend.html`，
-    地址 = 隧道地址 + `/comic`；隧道没开照实说，不猜旧地址。
+    群友漫画台在 5175 就是新界面 `/workspace/`，地址 = 隧道地址 + `/workspace/`；
+    隧道没开照实说，不猜旧地址。
     `?from=qq` 与 /画廊 同一个作用：5175 的 _gate 会先解开 /play 的页面锁
     再按正常鉴权走（未登录 → 登录页）。
 
-    2026-11-23 一度改发 `/workspace/`，当天改回 `/comic`（原始漫画台）。
+    2026-11-23 定稿：**5174 本机跑原始页给站主，5175 隧道跑新界面给群友**。
+    `/comic` 在 5175 只是留给旧收藏的 302 跳板，不该再往群里发它。
     """
     from app.features.qq import friend_site
     url = friend_site.url()
@@ -1430,9 +1431,9 @@ def _comic_studio_text():
         # 群里只给一句（和「/画廊」同口径）：进页面本来就要 QQ 号 + 私聊
         # 验证码，入口也没必要挂在群里。
         return "漫画台在群友页里，网址我私聊发你——先加我好友，私聊发「/漫画台」就行。"
-    return ("漫画台：%s/comic?from=qq\n"
+    return ("漫画台：%s/workspace/?from=qq\n"
             "打开后填你的 QQ 号，点「获取验证码」，验证码会发到这个私聊里。\n"
-            "写一句话剧情就能成书，出完的漫画在这台的「我的作品」里逐页重画。"
+            "写一句话剧情就能成书，出完的漫画在这台的「我的漫画作品」里逐页重画。"
             % url)
 
 

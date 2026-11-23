@@ -37,7 +37,7 @@ import time
 
 import requests
 from flask import (Blueprint, Response, jsonify, request, send_file,
-                   send_from_directory, redirect)
+                   send_from_directory)
 
 from app.features.image import comfy_out
 from app.features.image import lora_slots
@@ -386,11 +386,13 @@ def generate_image_build(skill, prompt, seed):
 
 @bp.route("/gen")
 def page():
-    """旧跑图台入口 → 新界面（2026-11-23 改发新界面）。
+    """跑图台页面（静态文件 `web/gen_pad.html`，跟漫画工作台并列）。
 
-    旧页面 web/gen_pad.html 保留，回退换回 send_from_directory 即可。
+    2026-11-23 一度 302 到新界面 `/workspace/`，现已改回原始跑图台：
+    5174 本机是站主自用、要的就是这套旧页面的详细参数面板；新界面只在
+    5175 群友页发。`/workspace/` 仍可直达，只是不再是 `/gen` 的去处。
     """
-    return redirect("/workspace/")
+    return send_from_directory(WEB_DIR, "gen_pad.html")
 
 
 @bp.route("/api/gen/channels")

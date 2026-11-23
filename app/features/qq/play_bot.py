@@ -95,7 +95,7 @@ def head_text():
                 "（Quick Tunnel 每次重启都会换域名）。\n"
                 "让群主双击「启动群友隧道.bat」，起来之后就有了。")
     return ("🎮 玩法 · 生图渠道一览\n"
-            "画廊：%s/gallery?from=qq\n"
+            "画廊：%s/workspace/?from=qq\n"
             "不提渠道就跑默认 silver；想换就说下面这些点名，"
             "认得的角色会自动挂 LoRA。" % url)
 

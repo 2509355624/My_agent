@@ -4324,9 +4324,9 @@ class GalleryCmdTest(unittest.TestCase):
 
     def test_private_chat_gets_the_gallery_url(self):
         text = self._text("private")
-        self.assertIn(self.URL + "/gallery", text)
+        # 5175 群友页的落地是新界面（2026-11-23 定稿），不绕 /gallery
         # 带解锁参数：这个浏览器可能刚玩过 /play，带着 fr_solo 页面锁
-        self.assertIn(self.URL + "/gallery?from=qq", text)
+        self.assertIn(self.URL + "/workspace/?from=qq", text)
         self.assertIn("验证码", text)
 
     def test_group_chat_withholds_the_url(self):
@@ -4412,7 +4412,7 @@ class ComicStudioCmdTest(unittest.TestCase):
 
     def test_private_chat_gets_the_comic_url(self):
         text = self._text("private")
-        self.assertIn(self.URL + "/comic?from=qq", text)
+        self.assertIn(self.URL + "/workspace/?from=qq", text)
         self.assertIn("验证码", text)
 
     def test_group_chat_withholds_the_url(self):
@@ -4628,7 +4628,7 @@ class PrivateKeywordEntryTest(unittest.TestCase):
 
     def test_decide_returns_the_gallery_url(self):
         out = self._decide("画廊")
-        self.assertIn(self.URL + "/gallery?from=qq", out)
+        self.assertIn(self.URL + "/workspace/?from=qq", out)
 
     def test_decide_returns_the_outfit_url(self):
         out = self._decide("换装")
@@ -4641,4 +4641,4 @@ class PrivateKeywordEntryTest(unittest.TestCase):
     def test_slash_forms_still_work(self):
         """斜杠没废：老用户和群聊照旧。"""
         for t in ("/画廊", "／画廊", "/ 画廊"):
-            self.assertIn(self.URL + "/gallery", self._decide(t))
+            self.assertIn(self.URL + "/workspace/", self._decide(t))

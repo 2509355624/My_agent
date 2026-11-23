@@ -46,18 +46,18 @@ class QQGalleryTextTest(unittest.TestCase):
         friend_site.url = self._url
         qq_api.current_context = self._ctx
 
-    def test_gallery_text_points_to_original_page(self):
-        """2026-11-23 当天改回：发原始画廊页，不发新界面。"""
+    def test_gallery_text_points_to_workspace(self):
+        """5175 群友页的正牌落地页是新界面，QQ 直接发它。"""
         from app.features.image import direct_gen
         text = direct_gen._gallery_text()
-        self.assertIn(FAKE_URL + "/gallery?from=qq", text)
-        self.assertNotIn("/workspace/", text)
+        self.assertIn(FAKE_URL + "/workspace/?from=qq", text)
+        self.assertNotIn("/gallery?from=qq", text)
 
-    def test_comic_text_points_to_original_page(self):
+    def test_comic_text_points_to_workspace(self):
         from app.features.image import direct_gen
         text = direct_gen._comic_studio_text()
-        self.assertIn(FAKE_URL + "/comic?from=qq", text)
-        self.assertNotIn("/workspace/", text)
+        self.assertIn(FAKE_URL + "/workspace/?from=qq", text)
+        self.assertNotIn("/comic?from=qq", text)
 
     def test_group_still_says_dm(self):
         """群里仍只回一句「私聊发你」，不甩链接（2026-10-30 拍板）。"""
@@ -67,7 +67,7 @@ class QQGalleryTextTest(unittest.TestCase):
         for fn in (direct_gen._gallery_text, direct_gen._comic_studio_text):
             self.assertNotIn(FAKE_URL, fn())
 
-    def test_receipt_link_points_to_original_page(self):
+    def test_receipt_link_points_to_workspace(self):
         from app.tools.normal import generate_image
         from app.features.qq import friend_site
         from app.gateways import friend_auth
@@ -77,12 +77,12 @@ class QQGalleryTextTest(unittest.TestCase):
             text = generate_image._receipt_links("private", "12345")
         finally:
             friend_auth.make_runbench_token = old_tok
-        self.assertIn(FAKE_URL + "/gallery?from=qq", text)
-        self.assertNotIn("/workspace/", text)
+        self.assertIn(FAKE_URL + "/workspace/?from=qq", text)
+        self.assertNotIn("/gallery?from=qq", text)
 
 
-class FriendAppServesOriginalTest(unittest.TestCase):
-    """5175 的 /gallery /comic 发原始页面（2026-11-23 改回，不再 302）。"""
+class FriendAppRedirectsToWorkspaceTest(unittest.TestCase):
+    """5175 的 /gallery /comic 只做 302 跳板（旧收藏还能用，落地是新界面）。"""
 
     @classmethod
     def setUpClass(cls):
@@ -90,19 +90,27 @@ class FriendAppServesOriginalTest(unittest.TestCase):
         cls.app = friend_app.app
         cls.mod = friend_app
 
-    def test_gallery_serves_original_page(self):
+    def test_gallery_redirects(self):
         with mock.patch.object(self.mod, "_logged_in", return_value=True):
             with self.app.test_client() as c:
                 r = c.get("/gallery?from=qq")
-        self.assertEqual(r.status_code, 200)
-        self.assertNotIn("Location", r.headers)
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(r.headers["Location"], "/workspace/")
 
-    def test_comic_serves_original_page(self):
+    def test_comic_redirects(self):
         with mock.patch.object(self.mod, "_logged_in", return_value=True):
             with self.app.test_client() as c:
                 r = c.get("/comic?from=qq")
-        self.assertEqual(r.status_code, 200)
-        self.assertNotIn("Location", r.headers)
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(r.headers["Location"], "/workspace/")
+
+    def test_html_aliases_redirect_too(self):
+        with mock.patch.object(self.mod, "_logged_in", return_value=True):
+            with self.app.test_client() as c:
+                for u in ("/gallery.html", "/comic.html"):
+                    r = c.get(u)
+                    self.assertEqual(r.status_code, 302, u)
+                    self.assertEqual(r.headers["Location"], "/workspace/", u)
 
     def test_solo_lock_cleared_once_then_served(self):
         """带 fr_solo + from=qq 打开 /workspace/：先绕一趟清锁，再出页面。

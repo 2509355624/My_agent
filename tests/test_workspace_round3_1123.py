@@ -2,7 +2,7 @@
 """2026-11-23 第二轮反馈的回归测试。
 
 用户这轮提的四件事：
-1. 5174 要用原始网页，不要新界面 —— 旧路由不能再 302 到 /workspace/
+1. 5174 要用原始网页，不要新界面；5175 群友页发新界面 —— 两边分工
 2. 参考图上传了却报「没找到她」 —— 上传返回的 items 是顶层字段
 3. 引用了参考图却不知道有没有真用上 —— 要有可见反馈，且后端真读
 4. 复制提示词和重跑去画的按钮挨太近 —— 要分开
@@ -22,24 +22,28 @@ def _read(rel, base=ROOT):
         return f.read()
 
 
-# ─── 1. 原始网页 ───────────────────────────────────────────
+# ─── 1. 新旧分工（2026-11-23 定稿口径）───────────────────────
+#
+# **5174 本机 = 站主自用，发原始页；5175 隧道 = 群友页，发新界面。**
+# 早先一版测试把「两边都发原始页」写死了，那是当天上午的临时口径，
+# 已被定稿推翻——所以这里断言的是分工，不是「全都不许出现 /workspace/」。
 
-class TestOriginalPagesRestored(unittest.TestCase):
-    """/gallery、/comic 要发回原始 HTML，不是 redirect。"""
+class TestSiteSplit(unittest.TestCase):
+    """5174 发原始页；5175 的 /gallery、/comic 只是 302 到新界面。"""
 
-    def test_5175_gallery_sends_original(self):
+    def test_5175_gallery_redirects_to_workspace(self):
         src = _read("friend_app.py")
         i = src.index("def gallery_page():")
         seg = src[i:src.index("@app.route(\"/comic\")", i)]
-        self.assertIn('send_from_directory(WEB_DIR, "gallery.html")', seg)
-        self.assertNotIn("redirect(\"/workspace", seg)
+        self.assertIn('return redirect("/workspace/")', seg)
+        self.assertNotIn('send_from_directory(WEB_DIR, "gallery.html")', seg)
 
-    def test_5175_comic_sends_original(self):
+    def test_5175_comic_redirects_to_workspace(self):
         src = _read("friend_app.py")
         i = src.index("def comic_page():")
         seg = src[i:src.index("@app.route(\"/api/comic/", i)]
-        self.assertIn('send_from_directory(WEB_DIR, "comic_studio_friend.html")', seg)
-        self.assertNotIn("redirect(\"/workspace", seg)
+        self.assertIn('return redirect("/workspace/")', seg)
+        self.assertNotIn('send_from_directory(WEB_DIR, "comic_studio_friend.html")', seg)
 
     def test_5174_gallery_sends_original(self):
         src = _read("app/web/pages.py")
@@ -53,17 +57,23 @@ class TestOriginalPagesRestored(unittest.TestCase):
         seg = src[i:i + 800]
         self.assertIn('send_from_directory(WEB_DIR, "comic_studio.html")', seg)
 
-    def test_qq_links_point_at_original_pages(self):
-        """QQ 发出去的地址也要是原始页，不能还带 /workspace/。"""
+    def test_5174_gen_sends_original(self):
+        """跑图台也只认原始页 `gen_pad.html`，不许 302 到新界面。"""
+        src = _read("app/features/image/routes.py")
+        i = src.index("def page():")
+        seg = src[i:i + 900]
+        self.assertIn('send_from_directory(WEB_DIR, "gen_pad.html")', seg)
+        self.assertNotIn('redirect("/workspace', seg)
+
+    def test_qq_links_point_at_workspace(self):
+        """QQ 发出去的是群友页地址，就该是 /workspace/，不再走旧地址绕一圈。"""
         for rel in ("app/features/image/direct_gen.py",
                     "app/features/qq/play_bot.py",
                     "app/tools/normal/generate_image.py"):
             src = _read(rel)
-            # 只允许注释里提到 /workspace/（讲历史），不允许拼进链接
             for line in src.splitlines():
-                if "/workspace/" in line and "return" in line or \
-                        ("/workspace/" in line and "lines.append" in line):
-                    self.fail("%s 里还有指向新界面的链接：%s" % (rel, line.strip()))
+                if "gallery?from=qq" in line or "comic?from=qq" in line:
+                    self.fail("%s 里还发着旧地址：%s" % (rel, line.strip()))
 
     def test_qq_gallery_and_comic_texts(self):
         """真调一次正文生成，确认拼出来的地址。"""
@@ -77,9 +87,8 @@ class TestOriginalPagesRestored(unittest.TestCase):
             c = direct_gen._comic_studio_text()
         finally:
             friend_site.url = old
-        # 群里/私聊两种口径都可能，这里只关心地址里没有 /workspace/
-        self.assertNotIn("/workspace/", g)
-        self.assertNotIn("/workspace/", c)
+        self.assertIn("https://x.example/workspace/?from=qq", g)
+        self.assertIn("https://x.example/workspace/?from=qq", c)
 
 
 # ─── 2. 参考图上传 ─────────────────────────────────────────

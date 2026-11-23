@@ -186,7 +186,7 @@ class ReceiptLinksTest(_SubmitHarness):
         # 第一行不动：卡片收起来时预览的就是它，也是 receipt_line 取的那行
         self.assertEqual(lines[0], "任务已提交，正在画了。")
         self.assertEqual(lines[-2], "角色扮演 %s/persona?from=qq" % self.URL)
-        self.assertEqual(lines[-1], "画廊 %s/gallery?from=qq" % self.URL)
+        self.assertEqual(lines[-1], "画廊 %s/workspace/?from=qq" % self.URL)
         self.assertTrue(lines[-3].startswith("跑图台 %s/runbench?k=" % self.URL))
 
     def test_runbench_token_leads_back_to_this_session(self):
