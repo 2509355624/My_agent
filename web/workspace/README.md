@@ -14,12 +14,14 @@ V3 聊天优先界面的独立功能文件夹。当前有两块：登录页、�
 | `css/login.css` | 登录页样式 |
 | `css/chat.css` | 气泡、AI 卡片、悬浮玻璃输入栏、chip |
 | `css/sheet.css` | 页面栈视图 + 底部玻璃抽屉 |
+| `css/gallery.css` | 画廊：文件夹标签条、两列墙、骨架屏、全屏查看器 |
 | `js/api.js` | 同源 JSON 请求（`get`/`post`）+ 登录接口 |
 | `js/login.js` | 两步流程、QQ/验证码校验、60s 倒计时、`sessionStorage` 暂存 QQ |
 | `js/gen.js` | 生图接口：渠道 / 提交 / 状态 / 取图 / 默认画风 |
 | `js/chat.js` | 消息渲染、折叠、复制、重画、轮询 |
 | `js/stack.js` | 页面栈 push/back、左滑退回、画风抽屉 |
-| `js/views.js` | 子页壳（左 X、中标题、右「我的」），内容位留空 |
+| `js/views.js` | 子页壳（左 X、中段、右「我的」）+ 子页注册口 |
+| `js/gallery.js` | 画廊：列表 / 分类 / 翻页 / 查看器（收藏、下载） |
 
 依赖方向：页面 → `chat.js`/`stack.js` → `gen.js` → `api.js`。
 `api.js` 不碰 DOM，`chat.js` 不拼接口地址，`views.js` 不认识接口。
@@ -41,6 +43,18 @@ def workspace_page():
 def workspace_chat():
     return send_from_directory(WEB_DIR, "workspace/chat.html")
 ```
+
+## 子页怎么写
+
+`views.js` 只负责壳：左 ✕、中段、右「我的」。某个子页想自己接管中段或内容，
+在它的模块里注册即可：
+
+```js
+WSViews.register("gallery", { top: fn(中段节点), mount: fn(内容区节点) });
+```
+
+没注册的子页还是默认样子（中段标题 + 一行占位）。注意 `sheet.css` 里
+`.vtop > button` 只钉两端那两个圆按钮，中段换成标签条时不会再被压成 38px。
 
 ## 视觉约定
 

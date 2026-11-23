@@ -1,5 +1,6 @@
-/* 子页壳：顶栏（左 X、中标题、右我的）+ 内容位。
-   本期只有空壳，内容由后续模块往 [data-host] 里填。 */
+/* 子页壳：顶栏（左 X、中段、右我的）+ 内容位。
+   某个子页要自己接管中段或内容时，向 register() 注册即可；没有注册的
+   就是现在这套默认样子（中段标题 + 一行占位）。 */
 (function (global) {
   "use strict";
 
@@ -14,6 +15,9 @@
     comic: "我的漫画作品还在接",
     me: "作品和收藏还在接"
   };
+
+  // name → { top: fn(中段节点), mount: fn(内容区节点) }
+  var CUSTOM = {};
 
   var ICON_ME =
     '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" ' +
@@ -30,7 +34,13 @@
     return b;
   }
 
+  function register(name, spec) {
+    CUSTOM[name] = spec || {};
+  }
+
   function build(name) {
+    var spec = CUSTOM[name] || {};
+
     var view = document.createElement("section");
     view.className = "view view-push";
     view.dataset.view = name;
@@ -40,30 +50,36 @@
 
     var close = button("data-close", "关闭", "✕");
 
-    var title = document.createElement("div");
-    title.className = "vtitle";
-    title.textContent = TITLES[name] || "";
+    var mid = document.createElement("div");
+    mid.className = "vtitle";
+    mid.textContent = TITLES[name] || "";
 
     var me = button("data-me", "我的");
     me.innerHTML = ICON_ME;
 
     top.appendChild(close);
-    top.appendChild(title);
+    top.appendChild(mid);
     top.appendChild(me);
 
     var body = document.createElement("div");
     body.className = "vbody";
     body.dataset.host = name;
 
-    var ph = document.createElement("p");
-    ph.className = "vph";
-    ph.textContent = PLACEHOLDER[name] || "";
-    body.appendChild(ph);
+    if (typeof spec.top === "function") spec.top(mid);
+
+    if (typeof spec.mount === "function") {
+      spec.mount(body);
+    } else {
+      var ph = document.createElement("p");
+      ph.className = "vph";
+      ph.textContent = PLACEHOLDER[name] || "";
+      body.appendChild(ph);
+    }
 
     view.appendChild(top);
     view.appendChild(body);
     return view;
   }
 
-  global.WSViews = { build: build, titles: TITLES };
+  global.WSViews = { build: build, register: register, titles: TITLES };
 })(window);

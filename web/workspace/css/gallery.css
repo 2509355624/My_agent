@@ -1,0 +1,262 @@
+/* 画廊（AI 创作）：文件夹横滑 + 两列缩略图墙 + 全屏查看器。
+   颜色/阴影只引用 tokens.css，深浅色自动跟随。 */
+
+/* 顶栏中段被换成文件夹标签条（views.js 的 top 钩子） */
+.gtabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.gtabs::-webkit-scrollbar { display: none; }
+
+.gtab {
+  flex: 0 0 auto;
+  padding: 6px 13px;
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text-dim);
+  font-size: 13px;
+  white-space: nowrap;
+  box-shadow: var(--shadow-1);
+  transition: color .15s, background .15s;
+}
+
+.gtab.on {
+  border-color: transparent;
+  background: linear-gradient(160deg, var(--brand-2), var(--brand));
+  color: var(--brand-on);
+  font-weight: 600;
+  box-shadow: var(--shadow-brand);
+}
+
+/* ── 两列墙 ─────────────────────────────────────────── */
+.gbody { padding: 12px 12px 20px; }
+
+.ggrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 10px;
+}
+
+.gcard {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  color: var(--text);
+}
+
+.gpic {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--card-2);
+  box-shadow: var(--shadow-1);
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+
+.gpic img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.gcard:active .gpic { transform: scale(.98); }
+
+.gname {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text);
+}
+
+.gno {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
+/* 骨架屏：图还没到时先占住网格，避免跳版 */
+.gsk .gpic {
+  background: linear-gradient(100deg, var(--card-2) 30%, var(--line) 50%,
+              var(--card-2) 70%);
+  background-size: 220% 100%;
+  animation: g-shimmer 1.4s linear infinite;
+  box-shadow: none;
+}
+
+.gnote {
+  grid-column: 1 / -1;
+  margin: 16vh 0 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.gretry {
+  display: block;
+  margin: 10px auto 0;
+  padding: 7px 18px;
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 13px;
+  box-shadow: var(--shadow-1);
+}
+
+.gmore {
+  display: block;
+  width: 100%;
+  margin: 18px 0 0;
+  padding: 11px;
+  border: 1px solid var(--hair);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--text-dim);
+  font-size: 13px;
+  box-shadow: var(--shadow-1);
+}
+
+.gmore[hidden] { display: none; }
+
+/* ── 查看器 ─────────────────────────────────────────── */
+body.g-lock { overflow: hidden; }
+
+.gviewer {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  background: rgba(14, 18, 26, .78);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  backdrop-filter: blur(12px) saturate(140%);
+}
+
+.gviewer[hidden] { display: none; }
+
+.gv-top {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: calc(8px + env(safe-area-inset-top)) 12px 6px;
+  color: #fff;
+}
+
+.gv-btn,
+.gv-pad {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+}
+
+.gv-btn {
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .14);
+  color: #fff;
+  font-size: 14px;
+  display: grid;
+  place-items: center;
+}
+
+.gv-btn:active { background: rgba(255, 255, 255, .24); }
+
+.gv-count {
+  flex: 1 1 auto;
+  text-align: center;
+  font-size: 13px;
+  color: rgba(255, 255, 255, .82);
+}
+
+.gv-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  padding: 6px 0 10px;
+}
+
+.gv-track {
+  display: flex;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.gv-track::-webkit-scrollbar { display: none; }
+
+.gv-slide {
+  flex: 0 0 100%;
+  scroll-snap-align: center;
+  display: grid;
+  place-items: center;
+  padding: 6px 14px;
+}
+
+.gv-slide img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 12px;
+  object-fit: contain;
+  box-shadow: 0 20px 50px -20px rgba(0, 0, 0, .85);
+}
+
+.gv-acts {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
+}
+
+.gv-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 18px;
+  border: 1px solid rgba(255, 255, 255, .2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .12);
+  color: #fff;
+  font-size: 14px;
+}
+
+.gv-act:active { background: rgba(255, 255, 255, .22); }
+
+.gv-act.on {
+  border-color: transparent;
+  background: linear-gradient(160deg, var(--brand-2), var(--brand));
+}
+
+@keyframes g-shimmer {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gsk .gpic { animation: none; }
+  .gpic { transition: none; }
+}

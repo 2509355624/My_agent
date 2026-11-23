@@ -51,7 +51,8 @@
   backdrop-filter: blur(18px) saturate(170%);
 }
 
-.vtop button {
+/* 只管顶栏两端那两个圆按钮；中段可能是个标签条，不能被压成 38px */
+.vtop > button {
   flex: 0 0 auto;
   width: 38px;
   height: 38px;
@@ -64,7 +65,7 @@
   place-items: center;
 }
 
-.vtop button:active { background: var(--card-2); }
+.vtop > button:active { background: var(--card-2); }
 
 .vtop .vtitle {
   flex: 1 1 auto;
