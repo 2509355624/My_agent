@@ -80,6 +80,15 @@ class TestMeApi(unittest.TestCase):
                          "作品和收藏都复用画廊查看器")
 
 
+class TestMeStack(unittest.TestCase):
+
+    def test_enter_me_pushes_a_layer(self):
+        """右上角人形进「我的」要真叠一层，✕ 退回刚才那页，不跳回聊天页。"""
+        js = _read("js/stack.js")
+        self.assertIn('if (e.target.closest("[data-me]")) { push("me"); return; }', js)
+        self.assertNotIn('replace("me")', js)
+
+
 class TestGalleryJump(unittest.TestCase):
 
     def test_viewer_can_jump_to_a_faved_item(self):

@@ -27,7 +27,7 @@
     return view;
   }
 
-  /* 换内容不换栈：个人页从子页右上角进，退回时直接回聊天页 */
+  /* 换内容不换栈：不做退回的一层，当前无调用方（个人页已改成真叠层） */
   function replace(name, opts) {
     if (!S.top) return push(name, opts);
     var next = global.WSViews.build(name, opts);
@@ -76,7 +76,9 @@
   function bindView(view) {
     view.addEventListener("click", function (e) {
       if (e.target.closest("[data-close]")) { back(); return; }
-      if (e.target.closest("[data-me]")) { replace("me"); return; }
+      // 右上角人形进「我的」也要真叠一层：这样 ✕ 退回的是刚才那一页，
+      // 不直接跳回聊天页（跟漫画页同一条规则，用户 2026-11-23 定）
+      if (e.target.closest("[data-me]")) { push("me"); return; }
     });
     bindSwipe(view);
   }
