@@ -129,9 +129,12 @@ class TestTabsKeepScroll(unittest.TestCase):
         js = _read("js/gallery.js")
         i = js.index("function fillTabs")
         seg = js[i:js.index("function markTabIntoView", i)]
-        self.assertIn("scrollLeft", seg)
-        # 先记后还
-        self.assertLess(seg.index("var keep"), seg.index("innerHTML"))
+        # 2026-11-24：口径升级——不再「清空再写回 scrollLeft」，而是**根本不
+        # 清空容器**（手指正按着的那一刻，连清空再写回都来不及）。
+        # 现在算通过的不是「先记后还」，而是「不出现 innerHTML = \"\"」。
+        self.assertNotIn('el.tabs.innerHTML = ""', seg,
+                         "fillTabs 不许整条重建标签栏（会把横向滚动位置清零）")
+        self.assertIn("dataset.key", seg)
 
     def test_selected_tab_scrolls_into_view(self):
         js = _read("js/gallery.js")

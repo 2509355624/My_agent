@@ -103,7 +103,9 @@ class TestComposerStaysPut(unittest.TestCase):
         self.assertIn("padding: 0", block)
 
     def test_gallery_scroll_is_inner_layer(self):
-        js = _read("js/gallery.js")
+        # 2026-11-24：造节点那一段挪到了 gallery_shell.js（gallery.js 有 600
+        # 行硬线），断言跟着走——两份合起来看，「内层滚动」还在。
+        js = _read("js/gallery.js") + _read("js/gallery_shell.js")
         self.assertIn("gscroll", js)
         css = _read("css/gallery.css")
         idx = css.index(".gscroll {")

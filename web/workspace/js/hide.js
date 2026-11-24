@@ -60,9 +60,57 @@
       });
   }
 
+  /* 存一张图到手机。**不能再用 `<a download href=图片地址>`**。
+
+     2026-11-24 站长报「下载的图片只有 48b，打开显示损坏，群友号没有这个问题」。
+     原因：`<a download>` 是导航式下载——它不查 HTTP 缓存，走的是**顶层导航
+     的凭据链**；站长这边图片接口要鉴权，拿回来的是错误响应的 JSON（正好
+     48 字节），存成 .webp 自然打不开。群友走网关吃的是常驻 cookie，碰巧没事。
+
+     现在和聊天页同一个套路：先问本地缓存（显示时顺手存过），没有就 fetch
+     原始字节，再从 blob 存盘。只有最后一步用 `<a download>`，而那时 href 是
+     `blob:`，和登录态一点关系都没有。 */
+  function save(o) {
+    var opt = o || {};
+    var url = opt.url || "";
+    var name = opt.name || "image.webp";
+    var fail = typeof opt.onFail === "function" ? opt.onFail : function () {};
+    if (!url) return;
+
+    function fire(blob) {
+      var u = global.URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = u;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      global.setTimeout(function () { global.URL.revokeObjectURL(u); }, 4000);
+    }
+    function fromNet() {
+      global.fetch(url, { credentials: "same-origin" }).then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.blob();
+      }).then(function (b) {
+        if (!b || !b.size) throw new Error("empty");
+        fire(b);
+        if (global.WSImg) global.WSImg.put(url, b).catch(function () {});
+      })["catch"](fail);
+    }
+    if (global.WSImg) {
+      global.WSImg.get(url).then(function (b) {
+        if (b && b.size) { fire(b); return; }
+        fromNet();
+      })["catch"](fromNet);
+      return;
+    }
+    fromNet();
+  }
+
   global.WSHide = {
     makeButton: makeButton,
     sync: sync,
+    save: save,
     icon: ICON_EYE,
     iconOff: ICON_EYE_OFF
   };

@@ -587,8 +587,12 @@ def health():
 # ─── 转发 ────────────────────────────────────────────────
 
 def _forward(prefix, sub, allow_guest=False, force_guest=False,
-             post_timeout=60):
+             post_timeout=60, jf=False):
     """把请求原样转给 5174，并补上登录态里的 QQ 号。
+
+    `jf`（2026-11-24）= 这是**工作台**发来的请求，转发时补 `__jf=1`。
+    5174 用它区分「群友版工作台」和「管理页」：同一个站长身份，在工作台
+    里只能看到普通用户该看的东西（见 `gallery.routes._jf`）。
 
     `qq` 一律由这里写死塞进去（参数或表单），**不信客户端传来的 qq**——
     否则谁都能改个 qq 就看别人的东西。
@@ -610,6 +614,8 @@ def _forward(prefix, sub, allow_guest=False, force_guest=False,
     url = "%s%s/%s" % (BACKEND, prefix, sub)
     headers = {"X-Friend-Token": friend_auth.secret()}
     params = dict(request.args)
+    if jf:
+        params["__jf"] = "1"
 
     # 游客身份 cookie 必须透传：5175 不解析它，只负责原样送到 5174。
     gs = request.cookies.get("gs_id")
@@ -912,7 +918,13 @@ def gv_detail():
 def proxy_gal(sub):
     # 游客能看画廊（只读）：必须先在登录页点 /guest 拿到标记，凭空打接口仍 401。
     # 下游 5174 的写接口一律要 qq，所以游客这一支只能读。
-    return _forward("/api/gal", sub, allow_guest=_guest_in())
+    #
+    # 2026-11-24：这一条**带 `__jf=1`**——工作台（群友版）和访问同一批接口，
+    # 但站主在工作台里必须和普通用户看到的一模一样（藏起来的图不出现、
+    # 没有「隐藏」按钮）。5174 那边靠这个标记区分「这是工作台」和「这是
+    # 管理页」，见 `gallery.routes._jf`。漏带这个标记，站长一登录工作台就会
+    # 看见半透明的已隐藏大图、左右滑到它、下载也拿得到。
+    return _forward("/api/gal", sub, allow_guest=_guest_in(), jf=True)
 
 
 # ─── 角色扮演（2026-11-03）──────────────────────────────

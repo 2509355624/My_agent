@@ -222,7 +222,11 @@ class OutfitContinuityTest(unittest.TestCase):
                                "round face, a wrist band"},
               "pages": [p1, p2]}
         issues, _ = A.audit(js, cap=4)
-        self.assertFalse(any("outfits" in x for x in issues), issues)
+        # 2026-11-24：判据从「每页有没有 outfits 字段」升级成「每页 outfits
+        # 有没有落进每一格」。这页的 caption 是 a girl sweeping the floor ——
+        # 只写了个女生，正是用户说的那种没交作业，所以现在**应该**被报出来。
+        self.assertFalse(any("没写 outfits" in x for x in issues), issues)
+        self.assertTrue(any("没写她穿什么" in x for x in issues), issues)
 
     def test_stamp_appends_outfit_state_to_caption(self):
         pj = {"summary": {"caption": "A girl in the shower."}}

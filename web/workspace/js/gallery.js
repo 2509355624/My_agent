@@ -24,8 +24,13 @@
      2026-11-23 用户第三次报「AI 创作页头顶那条滑动条滑不动」——根因就在这：
      `fillTabs` 每次列表加载完都会 `innerHTML = ""` 整条重建，滚动位置
      随之归零。用户手正按着往右滑的时候正好赶上一次加载回包，标签条就
-     「弹回最左边」，手感上就是卡死、白滑。现在记下 scrollLeft，重建完
-     立刻写回去（新内容还没排版时写不进就下一帧再补一次）。 */
+     「弹回最左边」，手感上就是卡死、白滑。当时记下 scrollLeft 重建完再写回，
+     但手指正压在屏幕上的那一刻连「先清空再写回」都来不及——2026-11-24
+     用户还是报「头顶的横向滚动条直接卡死」。
+
+     所以现在**分类没变就一个节点都不动**（`dataset.key` 不变直接 return，
+     这条本来就有）；分类变了也只做**就地增删**，不整条清空——DOM 一直在，
+     手指按着的那条滚动轴就不会被重置。 */
   function fillTabs(grps) {
     if (!el.tabs) return;
     /* 同名标签只留一个。后端已经按分类收过一遍（2026-11-24 那批重复的
@@ -38,32 +43,42 @@
       uniq.push(g);
     });
     var list = [""].concat(uniq);
-    if (el.tabs.dataset.key === list.join("|")) return;
+    if (el.tabs.dataset.key === list.join("|")) {
+      // 内容没变：只把选中态对齐，永不碰 DOM 结构
+      markTabOn();
+      return;
+    }
     el.tabs.dataset.key = list.join("|");
-    var keep = el.tabs.scrollLeft;
-    el.tabs.innerHTML = "";
 
-    list.forEach(function (g) {
-      var b = document.createElement("button");
-      b.type = "button";
-      b.className = "gtab" + (g === S.grp ? " on" : "");
-      b.textContent = g || "全部";
-      b.addEventListener("click", function () {
-        if (g === S.grp) return;
-        S.grp = g;
-        Array.prototype.forEach.call(el.tabs.children, function (x) {
-          x.classList.toggle("on", x.textContent === b.textContent);
+    /* 就地同步：多出来的按钮 remove，少了的 append，顺序按 list 走。
+       等价于重建，但不会把 container 的 scrollLeft 清零。 */
+    var have = {};
+    Array.prototype.forEach.call(el.tabs.children, function (b) {
+      have[b.dataset.grp || ""] = b;
+    });
+    Object.keys(have).forEach(function (g) {
+      if (list.indexOf(g) < 0) el.tabs.removeChild(have[g]);
+    });
+    list.forEach(function (g, i) {
+      var b = have[g];
+      if (!b) {
+        b = document.createElement("button");
+        b.type = "button";
+        b.className = "gtab";
+        b.dataset.grp = g;
+        b.textContent = g || "全部";
+        b.addEventListener("click", function () {
+          if (g === S.grp) return;
+          S.grp = g;
+          markTabOn();
+          load(true);
         });
-        load(true);
-      });
-      el.tabs.appendChild(b);
+      }
+      if (el.tabs.children[i] !== b) {
+        el.tabs.insertBefore(b, el.tabs.children[i] || null);
+      }
     });
-
-    el.tabs.scrollLeft = keep;
-    global.requestAnimationFrame(function () {
-      if (el.tabs && el.tabs.scrollLeft !== keep) el.tabs.scrollLeft = keep;
-      markTabIntoView();
-    });
+    markTabOn();
   }
 
   /* 把选中态跟 S.grp 对齐（不重建节点，所以不会把横向滚动位置弄丢） */
@@ -116,23 +131,21 @@
       img.loading = "lazy";
       img.decoding = "async";
       img.alt = work.title;
-      /* `&fit=1m`（2026-11-24）：画廊网格原来铺 360px 缩略图，在手机上
-         两列一格约 180 CSS px，360 正好够；但放大屏 / 平板就显得糊。带上
-         fit 可以让服务端挑一档更清楚的（≤1MB），竖图那种又高又窄的封面
-         尤其明显。服务端不认就当没传，退回原来的 s=t。 */
-      img.src = "/api/gal/img/" + work.cover + "?s=t&fit=1m";
+      /* **只要 `s=t`，不要再带 `fit=1m`**（2026-11-24 用户：「我怀疑你把聊天
+         界面返回 1m 图片的那个讨论用到了我的画廊里面」——他猜对了）。
+         缩略图本身 9KB，加上 fit 就变成 75KB，一屏 24 张多花约 8 倍流量，
+         手机端直接卡成幻灯片。网格只要看得清是哪张，要点开看清晰图走查看器。 */
+      img.src = "/api/gal/img/" + work.cover + "?s=t";
       pic.appendChild(img);
     }
 
-    /* 这本里有几张被藏了：卡片封面右上角挂个「已藏 N」。`hidden_n` 服务端
-       只给站主这个数，别人拿到的一律是 0 —— 对他们来说那些图不存在。
-
-       注意**不压暗封面**：封面已经是「第一张可见的图」了（服务端
-       `cover_item` 跳过隐藏的），压暗会让人以为整本都没了。 */
+    /* 这本里有几张被藏了（2026-11-24）：只挂一个小眼睛图标，不写数字。
+       不压暗封面——封面本来就是第一张可见的图，压暗会让人以为整本都没了。 */
     if (work.hidden_n > 0) {
       var badge = document.createElement("span");
       badge.className = "gbadge";
-      badge.textContent = "已藏 " + work.hidden_n;
+      badge.setAttribute("aria-label", "这本里有已隐藏的图");
+      badge.innerHTML = ICON_EYE_MINI;
       pic.appendChild(badge);
     }
 
@@ -192,10 +205,8 @@
       }
       fillTabs(d.grps || []);
 
-      /* 当前分类没了（目录被清空、或那面墙的图全被隐藏）→ 退回「全部」。
-         2026-11-24 用户：「清空 web 的时候这个文件夹目录是空的了，然后这个
-         标签就应该隐藏」——标签由 fillTabs 按服务端给的新列表重建，这里负责
-         把选中态也收回来，别停在一面空墙上。 */
+      /* 当前分类没了（目录清空 / 那面墙的图全被隐藏）→ 退回「全部」，
+         别让用户停在一面空墙上（2026-11-24）。 */
       if (d.grp_gone && S.grp) {
         S.grp = "";
         markTabOn();
@@ -233,6 +244,14 @@
     '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
     'stroke-width="1.6" stroke-linejoin="round">' +
     '<path d="M12 3.8l2.6 5.4 5.9.8-4.3 4.1 1 5.9-5.2-2.9-5.2 2.9 1-5.9L3.5 10l5.9-.8z"/></svg>';
+
+  /* 作品集卡片右上角的小眼睛（「这本里有已隐藏的图」）。只有图标、没有数字。 */
+  var ICON_EYE_MINI =
+    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" ' +
+    'stroke="currentColor" stroke-width="1.9" stroke-linecap="round" ' +
+    'stroke-linejoin="round">' +
+    '<path d="M2.5 12S6 6.5 12 6.5 21.5 12 21.5 12 18 17.5 12 17.5 2.5 12 2.5 12z"/>' +
+    '<circle cx="12" cy="12" r="2.8"/><path d="M4 20 20 4"/></svg>';
 
   var ICON_STAR_ON =
     '<svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" ' +
@@ -379,7 +398,13 @@
         v.node.count.textContent = (d && d.error) || "这本打不开";
         return;
       }
-      v.list = d.items || [];
+      v.list = (d.items || []).filter(function (it) { return !it.hidden; });
+      /* **已隐藏的图不进横向轨道**（2026-11-24 用户：「点击已隐藏的作品集，
+         直接看到半透明的已隐藏的图片，然后作品集无法左右滑动了……站长账号
+         直接看图片被卡死」）。原因不在于半透明，而在于它占了一屏：轨道是
+         `scroll-snap x mandatory`，滑到那张既没有内容、又没有下一步，手指
+         就在原地打转；同时它还会被当成「当前这张」去下载。
+         工作台里站长和群友一样：藏起来的就是不出现，要恢复去管理页。 */
       /* 作品级的 can_hide_item 只有详情接口给（列表里那份没有），补到
          `v.work` 上——隐藏按钮显示与否全靠它。 */
       if (d.work) {
@@ -524,56 +549,32 @@
   function download() {
     var it = current();
     if (!it) return;
-    var a = document.createElement("a");
-    /* 和查看器同一档（`fit=1m`）：用户要的就是「看到哪张存哪张」 */
-    a.href = imgUrl(it);
-    a.download = "gal-" + it.id + ".webp";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    /* 具体的取字节 + 存盘规矩在 `hide.js`（`WSHide.save`）。挪出去是因为
+       `gallery.js` 有 600 行硬线——那边本来就是「查看器底部按钮」的模块，
+       下载按钮是底栏四个按钮里的一个。 */
+    global.WSHide.save({
+      url: imgUrl(it),
+      name: "gal-" + it.id + ".webp",
+      onFail: function () { note("这张没下下来，检查一下网络再试", false); }
+    });
   }
 
   // ── 挂到子页 ──────────────────────────────────────────
 
+  /* 子页壳（顶栏标签条 + 内层滚动容器 + 两列网格 + 查看器）整段在
+     `gallery_shell.js`。`gallery.js` 有 600 行硬线，而这里全是「造节点」的
+     死代码；拆出去以后本文件只留「数据怎么来、状态怎么变」。
+
+     拆的时机是 2026-11-24 加完「网格回缩略图 / 下载走 blob / 标签栏不重建」
+     这三处改动之后——它们都是必要改动，不该为了行数被砍掉。 */
   function mountTop(title) {
-    title.className = "gtabs";
-    title.textContent = "";
-    el.tabs = title;
+    return global.WSGalleryShell.mountTop(title, el);
   }
 
   function mountBody(body) {
-    el.body = body;
-    body.classList.add("gbody");
-
-    /* 两层：外层是子页内容区（不滚，见 chat.css 的 .vbody.v-dock），里层才是
-       滚动容器。这样底部留白不会跟着滚动跑，输入栏钉在底下不动。 */
-    el.scroll = document.createElement("div");
-    el.scroll.className = "gscroll";
-    el.scroll.setAttribute("data-scroll", "");
-
-    // 从这一页发的话要落在这一页：输入栏被借到这里（见 views.js 的 dock），
-    // 聊天页那层消息区被盖住了，写进去等于石沉大海。
-    el.chat = document.createElement("div");
-    el.chat.className = "gchat";
-    el.chat.setAttribute("data-chat-scroll", "");
-
-    el.grid = document.createElement("div");
-    el.grid.className = "ggrid";
-
-    el.more = document.createElement("button");
-    el.more.type = "button";
-    el.more.className = "gmore";
-    el.more.textContent = "加载更多";
-    el.more.hidden = true;
-    el.more.addEventListener("click", function () { load(false); });
-
-    el.scroll.appendChild(el.grid);
-    el.scroll.appendChild(el.more);
-    el.scroll.appendChild(el.chat);
-    body.appendChild(el.scroll);
-
-    buildViewer();
-    load(true);
+    return global.WSGalleryShell.mountBody(body, el, v, {
+      load: load, buildViewer: buildViewer
+    });
   }
 
   /* 手机返回键 / 浏览器后退落到查看器那一条时，收的是查看器，不是底下的

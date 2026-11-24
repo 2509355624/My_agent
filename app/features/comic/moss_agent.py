@@ -220,6 +220,13 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
   - 纯局部特写（close-up of her face / of her hand / of her feet）：只写那一处——脸就写发型、
     眼睛、表情，手就写手指和入画的袖口。**不写身材、不贴全身外形串、不写整件衣服**。
     脸特写里写 long legs 或 wearing …，出图只能把镜头拉远成中景
+· **看得到身体的每一格，都必须把这页 outfits 那串衣着原样写进 caption**（2026-11-24 用户：
+  「角色穿什么衣服，每个格子都给我写清楚，不要指望写一个女生就行了」）。
+  **光写 `1girl, sitting by the window` 就是没交作业**——出图模型会自己给她编一件，
+  下一格又编另一件，于是「同一套衣服页页不一样」「要求的换装不生效」。
+  写法：`1girl, <外形串>, wearing <这一页 outfits 原文>, <动作>, <神态>`，
+  衣着串一个字都不许改（改一个词＝另一件衣服）。代码会在出图前把 outfits 原文逐格补上，
+  但**你自己写对**才是对的——补的那一份只是兜底，兜不住细节。
 · 一格里的衣服只提一次。先写了「背后湿透的衬衫」，结尾就不要再贴一遍外形串和衣着——
   同一格写两遍，出图会当成两件衣服。
 · 换装：换之前那页写旧衣；**脱下来那一格写「已经脱掉」**（内搭在身上、湿衣在手里），
@@ -898,12 +905,16 @@ def _ages(text):
 # 「一格一个定格」的三条判据。全是**封闭句式**，不是衣物词表准入：
 # 命中就说明这一格真的写了两个状态，改法唯一（拆格 / 改成确定的瞬间），
 # 所以算 blocking 交给模型重修；漏检只是少提示一次，不会误伤稿子。
-_CLOTH = (r"(?:t-shirt|shirt|tee|blouse|dress|gown|uniform|jersey|tank top|sweater"
+_CLOTH = (r"(?:t-shirt|shirt|tee|blouse|dress|gown|uniform|jersey|sweater"
           r"|cardigan|jacket|coat|hoodie|jumper|skirt|shorts|pants|trousers"
           r"|underlayer|towel"
           # 2026-11-22 补：少这几个，温泉话题整本的浴衣/牛仔裤根本进不了检测，
           # 「穿一件拿一件」「中间态」在换装剧情里全部静默失效（实跑发现）。
-          r"|yukata|kimono|robe|jeans|socks|stockings|tights|swimsuit)")
+          r"|yukata|kimono|robe|jeans|socks|stockings|tights|swimsuit"
+          # 2026-11-24 补：`<材质/颜色> top` 是最常见的上衣写法（sailor top /
+          # tank top / crop top），旧表达式只认 tank top 这一个死字符串，
+          # 于是「她穿 a navy blue sailor top」被当成没写衣服。
+          r"|(?:[a-z]+ )?top)")
 
 # 半脱：动作的起点和终点叠在一格里。这些句式一旦出现，出图必然穿一件拿一件。
 # 注意不认裸的 halfway——"a hand lifted halfway and frozen" 是合法的定格。
@@ -1093,6 +1104,47 @@ def audit(js, cap=12, male_none=False, group=False):
                     and all(str(v or "").strip() for v in of.values())):
                 out.append("第%d页：没写 outfits（这一页每个出场角色身上是什么）"
                            "——服饰连贯全靠它，缺了出图会穿回旧衣" % n)
+
+    # 每格写没写衣服（2026-11-24 用户：「每页有时候都不去写角色的服饰特征……
+    # 角色穿什么衣服，每个格子都给我写清楚，不要指望写一个女生就行了」）。
+    #
+    # 这是**没交作业**，不是内容好坏：看得到身体的格子里一个衣物词都没有，
+    # 就是没有交代她穿什么。判断用的是「这一页 outfits 里那几个衣物词有没有
+    # 落到这一格里」——词来自模型自己写的 outfits，不是我另造的词表，所以
+    # 不存在「我的词表盖不全」的问题：它穿什么由它定，我只要它抄回来。
+    # 命不中就记 blocking 交给重修轮，绝不在代码里替它编一套衣服。
+    if len(pgs) > 0:
+        for n, p in enumerate(pgs, 1):
+            of = (p or {}).get("outfits")
+            if not isinstance(of, dict) or not of:
+                continue
+            words = set()
+            for v in of.values():
+                words.update(re.findall(_CLOTH, str(v or "").lower()))
+            if not words:
+                continue
+
+            def _covered(cap, _w=words):
+                low = str(cap or "").lower()
+                return any(re.search(r"\b" + re.escape(w) + r"\b", low)
+                           for w in _w)
+
+            bad = []
+            for it in (p.get("items") or []):
+                if not isinstance(it, dict) or it.get("label") != "character":
+                    continue
+                cap = str(it.get("caption") or "")
+                if not cap.strip():
+                    continue
+                if M.TIGHT_CU.search(cap.lower()):
+                    continue            # 纯局部特写：画面里没有身体
+                if not _covered(cap):
+                    bad.append(str(it.get("id") or it.get("name") or "?")[:12])
+            if bad:
+                out.append("第%d页：格子 %s 里没写她穿什么——这一页的 outfits 是「%s」，"
+                           "照抄进每一格看得到身体的 caption（只写一个女生＝没交作业）"
+                           % (n, "/".join(bad), "; ".join(
+                               str(v) for v in of.values())[:80]))
 
     # 场景引用式写法（2026-11-22 粉光除粘液：P2 the same stone plaza 丢了 dusk
     # 画成白天、P6 the same bathroom 丢了瓷砖浴缸换了布局）：每页出图独立送画，
@@ -1288,6 +1340,54 @@ def _stamp_palette(pj, palette):
     sm = pj["summary"]
     sm["caption"] = ((sm.get("caption") or "").strip().rstrip(".")
                      + ". Fixed palette for every panel: " + palette + ".")
+
+
+def _stamp_outfits_cells(pj, outfits):
+    """把这一页的衣着状态逐格接进每个「人物的格子」的 caption。
+
+    为什么非要逐格钉（2026-11-24 用户原话）：「我要求 ai 严格按照我的剧情大纲
+    来，因为现在 ai 出现的问题就是，每页有时候都不去写角色的服饰特征，导致
+    有时候我要求显示不同服饰都不行，角色穿什么衣服，每个格子都给我写清楚，
+    不要指望写一个女生就行了」。
+
+    根因不是模型不肯写——是**格子里的衣着只是参考描述**，页 caption 里那句
+    Outfit state 也不是硬指令，出图模型照样可以按「一个女生」自己编。这里
+    把 outfits 原文接在格子 caption 末尾（`wearing: …`），一个词都不改：
+
+      · 只接 character 格：object 格（特写道具、空镜）本来就不该出现衣服，
+        接上去反而会把镜头拉远去拍身上；
+      · 格子里已经把这串写全了就不重复（同一格写两遍会让模型画成两件衣服）；
+      · 纯局部特写（脸 / 手 / 脚）也不接：那张画面里没有身体，写整件衣服
+        只能把镜头硬拉开——和 `moss_twopass` 里 TIGHT_CU 那条同一个道理。
+    """
+    if not isinstance(outfits, dict) or not outfits:
+        return
+    if not isinstance(pj.get("items"), list):
+        return
+    pairs = [(k, str(v).strip().rstrip("."))
+             for k, v in outfits.items() if str(v or "").strip()]
+    if not pairs:
+        return
+    for it in pj["items"]:
+        if it.get("label") != "character":
+            continue
+        cap = str(it.get("caption") or "")
+        low = cap.lower()
+        if not low.strip():
+            continue
+        # 纯局部特写：画面里没有身体，不接整件衣服
+        try:
+            if M.TIGHT_CU.search(low):
+                continue
+        except Exception:                   # noqa: BLE001
+            pass
+        # 按**每一个角色**分别看：这一格自己写全了谁就不补谁，只补漏掉的那份。
+        # 判据用整串包含——模型自己写对的时候通常一字不差照抄而不是改写。
+        need = [(k, v) for k, v in pairs if v.lower() not in low]
+        if not need:
+            continue
+        bits = "; ".join("%s wears: %s" % (k, v) for k, v in need)
+        it["caption"] = (cap.rstrip().rstrip(".") + ". " + bits + ".")
 
 
 def _stamp_outfits(pj, outfits):
@@ -1504,6 +1604,13 @@ def generate(brief, pages, call, progress=None, group=False):
         # 服饰状态钉进页 caption（P5/P6 连贯性），然后把这个中间字段从
         # 出图 JSON 里摘掉——Layout JSON 只该有出图端认得的字段。
         _stamp_outfits(pj, p.get("outfits"))
+        # **再给它钉进每一格的 caption**（2026-11-24）。页 caption 只管「这一页
+        # 身上是什么」，离真正出这一格的那张图还隔着一道：模型完全可以一格写
+        # 「一个女生坐在窗边」了事，页 caption 就只是背景资料。用户要的是
+        # 「角色穿什么衣服，每个格子都给我写清楚，不要指望写一个女生就行了」
+        # ——所以把 outfits 原文逐格接上去，不猜、不改词、不替它选衣服，
+        # 和 palette 是同一套做法（见 `_stamp_outfits` 的说明）。
+        _stamp_outfits_cells(pj, p.get("outfits"))
         pj.pop("outfits", None)
         try:
             issues_p = M.check_page(pj, n, js.get("cast"), lay, None)

@@ -170,6 +170,25 @@ def _is_owner(qq):
     return bool(GALLERY_OWNER_QQ) and str(qq) == GALLERY_OWNER_QQ
 
 
+def _jf():
+    """这次请求是不是**工作台**（群友版 5175 的 `/api/workspace/*` 已把请求改道）。
+
+    工作台里站主和群友看到的必须一模一样（2026-11-24 用户：「站长正常登录
+    工作台不就是和普通的用户一样的吗」）。工作台的路由由 `main.py` 的
+    `_workspace_api` 重写成 `?__jf=1` 再回来，所以这里只认这个显式标记，
+    不去猜「带没带 token」——能进管理页的请求也带 token，猜不出来。
+    """
+    return str(request.args.get("__jf") or "") == "1"
+
+
+def _admin():
+    """这次请求有没有**管理页**的权限（站主 + 页面上要求的那份密）。"""
+    try:
+        return _guard() is None and _is_owner(_qq())
+    except Exception:                       # noqa: BLE001
+        return False
+
+
 def _page_args():
     try:
         page = max(1, int(request.args.get("page") or 1))
@@ -183,6 +202,19 @@ def _page_args():
 
 
 # ─── 列表 ────────────────────────────────────────────────
+
+def _seer(qq):
+    """谁能在**这次请求**里看见被藏掉的东西（整本隐藏 + 单张隐藏）。
+
+    管理页 = 站主能看见（要能反悔）；工作台 / 群友页 = 谁都不能，站主也一样。
+    2026-11-24 用户原话：「我管理画廊是在管理页进行管理的，站长正常登录工作台
+    不就是和普通的用户一样的吗！」——工作台里站长点进来看到的就是一本干净的
+    作品集，藏掉的图不出现在横向轨道里，也就滑不到、下载不到、卡不住。
+    """
+    if _jf():
+        return False
+    return _is_owner(qq)
+
 
 def _work_row(row, qq):
     """一行作品集 → 前端要的形状。别名在这里做，QQ 号绝不出接口。"""
@@ -204,12 +236,13 @@ def _work_row(row, qq):
         "by": name,
         "mine": row["src"] == "user" and row["owner"] == str(qq or ""),
         "hidden": bool(row["hidden"]),
-        # 有几张被单张藏起来了（卡片角标用）。站主看得到，别人看到的是 0：
-        # 对他们来说那些图就是不存在。
-        "hidden_n": int(row["hidden_n"] or 0) if _is_owner(qq) else 0,
+        # 有几张被单张藏起来了（卡片角标用）。工作台里一律 0：那几张对
+        # 工作台来说就是不存在，角标写「已藏 2」只会让人点进去扑空。
+        "hidden_n": int(row["hidden_n"] or 0) if _seer(qq) else 0,
         # 站长对谁的都能隐藏（包括群友上传的公开作品）；群友只能管自己的
         # 删除，不能隐藏。前端按这个字段出按钮，别再自己拼 tab 条件。
-        "can_hide": _is_owner(qq),
+        # 工作台里谁都没有这个按钮——隐藏是管理动作，去管理页做。
+        "can_hide": _seer(qq),
     }
 
 
@@ -234,8 +267,8 @@ def api_list():
     # 站主点「看已隐藏」时只出下架那批（用来反悔）。这个开关只有站主有，
     # 别人带了 hidden=1 也照旧走下面的公开口径。
     hidden_only = (str(request.args.get("hidden") or "") == "1"
-                   and _is_owner(qq))
-    if _is_owner(qq):
+                   and _seer(qq))
+    if _seer(qq):
         # 站主自己也不看下架的（2026-11-22 用户要求）：点隐藏就和清掉扫描
         # 结果一样，从管理页消失，不然一屏里全是已经不要的目录。
         where.append("w.hidden=" + ("1" if hidden_only else "0"))
@@ -344,7 +377,8 @@ def api_list():
                     "grps": out_grps,
                     "grp_gone": bool(grp) and grp not in out_grps,
                     "has_more": more,
-                    "page": page, "owner": _is_owner(qq), "guest": not qq})
+                    "page": page, "owner": _is_owner(qq),
+                    "seer": _seer(qq), "guest": not qq})
 
 
 def _needs_dir_check(rows):
@@ -385,8 +419,11 @@ def api_mine():
             # 只查 src='user' 的话这里是 0 条，而扫描按钮恰好挂在这个 tab 上，
             # 扫完报「13285 张图」却一张都不显示——站主会以为扫描没生效。
             rows = con.execute(
-                _SELECT_WORK + " WHERE (w.src='user' AND w.owner=?)"
-                " OR (w.src='owner' AND " + _NOT_TEMP + ")"
+                _SELECT_WORK + " WHERE ((w.src='user' AND w.owner=?)"
+                " OR (w.src='owner' AND " + _NOT_TEMP + "))"
+                # 工作台里站长也是普通用户：自己藏起来的整本不该在「我的」
+                # 里冒出来（2026-11-24）。管理页那面墙才看得到它们。
+                + ("" if _seer(qq) else " AND w.hidden=0") +
                 " ORDER BY (w.src='user') ASC, w.grp ASC,"
                 " CASE WHEN w.ord='' THEN 1 ELSE 0 END, w.ord ASC,"
                 " w.sort ASC, w.id DESC"
@@ -418,15 +455,17 @@ def api_work(wid):
         # 临时参考图只有"上传它的那个人自己拿着 id"才打得开（前端刚传完
         # 立刻要显示缩略图），别人、以及列表里都碰不到它。
         is_temp = str(row["use"] or "keep") == "temp"
-        if is_temp and not mine and not _is_owner(qq):
+        if is_temp and not mine and not _seer(qq):
             return jsonify({"ok": False, "error": "没有这个作品集"}), 404
-        if row["hidden"] and not mine and not _is_owner(qq):
+        if row["hidden"] and not mine and not _seer(qq):
             return jsonify({"ok": False, "error": "没有这个作品集"}), 404
 
-        # 站主看得到自己藏了什么（带 hidden 标记，查看器里显示成半透明 +
-        # 「已隐藏」）；别人只拿到没藏的那批。作者本人也是「别人」——
-        # 跳过谁由站主决定，这一页对作者来说就是没了。
-        owner_view = _is_owner(qq)
+        # 管理页的站主看得到自己藏了什么（带 hidden 标记，用来反悔）；
+        # **工作台里站长也只拿到没藏的那批**——用户 2026-11-24：「站长正常登录
+        # 工作台不就是和普通的用户一样的吗」。藏掉的图不进轨道，就滑不到、
+        # 下载不到，也不会把整页拖卡。作者本人同样是「别人」：跳过谁由站主
+        # 决定，这一页对作者来说就是没了。
+        owner_view = _seer(qq)
         items = con.execute(
             "SELECT id, idx, path, COALESCE(hidden,0) AS hidden FROM items"
             " WHERE work_id=?" + ("" if owner_view else
@@ -447,10 +486,10 @@ def api_work(wid):
 
     data = _work_row(row, qq or "")
     data["can_delete"] = mine
-    data["can_hide"] = _is_owner(qq)   # 站长对谁的都能隐藏，群友作品也一样
+    data["can_hide"] = _seer(qq)   # 站长对谁的都能隐藏，群友作品也一样
     # 单张隐藏同样是站主的权限：作者只能删掉自己的图，藏起来让别人看不见
-    # 是他没那个立场做的决定。
-    data["can_hide_item"] = _is_owner(qq)
+    # 是他没那个立场做的决定。工作台里连站长也没有这颗按钮——隐藏去管理页做。
+    data["can_hide_item"] = _seer(qq)
     return jsonify({
         "ok": True,
         "work": data,
@@ -484,13 +523,13 @@ def api_img(iid):
     if not row:
         return jsonify({"ok": False, "error": "没这张图"}), 404
     if str(row["use"] or "keep") == "temp" and row["owner"] != str(qq or "") \
-            and not _is_owner(qq):
+            and not _seer(qq):
         return jsonify({"ok": False, "error": "没这张图"}), 404
-    if row["hidden"] and row["owner"] != str(qq or "") and not _is_owner(qq):
+    if row["hidden"] and row["owner"] != str(qq or "") and not _seer(qq):
         return jsonify({"ok": False, "error": "没这张图"}), 404
     # 单张隐藏：只对站主可见。群友自己拍的那张被站长藏了也一样拿不到——
     # 藏的意思就是「谁都别再看」，只留站主一个人能反悔。
-    if row["ihidden"] and not _is_owner(qq):
+    if row["ihidden"] and not _seer(qq):
         return jsonify({"ok": False, "error": "没这张图"}), 404
 
     src = row["path"]
@@ -577,7 +616,7 @@ def api_thumbs():
             " WHERE i.id IN (%s)" % marks,
             ids).fetchall()
 
-    mine_ok = _is_owner(qq)
+    mine_ok = _seer(qq)
     todo = []
     for r in rows:
         if r["hidden"] and r["owner"] != str(qq or "") and not mine_ok:
@@ -656,7 +695,7 @@ def api_warm():
             " WHERE i.id IN (%s)" % marks,
             ids).fetchall()
 
-    mine_ok = _is_owner(qq)
+    mine_ok = _seer(qq)
     ok = {}
     for r in rows:
         if r["hidden"] and r["owner"] != str(qq or "") and not mine_ok:
@@ -1242,9 +1281,9 @@ def _read_image_text(iid, prompt):
             " FROM items i JOIN works w ON w.id=i.work_id WHERE i.id=?", (iid,)).fetchone()
     if not row:
         return ""
-    if row["hidden"] and row["owner"] != str(qq or "") and not _is_owner(qq):
+    if row["hidden"] and row["owner"] != str(qq or "") and not _seer(qq):
         return ""
-    if row["ihidden"] and not _is_owner(qq):
+    if row["ihidden"] and not _seer(qq):
         return ""
     if str(row["use"] or "keep") == "temp" and row["owner"] != str(qq or "") \
             and not _is_owner(qq):
