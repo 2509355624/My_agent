@@ -251,6 +251,51 @@ class ScanPathTest(_Base):
         self.assertIn("error", out)
         self.assertNotIn("works", out)
 
+    # ── 2026-11-24 用户报的 bug：选一本却把整根都扫了 ──────────
+    # 上传 12 张图，结果 moss漫画 下 200 本全被重扫。根因是 scan_path
+    # 「落在配置根里就改成扫整个根」——作用域被口径的旧逻辑劫持了。
+
+    def test_subdir_scan_does_not_walk_siblings(self):
+        """选中的目录落在配置根里，也只扫它自己那一棵。"""
+        mine = self.mk("moss漫画/20261124_1236_浴室/moss-qunyou", "x.png")
+        self.mk("moss漫画/别的本/moss-qunyou", "y.png")
+        self.mk("moss漫画/另一本/moss-qunyou", "z.png")
+        one = os.path.dirname(os.path.dirname(mine))
+        with mock.patch.object(gallery, "GALLERY_ROOTS",
+                               (("moss漫画", self.root),)):
+            out = gallery.scan_path(one)
+        self.assertEqual(out["items"], 1, "只该登记选中这本里的 1 张")
+        self.assertEqual(len(self.works()), 1)
+
+    def test_subdir_scan_title_still_counts_from_root(self):
+        """标题仍相对配置根算——起点是子目录，基准还是根。
+
+        用例里配置根 = 临时目录，所以相对路径要带上 `moss漫画/`；
+        真实环境配置根就是 moss漫画 那一层，标题从时间戳开始。
+        """
+        mine = self.mk("moss漫画/20261124_1236_浴室/moss-qunyou", "x.png")
+        one = os.path.dirname(os.path.dirname(mine))
+        with mock.patch.object(gallery, "GALLERY_ROOTS",
+                               (("moss漫画", self.root),)):
+            gallery.scan_path(one)
+        titles = [w["title"] for w in self.works()]
+        self.assertEqual(titles, ["moss漫画/20261124_1236_浴室/moss-qunyou"])
+        # 关键：和「扫整根」算出来的相对路径完全一致，墙上不会出现两个名字
+        gallery.scan_path(self.root)
+        for w in self.works():
+            self.assertEqual(w["title"],
+                             "moss漫画/20261124_1236_浴室/moss-qunyou")
+
+    def test_full_root_scan_still_walks_everything(self):
+        """「全部重扫」不受影响：扫根还是要把整棵树都收进来。"""
+        self.mk("moss漫画/a/moss-qunyou", "x.png")
+        self.mk("moss漫画/b/moss-qunyou", "y.png")
+        with mock.patch.object(gallery, "GALLERY_ROOTS",
+                               (("moss漫画", self.root),)):
+            out = gallery.scan()
+        self.assertEqual(out["items"], 2)
+        self.assertEqual(len(self.works()), 2)
+
     def test_scanning_filesystem_root_is_rejected(self):
         """整块盘不能扫：那会把 D:\\AI、D:\\Users 全登记成作品集。"""
         fs_root = os.path.abspath(os.sep)
