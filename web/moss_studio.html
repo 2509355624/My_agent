@@ -370,8 +370,8 @@
     <div class="row" style="margin-top:12px">
       <button class="btn" id="btn-save">保存修改</button>
       <button class="btn primary" id="btn-draw-all">全部出图</button>
-      <button class="btn" id="btn-abort"
-              style="display:none;color:var(--error);border-color:var(--error)">终止</button>
+      <button class="btn" id="btn-abort" title="整本停下，没开始的页都不画了"
+              style="display:none;color:var(--error);border-color:var(--error)">全部终止</button>
       <label style="font-size:12px;color:var(--text-dim)">步长
         <input id="steps" type="number" min="1" max="150" value="30" style="width:64px">
       </label>
@@ -1094,8 +1094,17 @@ async function draw(pageNo, reroll) {
   btns.forEach(function (b) { b.disabled = false; });
   if (!r.ok) { toast(r.error || "没排上队", true); return; }
   S.aborted = false;          // 重新开跑：上一次的「已终止」不带到这一批
-  if (!EXPERT) setStage(3);   // 出图入队了，直接把人带到能看进度的那一步  if (reroll) toast("换种子重抽，" + (r.seed ? "seed " + r.seed : "") + "，约 3 分钟");
-  bar('<span class="spin"></span>已入队，等出图…');
+  /* 「全部出图」只补没画的：服务端会把已完成的页剔掉，这里如实播报一声，
+     免得用户以为整本在重跑（2026-11-24）。 */
+  var skip = (r.skipped || []).length;
+  if (!(r.pages || []).length) {
+    toast(r.message || "都画完了，没有要补的");
+    refreshStatus();
+    return;
+  }
+  if (!EXPERT) setStage(3);   // 出图入队了，直接把人带到能看进度的那一步
+  bar('<span class="spin"></span>已入队，等出图…' +
+      (skip ? "（画好的 " + skip + " 页跳过）" : ""));
   startPoll();
   setTimeout(startPoll, 3000);
 }
@@ -1174,15 +1183,15 @@ if ($("outline")) $("outline").addEventListener("input", syncOutline);
 syncOutline();
 $("btn-save").addEventListener("click", function () { saveNow().then(function () { toast("已保存"); }); });
 $("btn-draw-all").addEventListener("click", function () { draw(null, false); });
-/* 终止：不是杀进程。置位一个信号，出图线程当前这页会让 ComfyUI 定向停下，
-   后面没开始的页直接标「已终止」。 */
+/* 全部终止：不是杀进程。置位一个信号，出图线程当前这页会让 ComfyUI 定向停下，
+   后面没开始的页直接标「已终止」。只停单页的按钮在每页页头（data-act="stop"）。 */
 $("btn-abort").addEventListener("click", async function () {
   if (!S.task) return;
   S.aborted = true;
   this.disabled = true;
   var r = await api("/api/moss/abort", { task: S.task });
   this.disabled = false;
-  toast(r.message || (r.ok ? "已终止" : "终止失败"), !r.ok);
+  toast(r.message || (r.ok ? "已全部终止" : "全部终止失败"), !r.ok);
   this.style.display = "none";
   refreshStatus();
 });

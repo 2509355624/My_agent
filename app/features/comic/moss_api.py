@@ -837,6 +837,10 @@ def api_moss_pages_state():
 def api_moss_render():
     """后台出图。`pages` 不传＝全部；`seed` 明确给就用，`reroll=true` 换随机。
 
+    不点名页号时**跳过已经画好的页**（2026-11-24）：只补没画的、失败的和被
+    终止的。要整本重画带 `force=true`（或给 seed / reroll），要单页重画就
+    点名 `pages=[n]`。
+
     同一任务同时只跑一个线程——两批一起跑会在 `image_jobs` 队列里抢同一套
     模型，白等两遍冷启动。
     """
@@ -852,6 +856,7 @@ def api_moss_render():
 
     want = data.get("pages")
     nums = all_n
+    picked = False                              # 是否点名了页号
     if isinstance(want, list) and want:
         keep = set()
         for x in want:
@@ -860,8 +865,41 @@ def api_moss_render():
             except (TypeError, ValueError):
                 pass
         nums = [n for n in all_n if n in keep]
+        picked = True
     if not nums:
         return jsonify({"ok": False, "error": "没有要画的页"}), 400
+
+    # 「全部出图」只补没画的（2026-11-24 用户：「重新跑不会跑已经画过的」）。
+    # 已 done 的页有图，重排一遍要白等两三分钟还会把旧图覆盖掉。
+    # 只有两种情况照旧重画：点名了页号（单页「出图」）、或者显式 force。
+    # 想整本重画就带 force=true——前端「换 seed」走的就是这条路。
+    # 「换 seed」是整本重抽：只有真的指了 seed 或 reroll 才整本重画。
+    def _as_int(v):
+        try:
+            return int(v or 0)
+        except (TypeError, ValueError):
+            return 0
+    force = bool(data.get("force")) or bool(data.get("reroll")) or bool(
+        _as_int(data.get("seed")))
+    skipped = []
+    if not picked and not force:
+        st = (_load_state(d).get("pages") or {})
+        todo = []
+        for n in nums:
+            s = st.get(str(n)) or {}
+            rel = s.get("file") or ""
+            full = "" if not rel else (rel if os.path.isabs(rel) else os.path.join(
+                COMFYUI_OUTPUT_DIR or "", rel.replace("/", os.sep)))
+            # 图还在磁盘上才算画过：文件被清掉的话重跑是应该的
+            if s.get("status") == "done" and full and os.path.isfile(full):
+                skipped.append(n)
+            else:
+                todo.append(n)
+        nums = todo
+        if not nums:
+            return jsonify({"ok": True, "task": os.path.basename(d), "pages": [],
+                            "skipped": skipped,
+                            "message": "都画完了，没有要补的"})
 
     try:
         seed_base = int(data.get("seed") or 0)
@@ -901,6 +939,7 @@ def api_moss_render():
                      daemon=True,
                      name="moss-comic-%s" % os.path.basename(d)).start()
     return jsonify({"ok": True, "task": os.path.basename(d), "pages": nums,
+                    "skipped": skipped, "force": force,
                     "seed": seed_base or None, "steps": steps})
 
 
@@ -938,7 +977,7 @@ def api_moss_abort():
         except Exception:                       # noqa: BLE001
             pass
     return jsonify({"ok": True, "aborted": True, "dropped": dropped,
-                    "message": "已发终止信号，当前这一页会停下"})
+                    "message": "已全部终止：当前这一页停下，后面没开始的都不画了"})
 
 
 # ══════════════════════════════════════════════════════════

@@ -288,5 +288,91 @@ class DefaultStyleTest(_Base):
             self.assertIn(moss_api.DEFAULT_STYLE, fh.read())
 
 
+class SkipDoneTest(_Base):
+    """「全部出图」只补没画的（2026-11-24 用户要求，和漫画工作台一致）。
+
+    重启 5174 之后队列全没、图还在，重跑不该把已经画好的页再画一遍。
+    但单页「出图」（点名页号）和「换 seed」（reroll / 指了 seed）必须照旧
+    重画，否则用户想改一张都改不了。
+    """
+
+    def _mk3(self):
+        name = "20261124_1200_三页"
+        d = os.path.join(self.state, name)
+        os.makedirs(d)
+        spec = _spec(n=1)
+        spec["pages"] = [dict(spec["pages"][0], n=i) for i in (1, 2, 3)]
+        with open(os.path.join(d, "spec.json"), "w", encoding="utf-8") as fh:
+            json.dump(spec, fh, ensure_ascii=False)
+        # 第 1、3 页画好了，第 2 页没有
+        os.makedirs(os.path.join(moss_api.COMFYUI_OUTPUT_DIR, "web", "moss漫画", name),
+                    exist_ok=True)
+        rel = "web/moss漫画/%s/moss50/1.png" % name
+        full = os.path.join(moss_api.COMFYUI_OUTPUT_DIR, rel.replace("/", os.sep))
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "wb") as fh:
+            fh.write(b"\x89PNG")
+        moss_api._set_page(d, 1, status="done", file=rel, seed=11)
+        moss_api._set_page(d, 3, status="done", file=rel, seed=33)
+        return name, d
+
+    def _render(self, body, nums):
+        """跑一次 render，把出图线程换成假的，只记它收到哪些页号。"""
+        got = []
+
+        def fake_run(d, spec, n, *a, **kw):
+            got.extend(n)
+        with mock.patch.object(moss_api, "_run", side_effect=fake_run), \
+                mock.patch.object(moss_api, "_RUNNING", {}), \
+                mock.patch.object(moss_api, "_ABORT", {}):
+            r = self.c.post("/api/moss/render", json=body)
+        return r, got
+
+    def test_all_only_draws_missing_pages(self):
+        name, _ = self._mk3()
+        r, got = self._render({"task": name}, None)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(got, [2])                      # 只补第 2 页
+        out = r.get_json()
+        self.assertEqual(out["skipped"], [1, 3])
+        self.assertEqual(out["pages"], [2])
+        self.assertFalse(out["force"])
+
+    def test_named_page_is_redrawn_even_if_done(self):
+        name, _ = self._mk3()
+        r, got = self._render({"task": name, "pages": [1]}, None)
+        self.assertEqual(got, [1])
+        self.assertEqual(r.get_json()["skipped"], [])
+
+    def test_reroll_still_redraws_everything(self):
+        name, _ = self._mk3()
+        r, got = self._render({"task": name, "reroll": True}, None)
+        self.assertEqual(got, [1, 2, 3])
+        self.assertTrue(r.get_json()["force"])
+
+    def test_force_still_redraws_everything(self):
+        name, _ = self._mk3()
+        r, got = self._render({"task": name, "force": True}, None)
+        self.assertEqual(got, [1, 2, 3])
+
+    def test_nothing_left_says_so_without_queueing(self):
+        name, d = self._mk3()
+        moss_api._set_page(d, 2, status="done",
+                           file="web/moss漫画/%s/moss50/1.png" % name, seed=22)
+        r, got = self._render({"task": name}, None)
+        self.assertTrue(r.get_json()["ok"])
+        self.assertEqual(got, [])
+        self.assertEqual(r.get_json()["pages"], [])
+        self.assertIn("都画完了", r.get_json()["message"])
+
+    def test_missing_file_counts_as_not_drawn(self):
+        """state 说 done 但图被删了 → 该重画，不能空着。"""
+        name, d = self._mk3()
+        moss_api._set_page(d, 1, status="done",
+                           file="web/moss漫画/%s/moss50/没有这个文件.png" % name)
+        r, got = self._render({"task": name}, None)
+        self.assertIn(1, got)
+
+
 if __name__ == "__main__":
     unittest.main()
