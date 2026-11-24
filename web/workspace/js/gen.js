@@ -34,8 +34,14 @@
     return global.WSApi.post(BASE + "/cancel", { id: id });
   }
 
-  function img(file) {
-    return BASE + "/img?f=" + encodeURIComponent(file || "");
+  /* 图片地址。`w` 是缩略图宽度（2026-11-24）：原图常有 2~8MB，聊天区
+     和画廊列表里铺十几张就是几十 MB 全走家用上行。带上 w 服务端发
+     「长边 w 的 JPEG」，一张 30~70KB；**不带 w 就是原图**，点开大图、
+     下载都走那条。服务端只认 240/480/640/900 这几个宽度，其它值当没传。 */
+  function img(file, w) {
+    var u = BASE + "/img?f=" + encodeURIComponent(file || "");
+    if (w) u += "&w=" + encodeURIComponent(w);
+    return u;
   }
 
   function defaultSkill() {

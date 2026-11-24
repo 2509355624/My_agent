@@ -615,13 +615,22 @@ def cache_path(src, kind):
     return os.path.join(CACHE, key + "_" + kind + ".webp")
 
 
-def thumb(src, kind="t"):
+def thumb(src, kind="t", edge_override=None):
     """按需生成缓存图。→ 缓存文件绝对路径，失败返回 None。
 
     kind: `t` 网格缩略（360px）、`v` 预览（1600px）。画廊只发这两种，
     原图不出服务端。
+
+    `edge_override`（2026-11-24）：跑图台的聊天区要 240/480/640/900 这几档，
+    和画廊的 360/1600 对不上。与其在那边再写一份「读图 → 缩 → 落盘 → 加锁」
+    的代码，不如把长边透出来——缓存文件名本来就带 kind，传 `kind=edge值`
+    就天然是另一份缓存，锁、mtime 校验、`reuse_direct` 全部照旧复用。
     """
-    edge = {"t": 360, "v": 1600}.get(kind)
+    if edge_override:
+        edge = int(edge_override)
+        kind = str(edge)
+    else:
+        edge = {"t": 360, "v": 1600}.get(kind)
     if not edge:
         return src if os.path.isfile(src) else None
     if not os.path.isfile(src):

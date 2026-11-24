@@ -298,30 +298,87 @@
     card.acts.appendChild(again);
   }
 
-  /* 下载这张图。地址还是 /api/gen/img 那条（同源、带登录 cookie），
-     `download` 属性让浏览器存成文件而不是打开它；文件名用 img 字段，
-     ComfyUI 的原始名带上时间戳，重画几次也不会互相覆盖。
-    图还没出来（card.file 为空）时提示一句，不静默失败。 */
+  /* 点缩略图看原图（2026-11-24）：聊天区默认只铺 640 的 JPEG，
+     真要细看才拉原图。原地把 src 换掉而不是开一个查看器——少一套
+     DOM，也不会多出「关了查看器消息位置跳走」这类毛病。 */
+  function openFull(img) {
+    var full = img.dataset.full || "";
+    if (!full || img.dataset.fullLoaded === "1") return;
+    img.dataset.fullLoaded = "1";
+    img.classList.add("shot-full");
+    img.src = full;
+  }
+
+  /* 存一个 Blob 到本机（下载流程的最后一步）。 */
+  function saveBlob(blob, name) {
+    var url = global.URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    /* 立刻 revoke 会让部分浏览器来不及存盘，给一个宽限期 */
+    global.setTimeout(function () { global.URL.revokeObjectURL(url); }, 60000);
+  }
+
+  /* 下载这张图（2026-11-24 用户：「图片已经加载完成了，点下载竟然是从服务器
+     下载的，而不是直接拿已经缓存的图片」）。
+
+    以前是直接 `<a download href=...>` —— 那等于让浏览器**另起一个下载请求**，
+     和页面上那张 <img> 的缓存是两回事：`download` 属性触发的是导航式下载，
+     多数浏览器对这种情况**不查 HTTP 缓存**，于是同一张图又完整走了一遍隧道。
+
+     现在先 `fetch(src)`：同源、`cache: "default"`，浏览器会把已经躺在缓存里的
+     那份直接交出来（`immutable` 一年，命中就是不联网）。拿不到（缓存被清 /
+     换了隧道域名 / 网络抖动）再退回老办法，不至于点了没反应。 */
   function downloadImage(card) {
     var file = card.file || (card.rec && card.rec.file) || "";
     if (!file) {
       sysNote("这张还没出来，等它画完再点下载");
       return;
     }
-    var a = document.createElement("a");
-    a.href = global.WSGen.img(file);
-    a.download = String(file).split("/").pop() || "image.png";
-    a.rel = "noopener";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    var name = String(file).split("/").pop() || "image.png";
+    var src = global.WSGen.img(file);
+
+    function fallback() {
+      var a = document.createElement("a");
+      a.href = src;
+      a.download = name;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+
+    if (typeof global.fetch !== "function") { fallback(); return; }
+    global.fetch(src, { credentials: "same-origin", cache: "default" })
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.blob();
+      })
+      .then(function (b) {
+        if (!b || !b.size) throw new Error("空文件");
+        saveBlob(b, name);
+      })
+      ["catch"](fallback);
   }
 
+  /* 聊天区里铺的是**缩略图**（2026-11-24 用户：「图片生成之后，要加载
+     非常的慢」）。原图常有 2~8MB，一张卡一张原图，恢复历史十几张就是
+     几十 MB 全从这台机器往上走——家里那条上行根本扛不住。
+     `w=640` 大约 30~50KB，小两个数量级；想看清晰的原图就点一下，
+     那时才拉原图（`openFull`），不是不给。 */
   function showImage(card, job) {
     if (card.ph) {
       var img = document.createElement("img");
       img.alt = "生成结果";
-      img.src = global.WSGen.img(job.file);
+      img.loading = "lazy";
+      img.decoding = "async";
+      img.src = global.WSGen.img(job.file, 640);
+      img.dataset.full = global.WSGen.img(job.file);
+      img.className = "shot";
       img.addEventListener("error", function () {
         card.note.hidden = false;
         card.note.className = "note err";
@@ -329,6 +386,8 @@
       });
       card.ph.parentNode.replaceChild(img, card.ph);
       card.ph = null;
+      card.img = img;                 // 留个引用：下载/预览都靠它
+      img.addEventListener("click", function () { openFull(img); });
     }
     card.note.hidden = true;
     card.file = job.file || "";

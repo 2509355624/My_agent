@@ -91,9 +91,35 @@ _IMG_CACHE_CTL = "private, max-age=%d, immutable" % _IMG_MAX_AGE
 _NAI_REF_RE = re.compile(r"nai:([A-Za-z0-9._\- ]{1,120})")
 _NAI_PREFIX_MAX = 2000
 
-# 跑图台「横屏」的固定**底图**尺寸（2026-11-10 用户拍板）。放大链全是倍率，
-# 1.2× latent 再 2x 超分 → 成品 4608×2592。只改画布，不动放大链。
-LANDSCAPE_SIZE = (1920, 1080)
+# 缩略图（2026-11-24）：出图原图 2~8MB，聊天区铺十几张就是几十 MB 全走
+# 家用上行。`/api/gen/img?w=640` 走这里。允许的宽度白名单——不给任意值
+# 是为了让磁盘缓存命中，也免了拿它当任意分辨率转换器。
+# 真正干活的是 `gallery.thumb`（WebP + 按路径哈希缓存 + 每文件一把锁 +
+# mtime 校验），这边不重写那一套，只做「参数白名单」和「找不到就退回原图」。
+_IMG_THUMB_W = (240, 480, 640, 900)
+
+
+def _img_thumb_w(raw):
+    """解析 `?w=`：只认白名单里的宽度，其余一律当「不要缩略图」。"""
+    try:
+        w = int(str(raw or "0").strip())
+    except (TypeError, ValueError):
+        return 0
+    return w if w in _IMG_THUMB_W else 0
+
+
+def _img_thumb_file(src, w):
+    """原图的 w 长边缩略图；生成失败返回 None（调用方退回原图）。
+
+    缩略图只是优化，不是前置条件：Pillow 不在、图坏了、路径越界，一律
+    返回 None 而不是抛异常——出图本身不能因为缩不出来就 500。
+    """
+    try:
+        from app.features.gallery import gallery as _gallery
+        return _gallery.thumb(src, edge_override=w)
+    except Exception:                       # noqa: BLE001
+        log.debug("缩略图生成失败 %s w=%s", src, w, exc_info=True)
+        return None
 
 
 def _nai_prompt(prompt, prefix):
@@ -877,6 +903,21 @@ def api_img():
     # 和主站 /api/image 共用同一套路径校验，磁盘上没有才走下面的代理。
     local = comfy_out.local_output_file(f)
     if local:
+        # `?w=`（2026-11-24）：出图原图常常 2~8MB PNG，聊天区里铺十几张
+        # 就是几十 MB 一路穿过家用上行。带 w 就发长边 w 的 JPEG 缩略图，
+        # 一张大约 30~80KB，**小两个数量级**；点开大图仍走不带 w 的原图。
+        # 缩略图落 `state/thumb/`（按「原图路径+mtime+w」命名），同尺寸
+        # 只算一次；失败就退回原图，缩略图只是优化不是前置条件。
+        w = _img_thumb_w(request.args.get("w"))
+        if w:
+            thumb = _img_thumb_file(local, w)
+            if thumb:
+                # gallery.thumb 产出的是 WebP；mimetype 要跟着变，否则
+                # 浏览器按 image/jpeg 解析 WebP 会直接裂图。
+                resp = send_file(thumb, mimetype="image/webp",
+                                 conditional=True, max_age=_IMG_MAX_AGE)
+                resp.headers["Cache-Control"] = _IMG_CACHE_CTL
+                return resp
         resp = send_file(local, conditional=True, max_age=_IMG_MAX_AGE)
         resp.headers["Cache-Control"] = _IMG_CACHE_CTL
         return resp

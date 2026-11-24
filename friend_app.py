@@ -639,7 +639,13 @@ def _forward(prefix, sub, allow_guest=False, force_guest=False,
                       or (request.path or "").startswith("/api/image/web/")
                       or (request.path or "") == "/api/showcase/image"
                       or (request.path or "").startswith(
-                          "/api/image/角色扮演生图/")))
+                          "/api/image/角色扮演生图/")
+                      # 跑图台出图（2026-11-24）：原来不在这里，于是整张图先被
+                      # `r.content` 读进 5175 内存再发出——浏览器收不到
+                      # Content-Length，体感就是「卡住很久然后图突然蹦出来」。
+                      # 一张 2~3MB 的图看不出多大差别，但和下面的缓存头丢失
+                      # 叠在一起，就是用户说的「生成之后要加载非常慢」。
+                      or (request.path or "") == "/api/gen/img"))
     #  ↑ moss 漫画图单张 2MB+（2026-11-03 实测），persona 的 CG 单张 8MB+
     #    （2026-11-04 实测），一并流式。2026-11-08 扮演 CG 改落独立的
     #    `角色扮演生图/` 目录，这一支也得流式，否则 5175 会先把 8MB 读进内存。
@@ -704,6 +710,14 @@ def _forward(prefix, sub, allow_guest=False, force_guest=False,
     except Exception:
         sess.close()
         return jsonify({"ok": False, "error": "后台返回看不懂"}), 502
+    # 非流式分支也要照抄缓存头（2026-11-24）：上面 stream 那一支有，这里原来
+    # 一个都没带——5174 给 `/api/gen/img` 下的 `private, max-age=31536000,
+    # immutable` 到了 5175 就被丢掉，浏览器每次刷新都得整张重下，白走一遍
+    # 家用上行。ETag / Last-Modified 一起带上，才能协商出 304。
+    for h in ("Content-Length", "ETag", "Last-Modified", "Cache-Control",
+              "Accept-Ranges", "Content-Range"):
+        if r.headers.get(h):
+            resp.headers[h] = r.headers[h]
     sess.close()
 
     # 把 5174 下发的游客 cookie 转给浏览器（2026-11-03）。

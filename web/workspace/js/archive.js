@@ -81,7 +81,17 @@
           img.alt = "生成结果";
           img.loading = "lazy";
           img.decoding = "async";
-          img.src = global.WSGen.img(m.file);
+          // 恢复历史同样只铺缩略图（2026-11-24）：翻一次记录可能十几张，
+          // 每张原图 2~8MB，全从家用上行出就是「打开页面等半天」的由来。
+          img.src = global.WSGen.img(m.file, 640);
+          img.dataset.full = global.WSGen.img(m.file);
+          img.className = "shot";
+          img.addEventListener("click", function () {
+            if (!img.dataset.full || img.dataset.fullLoaded === "1") return;
+            img.dataset.fullLoaded = "1";
+            img.classList.add("shot-full");
+            img.src = img.dataset.full;
+          });
           c.body.appendChild(img);
           // 重放时把 prompt / skill 一起交给 buildActs：不带的话「复制」
           // 复制的是空串、「重画」也排不上队（新版多了下载，同样要 file）

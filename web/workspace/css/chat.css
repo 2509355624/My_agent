@@ -150,6 +150,17 @@
   background: var(--card-2);
 }
 
+/* 聊天区里的出图（2026-11-24）：先铺 640 宽的 JPEG 缩略图，点一下才拉
+   原图。缩略图会被放大到卡片宽度，轻微发虚；点过之后（.shot-full）换成
+   原图就清楚了。给个过渡，换图那一下不会突然一跳。 */
+.card img.shot {
+  cursor: zoom-in;
+  transition: filter .15s ease;
+}
+.card img.shot-full {
+  cursor: default;
+}
+
 .card .note {
   margin: 0;
   padding: 6px 4px 2px;
