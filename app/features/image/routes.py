@@ -101,15 +101,20 @@ _NAI_PREFIX_MAX = 2000
 # mtime 校验），这边不重写那一套，只做「参数白名单」和「找不到就退回原图」。
 _IMG_THUMB_W = (240, 480, 640, 900)
 
-# 「能存下来看」的那一档（2026-11-24 用户：「有办法使用工作台的话，图片压缩到
-# 512k 吗？下载就默认下这个 512k 的，和画廊一样的大小即可」）。
+# 「能存下来看」的那一档。2026-11-24 用户先要 512k，当天晚些又改口：
+# 「我感觉现在只有 102k 还是太小了……直接压到 1m 即可，不管什么图片，只要是
+# 工作台的，服务端压缩到 1m 再传过来，点击图片不需要重新传 10m 的原图」。
 #
 # 为什么不是再列几个宽度：宽度和体积对不上——1280 的复杂插画 WebP 能到 600KB，
 # 而 1024 的平涂只有 200KB。用户要的是一个**体积上限**，所以这一档单独走：
-# 长边从小往大试，取第一张不超过 cap 的；全都不够小才用它本身（再缩就糊了）。
-# 文件名的 kind 带 cap（`w1280c512`），改了上限自然换缓存，不会读到旧档。
-_IMG_FIT_W = (768, 1024, 1280, 1536)
-_IMG_FIT_CAP = 512 * 1024
+# 长边**从大往小试**，取第一张不超过 cap 的；都超了就给最小的那张（再缩就糊了）。
+# 从大往小是关键：反过来试的话，第一张 768 的 WebP 往往才 50KB 就「合格」了，
+# 于是永远出不来高清图——上一版「只有 102k」就是这么来的。
+# 缓存文件名带宽度（`w1536`），改了上限自然换档，不会读到旧缓存。
+_IMG_FIT_W = (1536, 1280, 1024, 768)
+_IMG_FIT_CAP = 1024 * 1024
+# 只认这一个值；以前写 `512k` 的旧链接继续按同一个上限发，免得碎图。
+_IMG_FIT_KEYS = ("1m", "1024k", "1024", "512k", "512")
 
 
 def _img_thumb_w(raw):
@@ -122,18 +127,21 @@ def _img_thumb_w(raw):
 
 
 def _img_fit(raw):
-    """`?fit=512k` → 字节上限；不认识的值返回 0。"""
-    if str(raw or "").strip().lower() in ("512k", "512"):
+    """`?fit=1m` → 字节上限；不认识的值返回 0（发原图）。"""
+    if str(raw or "").strip().lower() in _IMG_FIT_KEYS:
         return _IMG_FIT_CAP
     return 0
 
 
 def _img_fit_file(src, cap):
-    """长边从中往大试，取第一张 ≤ cap 的 WebP。都超了就给最小的那张。
+    """长边从大往小试，取第一张 ≤ cap 的 WebP。都超了就给最小的那张。
 
-    缓存直接落在 `gallery.cache_path` 定好的位置（`state/thumb/` 同一套目录、
-    同一把锁、同样的 mtime 校验），不另开一套缓存——只是「选哪一档宽度」这
-    件事 gallery.thumb 做不了：它按宽度缩一次就完事。
+    缓存直接落在 `gallery.cache_path` 定好的位置（`state/gallery_cache/` 同一
+    套目录、同一把锁、同样的 mtime 校验），不另开一套缓存——只是「选哪一档
+    宽度」这件事 gallery.thumb 做不了：它按宽度缩一次就完事。
+
+    原图本身长边不到最宽那档时（角色扮演的竖图多是 832×1216），thumb 只会
+    等比缩小，所以第一档就等于原分辨率；超过 cap 才继续往下退。
     """
     try:
         from app.features.gallery import gallery as _gallery
@@ -150,7 +158,7 @@ def _img_fit_file(src, cap):
                 return None
         return best
     except Exception:                       # noqa: BLE001
-        log.debug("512K 档生成失败 %s", src, exc_info=True)
+        log.debug("1M 档生成失败 %s", src, exc_info=True)
         return None
 
 

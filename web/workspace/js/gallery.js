@@ -8,7 +8,8 @@
   var S = { grp: "", page: 1, more: true, busy: false, works: [] };
   var el = {};
   var io = null;
-  var v = { list: [], idx: 0, jump: 0, faved: false, node: null, work: null };
+  var v = { list: [], idx: 0, jump: 0, faved: false, node: null, work: null,
+            hist: false };
 
   function $(id) { return document.getElementById(id); }
 
@@ -115,11 +116,11 @@
       img.loading = "lazy";
       img.decoding = "async";
       img.alt = work.title;
-      /* `&fit=512k`（2026-11-24）：画廊网格原来铺 360px 缩略图，在手机上
+      /* `&fit=1m`（2026-11-24）：画廊网格原来铺 360px 缩略图，在手机上
          两列一格约 180 CSS px，360 正好够；但放大屏 / 平板就显得糊。带上
-         fit 可以让服务端挑一档更清楚的（≤512KB），竖图那种又高又窄的
-         封面尤其明显。服务端不认就当没传，退回原来的 s=t。 */
-      img.src = "/api/gal/img/" + work.cover + "?s=t&fit=512k";
+         fit 可以让服务端挑一档更清楚的（≤1MB），竖图那种又高又窄的封面
+         尤其明显。服务端不认就当没传，退回原来的 s=t。 */
+      img.src = "/api/gal/img/" + work.cover + "?s=t&fit=1m";
       pic.appendChild(img);
     }
 
@@ -311,6 +312,23 @@
     v.node = { box: box, count: count, track: track, fav: fav };
   }
 
+  /* 查看器里的大图。2026-11-24 用户：「点击图片不需要重新传 10m 的原图，
+     我们默认就只给 1m 即可，下载也是下载 1m 的」——所以查看器、下载、网格
+     **用的是同一档**（`fit=1m`），看到哪张就存哪张，不再有「点开等十几秒
+     才变清晰」这一步。
+
+     `s=v` 留着：服务端缩不出来时会退到 1600px 预览，总比 404 好。 */
+  function imgUrl(it) { return "/api/gal/img/" + it.id + "?s=v&fit=1m"; }
+
+  /* 给查看器压一条历史记录。已经压过（还开着）就不再压——连点两本不同的
+     作品集会走两次 open，第二次再压一条，关的时候要多按一次返回键。 */
+  function pushViewer() {
+    if (v.hist) return;
+    v.hist = true;
+    global.history.pushState({ gv: 1,
+      ws: Number((global.history.state || {}).ws) || 0 }, "");
+  }
+
   /* work：作品集；itemId：可选，从收藏那张直接跳到它在集里的位置 */
   function open(work, itemId) {
     // 「我的」页可以直接 push 出来，不一定先逛过画廊；查看器得能自己建
@@ -321,6 +339,16 @@
     v.work = work;
     v.node.box.hidden = false;
     document.body.classList.add("g-lock");
+    /* 手机返回键要能关掉这一层（2026-11-24 用户：「打开某个具体画廊的图片
+       详情，按下手机的返回键时，没有关闭当前的详情页面，而是底下的界面正常
+       回退」）。查看器是个 position:fixed 的覆盖层，不在页面栈里，所以以前
+       popstate 只退子页、它赖着不走。
+
+       现在给它单压一条历史记录（`{gv:1}`，不带 ws——页面栈那边只认 ws 这个
+       整数，多出来的属性不影响它的层数计算），返回键退到这里，popstate 里
+       看见 gv 就把它收起来。`v.hist` 记住「这条是我压的」，避免连开两本时
+       压两条。 */
+    pushViewer();
     v.node.track.innerHTML = "";
     v.node.count.textContent = "";
     v.idx = 0;
@@ -339,7 +367,7 @@
         slide.className = "gv-slide";
         var img = document.createElement("img");
         img.alt = work.title;
-        img.src = "/api/gal/img/" + it.id + "?s=v";
+        img.src = imgUrl(it);
         slide.appendChild(img);
         v.node.track.appendChild(slide);
       });
@@ -361,11 +389,35 @@
     });
   }
 
-  function closeViewer() {
+  /* 收起来，**不动历史**。返回键那条路走这里——那时浏览器历史已经退回去了，
+     再 back 一次就等于连退两层。✕ / 「画同款」走 closeViewer，由它负责把
+     多出来的那条补掉。 */
+  function hide() {
     if (!v.node) return;
     v.node.box.hidden = true;
     v.node.track.innerHTML = "";
     document.body.classList.remove("g-lock");
+  }
+
+  /* 收起查看器。→ true 表示「我顺手把浏览器历史也退了一条」。
+
+     `history.back()` 是**异步**的：调用完 state 不会立刻变，紧跟着再读
+     `history.state.ws` 拿到的还是退之前那个值。「画同款」正是 closeViewer()
+     之后紧接着 WSStack.back()，两下一叠就成了连退两层——AI 创作页被一起
+     关掉。所以把「已经退了一条」这个事实返回给调用方，让它别再退。
+
+     没压过 `{gv:1}`（比如查看器是从「我的」直接开的、历史已被别处清理）
+     时不会执行 back，返回 false，调用方照原逻辑退页面栈。 */
+  function closeViewer() {
+    if (!v.node || v.node.box.hidden) return false;
+    hide();
+    /* 用户自己关的（✕ / 「画同款」）：那条 `{gv:1}` 用不上了，退回去，
+       否则下一次按返回键是一次「什么都没发生」的空退。 */
+    if (!v.hist) return false;
+    v.hist = false;
+    if (Number((global.history.state || {}).gv) !== 1) return false;
+    global.history.back();
+    return true;
   }
 
   /* 「画同款」（用户 2026-11-23 定）：不是图生图，是把这张读成一段描述再生成。
@@ -376,8 +428,14 @@
     var it = current();
     if (!it) return;
     var work = v.work || {};
-    closeViewer();
-    if (global.WSStack) global.WSStack.back();
+    /* 关查看器会顺手退掉 `{gv:1}` 那条历史。紧接着调 WSStack.back() 时它
+       读到的是**退之前**的 state（back() 异步），于是又退一层，把 AI 创作
+       页也关掉。所以先把「还欠一次退页」告诉栈，让它按最终层数收。 */
+    var popped = closeViewer();
+    if (global.WSStack) {
+      if (popped && global.WSStack.backToChat) global.WSStack.backToChat();
+      else global.WSStack.back();
+    }
     if (global.WSRef) global.WSRef.useSame(work, it.id);
   }
 
@@ -408,7 +466,8 @@
     var it = current();
     if (!it) return;
     var a = document.createElement("a");
-    a.href = "/api/gal/img/" + it.id + "?s=v";
+    /* 和查看器同一档（`fit=1m`）：用户要的就是「看到哪张存哪张」 */
+    a.href = imgUrl(it);
     a.download = "gal-" + it.id + ".webp";
     document.body.appendChild(a);
     a.click();
@@ -457,6 +516,17 @@
     buildViewer();
     load(true);
   }
+
+  /* 手机返回键 / 浏览器后退落到查看器那一条时，收的是查看器，不是底下的
+     子页。`stack.js` 那边按 `state.ws` 层数退页面，压 `{gv:1}` 时把当时的
+     ws 一起带上，所以退到这一条时层数没变，它不会顺手把子页也关掉。 */
+  global.addEventListener("popstate", function (e) {
+    if (!v.node || v.node.box.hidden) return;
+    // 退到的这条还带 gv，说明是往前退回了另一个查看器态（几乎不会发生）
+    if (e.state && Number(e.state.gv) === 1) return;
+    v.hist = false;
+    hide();
+  });
 
   global.WSGallery = {
     open: open,

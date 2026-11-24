@@ -19,7 +19,10 @@
   html, body { background: var(--bg); color: var(--text);
     font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
     font-size: 14px; min-height: 100%; }
-  .wrap { max-width: 1320px; margin: 0 auto; padding: 20px 20px 60px; }
+  /* 容器被内容撑宽时至少要能裁掉，不然整页横向滚动，几个本子的名字会糊
+     在一起（2026-11-24 用户报的「名字很长时横向直接延伸出去」）。 */
+  .wrap { max-width: 1320px; margin: 0 auto; padding: 20px 20px 60px;
+    overflow-x: clip; }
   .topbar { display: flex; align-items: center; gap: 12px; padding: 12px 0 18px; flex-wrap: wrap; }
   .topbar h1 { font-size: 17px; font-weight: 500; }
   .topbar .pill { font-size: 11px; color: var(--accent); border: 1px solid var(--accent-dim);
@@ -30,11 +33,15 @@
     border: 1px solid var(--border-soft); border-radius: 10px; padding: 3px 9px; }
   .hbtn:hover { color: var(--text); }
   .hbtn.on { color: var(--accent); border-color: var(--accent-dim); }
-  /* 手机上长 pill + 历史下拉把顶栏撑到 163px：pill 收起、下拉限宽 */
+  /* 手机上长 pill + 历史下拉把顶栏撑到 163px：pill 收起、下拉限宽。
+     顶栏本来就 flex-wrap（见 .topbar），所以历史那一组可以单独换到第二行、
+     吃掉整行宽度（下拉 flex:1）——名字再长也只是被省略号截掉，不会把
+     .topbar 撑出屏幕。 */
   @media (max-width: 640px) {
     .topbar { gap: 8px 12px; padding: 10px 0 14px; }
     .topbar .pill, .topbar .spacer { display: none; }
-    #hist select { max-width: 150px; }
+    #hist { flex: 1 1 100%; order: 2; }
+    #hist select { flex: 1 1 auto; max-width: none; }
   }
   .spacer { flex: 1; }
   a.back { color: var(--text-dim); text-decoration: none; font-size: 13px; }
@@ -165,17 +172,35 @@
     line-height: 1.5; color: var(--text-dim); }
   .errline { color: var(--error); font-size: 11px; margin-top: 6px; word-break: break-all; }
 
+  /* 任务号是 md5 一类的一长串，直接写在 <h2> 里会把那行撑出卡片
+     ——和顶栏那条同一个毛病，用同一套办法：允许收缩 + 省略号。 */
+  #spec-task { display: inline-block; max-width: 46ch; vertical-align: bottom;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 640px) { #spec-task { max-width: 18ch; } }
+
   /* ── 体检 ── */
   #issues { margin-top: 8px; }
   #issues .it { font-size: 12px; color: var(--warn); line-height: 1.8; }
   #issues .ok { font-size: 12px; color: var(--success); }
 
-  /* ── 历史 ── */
-  #hist { display: flex; gap: 8px; align-items: center; }
-  #hist select { max-width: 320px; }
+  /* 名字很长时整条横向撑出去、几个本子糊在一起（2026-11-24 用户报的）。
+     根因是顶栏里放下拉的那个盒子**没有 min-width:0**：flex 子项的默认
+     `min-width:auto` 等于「不能小于内容宽度」，而 <select> 的固有宽度是按
+     最长那条 option 算的，`max-width:320px` 根本盖不住——于是它把 .topbar
+     撑得比 .wrap 还宽，右边直接溢出。
+
+     三条一起改：盒子允许收缩（min-width:0）、下拉本身可收缩且省略、
+     选中项的显示文字另给一份短的（见 shortLabel / loadList）。
+
+     `.wrap` 的 overflow-x 在文件开头那条里加（见顶部），这里只管 #hist。 */
+  #hist { display: flex; gap: 8px; align-items: center;
+    min-width: 0; flex: 0 1 auto; max-width: 100%; }
+  #hist select { max-width: 320px; min-width: 0; flex: 0 1 auto;
+    text-overflow: ellipsis; }
 
   /* 连载位置（2026-11-24）：打开续集本时顶栏显示「《暴风夜》· 第 02 页」 */
-  .ltag { font-size: 11px; color: var(--text-dim); border: 1px solid var(--border-soft);
+  .ltag { min-width: 0; font-size: 11px; color: var(--text-dim);
+    border: 1px solid var(--border-soft);
     border-radius: 10px; padding: 2px 8px; white-space: nowrap; max-width: 240px;
     overflow: hidden; text-overflow: ellipsis; }
   /* 新建 / 续集 切换：两个 tab，切的是第①步那张卡 */
@@ -405,7 +430,7 @@
   <div class="stage-hint" id="specHint">剧本还没写出来。点上面的「① 写这一集」填好剧情，编剧写完后会自动停在这里给你看。</div>
   <!-- ── 2. 剧本 ── -->
   <div class="card" id="spec-card" style="display:none">
-    <h2>剧本 <span id="spec-task" style="color:var(--text-mute);font-size:11px"></span></h2>
+    <h2>剧本 <span id="spec-task" title="" style="color:var(--text-mute);font-size:11px"></span></h2>
     <div class="headgrid">
       <div>
         <label class="fl">标题</label>
@@ -765,7 +790,9 @@ function renderSpec() {
   $("spec-card").style.display = "";
   var hint = $("specHint");
   if (hint) hint.style.display = "none";
+  // 任务号很长，显示上截断（见 #spec-task 的样式），悬停能看全
   $("spec-task").textContent = S.task || "";
+  $("spec-task").title = S.task || "";
   $("spec-title").value = S.spec.title;
   $("spec-style").value = S.spec.style;
 
@@ -1389,19 +1416,58 @@ async function loadList() {
     items.map(function (it) {
       /* 续集本标题常和上一本一样，靠「第 02 页」才分得清先后（2026-11-24） */
       var head = it.line_n ? "第" + ("0" + it.line_n).slice(-2) + "页 · " : "";
-      return '<option value="' + esc(it.task) + '">' + esc(head + it.mtime + " · " + it.title) +
-        (it.done ? "（" + it.done + "/" + it.pages + "）" : "") + "</option>";
+      var full = head + it.mtime + " · " + it.title +
+        (it.done ? "（" + it.done + "/" + it.pages + "）" : "");
+      /* `<select>` 的固有宽度按最长那条 option 算，光靠 CSS 的 max-width 收
+         不回来（老 WebView 尤其）。所以两条一起给：
+           · 展开列表里是完整那行（好挑）；
+           · 收起状态显示简写（日期 + 截短的标题 + 进度），宽度自然就短了。 */
+      return '<option value="' + esc(it.task) + '" data-short="' +
+        esc(shortLabel(it)) + '">' + esc(full) + "</option>";
     }).join("");
   var has = Array.prototype.some.call(sel.options, function (o) { return o.value === keep; });
   sel.value = has ? keep : (S.task && Array.prototype.some.call(sel.options, function (o) {
     return o.value === S.task; }) ? S.task : "");
+  polishHistSel();
   fillContFrom(items);
+}
+
+/* 收起状态那行字：日期 + 标题（截短）+ 进度。连载本前面再带个「02」。
+   完整标题仍在 option 里，展开照样看得见，`title` 悬停也能看全。
+
+   手机上下拉只有一百多像素，两个字宽的汉字就能顶出去，所以按视口宽度分两档：
+   窄屏只留「页码 + 月-日 + 标题前几个字」。 */
+function shortLabel(it) {
+  var narrow = (window.innerWidth || 0) < 640;
+  var t = String(it.title || it.task || "");
+  var keep = narrow ? 7 : 14;
+  if (t.length > keep) t = t.slice(0, keep) + "…";
+  var n = it.line_n ? ("0" + it.line_n).slice(-2) + " " : "";
+  var day = narrow ? String(it.mtime || "").replace(/^(\d+-\d+)-\d+$/, "$1") : it.mtime;
+  return n + day + " " + t + (it.done ? " " + it.done + "/" + it.pages : "");
+}
+
+/* `<select>` 收起时显示的就是「选中那条 option 的文字」。原生控件没法只
+   改显示不改数据，所以在选中项变化时把它的文本换成短的，其余项换回长的
+   （展开列表要完整信息）。`data-full` 记住原文，反复切也不会越切越短。 */
+function polishHistSel() {
+  var sel = $("histsel");
+  if (!sel) return;
+  Array.prototype.forEach.call(sel.options, function (o) {
+    var full = o.dataset.full || o.textContent;
+    var short = o.dataset.short || full;
+    o.dataset.full = full;
+    if (o.selected) o.textContent = short;
+    else o.textContent = full;
+    o.title = full;
+  });
 }
 
 $("histsel").addEventListener("change", async function () {
   if (!this.value) return;
   var r = await api("/api/moss/status?task=" + encodeURIComponent(this.value));
   if (!r.ok) { toast(r.error || "读不出来", true); return; }
+  polishHistSel();          // 选中项换成简写，其余项还原成完整那行
   loadPayload(r);
   if (r.running) startPoll();
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1419,7 +1485,7 @@ $("histsel").addEventListener("change", async function () {
   var first = $("histsel").options[1];
   if (!first) return;
   var r = await api("/api/moss/status?task=" + encodeURIComponent(first.value));
-  if (r.ok) { loadPayload(r); $("histsel").value = first.value; }
+  if (r.ok) { loadPayload(r); $("histsel").value = first.value; polishHistSel(); }
   if (r.running) startPoll();
 })();
 </script>

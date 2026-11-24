@@ -250,6 +250,12 @@
     shrink(file).then(function (blob) {
       var fd = new FormData();
       fd.append("file", blob, (file.name || "ref").replace(/\.[^.]+$/, "") + ".webp");
+      /* `use=temp`（2026-11-24 用户定）：这张图只为「识图反推」活一下，
+         不该进「我的作品」。服务端据此打上 use='temp'，所有作品列表都
+         过滤掉它，24 小时后连文件带缓存一起清。
+         以前不传这个字段，于是手机相册里的照片全被当成作品集攒在「我的」
+         里——用户看到的是「我的作品里全是我拍的照片」。 */
+      fd.append("use", "temp");
       return fetch("/api/gal/upload/one", {
         method: "POST", body: fd, credentials: "same-origin"
       }).then(function (r) { return r.json().catch(function () { return {}; }); });

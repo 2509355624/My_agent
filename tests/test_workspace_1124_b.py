@@ -75,28 +75,45 @@ class FitTest(unittest.TestCase):
                                headers=headers or self.h,
                                base_url=self.base_url)
 
-    def test_512k_is_under_cap(self):
-        r = self._get("&fit=512k")
+    def test_1m_is_under_cap(self):
+        r = self._get("&fit=1m")
         self.assertEqual(r.status_code, 200)
         self.assertLessEqual(len(r.data), gen_api._IMG_FIT_CAP,
-                            "512K 档超过了上限")
+                            "1M 档超过了上限")
         self.assertEqual(r.headers.get("Content-Type"), "image/webp")
 
-    def test_512k_bigger_than_grid_thumb_smaller_than_original(self):
-        """它得比 640 缩略图清楚、又比原图小得多——这就是「和画廊一样大」。"""
+    def test_cap_is_one_megabyte(self):
+        """2026-11-24 用户：「现在只有 102k 还是太小了……压到 1m 即可」。"""
+        self.assertEqual(gen_api._IMG_FIT_CAP, 1024 * 1024)
+
+    def test_fit_tries_large_widths_first(self):
+        """从大往小试。反过来（768 起）第一张往往才 50KB 就「合格」，
+        永远出不来高清图——上一版「只有 102k」就是这么来的。"""
+        self.assertEqual(tuple(gen_api._IMG_FIT_W),
+                         tuple(sorted(gen_api._IMG_FIT_W, reverse=True)))
+        self.assertGreaterEqual(gen_api._IMG_FIT_W[0], 1536)
+
+    def test_1m_bigger_than_grid_thumb_smaller_than_original(self):
+        """它得比 640 缩略图清楚、又比原图小得多。"""
         full = len(self._get("").data)
         grid = len(self._get("&w=640").data)
-        fit = len(self._get("&fit=512k").data)
-        self.assertGreater(fit, grid, "512K 档比网格缩略图还小，白做")
-        self.assertLess(fit * 4, full, "512K 档没比原图小多少")
+        fit = len(self._get("&fit=1m").data)
+        self.assertGreater(fit, grid, "1M 档比网格缩略图还小，白做")
+        self.assertLess(fit * 4, full, "1M 档没比原图小多少")
 
-    def test_512k_supports_304(self):
-        r1 = self._get("&fit=512k")
+    def test_1m_supports_304(self):
+        r1 = self._get("&fit=1m")
         h = dict(self.h)
         h["If-None-Match"] = r1.headers.get("ETag")
-        r2 = self._get("&fit=512k", h)
+        r2 = self._get("&fit=1m", h)
         self.assertEqual(r2.status_code, 304)
         self.assertEqual(len(r2.data), 0)
+
+    def test_legacy_512k_still_served(self):
+        """老前端 / 存着的旧链接发 `512k`，按同一个上限发，别碎图。"""
+        r = self._get("&fit=512k")
+        self.assertEqual(r.status_code, 200)
+        self.assertLessEqual(len(r.data), gen_api._IMG_FIT_CAP)
 
     def test_unknown_fit_falls_back(self):
         base = len(self._get("").data)
@@ -256,15 +273,23 @@ class GalleryGroupTest(unittest.TestCase):
 class FrontendTest(unittest.TestCase):
     """前端事实：档位一致、超时给重试、下载走本地缓存、重放先问服务端。"""
 
-    def test_chat_uses_fit_512k(self):
+    def test_chat_uses_fit_1m(self):
         s = _src("web", "workspace", "js", "chat.js")
-        self.assertIn('var FIT = "512k"', s)
+        self.assertIn('var FIT = "1m"', s)
         self.assertIn("WSGen.img(file, FIT)", s, "列表/下载没走压缩档")
+
+    def test_click_does_not_fetch_original(self):
+        """2026-11-24 用户：「点击图片不需要重新传 10m 的原图」。
+        所以点开只能是放大这一张，不许再挂一个不带 fit 的地址。"""
+        s = _src("web", "workspace", "js", "chat.js")
+        self.assertNotIn("dataset.full", s, "还在点开时换原图地址")
+        self.assertIn("function toggleFull", s)
 
     def test_archive_uses_same_fit(self):
         s = _src("web", "workspace", "js", "archive.js")
-        self.assertIn('var FIT = "512k"', s)
-        self.assertIn("global.WSGen.img(m.file, FIT)", s)
+        self.assertIn('var FIT = "1m"', s)
+        self.assertIn("global.WSChat.shotEl(m.file)", s,
+                      "重放没复用同一张（地址不同就多下一遍）")
 
     def test_download_hits_local_cache_first(self):
         s = _src("web", "workspace", "js", "chat.js")

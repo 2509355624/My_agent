@@ -7,9 +7,9 @@
 (function (global) {
   "use strict";
 
-  /* 列表里铺的那一档：和服务端 `/api/gen/img?fit=` 对齐（长边试到 ≤512KB）。
-     和 chat.js 里的 `FIT` 是同一个值，两边改一处必须一起改。 */
-  var FIT = "512k";
+  /* 列表里铺的那一档：和服务端 `/api/gen/img?fit=` 对齐（长边从大往小试、
+     取第一张 ≤1MB）。和 chat.js 里的 `FIT` 是同一个值，两边改一处必须一起改。 */
+  var FIT = "1m";
 
   // ── 重放 ──────────────────────────────────────────────
 
@@ -84,10 +84,45 @@
 
   /* ── 恢复 ────────────────────────────────────────────
      消息按顺序重放：气泡、参考卡、结果卡（带图）、漫画格。
-     没出图的那条在重放完统一接回轮询（生图走 status，漫画走自己的轮询）。 */
+     没出图的那条在重放完统一接回轮询（生图走 status，漫画走自己的轮询）。
+
+     数据来源（2026-11-24）：先读服务端 `/api/chat/archive`（按登录的 QQ 号
+     存，换浏览器/换手机也是同一份），拿不到再退回本地那份。服务端那份是
+     正本——以前只认 localStorage，换设备就是一片空白。 */
   function restore() {
-    var d = global.WSStore && global.WSStore.load();
-    if (!d || !d.msgs || !d.msgs.length) return;
+    var local = global.WSStore && global.WSStore.load();
+
+    var ready = (global.WSStore && global.WSStore.pull)
+      ? global.WSStore.pull()
+      : Promise.resolve(null);
+
+    ready.then(function (d) {
+      var use = (d && d.msgs && d.msgs.length) ? d.msgs : null;
+      // 服务端没有、本地有：说明这台设备上有还没推上去的记录（比如刚断网
+      // 生成完的那批）。照常重放本地那份，下一次 save 会把它补推上去。
+      if (!use) {
+        if (local && local.msgs && local.msgs.length) replay(local.msgs);
+        return;
+      }
+      /* 服务端有：以它为准。本地多出来的那几条（比服务端新）也接着放，
+         不然「另一台刚画完、后台还没推上去」的那张会在这台上凭空消失。 */
+      var extra = [];
+      if (local && local.msgs && local.msgs.length) {
+        var known = {};
+        use.forEach(function (m) { known[JSON.stringify(m)] = 1; });
+        extra = local.msgs.filter(function (m) {
+          return !known[JSON.stringify(m)];
+        });
+        // 只有本地最后几条算「新的」，老的那些多半是本地还没被服务端覆盖
+        if (extra.length > 20) extra = [];
+      }
+      replay(use.concat(extra));
+    });
+  }
+
+  function replay(list) {
+    if (!list || !list.length) return;
+    var d = { msgs: list };
 
     /* 重放消息里的参考卡时顺手把「待发送」那张也认回来：用户没发的那张
        刷新后还得在输入栏上方等着，不然得重新去画廊点一次。只认最后一张
@@ -111,26 +146,10 @@
       } else if (m.k === "img") {
         var c = restoreShell(m);
         if (m.file) {
-          var img = document.createElement("img");
-          img.alt = "生成结果";
-          img.loading = "lazy";
-          img.decoding = "async";
-          // 恢复历史也铺**512KB 那一档**（2026-11-24）：翻一次记录可能十几张，
+          // 恢复历史也铺**1MB 那一档**（2026-11-24）：翻一次记录可能十几张，
           // 每张原图 2~8MB，全从家用上行出就是「打开页面等半天」的由来。
-          // `FIT` 和 chat.js 里同一个值，下载拿的也是这一张。
-          img.src = global.WSGen.img(m.file, FIT);
-          img.dataset.full = global.WSGen.img(m.file);
-          img.className = "shot";
-          img.addEventListener("click", function () {
-            if (!img.dataset.full || img.dataset.fullLoaded === "1") return;
-            img.dataset.fullLoaded = "1";
-            img.classList.add("shot-full");
-            img.src = img.dataset.full;
-            // 顺手把原图也存进本地缓存：下次点开、换域名再来都不用重拉
-            pull(img.dataset.full);
-          });
-          // 列表这张本身也进本地缓存——下载直接拿它，不再穿一次隧道
-          pull(img.src);
+          // `FIT` 和 chat.js 里同一个值；点开只是放大这一张，不再换原图。
+          var img = global.WSChat.shotEl(m.file);
           c.body.appendChild(img);
           // 重放时把 prompt / skill 一起交给 buildActs：不带的话「复制」
           // 复制的是空串、「重画」也排不上队（新版多了下载，同样要 file）

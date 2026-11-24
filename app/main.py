@@ -173,6 +173,11 @@ app.register_blueprint(friend_api.bp)
 # 群友上传 → 压缩后入库。同样只认内部令牌，公网入口在 5175。
 app.register_blueprint(gallery_api.bp)
 
+# 工作台聊天记录（2026-11-24）：按 QQ 号一档一份，换浏览器 / 换设备登录
+# 拿到的是同一份。见 app/features/chat/routes.py。
+from app.features.chat import routes as chat_archive_api                 # noqa: E402
+app.register_blueprint(chat_archive_api.bp)
+
 
 @app.before_request
 def _public_source_guard():

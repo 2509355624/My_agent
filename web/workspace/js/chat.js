@@ -18,10 +18,14 @@
      重排一张。 */
   var SETTLE_MS = 8 * 60 * 1000;
   var PAINT_MS = 25 * 60 * 1000;
-  /* 聊天区铺的图：长边试到不超过 512KB 的那一档 WebP（和服务端 `fit` 对齐）。
-     用户口径是「和画廊一样的大小即可」——画廊网格 360 / 预览 1600，512KB
-     正好落在中间：手机上看着够清楚，一张 0.2~0.5MB，十几张也就几 MB。 */
-  var FIT = "512k";
+  /* 聊天区铺的图：长边从大往小试、取第一张不超过 1MB 的那一档 WebP（和服务端
+     `fit` 对齐，见 image/routes.py 的 `_IMG_FIT_W`）。
+
+     2026-11-24 用户改的口径：「现在只有 102k 还是太小了……直接压到 1m 即可，
+     不管什么图片，只要是工作台的，服务端压缩到 1m 再传过来，点击图片不需要
+     重新传 10m 的原图，我们默认就只给 1m 即可」——所以这里**就是最终那一份**：
+     列表、点开、下载全部用它，不存在「点一下再拉原图」这回事了。 */
+  var FIT = "1m";
 
   var el = {};
   var S = {
@@ -316,19 +320,29 @@
     card.acts.appendChild(again);
   }
 
-  /* 点缩略图看原图（2026-11-24）：列表里铺的是 512KB 那一档，真要细看才
-     拉原图。**先问本地缓存**：之前点开过一次的原图已经躺在 IndexedDB 里，
-     再点就是 0 请求（换过隧道域名也一样命中，见 imgcache.js）。
-     原地把 src 换掉而不是开一个查看器——少一套 DOM，也不会多出「关了查看器
-     消息位置跳走」这类毛病。 */
-  function openFull(img) {
-    var full = img.dataset.full || "";
-    if (!full || img.dataset.fullLoaded === "1") return;
-    img.dataset.fullLoaded = "1";
-    img.classList.add("shot-full");
-    img.src = full;
-    // 顺手存一份：下次点开、下次「下载原图」都不用再穿一次隧道。
-    pull(keyOf(full), full);
+  /* 点一下把这张**放大到原尺寸看**（2026-11-24 用户改口径后：不再拉原图）。
+
+     以前这里是把 src 换成不带 fit 的原图（一张 2~8MB，走一次家用上行，等十几
+     秒），用户明确否掉了：「点击图片不需要重新传 10m 的原图，我们默认就只给
+     1m 即可」。所以现在点开只是把已经下下来的那份铺开——100% 原尺寸、允许
+     手指缩放，**零额外请求**。
+
+     原地放大而不是开一个查看器：少一套 DOM，也不会多出「关了查看器消息位置
+     跳走」这类毛病。再点一下收回去。 */
+  function toggleFull(img) {
+    var on = img.classList.toggle("shot-full");
+    if (!on) return;
+    // 铺开后这张比气泡宽得多，横向要能滑到底看右边，不然等于只看到左半张
+    var b = box();
+    if (b) {
+      global.requestAnimationFrame(function () {
+        var r = img.getBoundingClientRect();
+        var br = b.getBoundingClientRect();
+        if (r.left < br.left || r.right > br.right) {
+          b.scrollLeft += (r.left - br.left) - 12;
+        }
+      });
+    }
   }
 
   /* 缓存 key 和请求地址是两样东西（2026-11-24）：地址上带站点签名 `k=`，
@@ -425,11 +439,13 @@
     })["catch"](fromNet);
   }
 
-  /* 聊天区里铺的是 **512KB 那一档**（2026-11-24 用户：「图片生成之后，要加载
-     非常的慢」「工作台其实是没有 qq 好用的，而且对带宽的压力也比较大」
-     「压缩图片和画廊的一样的大小」）。原图常有 2~8MB，一张卡一张原图，
-     恢复历史十几张就是几十 MB 全从这台机器往上走——家里那条上行扛不住。
-     点一下才拉原图（`openFull`），不是不给。
+  /* 聊天区里铺的是 **1MB 那一档**（2026-11-24 用户：「直接压到 1m 即可，
+     不管什么图片，只要是工作台的，服务端压缩到 1m 再传过来」）。原图常有
+     2~8MB，一张卡一张原图，恢复历史十几张就是几十 MB 全从这台机器往上走
+     ——家里那条上行扛不住。
+
+     一份到底：点开不再是「换原图地址」，而是把已经下下来的这张放大
+     （见 toggleFull），所以这儿不挂原图地址。
 
      另外它顺手把这张的字节 `pull` 进本地缓存：下载和下次打开都直接拿。 */
   function shotEl(file) {
@@ -438,9 +454,9 @@
     img.loading = "lazy";
     img.decoding = "async";
     img.src = global.WSGen.img(file, FIT);
-    img.dataset.full = global.WSGen.img(file);
+    img.dataset.file = file || "";
     img.className = "shot";
-    img.addEventListener("click", function () { openFull(img); });
+    img.addEventListener("click", function () { toggleFull(img); });
     pull(global.WSGen.imgKey(file, FIT), img.src);
     return img;
   }
@@ -724,6 +740,21 @@
     grow();
     syncSend();
 
+    /* 在子页里发的话，发完就该回聊天页（2026-11-24 用户：「我在 AI 创作界面，
+       上传图片，然后说需求，然后点击发送的时候，没有自动回到初始的聊天界面」）。
+
+       为什么要退而不是原地等：气泡和出图卡片全都写进根消息区（见 box() 上
+       面的注释），子页盖在上面时用户看到的是「点了发送、什么都没发生」。
+       退页动画 0.28s，正好盖住识图 + 排队的起步，回来就是聊天页在跑。
+
+       只退一层：AI 创作是从聊天页推进来的，退一层就回到根。漫画单本页
+       （book）不借输入栏，走不到这儿。 */
+    if (global.WSStack && global.WSStack.top()) {
+      var top = global.WSStack.top();
+      // 只退「借了输入栏」的页；别的子页里如果以后也能发，别顺手把人退出去
+      if (top.dataset && top.dataset.dock) global.WSStack.back();
+    }
+
     // 漫画模式：这句话是剧情需求，交给创作面板去跑「编剧 → 分页画」
     // 漫画那条链自己会读参考，不需要在这里等识图
     if (global.WSCreate && global.WSCreate.mode() === "comic") {
@@ -895,6 +926,9 @@
     syncHint: function () { if (global.WSRef) global.WSRef.syncHint(); },
     paintUser: paintUser,
     paintNote: paintNote,
+    /* 重放存档时复用同一张图（同一条地址 → 同一个缓存 key，重放和历史不会
+       各下一遍）。见 archive.js 的 replay()。 */
+    shotEl: shotEl,
     buildActs: buildActs,
     box: box,
     hideEmpty: hideEmpty,

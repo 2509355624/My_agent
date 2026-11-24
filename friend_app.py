@@ -750,6 +750,17 @@ def proxy(sub):
     return _forward("/api/friend", sub)
 
 
+@app.route("/api/chat/<path:sub>", methods=["GET", "POST", "DELETE"])
+def proxy_chat(sub):
+    """工作台聊天记录（2026-11-24）：`/api/chat/archive` 的 GET/POST/DELETE。
+
+    走 `_forward` 而不是自己读档：QQ 号必须由网关**注入**（`params["qq"]`），
+    客户端传什么 qq 都不作数——否则改个参数就能读写别人的聊天记录。
+    没登录 → 401（`_forward` 自带），前端据此退回「只用本地那份」。
+    """
+    return _forward("/api/chat", sub)
+
+
 @app.route("/api/gen/<path:sub>", methods=["GET", "POST"])
 def proxy_gen(sub):
     """跑图台那套接口（渠道清单 / 提交 / 轮询 / 取图）给新界面用。

@@ -85,6 +85,40 @@
   white-space: nowrap;
 }
 
+/* 中段没有标题也不许撑出一条空栏（2026-11-24 用户两次报：
+   「AI 创作的界面头顶有一行多余的横栏，明明什么都没有，但是还留着」、
+   「我的漫画作品，点进去，依旧是头顶的白色横栏的问题」）。
+   `.vtitle` 是 flex:1，就算一个字都没有也占一行；`.vtop` 自己另有 padding
+   + 分隔线，于是顶上就横着一条 38px 的空带。
+
+   现在：正文标题为空时它退成 0 宽，顶栏只剩两端的 ✕ / 人形；两端按钮之间
+   的空档由 `justify-content: space-between` 补上。
+
+   ⚠️ 判据是 `:empty`（一个子节点都没有），不是「文字为空」：`.gtabs`
+   （AI 创作那页的文件夹标签条）也是中段，它里面装着按钮节点，所以天生
+   不匹配这一条——不能写成 `.vtitle:not(:empty)` 去「保护」它，那样只能
+   保住空标签条，真装进按钮反而被忽略。 */
+.vtop > .vtitle:empty {
+  flex: 0 0 0;
+  width: 0;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+/* 中段让位之后，两端按钮靠 space-between 分列左右——原来那个「flex:1 的
+   中段」负责把它们撑开的。 */
+.vtop:has(> .vtitle:empty) {
+  justify-content: space-between;
+}
+
+/* 没有 :has() 的老 WebView（安卓 9 及更早的微信内核）兜一层：中段 0 宽时
+   把人形按钮推到最右，用 margin-left:auto，效果一样。 */
+.vtop > .vtitle:empty + button {
+  margin-left: auto;
+}
+
 .vbody {
   flex: 1 1 auto;
   min-height: 0;

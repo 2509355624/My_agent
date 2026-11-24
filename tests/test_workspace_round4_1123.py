@@ -44,8 +44,10 @@ class TestDescribeOnlyOnSend(unittest.TestCase):
         i = js.index("function send()")
         seg = js[i:js.index("function copyText", i)]
         self.assertIn("ensureDescribed", seg, "点发送才去读图")
-        # 读图的等待必须在 submitJob 之前，顺序反了就白读
-        self.assertLess(seg.index("ensureDescribed"), seg.index("submitJob"))
+        # 读图的等待必须在真正 submitJob 之前，顺序反了就白读。
+        # 从最后一个 ensureDescribed 找起：函数里前面还有注释提到它。
+        at = seg.rindex("ensureDescribed")
+        self.assertLess(at, seg.index("submitJob", at), "读完才提交")
 
     def test_ensure_described_is_parallel_and_skips_read_ones(self):
         js = _read("js/ref.js")
@@ -103,9 +105,11 @@ class TestDownloadButton(unittest.TestCase):
     def test_download_uses_anchor(self):
         js = _read("js/chat.js")
         i = js.index("function downloadImage")
-        seg = js[i:i + 900]
-        self.assertIn('a.download =', seg, "用 <a download> 存文件，不走 canvas")
+        seg = js[i:js.index("function shotEl", i)]
+        self.assertIn("a.download =", seg, "用 <a download> 存文件，不走 canvas")
         self.assertIn("WSGen.img", seg, "地址仍走同源 /api/gen/img")
+        # 下载拿的就是列表里那张（同一个 fit），不是另一份原图
+        self.assertIn("WSGen.img(file, FIT)", seg)
 
     def test_card_keeps_its_file(self):
         """卡片得知道自己是哪张图，否则下载按钮拿不到文件名。"""

@@ -82,6 +82,15 @@ _COMIC_WHERE_RAW = ("(grp LIKE '漫画\\_%' ESCAPE '\\' "
 THUMB_BATCH = 24
 THUMB_BATCH_V = 6
 
+# 临时参考图（use='temp'）在所有列表里被过滤掉。只写一次，免得六条 SQL
+# 各写一遍、改一处漏五处。COALESCE 兜老库：`use` 列是后加的，老行是 NULL。
+_NOT_TEMP = "COALESCE(w.use,'keep') <> 'temp'"
+_NOT_TEMP_RAW = "COALESCE(use,'keep') <> 'temp'"
+
+# `?fit=` 认哪些写法。`512k` 是老前端发出来的，按同一个上限发（1MB），
+# 免得存着的旧链接一下碎掉。
+_FIT_KEYS = ("1m", "1024k", "1024", "512k", "512")
+
 # 前端一次最多能让我预生成几张预览图。多了就是在替「全库预热」开门，
 # 一万三千张 × 0.4 秒没人等得起。
 WARM_MAX = 24
@@ -209,7 +218,9 @@ def api_list():
         return bad
     qq = _qq()
     page, size = _page_args()
-    where = ["w.n > 0"]
+    # 临时参考图（use='temp'）不进任何一面墙：它们是用户垫给识图用的，
+    # 不属于任何人的作品（2026-11-24）。见 api_upload_one 的说明。
+    where = ["w.n > 0", _NOT_TEMP]
     args = []
     # 站主点「看已隐藏」时只出下架那批（用来反悔）。这个开关只有站主有，
     # 别人带了 hidden=1 也照旧走下面的公开口径。
@@ -267,12 +278,13 @@ def api_list():
         if scope == "owner":
             # 下架的目录不占分类条：整个分类都被隐藏时，那个标签点进去是空墙。
             gsql = ("SELECT DISTINCT grp, path FROM works WHERE n>0 AND grp<>''"
-                    " AND src='owner' AND hidden=0")
+                    " AND src='owner' AND hidden=0 AND " + _NOT_TEMP_RAW)
         elif scope == "pub":
             gsql = ("SELECT DISTINCT grp, path FROM works WHERE n>0 AND grp<>''"
-                    " AND src='user'")
+                    " AND src='user' AND " + _NOT_TEMP_RAW)
         else:
-            gsql = "SELECT DISTINCT grp, path FROM works WHERE n>0 AND grp<>''"
+            gsql = ("SELECT DISTINCT grp, path FROM works WHERE n>0 AND grp<>''"
+                    " AND " + _NOT_TEMP_RAW)
         # 目录被清空（站主「清空 web」之后那种）时 `n` 还是旧值，库里仍然
         # 说这个分类有图——标签留着，点进去一面空白墙。所以这里顺手判一下
         # 目录在不在，整组目录都没了就不列它（2026-11-24 用户要求）。
@@ -306,6 +318,7 @@ def api_list():
                        " AND src='user'" if scope == "pub" else "")
         has_comic = con.execute(
             "SELECT 1 FROM works WHERE n>0" + comic_scope + " AND "
+            + _NOT_TEMP_RAW + " AND "
             + _COMIC_WHERE_RAW + " LIMIT 1"
         ).fetchone()
         if has_comic:
@@ -362,7 +375,7 @@ def api_mine():
             # 扫完报「13285 张图」却一张都不显示——站主会以为扫描没生效。
             rows = con.execute(
                 _SELECT_WORK + " WHERE (w.src='user' AND w.owner=?)"
-                " OR w.src='owner'"
+                " OR (w.src='owner' AND " + _NOT_TEMP + ")"
                 " ORDER BY (w.src='user') ASC, w.grp ASC,"
                 " CASE WHEN w.ord='' THEN 1 ELSE 0 END, w.ord ASC,"
                 " w.sort ASC, w.id DESC"
@@ -371,6 +384,7 @@ def api_mine():
         else:
             rows = con.execute(
                 _SELECT_WORK + " WHERE w.src='user' AND w.owner=?"
+                " AND " + _NOT_TEMP +
                 " ORDER BY w.id DESC LIMIT ? OFFSET ?",
                 (str(qq), size + 1, (page - 1) * size)).fetchall()
     return jsonify({"ok": True, "works": [_work_row(r, qq) for r in rows[:size]],
@@ -390,6 +404,11 @@ def api_work(wid):
         if not row:
             return jsonify({"ok": False, "error": "没有这个作品集"}), 404
         mine = row["src"] == "user" and row["owner"] == str(qq or "")
+        # 临时参考图只有"上传它的那个人自己拿着 id"才打得开（前端刚传完
+        # 立刻要显示缩略图），别人、以及列表里都碰不到它。
+        is_temp = str(row["use"] or "keep") == "temp"
+        if is_temp and not mine and not _is_owner(qq):
+            return jsonify({"ok": False, "error": "没有这个作品集"}), 404
         if row["hidden"] and not mine and not _is_owner(qq):
             return jsonify({"ok": False, "error": "没有这个作品集"}), 404
 
@@ -437,9 +456,12 @@ def api_img(iid):
 
     with gallery.connect() as con:
         row = con.execute(
-            "SELECT i.path, w.hidden, w.src, w.owner FROM items i"
+            "SELECT i.path, w.hidden, w.src, w.owner, w.use FROM items i"
             " JOIN works w ON w.id=i.work_id WHERE i.id=?", (iid,)).fetchone()
     if not row:
+        return jsonify({"ok": False, "error": "没这张图"}), 404
+    if str(row["use"] or "keep") == "temp" and row["owner"] != str(qq or "") \
+            and not _is_owner(qq):
         return jsonify({"ok": False, "error": "没这张图"}), 404
     if row["hidden"] and row["owner"] != str(qq or "") and not _is_owner(qq):
         return jsonify({"ok": False, "error": "没这张图"}), 404
@@ -448,11 +470,22 @@ def api_img(iid):
     if not os.path.isfile(src):
         return jsonify({"ok": False, "error": "文件不在了"}), 404
 
-    # `fit=512k`（2026-11-24）：和跑图台那条同一个口径——长边试到不超过
-    # 512KB。画廊网格 / 工作台下载都用它，图片大小就和「看的这一份」一致了。
+    # `fit=1m`（2026-11-24）：和跑图台那条同一个口径——长边从大往小试，取
+    # 第一张不超过 1MB 的 WebP。画廊网格 / 查看器 / 下载都用它，所以「看到的
+    # 那一份」和「存下来的那一份」是同一张图，点开不会再换一次。
     # 复用 `_img_fit_file`（同一套缩略图缓存），不在这儿重写一份。
-    if str(request.args.get("fit") or "").strip().lower() in ("512k", "512"):
+    if str(request.args.get("fit") or "").strip().lower() in _FIT_KEYS:
         from app.features.image.routes import _IMG_FIT_CAP, _img_fit_file
+        # 源文件本来就不超上限时，直接发它——再压一遍只掉画质：
+        #   · 群友上传的落盘就是 1600px WebP（75~260KB），`reuse_direct` 认这种；
+        #   · 站主自己跑出来存进图库的原图，大的有几十 MB，走下面的压缩档。
+        # 以前没这一条时，一张 75KB 的 1600px 预览会被缩到 1536 再压一次，
+        # 白丢一点清晰度，还多占一份缓存。
+        try:
+            if gallery.reuse_direct(src) or os.path.getsize(src) <= _IMG_FIT_CAP:
+                return _img(src)
+        except OSError:
+            pass
         got = _img_fit_file(src, _IMG_FIT_CAP)
         if got:
             return _img(got)
@@ -512,7 +545,7 @@ def api_thumbs():
     marks = ",".join("?" * len(ids))
     with gallery.connect() as con:
         rows = con.execute(
-            "SELECT i.id, i.path, w.hidden, w.owner FROM items i"
+            "SELECT i.id, i.path, w.hidden, w.owner, w.use FROM items i"
             " JOIN works w ON w.id=i.work_id WHERE i.id IN (%s)" % marks,
             ids).fetchall()
 
@@ -521,6 +554,9 @@ def api_thumbs():
     for r in rows:
         if r["hidden"] and r["owner"] != str(qq or "") and not mine_ok:
             continue                       # 别人下架的图，一张都不给
+        if str(r["use"] or "keep") == "temp" and r["owner"] != str(qq or "") \
+                and not mine_ok:
+            continue                       # 别人的临时参考图也不给
         if not r["path"] or not os.path.isfile(r["path"]):
             continue
         todo.append((r["id"], r["path"]))
@@ -585,7 +621,7 @@ def api_warm():
     marks = ",".join("?" * len(ids))
     with gallery.connect() as con:
         rows = con.execute(
-            "SELECT i.id, i.path, w.hidden, w.owner FROM items i"
+            "SELECT i.id, i.path, w.hidden, w.owner, w.use FROM items i"
             " JOIN works w ON w.id=i.work_id WHERE i.id IN (%s)" % marks,
             ids).fetchall()
 
@@ -593,6 +629,9 @@ def api_warm():
     ok = {}
     for r in rows:
         if r["hidden"] and r["owner"] != str(qq or "") and not mine_ok:
+            continue
+        if str(r["use"] or "keep") == "temp" and r["owner"] != str(qq or "") \
+                and not mine_ok:
             continue
         if not r["path"] or not os.path.isfile(r["path"]):
             continue
@@ -645,13 +684,13 @@ def _marked(kind, qq, page, size):
     返回的每条带 `work` + `idx`：前端拿它直接开查看器并跳到那一张，
     不用为了看一张图先加载整个作品集。
     """
-    where = ["m.qq=?", "m.kind=?", "w.n > 0"]
+    where = ["m.qq=?", "m.kind=?", "w.n > 0", _NOT_TEMP]
     args = [str(qq), kind]
     if not _is_owner(qq):
         # 下架的图别出现在「我收藏的」里（除了作者本人，他本来就还能看）
         where.append("(w.hidden=0 OR (w.src='user' AND w.owner=?))")
         args.append(str(qq))
-    sql = ("SELECT i.id, i.work_id, i.idx, w.title, w.src, w.owner"
+    sql = ("SELECT i.id, i.work_id, i.idx, w.title, w.src, w.owner, w.use"
            " FROM marks m JOIN items i ON i.id=m.item_id"
            " JOIN works w ON w.id=i.work_id"
            " WHERE " + " AND ".join(where) +
@@ -983,6 +1022,19 @@ def api_upload_one():
     `wid` 空着就开一个新作品集并把 id 返回，后面几张带着同一个 wid 追加。
     这样第一张几秒内就能落地，不用等十张全压完；某一张失败也只影响它
     自己，不连累已经传上去的。
+
+    ## `use=temp`（2026-11-24 用户明确要求）
+
+    「上传的图片是不可以我服务器进行存储的，只是作为临时传到我的服务器
+    作为识图反推的图片」——工作台输入栏上传的参考图**只是垫给识图看**的，
+    不该进「我的作品」。所以前端传 `use=temp`，落库时 `use='temp'`：
+
+    · 所有列表接口（/list、/mine、分类条、/favs、/likes）都按
+      `use <> 'temp'` 过滤，用户在自己的作品里永远看不到它们；
+    · 24 小时后由 `purge_temp` 连文件带缓存一起清掉（不常驻线程，
+      下一次传图时顺手扫一遍）。
+
+    不传 `use` 的老调用方（站主自己的批量上传、别的页面）行为不变。
     """
     bad = _guard()
     if bad:
@@ -990,6 +1042,10 @@ def api_upload_one():
     qq = _qq()
     if not qq:
         return jsonify({"ok": False, "error": "参数不对"}), 400
+
+    use = (gallery.USE_TEMP
+           if str(request.form.get("use") or "").strip().lower() == "temp"
+           else gallery.USE_KEEP)
 
     title = str(request.form.get("title") or "").strip()[:40]
     f = (request.files.getlist("file") or [None])[0]
@@ -1024,9 +1080,9 @@ def api_upload_one():
         # 默认并进最近一个还没装满的集——100 张填满再开下一个，墙上不会
         # 散落一堆两三张的小集。勾了「新建作品集」才跳过这一步。
         if not force_new:
-            wid = gallery.latest_open_work(qq)
+            wid = gallery.latest_open_work(qq, use)
         if not wid:
-            wid = gallery.create_work(qq, title or "未命名作品")
+            wid = gallery.create_work(qq, title or "未命名作品", use=use)
             made = True
 
     try:
@@ -1051,10 +1107,17 @@ def api_upload_one():
         irow = con.execute(
             "SELECT id FROM items WHERE work_id=? AND idx=?",
             (wid, idx - 1)).fetchone()
+    # 临时参考图：趁着这次上传顺手把过期的老图收掉。只清 temp，
+    # 用户自己的收藏一张都不碰（见 gallery.purge_temp）。
+    if use == gallery.USE_TEMP:
+        try:
+            gallery.purge_temp()
+        except Exception:                    # noqa: BLE001
+            log.warning("回收临时参考图失败", exc_info=True)
     return jsonify({"ok": True, "work_id": wid, "n": n, "idx": idx,
                     "item_id": (irow["id"] if irow else 0),
                     "left": max(0, gallery.WORK_MAX - n),
-                    "new": made,
+                    "new": made, "use": use,
                     "title": (trow["title"] or "") if trow else ""})
 
 
@@ -1101,11 +1164,14 @@ def _read_image_text(iid, prompt):
     qq = _qq()
     with gallery.connect() as con:
         row = con.execute(
-            "SELECT i.path, w.hidden, w.owner FROM items i"
+            "SELECT i.path, w.hidden, w.owner, w.use FROM items i"
             " JOIN works w ON w.id=i.work_id WHERE i.id=?", (iid,)).fetchone()
     if not row:
         return ""
     if row["hidden"] and row["owner"] != str(qq or "") and not _is_owner(qq):
+        return ""
+    if str(row["use"] or "keep") == "temp" and row["owner"] != str(qq or "") \
+            and not _is_owner(qq):
         return ""
     src = row["path"]
     if not src or not os.path.isfile(src):

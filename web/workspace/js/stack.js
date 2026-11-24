@@ -97,6 +97,19 @@
     }
   }
 
+  /* 「刚有人替我把 history 退了一条，你现在只需要把栈收一层」。
+
+     场景：画廊查看器压了 `{gv:1}`，关它时调了 `history.back()`。那个调用
+     是异步的，紧接着再走 back() 读 `history.state.ws` 读到的还是**退之前**
+     的值，于是又 back 一次 —— 用户点一下「画同款」，AI 创作页被连退两层
+     一起关掉。
+
+     这里不走 history（已经退过了），直接出栈；popstate 稍后到达时 want
+     会比 depth 小，`while` 里没有可退的，是空转，不会多退。 */
+  function backToChat() {
+    closeNow();
+  }
+
   function bindView(view) {
     view.addEventListener("click", function (e) {
       if (e.target.closest("[data-close]")) { back(); return; }
@@ -299,6 +312,8 @@
     push: push,
     replace: replace,
     back: back,
+    /* 别人已经替我把浏览器历史退了一条时用（看 gallery.js 的 sameAs） */
+    backToChat: backToChat,
     top: function () { return S.top; }
   };
 })(window);

@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS works (
     cover   TEXT DEFAULT '',      -- 封面图绝对路径
     n       INTEGER DEFAULT 0,
     hidden  INTEGER DEFAULT 0,    -- 站主下架
+    use     TEXT DEFAULT 'keep',  -- keep 收藏 / temp 只给识图用的临时参考图
     fp      TEXT DEFAULT '',      -- 扫描指纹，没变就不重写 items
     sort    INTEGER DEFAULT 0,    -- 发现顺序，扫描时按自然序赋，翻页靠它
     ord     TEXT DEFAULT '',      -- 自然排序键（标题里的数字补零），分类内排序用
@@ -196,6 +197,10 @@ def init():
         cols = {r["name"] for r in con.execute("PRAGMA table_info(works)")}
         if "ord" not in cols:
             con.execute("ALTER TABLE works ADD COLUMN ord TEXT DEFAULT ''")
+        # 老库补列（2026-11-24）：这张是收藏还是临时参考图。加列即生效——
+        # 老数据默认 'keep'，一行都不用改。
+        if "use" not in cols:
+            con.execute("ALTER TABLE works ADD COLUMN use TEXT DEFAULT 'keep'")
         con.execute("PRAGMA journal_mode=WAL")
     return DB
 
@@ -810,38 +815,60 @@ def upload_dir(qq, wid):
     return os.path.join(UPLOAD, str(qq), str(wid))
 
 
-def create_work(qq, title=""):
+# 「这张图是干什么用的」。
+#   keep  = 用户自己收藏的图（旧的 `/upload` 批量上传走这条），要长期留着
+#   temp  = 临时垫给识图 / 反推用的参考图，**不许进「我的作品」**，
+#           过期由 `purge_temp` 扫掉（2026-11-24 用户：「上传的图片是不可以我
+#           服务器进行存储的，只是作为临时传到我的服务器作为识图反推的图片」）
+USE_KEEP = "keep"
+USE_TEMP = "temp"
+TEMP_TTL = 24 * 3600        # 临时图在盘上活多久（够用户当天回头再改一版）
+USE_GRP = {USE_KEEP: "群友", USE_TEMP: "临时"}
+
+
+def create_work(qq, title="", use=USE_KEEP):
     """先开一个空的作品集壳，返回 wid。
 
     逐张上传要用它：前端压好一张就传一张，第一张落地时后面九张可能还没
     解压完。所以壳必须先于图存在，否则每张都得等上一张。
 
     中途关掉页面最多留一个空壳，`abort_upload` 负责回收。
+
+    `use` 决定它属于哪一档：`temp` 的壳落在 grp='临时'，所有列表接口都
+    按 `use <> 'temp'` 过滤，所以它不会出现在「我的作品 / 画廊」上。
     """
     now = time.time()
+    use = USE_TEMP if use == USE_TEMP else USE_KEEP
     with connect() as con:
         cur = con.execute(
             "INSERT INTO works(key, src, owner, grp, title, path, cover, n,"
             " sort, ts, seen) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-            ("", "user", str(qq), "群友", title or "未命名作品", "",
+            ("", "user", str(qq), USE_GRP[use], title or "未命名作品", "",
              "", 0, 0, now, now))
         wid = cur.lastrowid
         con.execute("UPDATE works SET key=? WHERE id=?",
                     ("user:%s/%d" % (qq, wid), wid))
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(works)")}
+        if "use" in cols:
+            con.execute("UPDATE works SET use=? WHERE id=?", (use, wid))
     return wid
 
 
-def latest_open_work(qq):
+def latest_open_work(qq, use=USE_KEEP):
     """这个用户最近一个还没装满的作品集 id；一个都没有就返回 0。
 
     上传默认往这里塞：凑满 100 张再开下一个，墙上不会散落一堆两三张的
     小集。想单独开一个的时候由调用方传 `force_new` 绕开它。
+
+    `use` 必须分开找：临时参考图和正式收藏各占各的壳，混在一起会把用户的
+    参考图并进作品集里（2026-11-24）。
     """
+    use = USE_TEMP if use == USE_TEMP else USE_KEEP
     with connect() as con:
         row = con.execute(
             "SELECT id FROM works WHERE src='user' AND owner=? AND n < ?"
-            " ORDER BY id DESC LIMIT 1",
-            (str(qq), WORK_MAX)).fetchone()
+            " AND COALESCE(use,'keep')=? ORDER BY id DESC LIMIT 1",
+            (str(qq), WORK_MAX, use)).fetchone()
     return int(row["id"]) if row else 0
 
 
@@ -936,16 +963,16 @@ def abort_upload(qq, wid):
     return True
 
 
-def save_upload(qq, files, force_new=False):
+def save_upload(qq, files, force_new=False, use=USE_KEEP):
     """一次传多张：并入最近一集（或者新开）+ 逐张落盘。→ (work_id, 存了几张)
 
     files: [(filename, bytes)]，已由调用方做过大小检查。
     逐张上传的接口走 latest_open_work + append_upload，这里是批量兜底。
     默认和逐张一致：没装满的那个集先填，`force_new=True` 才另起一个。
     """
-    wid = 0 if force_new else latest_open_work(qq)
+    wid = 0 if force_new else latest_open_work(qq, use)
     if not wid:
-        wid = create_work(qq)
+        wid = create_work(qq, use=use)
     n = 0
     for i, (name, raw) in enumerate(files, 1):
         try:
@@ -954,6 +981,7 @@ def save_upload(qq, files, force_new=False):
         except Exception:
             log.warning("上传的第 %d 张转码失败：%s", i, name, exc_info=True)
     if not n:
+        # 一张都没落下来：把刚才开的空壳收回去
         delete_work(wid)
         return None, 0
     return wid, n
@@ -973,6 +1001,7 @@ def load_upload_image(raw):
 
 def delete_work(wid, owner=None):
     """删一个作品集。群友只能删自己的（owner 传 QQ 号时强校验）。"""
+    paths = []
     with connect() as con:
         row = con.execute("SELECT * FROM works WHERE id=?", (wid,)).fetchone()
         if not row:
@@ -981,15 +1010,45 @@ def delete_work(wid, owner=None):
             return False, "只能删自己的"
         if row["src"] == "owner":
             return False, "站主作品集不能从网页删（去磁盘删，再重新扫描）"
+        paths = [r["path"] for r in con.execute(
+            "SELECT path FROM items WHERE work_id=?", (wid,))]
         con.execute("DELETE FROM items WHERE work_id=?", (wid,))
         con.execute("DELETE FROM marks WHERE item_id NOT IN "
                     "(SELECT id FROM items)", ())
         con.execute("DELETE FROM works WHERE id=?", (wid,))
+    # 文件删掉之后，按路径哈希落下的缩略图/预览缓存就成了孤儿；临时图
+    # 一天要清好几批，不顺手带走就会一直堆在 state/gallery_cache 里。
+    for p in paths:
+        _drop_cache(p)
     try:
         shutil.rmtree(upload_dir(row["owner"], wid), ignore_errors=True)
     except OSError:
         pass
     return True, ""
+
+
+def purge_temp(ttl=TEMP_TTL):
+    """回收过期的临时参考图（`use='temp'`）。→ 删掉几个作品集
+
+    这些图只是为了「识图反推提示词」活一下：用户传上来、读成一段描述、
+    生成完就没用了。留在盘上既占地方，又会在「我的作品」里冒出一堆手机
+    相册图（2026-11-24 用户报的就是这个）。所以按 TTL 清干净，DB 行、
+    磁盘文件和缩略图缓存一起删。
+
+    由 `api_upload_one` 在**传新图时**顺手扫一次（不挂定时线程：没人在用
+    这个功能的时候不该有东西在后台跑）。
+    """
+    cut = time.time() - max(3600, int(ttl))
+    with connect() as con:
+        rows = con.execute(
+            "SELECT id FROM works WHERE COALESCE(use,'keep')='temp' AND ts < ?",
+            (cut,)).fetchall()
+    n = 0
+    for r in rows:
+        ok, _why = delete_work(int(r["id"]))
+        if ok:
+            n += 1
+    return n
 
 
 def _drop_cache(src):
