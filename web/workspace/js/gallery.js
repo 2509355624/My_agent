@@ -27,7 +27,16 @@
      立刻写回去（新内容还没排版时写不进就下一帧再补一次）。 */
   function fillTabs(grps) {
     if (!el.tabs) return;
-    var list = [""].concat(grps || []);
+    /* 同名标签只留一个。后端已经按分类收过一遍（2026-11-24 那批重复的
+       `new` 是 `SELECT DISTINCT grp, path` 按两列去重造成的），这里再兜
+       一层——标签重复时点哪个都跳同一个分类，纯属视觉噪声。 */
+    var uniq = [], seen = {};
+    (grps || []).forEach(function (g) {
+      if (!g || seen[g]) return;
+      seen[g] = true;
+      uniq.push(g);
+    });
+    var list = [""].concat(uniq);
     if (el.tabs.dataset.key === list.join("|")) return;
     el.tabs.dataset.key = list.join("|");
     var keep = el.tabs.scrollLeft;

@@ -56,6 +56,13 @@ class _Base(unittest.TestCase):
         moss_api.STATE_ROOT = self.state
         moss_api.COMFYUI_OUTPUT_DIR = os.path.join(self.tmp, "output")
         os.makedirs(moss_api.COMFYUI_OUTPUT_DIR)
+        # 连载档案也必须关在临时目录里（2026-11-24 加续集）：`_publish_line`
+        # 会在出图线程尾部写 `moss_series`，不隔离就是往真实存档里灌测试数据。
+        ms = moss_api.moss_series
+        self._old_series = (ms.STATE_ROOT, ms.INDEX_FILE)
+        ms.STATE_ROOT = os.path.join(self.tmp, "series")
+        ms.INDEX_FILE = os.path.join(ms.STATE_ROOT, "_index.json")
+        os.makedirs(ms.STATE_ROOT)
 
         app = Flask(__name__)
         app.register_blueprint(moss_api.bp)
@@ -64,6 +71,8 @@ class _Base(unittest.TestCase):
     def tearDown(self):
         moss_api.STATE_ROOT = self._old_state
         moss_api.COMFYUI_OUTPUT_DIR = self._old_out
+        ms = moss_api.moss_series
+        ms.STATE_ROOT, ms.INDEX_FILE = self._old_series
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _mk_task(self, name="20261021_1200_测试"):
@@ -437,6 +446,131 @@ class PageLabelTest(_Base):
         body = r.get_json()
         self.assertTrue(body["busy"])
         self.assertEqual(body["page"], 3)
+
+
+class ContinueTest(_Base):
+    """续集（2026-11-24 用户：「给 moss 漫画增加续集，和漫画工作台一样」）。
+
+    钉死五件事：
+      1. 老任务（没有系列）第一次续集时**补建**一条单链，前情/场景从 spec 取；
+      2. 续出来的新本**新开一个任务目录**，旧本一个字不动；
+      3. 一条线连着续三次，页号是 1,2,3,4,5,6… **连续不跳号、不撞号**；
+      4. 同一本重复调 `_series_for_task` 不会重复登记（多页的本最容易踩）；
+      5. 没写剧情 / 任务不存在 → 400 / 404，不建空本子。
+    """
+
+    def _mk_book(self, name="20261101_1200_旧本", pages=2):
+        d = os.path.join(self.state, name)
+        os.makedirs(d, exist_ok=True)
+        spec = {"title": "旧本", "cast": {"girl": "a girl with long hair"},
+                "pages": [{"n": i + 1, "layout": "2x2", "scene": "scene %d" % (i + 1),
+                           "beat": "第%d页的钩子" % (i + 1),
+                           "panels": [{"desc": "panel %d" % (i + 1)}]}
+                          for i in range(pages)]}
+        with open(os.path.join(d, "spec.json"), "w", encoding="utf-8") as fh:
+            json.dump(spec, fh, ensure_ascii=False)
+        for i in range(pages):
+            moss_api._set_page(d, i + 1, status="done",
+                               file="/tmp/p%d.png" % (i + 1), seed=i)
+        return name, d, spec
+
+    @staticmethod
+    def _fake_spec(pages):
+        return {"title": "", "style": "", "cast": {"girl": "a girl with long hair"},
+                "pages": [{"n": i + 1, "layout": "2x2", "scene": "new room",
+                           "beat": "新第%d页" % (i + 1),
+                           "panels": [{"desc": "new %d" % (i + 1)}]}
+                          for i in range(pages)]}
+
+    def test_backfill_old_task_makes_a_chain(self):
+        _name, d, spec = self._mk_book()
+        sid, last, series = moss_api._series_for_task(d, spec)
+        self.assertTrue(sid)
+        self.assertEqual([p["n"] for p in series["pages"]], [1, 2])
+        self.assertEqual(series["pages"][1]["parent"], series["pages"][0]["id"])
+        self.assertEqual(last["n"], 2)
+        # 前情/场景来自 spec 自己，不靠模型
+        self.assertIn("第1页的钩子", series["pages"][0]["summary"])
+        self.assertEqual(series["pages"][1]["scene"], "scene 2")
+
+    def test_backfill_is_idempotent(self):
+        _name, d, spec = self._mk_book()
+        sid, _last, _s = moss_api._series_for_task(d, spec)
+        sid2, _last2, series2 = moss_api._series_for_task(d, spec)
+        self.assertEqual(sid, sid2)
+        self.assertEqual(len(series2["pages"]), 2)      # 没被登记两遍
+
+    def test_continue_makes_new_task_dir_and_keeps_old(self):
+        name, d, _spec0 = self._mk_book()
+        before = sorted(os.listdir(d))
+        with mock.patch.object(moss_api.moss_agent, "generate",
+                               return_value=(self._fake_spec(2), {"secs": 1})):
+            r = self.c.post("/api/moss/continue",
+                            json={"task": name, "brief": "剧情：她走了", "pages": 2})
+        self.assertEqual(r.status_code, 200)
+        out = r.get_json()
+        self.assertNotEqual(out["task"], name)
+        self.assertTrue(os.path.isdir(os.path.join(self.state, out["task"])))
+        self.assertEqual(sorted(os.listdir(d)), before)   # 旧本没被改
+        self.assertEqual(out["line"]["parent"], 2)        # 接在第 2 页后面
+        self.assertEqual(out["line"]["next"], 3)
+        self.assertEqual(out["cast"], {"girl": "a girl with long hair"})
+
+    def test_continue_three_times_numbers_stay_consecutive(self):
+        name, _d, _s = self._mk_book()
+        prev, seen = name, []
+        for k in range(3):
+            with mock.patch.object(moss_api.moss_agent, "generate",
+                                   return_value=(self._fake_spec(2), {"secs": 1})):
+                r = self.c.post("/api/moss/continue",
+                                json={"task": prev, "brief": "剧情：第%d次" % (k + 1),
+                                      "pages": 2})
+            out = r.get_json()
+            _sid, _last, series = moss_api._series_for_task(
+                os.path.join(self.state, out["task"]))
+            prev = out["task"]
+        seen = sorted(p["n"] for p in series["pages"])
+        self.assertEqual(seen, list(range(1, 9)))          # 1..8，不跳不重
+
+    def test_continue_brief_carries_prev_story(self):
+        name, _d, _s = self._mk_book()
+        got = {}
+
+        def fake(ctx, pages, call, group=False):
+            got["ctx"] = ctx
+            return self._fake_spec(pages), {"secs": 1}
+
+        with mock.patch.object(moss_api.moss_agent, "generate", side_effect=fake):
+            self.c.post("/api/moss/continue",
+                        json={"task": name, "brief": "剧情：她走了", "pages": 1})
+        self.assertIn("第 01 页", got["ctx"])
+        self.assertIn("不是另起一集", got["ctx"])
+        self.assertIn("scene 2", got["ctx"])               # 只给上一页场景卡
+
+    def test_continue_requires_brief(self):
+        name, _d, _s = self._mk_book()
+        r = self.c.post("/api/moss/continue", json={"task": name, "brief": "  "})
+        self.assertEqual(r.status_code, 400)
+
+    def test_continue_rejects_unknown_task(self):
+        r = self.c.post("/api/moss/continue",
+                        json={"task": "不存在的本子", "brief": "剧情"})
+        self.assertEqual(r.status_code, 404)
+
+    def test_status_reports_line_position(self):
+        name, _d, _s = self._mk_book()
+        moss_api._series_for_task(os.path.join(self.state, name))
+        body = self.c.get("/api/moss/status?task=" + name).get_json()
+        self.assertEqual(body["line"]["n"], 2)
+        self.assertEqual(body["line"]["pages"], 2)
+
+    def test_list_marks_page_number(self):
+        name, _d, _s = self._mk_book()
+        moss_api._series_for_task(os.path.join(self.state, name))
+        items = self.c.get("/api/moss/list").get_json()["items"]
+        row = [x for x in items if x["task"] == name][0]
+        self.assertEqual(row["line_n"], 2)
+        self.assertEqual(row["line_of"], 2)
 
 
 if __name__ == "__main__":

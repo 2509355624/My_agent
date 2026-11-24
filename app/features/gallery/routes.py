@@ -278,13 +278,25 @@ def api_list():
         # 目录在不在，整组目录都没了就不列它（2026-11-24 用户要求）。
         # 「任何一条还活着」就算这个分类还在：漫画一个任务一个目录，删掉一本
         # 不该把「漫画」整个标签带走。
+        #
+        # 注意 `SELECT DISTINCT grp, path` 是按 (grp, path) 去重的：一个分类下
+        # 有几个目录就吐几行，同名的 grp 会重复 N 次。2026-11-24 用户报「AI 创作
+        # 头顶那一排全是重复的 new」，根因就在这——这里必须按 grp 收成一组，
+        # 每个分类只出一个标签。
         alive = {}
         rows_g = con.execute(gsql).fetchall()
         if _needs_dir_check(rows_g):
             for r in rows_g:
                 g = r["grp"]
                 alive[g] = alive.get(g, False) or _dir_alive(r["path"])
-        grps = [r["grp"] for r in rows_g if alive.get(r["grp"], True)]
+        seen = set()
+        grps = []
+        for r in rows_g:
+            g = r["grp"]
+            if not g or g in seen or not alive.get(g, True):
+                continue
+            seen.add(g)
+            grps.append(g)
         # 漫画归一：只要库里还有漫画行，就把 7 个 `漫画_C...` 碎标签撤掉，
         # 换成一个「漫画」。web 组本身保留（还有「生图页」那 1 条真·非漫画）。
         # 判据用 grp/title 两个字段：单渠道本藏在 web 组、只体现在 title 里。

@@ -168,6 +168,18 @@
   #hist { display: flex; gap: 8px; align-items: center; }
   #hist select { max-width: 320px; }
 
+  /* 连载位置（2026-11-24）：打开续集本时顶栏显示「《暴风夜》· 第 02 页」 */
+  .ltag { font-size: 11px; color: var(--text-dim); border: 1px solid var(--border-soft);
+    border-radius: 10px; padding: 2px 8px; white-space: nowrap; max-width: 240px;
+    overflow: hidden; text-overflow: ellipsis; }
+  /* 新建 / 续集 切换：两个 tab，切的是第①步那张卡 */
+  .modes { display: flex; gap: 6px; margin-bottom: 10px; }
+  .modes button { font: inherit; font-size: 12px; padding: 5px 14px; cursor: pointer;
+    background: transparent; color: var(--text-dim); border: 1px solid var(--border-soft);
+    border-radius: 999px; }
+  .modes button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  @media (max-width: 640px) { .ltag { display: none !important; } }
+
   #zoom { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.92);
     z-index: 30; align-items: center; justify-content: center; cursor: zoom-out;
     user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
@@ -244,6 +256,7 @@
   <div class="topbar">
     <h1>moss 漫画</h1>
     <span class="pill">一页一次生成</span>
+    <span id="line-tag" class="ltag" style="display:none"></span>
     <div class="spacer"></div>
     <div id="hist"><select id="histsel"><option value="">— 最近任务 —</option></select></div>
     <a class="back" href="/" >← 回首页</a>
@@ -265,9 +278,38 @@
   </div>
 
   <div class="stage-pane active" data-pane="1">
-  <div class="stage-hint">先填主角和一段剧情；分集大纲可以留空，交给编剧排页。写完自动进第 ② 步。</div>
+  <div class="stage-hint" id="stage1Hint">先填主角和一段剧情；分集大纲可以留空，交给编剧排页。写完自动进第 ② 步。</div>
+  <div class="modes">
+    <button type="button" class="on" id="mode-new">新开一集</button>
+    <button type="button" id="mode-cont">续集（接上一本）</button>
+  </div>
+  <!-- ── 0. 续集（2026-11-24）：接在哪一本后面 ── -->
+  <div class="card" id="cont-card" style="display:none">
+    <h2>续集 <span style="color:var(--text-mute);font-size:11px;font-weight:400">接在上一本后面，前情和人物从那一页带过来</span></h2>
+    <div class="row" style="align-items:center;gap:8px">
+      <span style="font-size:12px;color:var(--text-dim)">从哪一本接</span>
+      <select id="cont-from" style="min-width:260px"></select>
+      <span id="cont-tip" style="font-size:11px;color:var(--text-dim)"></span>
+    </div>
+    <div class="row" style="margin-top:10px;align-items:flex-start;gap:8px">
+      <span class="lab" style="padding-top:9px">接下来发生什么</span>
+      <textarea id="cont-plot" rows="3" style="flex:1"
+                placeholder="只写这一集要往下演的事，不用重复前情。例：她发现伞被人拿走了，只好在雨里一路小跑回家。"></textarea>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label style="font-size:12px;color:var(--text-dim)">页数
+        <input id="cont-pages" type="number" value="2" min="1" max="12" style="width:62px">
+      </label>
+      <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input id="cont-group" type="checkbox" style="width:auto"> 群像
+      </label>
+      <div class="spacer"></div>
+      <button class="btn primary" id="btn-continue">续写这一集</button>
+    </div>
+  </div>
+
   <!-- ── 1. 这一集 ── -->
-  <div class="card">
+  <div class="card" id="new-card">
     <h2>这一集</h2>
     <div class="row" style="align-items:center;gap:8px;margin-bottom:10px">
       <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer">
@@ -687,11 +729,24 @@ function loadPayload(p) {
   S.pages = p.pages || [];
   renderSpec();
   patch(p);
+  showLine(p.line);
   // 载入任务：还没出图停在第②步改剧本，已经画过的直接进第③步看图。
   var started = (p.pages || []).some(function (x) {
     return x.status === "done" || x.status === "running";
   });
   setStage(started ? 3 : 2);
+}
+
+/* 顶栏那个连载小标：这一本是哪条线的第几页。没有系列就不显示。 */
+function showLine(line) {
+  var tag = $("line-tag");
+  if (!tag) return;
+  if (!line || !line.n) { tag.style.display = "none"; tag.textContent = ""; return; }
+  tag.style.display = "";
+  tag.textContent = (line.title ? "《" + line.title + "》· " : "") +
+                    "第 " + ("0" + line.n).slice(-2) + " 页";
+  tag.title = line.pending ? "这一集还没出图，出完就接到第 " + line.n + " 页"
+                           : "这条线一共 " + line.pages + " 页";
 }
 
 function renderSpec() {
@@ -1219,6 +1274,86 @@ $("btn-lora-save").addEventListener("click", async function () {
 });
 
 /* ══ 历史任务 ══════════════════════════════════════════════ */
+/* 续集（2026-11-24）：接在哪一本后面。
+   下拉里只列「能接」的本子——这一本自己得先是树上某一页，或者至少有
+   剧本可以补建系列；续集本显示成「《暴风夜》第 02 页」，和老本一眼分开。 */
+var CONT = { from: "", ready: false };
+
+function lineLabel(it) {
+  return (it.line_n ? "第 " + ("0" + it.line_n).slice(-2) + " 页 · " : "") +
+         it.mtime + " · " + it.title;
+}
+
+function fillContFrom(items) {
+  var sel = $("cont-from");
+  if (!sel) return;
+  var keep = CONT.from || S.task || "";   // 默认接「当前打开的这一本」
+  var list = (items || []).filter(function (it) { return it.done > 0; });
+  sel.innerHTML = list.map(function (it) {
+    return '<option value="' + esc(it.task) + '">' + esc(lineLabel(it)) + "</option>";
+  }).join("") || '<option value="">（还没有画完的本子）</option>';
+  var has = Array.prototype.some.call(sel.options, function (o) { return o.value === keep; });
+  if (has) sel.value = keep;
+  CONT.from = sel.value || "";
+  syncContTip();
+}
+
+function syncContTip() {
+  var tip = $("cont-tip");
+  if (!tip) return;
+  var o = $("cont-from").selectedOptions && $("cont-from").selectedOptions[0];
+  tip.textContent = o && o.value ? "前情和人物都从这一本带过去" : "";
+}
+
+$("cont-from").addEventListener("change", function () {
+  CONT.from = this.value;
+  syncContTip();
+});
+
+/* 切「新开 / 续集」：只切第 ① 步两张卡，不动阶段向导 */
+function setMode(mode) {
+  var cont = mode === "cont";
+  $("cont-card").style.display = cont ? "" : "none";
+  $("new-card").style.display = cont ? "none" : "";
+  $("mode-cont").classList.toggle("on", cont);
+  $("mode-new").classList.toggle("on", !cont);
+  $("stage1Hint").textContent = cont
+    ? "写这一集要往下演什么；主角、外形、画风都从上一本带过来，不用重填。写完自动进第 ② 步。"
+    : "先填主角和一段剧情；分集大纲可以留空，交给编剧排页。写完自动进第 ② 步。";
+  if (cont) syncContTip();
+}
+$("mode-new").addEventListener("click", function () { setMode("new"); });
+$("mode-cont").addEventListener("click", function () { setMode("cont"); });
+
+$("btn-continue").addEventListener("click", async function () {
+  var from = $("cont-from").value;
+  var plot = ($("cont-plot").value || "").trim();
+  if (!from) { toast("先选一本要接的本子", true); return; }
+  if (!plot) { toast("写一句接下来发生什么", true); return; }
+  var btn = this;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>续写中…';
+  bar("编剧接着上一本往下写（几秒）…");
+  try {
+    var payload = { task: from, brief: plot, pages: parseInt($("cont-pages").value, 10) || 2 };
+    if ($("cont-group") && $("cont-group").checked) payload.group = true;
+    if ($("prov") && $("prov").value) {
+      payload.provider = $("prov").value;
+      if ($("model") && $("model").value) payload.model = $("model").value;
+    }
+    var r = await api("/api/moss/continue", payload);
+    if (!r.ok) { bar(r.error || "续集没写成", true); return; }
+    bar("");
+    loadPayload(r);
+    loadList();
+    var ln = r.line || {};
+    toast("接着第 " + (ln.parent || "?") + " 页往下写了，看看剧本");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "续写这一集";
+  }
+});
+
 async function loadList() {
   var r = await api("/api/moss/list");
   if (!r.ok) return;
@@ -1226,12 +1361,15 @@ async function loadList() {
   var keep = sel.value;
   sel.innerHTML = '<option value="">— 最近任务 —</option>' +
     (r.items || []).map(function (it) {
-      return '<option value="' + esc(it.task) + '">' + esc(it.mtime + " · " + it.title) +
+      /* 续集本标题常和上一本一样，靠「第 02 页」才分得清先后（2026-11-24） */
+      var head = it.line_n ? "第" + ("0" + it.line_n).slice(-2) + "页 · " : "";
+      return '<option value="' + esc(it.task) + '">' + esc(head + it.mtime + " · " + it.title) +
         (it.done ? "（" + it.done + "/" + it.pages + "）" : "") + "</option>";
     }).join("");
   var has = Array.prototype.some.call(sel.options, function (o) { return o.value === keep; });
   sel.value = has ? keep : (S.task && Array.prototype.some.call(sel.options, function (o) {
     return o.value === S.task; }) ? S.task : "");
+  fillContFrom(r.items || []);
 }
 
 $("histsel").addEventListener("change", async function () {

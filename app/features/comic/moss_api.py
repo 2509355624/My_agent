@@ -47,6 +47,7 @@ from app.features.comic import soda_letter
 from app.features.image import lora_slots
 from app.features.comic import moss_comic
 from app.features.comic import moss_agent
+from app.features.comic import moss_series
 from app.features.comic import moss_twopass
 from app.integrations import llm
 from app.features.image import jobs as image_jobs
@@ -234,6 +235,172 @@ def _load_state(d):
     return _read_json(_state_path(d), {})
 
 
+# ══════════════════════════════════════════════════════════
+#  连载：任务目录 ↔ moss_series 的节点
+# ══════════════════════════════════════════════════════════
+#
+# 2026-11-24 用户要「moss 漫画台增加续集，和漫画工作台一样」。
+#
+# **不另建一套线**：QQ 那边早就有 `moss_series` 那棵树（`moss续集` 用了
+# 一个多月），漫画台再存一份只会变成两边各接各的、编号对不上。所以这里
+# 只做一件事——把「任务目录」翻译成「树上的某一页」：
+#
+#   · 每个任务目录最多对应一个节点（`page.task`）；
+#   · 老任务（漫画台这批，一个都没有系列）在第一次续集时补建，
+#     历史页按页号顺序串成一条单链，只回填能拿到的事实；
+#   · 续出来的新页**新开任务目录**（和 QQ 一致），旧的一本一个字不动。
+
+_MOSS_WEB_OWNER = "web"
+
+
+def _series_index():
+    """`绝对任务路径 → (series_id, 页节点, series)`。一次扫全库，页面只要一次调用。
+
+    只索引 `task` 非空的页：任务的绝对路径是它自己的主键，不靠标题猜。
+
+    一本多页时**取这本里页号最大的那一页**：续集要接在它后面，不能接在
+    这本的第一页后面（2026-11-24 实测：两页的本续集接在了树上第 3 页，
+    但第 4 页才是这本真正的末页，接错分支）。
+    """
+    out = {}
+    root = moss_series.STATE_ROOT
+    if not os.path.isdir(root):
+        return out
+    for name in os.listdir(root):
+        d = os.path.join(root, name)
+        if not os.path.isdir(d):
+            continue
+        s = moss_series.load(name)
+        if not s:
+            continue
+        for pg in s.get("pages") or []:
+            t = str(pg.get("task") or "").strip()
+            if not t:
+                continue
+            key = os.path.realpath(t)
+            old = out.get(key)
+            if old is None or int(pg.get("n") or 0) > int(old[1].get("n") or 0):
+                out[key] = (s.get("id") or name, pg, s)
+    return out
+
+
+def _page_summary(spec):
+    """一页 spec → 前情摘要（一行 50~80 字）。**只取 spec 里已有的事实**。
+
+    补建时没有摘要就会让续集完全看不见前情，那样「续」出来的是另起一集。
+    这里不调模型：`beat` / `link` / 每格 desc 本来就是这一页演了什么的
+    书面记录，按顺序连起来就是一份够用的前情。
+    """
+    for page in spec.get("pages") or []:
+        beats = [str(page.get("beat") or "").strip()]
+        descs = [str((p or {}).get("desc") or "").strip()
+                 for p in (page.get("panels") or [])]
+        descs = [x for x in descs if x]
+        text = "；".join(x for x in beats + descs if x)
+        if text:
+            return text[:160]
+    return str(spec.get("title") or "").strip()[:80]
+
+
+def _page_scene(spec):
+    """一页 spec → 场景卡（画面锚）。就是这一页那串英文 scene。"""
+    for page in spec.get("pages") or []:
+        sc = str(page.get("scene") or "").strip()
+        if sc:
+            return sc
+    return ""
+
+
+def _series_for_task(d, spec=None):
+    """任务目录 → `(sid, 页节点, series)`；没有就登记到树上再返回。
+
+    **续集本**（`spec.line` 里有 `series` / `parent`，由 `/api/moss/continue`
+    写进去）挂成**上一页的子节点**——这才是「续」；**老本**按页号顺序补建
+    一条单链。补建规则刻意保守：只填 spec 里看得见的事实（summary / scene /
+    seed / task），**不编造剧情**——拿不到摘要就让它缺着。
+
+    返回的「页节点」是**最后一页**：续集接在它后面。
+    """
+    hit = _series_index().get(os.path.realpath(d))
+    if hit:
+        return hit
+    spec = spec if spec is not None else _read_json(os.path.join(d, "spec.json"), {})
+    if not spec:
+        return "", None, None
+    line = spec.get("line") if isinstance(spec.get("line"), dict) else {}
+    sid = str(line.get("series") or "")
+    prev_id = str(line.get("parent") or "")
+    # 续集本的父页所属系列：父页不在就退回补建一条新的（不挂到错误的线上）
+    if sid and prev_id:
+        series = moss_series.load(sid)
+        parent = moss_series.by_id(series or {}, prev_id)
+        if not parent:
+            sid, prev_id = "", ""
+    else:
+        sid, prev_id = "", ""
+    if not sid:
+        series = moss_series.open_new("private", _MOSS_WEB_OWNER,
+                                      title=spec.get("title") or "",
+                                      style=spec.get("style") or "",
+                                      cast=spec.get("cast") or {})
+        sid = series["id"]
+    # 页号基准：**续集本的 spec 是从第 1 页起排的**（新的一本），但它接在
+    # 树上的第 N 页后面，所以第一页应该是 N+1 而不是 1。老本没有 `line`，
+    # 基准 0 → 第 1 页，就是它自己的页号。
+    # 2026-11-24 实测踩到的坑：按 spec 的 n 直接挂，第 2 页的老本续一集
+    # 会变成树上第 4 页（2+2），中间凭空少一页。
+    # 基准取 `parent_n`：它记的就是**点续集那一刻这条线最高的页号**。
+    # `added` 记下这次真正新建的节点 id：只有它们才能挪页号。`_series_index`
+    # 是按 `page.task` 建索引的，一本多页时只记住最后一页，所以「这个任务
+    # 已经挂过」和「这本里的第一页还没挂」要分开判断——否则第二次调用来
+    # 会把已经对齐过的页再 +base 一遍（2026-11-24 实测：1,2,3,4 → 8,5）。
+    base = int(line.get("parent_n") or 0) if line.get("series") else 0
+    st = _load_state(d).get("pages") or {}
+    # 「这本挂过没有」按任务查全树，不按 `_series_index`：那本索引一本多页时
+    # 每个 task 只留一个节点，拿它判重会把第二页当成没挂过，再挂一遍
+    # （2026-11-24 实测：1,2,3,4 变成 1,2,3,4,8,5）。
+    def _already(x, _d=d):
+        real = os.path.realpath(_d)
+        return any(str(pg.get("task") or "") and
+                   os.path.realpath(pg["task"]) == real
+                   for pg in x.get("pages") or [])
+    if moss_series.mutate(sid, _already):
+        series = moss_series.load(sid) or {}
+        pages = series.get("pages") or []
+        log.info("moss 任务 %s 已经在系列 %s 里，不重复登记",
+                 os.path.basename(d), sid)
+        return (sid, pages[-1] if pages else None, series)
+    added = []
+    for page in spec.get("pages") or []:
+        n = int(page.get("n") or 0)
+        stp = st.get(str(n)) or {}
+        new_id = moss_series.mutate(sid, lambda x, _p=prev_id, _s=stp, _pg=page: (
+            moss_series.add_page(
+                x, parent_id=_p, task=d, brief="", seed=_s.get("seed"),
+                summary=_page_summary({"pages": [_pg]}),
+                scene=_page_scene({"pages": [_pg]}),
+                owner=_MOSS_WEB_OWNER) or {}).get("id") or "")
+        if new_id:
+            added.append(new_id)
+            prev_id = new_id
+    series = moss_series.load(sid) or {}
+    # 整本对齐到基准上：续集本的 spec 从第 1 页起排，接到树上要变成 base+1。
+    # `moss_series.fill` 明确不许改 `n`（页号是结构的一部分），所以这里直接在
+    # 锁里改完再整份写回——只动**这次新建**的节点，别的分支不碰。
+    if base and added:
+        def _renumber(x, _ids=set(added), _base=base):
+            for pg in x.get("pages") or []:
+                if pg.get("id") in _ids and int(pg.get("n") or 0) <= _base:
+                    pg["n"] = _base + int(pg.get("n") or 0)
+            return None
+        moss_series.mutate(sid, _renumber)
+        series = moss_series.load(sid) or series
+    pages = series.get("pages") or []
+    log.info("moss 任务 %s 登记系列 %s（共 %d 页）",
+             os.path.basename(d), sid, len(pages))
+    return (sid, pages[-1] if pages else None, series)
+
+
 def _rel_exists(rel):
     """state 里记的相对路径是否真的还在磁盘上。
 
@@ -384,6 +551,31 @@ def _payload(d, spec=None, prompts=None):
     # 「散文分镜规则」去查一份 Layout JSON，只会吐假错（没有 plan / 景别单一 / 缺旁白）。
     # 2026-11-21：双段模式直接跳过，不给页面添噪音。
     two_pass = any(p.get("prompt_override") for p in (spec.get("pages") or []))
+    # 这一本在连载里是哪一页（2026-11-24）。只读树上**已经有**的节点，不补建：
+    # 打开一本老任务不该顺手写一个系列档案出来（列表里每一本都会做这次调用）。
+    # 续集本刚编剧完还没出图时树上还没有它，就用 `spec.line` 里记的位置
+    # （上一页第几页 + 自己是第几页），页面照样能显示「第 02 页」。
+    line = None
+    try:
+        hit = _series_index().get(os.path.realpath(d))
+        if hit:
+            sid, node, series = hit
+            line = {"id": sid,
+                    "page": node.get("id"),
+                    "n": node.get("n"),
+                    "pages": len(series.get("pages") or []),
+                    "title": series.get("title") or ""}
+        else:
+            raw = spec.get("line") if isinstance(spec.get("line"), dict) else {}
+            if raw.get("series"):
+                line = {"id": raw["series"],
+                        "page": "",
+                        "n": int(raw.get("parent_n") or 0) + 1,
+                        "pages": 0,
+                        "title": "",
+                        "pending": True}
+    except Exception:                           # noqa: BLE001 - 定位失败不该挡住看图
+        log.exception("moss 任务 %s 定位系列失败", task)
     return {
         "ok": True,
         "task": task,
@@ -396,6 +588,7 @@ def _payload(d, spec=None, prompts=None):
         "running": _running(d),
         "issues": [] if two_pass else moss_comic.check(spec),
         "pages": pages,
+        "line": line,
     }
 
 
@@ -535,6 +728,144 @@ def api_moss_two_agent():
                         "pages": report.get("pages") or [],
                         "notes": report.get("script_issues") or []}
     return jsonify(out)
+
+
+@bp.route("/api/moss/continue", methods=["POST"])
+def api_moss_continue():
+    """从某一本往下接一集（2026-11-24 用户要的「续集」）。
+
+    页面只传 `task`（从哪一本接）+ `brief`（接下来发生什么）。其余全部由代码
+    从树上取：前情摘要、上一页场景卡、人物外形。**和 QQ 的 `moss续集` 是
+    同一套东西**（`moss_series` 那棵树），所以这里续出来的页在群里引用一下
+    就能接着画，编号也是同一个。
+
+    三种来源统一成一个「父页」：
+      · 这本本来就是树上某一页的图（QQ 画过 / 网页续过）→ 就是那一页；
+      · 老任务（漫画台改版前画的，没有系列）→ 先补建单链，取最后一页；
+      · 都不是 → 报错，不猜。
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        d = _task_dir(data.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    brief = str(data.get("brief") or "").strip()
+    if not brief:
+        return jsonify({"ok": False,
+                        "error": "续集要写接下来的剧情，比如「她发现伞被人拿走了」"}), 400
+    try:
+        pages = max(1, min(12, int(data.get("pages") or 1)))
+    except (TypeError, ValueError):
+        pages = 1
+    spec_old = _read_json(os.path.join(d, "spec.json"), {})
+    if not spec_old:
+        return jsonify({"ok": False, "error": "这一本的剧本不见了"}), 404
+
+    sid, page, series = _series_for_task(d, spec_old)
+    if not sid or not page:
+        return jsonify({"ok": False, "error": "这一本接不上（系列档案没建起来）"}), 400
+
+    # 同一条线同时只画一张：第二张接在同一页上会炸出几乎一样的分支
+    # （QQ 那边 `_take` 管的是同一件事，那边是进程内占位，这边直接看队列）。
+    # 新的一集从**这条线最高的页号**往后接：`page` 是分支父页，它不一定是最末一页。
+    # 2026-11-24 实测：从「第一集」续出第 3、4 页后再接，父页还是第 3 页，
+    # 整本挂树上会撞成两个第 4 页。
+    head = 0
+    for p in series.get("pages") or []:
+        if p.get("dead"):
+            continue
+        head = max(head, int(p.get("n") or 0))
+    nxt = head + 1
+    busy = _line_busy(sid)
+    if busy:
+        return jsonify({"ok": False, "busy": True,
+                        "error": "第 %02d 页还在画，等它出来再续" % busy,
+                        "page": busy}), 409
+
+    prev = moss_series.prev_lines(series, page.get("id") or "")
+    prev_scene = moss_series.prev_scene(series, page.get("id") or "")
+    cast = series.get("cast") or {}
+    # 人物外形从树上取；树上没有（补建的老任务）就用原剧本里的那套
+    cast = cast or (spec_old.get("cast") or {})
+
+    # 剧情输入可能是「男主/女主/剧情」三段拼的（页面原样传），和 /write 一个口径
+    plain = moss_agent.compose_brief(moss_agent.parse_brief(brief), fallback=brief)
+    ctx = plain
+    if prev or prev_scene:
+        bricks = ["**这一集要接着上面的剧情往下写，不是另起一集。**", ""]
+        if prev:
+            bricks += ["**这条线前面已经画过的**：", prev, ""]
+        if prev_scene:
+            bricks += ["**上一页的画面**（这一集默认就在同一个地方、同一批东西里发生）：",
+                       prev_scene, ""]
+        bricks += ["这一集要写的事情：", plain]
+        ctx = "\n".join(bricks)
+
+    provider = str(data.get("provider") or "").strip() or None
+    model = str(data.get("model") or "").strip() or None
+
+    def bound_call(system, user, max_tokens=8000, temperature=None, tag=""):
+        return _twopass_call(system, user, max_tokens=max_tokens,
+                             temperature=temperature, tag=tag,
+                             provider=provider, model=model)
+
+    group = bool(data.get("group"))
+    try:
+        spec, report = moss_agent.generate(ctx, pages, bound_call, group=group)
+    except BaseException as exc:                # noqa: BLE001 - 模型侧异常一律转 502
+        return jsonify({"ok": False,
+                        "error": "MOSS 链路失败：%s" % (str(exc) or exc.__class__.__name__)}), 502
+
+    spec["style"] = DEFAULT_STYLE
+    # 角色设定必须和上一页逐字一致，否则同一张脸下一集就变了样。
+    if cast:
+        spec["cast"] = dict(cast)
+    # 标题没写就沿用这条线的标题，列表里才分得清是哪条线
+    if not str(spec.get("title") or "").strip():
+        spec["title"] = series.get("title") or "续集"
+    # 这一本属于哪条线、接在哪一页后面。出图线程跑完按它把本子挂到树上
+    # （`_series_for_task` 认这两个字段），刷新页面时也靠它显示「第 N 页」。
+    # `parent_n` 记的是**这条线最高的页号**（`head`）：多页续集挂树时整本
+    # 对齐到它后面，不能按本内页号 1、2 挂（会撞进已占的号里）。
+    spec["line"] = {"series": sid, "parent": page.get("id") or "",
+                    "parent_n": head, "from_n": page.get("n") or 0}
+
+    nd = _new_task_dir(spec)
+    spec, ps = _save(nd, spec, None)
+    rep = {k: v for k, v in report.items() if k != "script_md"}
+    with open(os.path.join(nd, "twopass_report.json"), "w", encoding="utf-8") as fh:
+        json.dump(rep, fh, ensure_ascii=False, indent=1)
+
+    out = _payload(nd, spec, ps)
+    out["brief"] = brief
+    out["line"] = {"id": sid, "title": series.get("title") or "",
+                   "parent": page.get("n"), "next": nxt,
+                   "pages": len(series.get("pages") or []), "here": False}
+    out["two_agent"] = {"engine": "agent", "group": group,
+                        "secs": report.get("secs"),
+                        "pass": report.get("pass"),
+                        "rounds": report.get("rounds") or [],
+                        "pages": report.get("pages") or [],
+                        "notes": report.get("script_issues") or []}
+    return jsonify(out)
+
+
+def _line_busy(sid):
+    """这条线现在是不是还有一页在画。在画就返回那一页的页号，否则 0。
+
+    只看**能对上这条线的任务**：`_RUNNING` 的键是任务目录，返回体里带
+    `n`。树上的页都能翻译成任务目录，所以逐个任务对一遍即可，不新增状态。
+    """
+    series = moss_series.load(sid) or {}
+    dirs = {os.path.realpath(str(p.get("task") or "")): (p.get("n") or 0)
+            for p in series.get("pages") or [] if p.get("task")}
+    with _RUN_LOCK:
+        running = list(_RUNNING.items())
+    for d, r in running:
+        n = dirs.get(os.path.realpath(d))
+        if n:
+            return int(n)
+    return 0
 
 
 @bp.route("/api/moss/save", methods=["POST"])
@@ -746,6 +1077,19 @@ def _run(d, spec, nums, seed_base, loras=None, steps=None, abort=None):
             _RUNNING.pop(d, None)
             _ABORT.pop(d, None)
             _PAGE_STOP.pop(d, None)
+        # 出一批就把这本挂到连载树上（2026-11-24）。放在 finally 而不是
+        # 循环里：中途被打断也是「这一本画过了」，下次点续集要用它的前情，
+        # 而且已经出来的那几页在群里引用得到。
+        # 新本（续集）→ 挂成上一页的子节点；老本 → 补建单链。
+        _publish_line(d, spec)
+
+
+def _publish_line(d, spec):
+    """确保任务目录在树上有个位置。失败只记日志——出图已经成功了。"""
+    try:
+        _series_for_task(d, spec)
+    except Exception:                           # noqa: BLE001
+        log.exception("moss 任务 %s 挂连载树失败", os.path.basename(d))
 
 
 def _page_stopped(d, n):
@@ -1074,8 +1418,19 @@ def api_moss_img():
 
 @bp.route("/api/moss/list", methods=["GET"])
 def api_moss_list():
-    """历史任务（按 spec.json 的修改时间倒序）。"""
+    """历史任务（按 spec.json 的修改时间倒序）。
+
+    `line_n` / `line_of`（2026-11-24）：这本在连载里是第几页、那条线一共几页。
+    续集出来的本子标题往往和上一本一样，光看标题分不清顺序，下拉里要靠这个
+    标出「第 02 页」。一次扫全库算一次（`_series_index`），不逐本去读档案。
+    """
     items = []
+    idx = {}
+    try:
+        idx = {k: (v[0], v[1].get("n"), len(v[2].get("pages") or []))
+               for k, v in _series_index().items()}
+    except Exception:                           # noqa: BLE001 - 列表不该被连载拖垮
+        log.exception("moss 列表读连载位置失败")
     if os.path.isdir(STATE_ROOT):
         for name in os.listdir(STATE_ROOT):
             d = os.path.join(STATE_ROOT, name)
@@ -1088,12 +1443,22 @@ def api_moss_list():
             have = [(p.get("n"), _page_file(d, p.get("n"), st)) for p in pages]
             have = [(n, rel) for n, rel in have if rel]
             first = have[0] if have else (None, "")
+            ln, lof = 0, 0
+            hit = idx.get(os.path.realpath(d))
+            if hit:
+                ln, lof = int(hit[1] or 0), int(hit[2] or 0)
+            else:
+                raw = spec.get("line") if isinstance(spec.get("line"), dict) else {}
+                if raw.get("series"):
+                    ln = int(raw.get("parent_n") or 0) + 1
             items.append({
                 "task": name,
                 "title": spec.get("title") or name,
                 "pages": len(pages),
                 "layout": (pages[0].get("layout") if pages else "") or "",
                 "done": len(have),
+                "line_n": ln,
+                "line_of": lof,
                 "mtime": time.strftime("%m-%d %H:%M",
                                        time.localtime(os.path.getmtime(sp))),
                 "thumb": ("/api/moss/img?task=%s&n=%s" % (name, first[0]))

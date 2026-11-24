@@ -571,6 +571,19 @@ class ComicGroupingTest(_Base):
         self.assertIn("moss漫画", grps)
         self.assertIn("web", grps)
 
+    def test_同名分类只出一个标签(self):
+        """2026-11-24 用户报「AI 创作头顶那排全是重复的 new」。
+
+        根因是 `SELECT DISTINCT grp, path` 按**两列**去重：一个分类下有
+        N 个目录就吐 N 行，同一个 grp 重复 N 次。这里插两个不同 path 的
+        同名分类，分类条必须只出一个。
+        """
+        self._insert_works([("old", "first", "owner", 3), ("old", "second", "owner", 5)])
+        grps = self.j(self.c.get("/api/gal/list?qq=10001&scope=owner",
+                                 headers=self.h))["grps"]
+        self.assertEqual(grps.count("old"), 1)
+        self.assertIn("old", grps)
+
     def test_点漫画捞全两种形态(self):
         d = self.j(self.c.get("/api/gal/list?qq=10001&scope=owner&grp=漫画",
                               headers=self.h))
