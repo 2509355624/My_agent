@@ -61,7 +61,10 @@
   /* 加一张参考图（画廊「画同款」、输入栏＋相册、替换漫画参考都走这里） */
   function addRef(item) {
     if (!item || !item.id) return;
-    if (S.refs.some(function (r) { return r.id === item.id; })) return;
+    /* 用户又选了一次同一张（相册重传、又点了一次画同款）：把之前恢复出来
+       的「不算数」标记摘掉——他这次是真的要带上这张了。 */
+    var had = S.refs.filter(function (r) { return r.id === item.id; })[0];
+    if (had) { delete had.resumed; syncHint(); return; }
     S.refs.push(item);
     paintRef(item);
     global.WSChat.log({ k: "ref", wid: item.wid, id: item.id,
@@ -75,8 +78,18 @@
   }
 
   /* 发送成功才把参考图从「待发送」移走：还压在输入栏里就等于下一句
-     又带着同一张，用户会莫名其妙收到一张套着上一张图的图。 */
-  function commit() { S.refs = []; syncHint(); }
+     又带着同一张，用户会莫名其妙收到一张套着上一张图的图。
+
+     顺手把存档里那几条 `k:"ref"` 记录删掉（2026-11-24 晚）：它们是「还没
+     发出去的那张」的回执，发完了就没有意义。以前只从 S.refs 里摘掉、存档
+     不动，于是每次刷新 restore 都会从存档尾巴把它们认回来——用户看到的
+     就是「我什么都没选，引用图栏自己冒出来了」。 */
+  function commit() {
+    var ids = S.refs.map(function (r) { return r.id; });
+    S.refs = [];
+    if (ids.length && global.WSChat) global.WSChat.dropRefRecords(ids);
+    syncHint();
+  }
 
   /* 「画同款」：把画廊这张读成一段描述再生成（用户 2026-11-23 定的口径——
      这里没有图生图）。调用方已经退回了聊天页，这里只负责挂参考图、
@@ -167,23 +180,32 @@
     syncHint();
   }
 
-  /* 刷新后把「还没发出去的那张」挂回输入栏（restore 时调用） */
+  /* 刷新时把存档里最后那条参考图认回来。**只记着，不显示。**
+
+     以前这里会把那张挂回输入栏，等于「刷新一下，上一条消息用过的参考图
+     又出现在待发送里」——用户 2026-11-24 报的就是这个。存档里那条 `ref`
+     发送成功时就该用掉了，只是一直没人删它，于是每次都从存档尾巴上被
+     认回来。现在恢复出来的带 `resumed`，syncHint 不画它。 */
   function rehydrate(m) {
     if (!m || !m.id) return;
     if (S.refs.some(function (r) { return r.id === m.id; })) return;
-    S.refs.push({ wid: m.wid, id: m.id, url: m.url || "" });
+    S.refs.push({ wid: m.wid, id: m.id, url: m.url || "", resumed: true });
     if (!el.bar) el.bar = $("ref-bar");
     syncHint();
   }
 
-  /* 输入框上方的小尾巴：显示这次带了哪些图、当前是什么模式 */
+  /* 输入框上方的小尾巴：显示这次带了哪些图、当前是什么模式。
+
+     只画**真的在等发送**的那几张：恢复回来的（`resumed`）不算，用户碰过
+     它们（再点一次、重新选图）才算自己的。 */
   function syncHint() {
     if (!el.bar) return;
     el.bar.innerHTML = "";
     var comic = global.WSCreate && global.WSCreate.mode() === "comic";
-    el.bar.hidden = !S.refs.length;
-    if (!S.refs.length) return;
-    S.refs.forEach(function (r) {
+    var live = S.refs.filter(function (r) { return !r.resumed; });
+    el.bar.hidden = !live.length;
+    if (!live.length) return;
+    live.forEach(function (r) {
       var wrap = document.createElement("div");
       wrap.className = "refs mini";
       var img = document.createElement("img");

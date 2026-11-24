@@ -10,7 +10,7 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WS = os.path.join(ROOT, "web", "workspace")
 
-FILES = ("css/gallery.css", "js/gallery.js")
+FILES = ("css/gallery.css", "js/gallery.js", "js/hide.js")
 
 
 def _read(rel):

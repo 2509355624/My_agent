@@ -224,6 +224,17 @@
     border-radius:20px;backdrop-filter:blur(4px)}
   .shot .mk{position:absolute;right:7px;top:6px;font-size:14px;line-height:1;
     text-shadow:0 1px 4px rgba(0,0,0,.9)}
+  /* 单张隐藏：右下角那颗按钮。存在感要低（一屏几十张，别抢图），但按下去
+     要够大——手机上用拇指点，20px 的小图标点不中。 */
+  .shot .hb-item{position:absolute;right:6px;bottom:6px;z-index:3;
+    padding:3px 9px;border:0;border-radius:999px;cursor:pointer;
+    background:rgba(0,0,0,.56);color:#fff;font-size:11px;line-height:16px;
+    font-family:inherit;backdrop-filter:blur(4px);opacity:.72;
+    transition:opacity .16s,background .16s}
+  .shot .hb-item:hover,.shot .hb-item:active{opacity:1;background:rgba(0,0,0,.78)}
+  /* 已藏的那张：压暗 + 灰，一眼能看出「这张不公开」 */
+  .shot.off img{opacity:.32 !important;filter:grayscale(.45)}
+  .shot.off .hb-item{opacity:1;background:var(--pink);color:#fff}
   .dempty{text-align:center;color:var(--dim);padding:48px 20px;font-size:14px;
     flex:1;width:100%}
 
@@ -1464,7 +1475,7 @@
     var pics = [];
     S.items.forEach(function (it, i) {
       var s = document.createElement("div");
-      s.className = "shot";
+      s.className = "shot" + (it.hidden ? " off" : "");
       s.onclick = function () { openViewer(i); };
 
       var im = document.createElement("img");
@@ -1493,10 +1504,58 @@
         mk.textContent = "★";
         s.appendChild(mk);
       }
+
+      /* 单张隐藏（2026-11-24 用户：「进到作品集里面的单个图片，右下角也有
+         隐藏的按钮，单独隐藏这个图片」）。作品集详情页只有站主能进，所以
+         这个按钮不用再判权限。已藏的图在网格里压暗 + 打个「已隐藏」，点按钮
+         就是恢复。`stopPropagation` 必须——外层 s.onclick 是打开查看器。 */
+      var hb = document.createElement("button");
+      hb.type = "button";
+      hb.className = "hb-item";
+      hb.title = it.hidden ? "取消隐藏这张" : "隐藏这张";
+      hb.textContent = it.hidden ? "已隐藏" : "隐藏";
+      hb.addEventListener("click", function (e) {
+        e.stopPropagation();
+        toggleItemHidden(it, s, hb);
+      });
+      s.appendChild(hb);
+
       S.shotEls[i] = s;
       (cols ? cols[i % cols.length] : box).appendChild(s);
     });
     fillPics(pics, "t");
+  }
+
+  /* 单张隐藏 / 恢复。和 `setHidden`（整本下架）是两件事：这边只让这一页
+     不公开，作品集照常挂在墙上、照常点得进来，只是少一张。
+
+     服务端会把 works.n 重算成可见张数，所以「全藏完」之后这本会从墙上
+     消失——那种情况直接关掉详情页回墙面，别让站主停在一面全灰的墙上。 */
+  function toggleItemHidden(it, el, btn) {
+    var on = !it.hidden;
+    api("item/hidden", { method: "POST",
+                         headers: { "Content-Type": "application/json" },
+                         body: JSON.stringify({ item_id: it.id, hidden: on }) })
+      .then(function (d) {
+        it.hidden = on ? 1 : 0;
+        // 抬头那行的「N 张」是可见张数（服务端重算过），跟着改
+        if (S.cur && d && typeof d.left === "number") S.cur.n = d.left;
+        if (el) el.classList.toggle("off", on);
+        if (btn) {
+          btn.textContent = on ? "已隐藏" : "隐藏";
+          btn.title = on ? "取消隐藏这张" : "隐藏这张";
+        }
+        // 详情页抬头那行「N 张」要跟着变，不然藏了一张还写着原来的数
+        $("dby").textContent = S.cur.by + (S.cur.n > 1 ? " · " + S.cur.n + " 张" : "");
+        toast(on ? "这张已隐藏" : "这张放回来了", 1800);
+        if (on && d && d.left === 0) {
+          // 这本一张可见的都不剩了：服务端那边 n 已经是 0，墙上不会再出现。
+          toast("这本的图全藏起来了，已从墙上下架", 3200);
+          closeDetail();
+          S.dirty = false;
+          load(true);
+        }
+      }).catch(function (e) { toast(e.message); });
   }
 
   function closeDetail() {

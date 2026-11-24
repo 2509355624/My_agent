@@ -87,6 +87,10 @@ THUMB_BATCH_V = 6
 _NOT_TEMP = "COALESCE(w.use,'keep') <> 'temp'"
 _NOT_TEMP_RAW = "COALESCE(use,'keep') <> 'temp'"
 
+# 单张图隐藏（items.hidden）。站主永远看得见自己藏了什么，群友 / 游客只
+# 拿到没藏的那批。只写一次，免得七八条 SQL 各拼一遍、改一处漏三处。
+_VISIBLE = "COALESCE(i.hidden,0)=0"
+
 # `?fit=` 认哪些写法。`512k` 是老前端发出来的，按同一个上限发（1MB），
 # 免得存着的旧链接一下碎掉。
 _FIT_KEYS = ("1m", "1024k", "1024", "512k", "512")
@@ -200,6 +204,9 @@ def _work_row(row, qq):
         "by": name,
         "mine": row["src"] == "user" and row["owner"] == str(qq or ""),
         "hidden": bool(row["hidden"]),
+        # 有几张被单张藏起来了（卡片角标用）。站主看得到，别人看到的是 0：
+        # 对他们来说那些图就是不存在。
+        "hidden_n": int(row["hidden_n"] or 0) if _is_owner(qq) else 0,
         # 站长对谁的都能隐藏（包括群友上传的公开作品）；群友只能管自己的
         # 删除，不能隐藏。前端按这个字段出按钮，别再自己拼 tab 条件。
         "can_hide": _is_owner(qq),
@@ -208,7 +215,9 @@ def _work_row(row, qq):
 
 _SELECT_WORK = (
     "SELECT w.*, (SELECT i.id FROM items i WHERE i.work_id=w.id"
-    " ORDER BY i.idx LIMIT 1) AS cover_item FROM works w")
+    " AND COALESCE(i.hidden,0)=0 ORDER BY i.idx LIMIT 1) AS cover_item,"
+    " (SELECT COUNT(*) FROM items i WHERE i.work_id=w.id"
+    " AND COALESCE(i.hidden,0)=1) AS hidden_n FROM works w")
 
 
 @bp.route("/list")
@@ -275,6 +284,8 @@ def api_list():
         rows = con.execute(sql, args).fetchall()
         # 分类条只列「这个 tab 里真有的分类」：站长 tab 是磁盘目录，
         # 公开 tab 是群友上传。否则点进一个空分类会看到空白墙。
+        # `n>0` 现在是「还有可见的图」（见 gallery._recount）：一本被整页隐藏
+        # 完之后 n 归零，它的分类也就不该再占一个标签。
         if scope == "owner":
             # 下架的目录不占分类条：整个分类都被隐藏时，那个标签点进去是空墙。
             gsql = ("SELECT DISTINCT grp, path FROM works WHERE n>0 AND grp<>''"
@@ -412,8 +423,15 @@ def api_work(wid):
         if row["hidden"] and not mine and not _is_owner(qq):
             return jsonify({"ok": False, "error": "没有这个作品集"}), 404
 
+        # 站主看得到自己藏了什么（带 hidden 标记，查看器里显示成半透明 +
+        # 「已隐藏」）；别人只拿到没藏的那批。作者本人也是「别人」——
+        # 跳过谁由站主决定，这一页对作者来说就是没了。
+        owner_view = _is_owner(qq)
         items = con.execute(
-            "SELECT id, idx, path FROM items WHERE work_id=? ORDER BY idx",
+            "SELECT id, idx, path, COALESCE(hidden,0) AS hidden FROM items"
+            " WHERE work_id=?" + ("" if owner_view else
+                                  " AND COALESCE(hidden,0)=0") +
+            " ORDER BY idx",
             (wid,)).fetchall()
         # 游客没有 qq，跳过点赞/收藏查询——点亮的星星只属于登录的人
         rows = con.execute(
@@ -430,10 +448,14 @@ def api_work(wid):
     data = _work_row(row, qq or "")
     data["can_delete"] = mine
     data["can_hide"] = _is_owner(qq)   # 站长对谁的都能隐藏，群友作品也一样
+    # 单张隐藏同样是站主的权限：作者只能删掉自己的图，藏起来让别人看不见
+    # 是他没那个立场做的决定。
+    data["can_hide_item"] = _is_owner(qq)
     return jsonify({
         "ok": True,
         "work": data,
         "items": [{"id": r["id"], "idx": r["idx"],
+                   "hidden": 1 if r["hidden"] else 0,
                    "like": 1 if r["id"] in liked else 0,
                    "fav": 1 if r["id"] in faved else 0,
                    "likes": likes.get(r["id"], 0),
@@ -456,14 +478,19 @@ def api_img(iid):
 
     with gallery.connect() as con:
         row = con.execute(
-            "SELECT i.path, w.hidden, w.src, w.owner, w.use FROM items i"
-            " JOIN works w ON w.id=i.work_id WHERE i.id=?", (iid,)).fetchone()
+            "SELECT i.path, i.hidden AS ihidden, w.hidden, w.src, w.owner, w.use"
+            " FROM items i JOIN works w ON w.id=i.work_id WHERE i.id=?",
+            (iid,)).fetchone()
     if not row:
         return jsonify({"ok": False, "error": "没这张图"}), 404
     if str(row["use"] or "keep") == "temp" and row["owner"] != str(qq or "") \
             and not _is_owner(qq):
         return jsonify({"ok": False, "error": "没这张图"}), 404
     if row["hidden"] and row["owner"] != str(qq or "") and not _is_owner(qq):
+        return jsonify({"ok": False, "error": "没这张图"}), 404
+    # 单张隐藏：只对站主可见。群友自己拍的那张被站长藏了也一样拿不到——
+    # 藏的意思就是「谁都别再看」，只留站主一个人能反悔。
+    if row["ihidden"] and not _is_owner(qq):
         return jsonify({"ok": False, "error": "没这张图"}), 404
 
     src = row["path"]
@@ -545,8 +572,9 @@ def api_thumbs():
     marks = ",".join("?" * len(ids))
     with gallery.connect() as con:
         rows = con.execute(
-            "SELECT i.id, i.path, w.hidden, w.owner, w.use FROM items i"
-            " JOIN works w ON w.id=i.work_id WHERE i.id IN (%s)" % marks,
+            "SELECT i.id, i.path, i.hidden AS ihidden, w.hidden, w.owner, w.use"
+            " FROM items i JOIN works w ON w.id=i.work_id"
+            " WHERE i.id IN (%s)" % marks,
             ids).fetchall()
 
     mine_ok = _is_owner(qq)
@@ -554,6 +582,8 @@ def api_thumbs():
     for r in rows:
         if r["hidden"] and r["owner"] != str(qq or "") and not mine_ok:
             continue                       # 别人下架的图，一张都不给
+        if r["ihidden"] and not mine_ok:
+            continue                       # 单张隐藏的，只有站主看得到
         if str(r["use"] or "keep") == "temp" and r["owner"] != str(qq or "") \
                 and not mine_ok:
             continue                       # 别人的临时参考图也不给
@@ -621,14 +651,17 @@ def api_warm():
     marks = ",".join("?" * len(ids))
     with gallery.connect() as con:
         rows = con.execute(
-            "SELECT i.id, i.path, w.hidden, w.owner, w.use FROM items i"
-            " JOIN works w ON w.id=i.work_id WHERE i.id IN (%s)" % marks,
+            "SELECT i.id, i.path, i.hidden AS ihidden, w.hidden, w.owner, w.use"
+            " FROM items i JOIN works w ON w.id=i.work_id"
+            " WHERE i.id IN (%s)" % marks,
             ids).fetchall()
 
     mine_ok = _is_owner(qq)
     ok = {}
     for r in rows:
         if r["hidden"] and r["owner"] != str(qq or "") and not mine_ok:
+            continue
+        if r["ihidden"] and not mine_ok:
             continue
         if str(r["use"] or "keep") == "temp" and r["owner"] != str(qq or "") \
                 and not mine_ok:
@@ -684,7 +717,7 @@ def _marked(kind, qq, page, size):
     返回的每条带 `work` + `idx`：前端拿它直接开查看器并跳到那一张，
     不用为了看一张图先加载整个作品集。
     """
-    where = ["m.qq=?", "m.kind=?", "w.n > 0", _NOT_TEMP]
+    where = ["m.qq=?", "m.kind=?", "w.n > 0", _NOT_TEMP, _VISIBLE]
     args = [str(qq), kind]
     if not _is_owner(qq):
         # 下架的图别出现在「我收藏的」里（除了作者本人，他本来就还能看）
@@ -805,6 +838,47 @@ def api_visible():
     with gallery.connect() as con:
         con.execute("UPDATE works SET hidden=? WHERE id=?", (hidden, wid))
     return jsonify({"ok": True, "hidden": bool(hidden)})
+
+
+@bp.route("/item/hidden", methods=["POST"])
+def api_item_hidden():
+    """单张图隐藏 / 恢复。只有站主能改（`hidden` 为真藏起来，假恢复）。
+
+    跟作品级的下架 `/visible` 是两件事：那边整本从墙上消失，这边只让这一
+    页不公开，作品集照常在那、照常能点进去，只是少了一张。所以单独一条
+    接口，免得前端要拼两种语义。
+    """
+    bad = _guard()
+    if bad:
+        return bad
+    qq = _qq()
+    if not _is_owner(qq):
+        return jsonify({"ok": False, "error": "只有站主能改"}), 403
+    body = request.get_json(silent=True) or {}
+    try:
+        iid = int(body.get("item_id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "参数不对"}), 400
+    hidden = 1 if body.get("hidden") else 0
+    ok, why, wid, left = gallery.set_item_hidden(iid, hidden)
+    if not ok:
+        return jsonify({"ok": False, "error": why}), 404
+    return jsonify({"ok": True, "hidden": bool(hidden),
+                    "work_id": wid, "left": left})
+
+
+@bp.route("/items/hidden")
+def api_hidden_items():
+    """看被单张隐藏的那些图（站主反悔用）。带 `work_id` 就只看那一本。"""
+    bad = _guard()
+    if bad:
+        return bad
+    qq = _qq()
+    if not _is_owner(qq):
+        return jsonify({"ok": False, "error": "只有站主能看"}), 403
+    raw = str(request.args.get("work_id") or "").strip()
+    wid = int(raw) if raw.isdigit() else None
+    return jsonify({"ok": True, "items": gallery.hidden_items(wid)})
 
 
 @bp.route("/pin/verify", methods=["POST"])
@@ -1164,11 +1238,13 @@ def _read_image_text(iid, prompt):
     qq = _qq()
     with gallery.connect() as con:
         row = con.execute(
-            "SELECT i.path, w.hidden, w.owner, w.use FROM items i"
-            " JOIN works w ON w.id=i.work_id WHERE i.id=?", (iid,)).fetchone()
+            "SELECT i.path, i.hidden AS ihidden, w.hidden, w.owner, w.use"
+            " FROM items i JOIN works w ON w.id=i.work_id WHERE i.id=?", (iid,)).fetchone()
     if not row:
         return ""
     if row["hidden"] and row["owner"] != str(qq or "") and not _is_owner(qq):
+        return ""
+    if row["ihidden"] and not _is_owner(qq):
         return ""
     if str(row["use"] or "keep") == "temp" and row["owner"] != str(qq or "") \
             and not _is_owner(qq):

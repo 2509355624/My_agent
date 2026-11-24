@@ -91,6 +91,22 @@
     if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
   }
 
+  /* 一批参考图发出去之后，把存档里对应的 `k:"ref"` 记录一并清掉。
+
+     这类记录的本意是「这张还没发，刷新后要挂回输入栏」，所以只要它留在
+     存档尾巴上，下一次 restore 就会把它认回来——用户 2026-11-24 报的
+     「每次刷新引用图栏自己冒出来」就是这个。发送成功 = 它已经兑现了，
+     记录该走。 */
+  function dropRefRecords(ids) {
+    if (!ids || !ids.length) return;
+    var want = {};
+    ids.forEach(function (i) { want[String(i)] = 1; });
+    S.msgs = S.msgs.filter(function (m) {
+      return !(m.k === "ref" && want[String(m.id)]);
+    });
+    if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
+  }
+
   // ── 消息区 ────────────────────────────────────────────
 
   function paintNote(text) {
@@ -922,6 +938,7 @@
     touch: touch,
     log: log,
     dropRef: dropRef,
+    dropRefRecords: dropRefRecords,
     /* 参考图拆到 ref.js 了，这里留个转发：旧的调用点还在的话不会炸 */
     syncHint: function () { if (global.WSRef) global.WSRef.syncHint(); },
     paintUser: paintUser,

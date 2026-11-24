@@ -128,9 +128,10 @@
        刷新后还得在输入栏上方等着，不然得重新去画廊点一次。只认最后一张
        ——同一条消息里挂着两三个参考图，重新挂一遍反而更乱。 */
     var lastRef = null;
+    var lastRefAt = -1;
 
     var again = [];
-    d.msgs.forEach(function (m) {
+    d.msgs.forEach(function (m, i) {
       if (!m || !m.k) return;
       global.WSChat.msgs().push(m);
 
@@ -142,7 +143,12 @@
         global.WSChat.paintNote(m.t);
       } else if (m.k === "ref") {
         restoreRef(m);
+        /* 只认**归档末尾**那条：`k:"ref"` 是「还没发出去」的回执，正常情况
+           下它只可能挂在最后（发出去之后 commit 就把它删了，见 ref.js）。
+           中间还夹着别的消息，说明那几张早用掉了，认回来等于凭空冒出一张。
+           所以这里记下位置，循环结束后只有「它就在末尾」才算数。 */
         lastRef = m;
+        lastRefAt = i;
       } else if (m.k === "img") {
         var c = restoreShell(m);
         if (m.file) {
@@ -180,7 +186,8 @@
       }
     });
 
-    if (lastRef && global.WSRef) {
+    /* 只有它真的在归档末尾才算「还没发出去」；夹在中间的是陈年记录。 */
+    if (lastRef && lastRefAt === d.msgs.length - 1 && global.WSRef) {
       global.WSRef.rehydrate(lastRef);
     }
 

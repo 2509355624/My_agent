@@ -94,7 +94,8 @@ CREATE TABLE IF NOT EXISTS items (
     work_id INTEGER NOT NULL,
     idx     INTEGER NOT NULL,
     path    TEXT NOT NULL,
-    bytes   INTEGER DEFAULT 0
+    bytes   INTEGER DEFAULT 0,
+    hidden  INTEGER DEFAULT 0     -- 单张隐藏（作品级的 hidden 在 works 上）
 );
 CREATE INDEX IF NOT EXISTS idx_items_work ON items(work_id, idx);
 CREATE TABLE IF NOT EXISTS marks (
@@ -201,6 +202,12 @@ def init():
         # 老数据默认 'keep'，一行都不用改。
         if "use" not in cols:
             con.execute("ALTER TABLE works ADD COLUMN use TEXT DEFAULT 'keep'")
+        # 老库补列（2026-11-24 晚）：单张图被隐藏。0 正常 / 1 隐藏。
+        # 作品级的 hidden 在 works 上，管的是「整本下架」；这一列管「这本里
+        # 的某一页不公开」。两件事互不干扰，所以单开一列而不是复用 marks。
+        icols = {r["name"] for r in con.execute("PRAGMA table_info(items)")}
+        if "hidden" not in icols:
+            con.execute("ALTER TABLE items ADD COLUMN hidden INTEGER DEFAULT 0")
         con.execute("PRAGMA journal_mode=WAL")
     return DB
 
@@ -448,15 +455,22 @@ def scan(roots=None):
                 continue
 
             if row:
+                # 这里会整本重写 items（目录内容变了）。单张隐藏记在 items 上，
+                # 重写会丢，所以先按路径把旧的那批记下来，插回去时再补——
+                # 否则站主新丢几张图进目录、重新扫描一次，之前藏的又全冒出来。
+                keep_hidden = {r["path"] for r in con.execute(
+                    "SELECT path FROM items WHERE work_id=?"
+                    " AND COALESCE(hidden,0)=1", (row["id"],))}
+                wid = row["id"]
                 con.execute(
                     "UPDATE works SET grp=?, title=?, path=?, cover=?, n=?, "
                     "fp=?, ord=?, seen=? WHERE id=?",
                     (grp, title, abspath, cover, len(files), fp, ordk, now,
-                     row["id"]))
-                wid = row["id"]
+                     wid))
                 con.execute("DELETE FROM items WHERE work_id=?", (wid,))
                 changed += 1
             else:
+                keep_hidden = set()
                 cur = con.execute(
                     "INSERT INTO works(key, src, owner, grp, title, path, cover,"
                     " n, fp, sort, ord, ts, seen)"
@@ -471,6 +485,18 @@ def scan(roots=None):
                 "INSERT INTO items(work_id, idx, path, bytes) VALUES(?,?,?,?)",
                 [(wid, i, os.path.join(abspath, name), size)
                  for i, (name, size) in enumerate(files)])
+            if keep_hidden:
+                con.execute(
+                    "UPDATE items SET hidden=1 WHERE work_id=? AND path IN (%s)"
+                    % ",".join("?" * len(keep_hidden)),
+                    [wid] + sorted(keep_hidden))
+                # n 是「可见张数」，封面也只从可见的里挑。不这么算的话，
+                # 一面全被隐藏的墙还会报「有 N 张」，点进去却是空的。
+                left = _recount(con, wid)
+                con.execute(
+                    "UPDATE works SET n=?, cover=COALESCE((SELECT path FROM items"
+                    " WHERE work_id=works.id AND COALESCE(hidden,0)=0"
+                    " ORDER BY idx LIMIT 1),'') WHERE id=?", (left, wid))
             total_items += len(files)
 
         # 磁盘上已经没有的目录：只标记，不删。站主手删是常态，删库会让
@@ -1025,6 +1051,61 @@ def delete_work(wid, owner=None):
     except OSError:
         pass
     return True, ""
+
+
+def _recount(con, wid):
+    """这本还看得见几张。→ int
+
+    `works.n` 现在算的是**可见张数**，不是「目录里几个文件」：两面墙都按
+    `w.n > 0` 过滤，一页页全隐藏完之后就得从墙上消失。
+    """
+    return con.execute(
+        "SELECT COUNT(*) c FROM items WHERE work_id=?"
+        " AND COALESCE(hidden,0)=0", (wid,)).fetchone()["c"]
+
+
+def set_item_hidden(iid, hidden):
+    """单张图隐藏 / 恢复。→ (ok, why, work_id, 这本还剩几张可见)
+
+    和 `delete_work` 的差别只有一个：**不动磁盘文件、不删记录**。站主磁盘
+    目录里那批图下次扫描还会回来，真删（`delete_item`）等于白删一次；而
+    「这张不公开」是个状态，能反悔，所以只翻一列。
+
+    顺手把 works.n 重算成「可见张数」，作品集封面也换到第一张可见的：
+    两面墙都按 `w.n > 0` 过滤，不重算的话一页一页全隐藏完之后，作品集还挂在
+    墙上，点进去空一面。封面同理，否则封面可能指向一张已经被藏的图
+    （`_SELECT_WORK` 的 cover_item 现在也带了这个条件）。
+    """
+    with connect() as con:
+        row = con.execute("SELECT work_id FROM items WHERE id=?",
+                          (iid,)).fetchone()
+        if not row:
+            return False, "没这张图", 0, 0
+        wid = int(row["work_id"])
+        con.execute("UPDATE items SET hidden=? WHERE id=?",
+                    (1 if hidden else 0, iid))
+        left = _recount(con, wid)
+        con.execute(
+            "UPDATE works SET n=?,"
+            " cover=COALESCE((SELECT path FROM items WHERE work_id=works.id"
+            "   AND COALESCE(hidden,0)=0 ORDER BY idx LIMIT 1),'')"
+            " WHERE id=?", (left, wid))
+    return True, "", wid, left
+
+
+def hidden_items(wid=None):
+    """列出被单张隐藏的图。传 wid 就只看那一本（作品集页里「看已隐藏」用）。"""
+    sql = ("SELECT i.id, i.work_id, i.idx, w.title FROM items i"
+           " JOIN works w ON w.id=i.work_id WHERE COALESCE(i.hidden,0)=1")
+    args = []
+    if wid is not None:
+        sql += " AND i.work_id=?"
+        args.append(int(wid))
+    sql += " ORDER BY i.work_id, i.idx"
+    with connect() as con:
+        rows = con.execute(sql, args).fetchall()
+    return [{"id": r["id"], "work": r["work_id"], "idx": r["idx"],
+             "title": r["title"] or "未命名"} for r in rows]
 
 
 def purge_temp(ttl=TEMP_TTL):

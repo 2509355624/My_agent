@@ -124,6 +124,18 @@
       pic.appendChild(img);
     }
 
+    /* 这本里有几张被藏了：卡片封面右上角挂个「已藏 N」。`hidden_n` 服务端
+       只给站主这个数，别人拿到的一律是 0 —— 对他们来说那些图不存在。
+
+       注意**不压暗封面**：封面已经是「第一张可见的图」了（服务端
+       `cover_item` 跳过隐藏的），压暗会让人以为整本都没了。 */
+    if (work.hidden_n > 0) {
+      var badge = document.createElement("span");
+      badge.className = "gbadge";
+      badge.textContent = "已藏 " + work.hidden_n;
+      pic.appendChild(badge);
+    }
+
     var name = document.createElement("div");
     name.className = "gname";
     name.textContent = work.title;
@@ -291,8 +303,14 @@
     same.innerHTML = ICON_SAME + "<span>画同款</span>";
     same.addEventListener("click", sameAs);
 
+    /* 隐藏这一张（只有站主有）。放在「画同款」右边、下载左边——底栏是从
+       右往左排的，最右是下载。按钮长相归 hide.js 管，这儿只管它该不该在。 */
+    var hide = global.WSHide.makeButton(!!(v.work && v.work.can_hide_item));
+    hide.addEventListener("click", toggleHide);
+
     acts.appendChild(fav);
     acts.appendChild(same);
+    acts.appendChild(hide);
     acts.appendChild(dl);
 
     box.appendChild(top);
@@ -309,7 +327,7 @@
       }
     });
 
-    v.node = { box: box, count: count, track: track, fav: fav };
+    v.node = { box: box, count: count, track: track, fav: fav, hide: hide };
   }
 
   /* 查看器里的大图。2026-11-24 用户：「点击图片不需要重新传 10m 的原图，
@@ -362,6 +380,13 @@
         return;
       }
       v.list = d.items || [];
+      /* 作品级的 can_hide_item 只有详情接口给（列表里那份没有），补到
+         `v.work` 上——隐藏按钮显示与否全靠它。 */
+      if (d.work) {
+        v.work.can_hide_item = !!d.work.can_hide_item;
+        v.work.can_hide = !!d.work.can_hide;
+        v.work.n = d.work.n;
+      }
       v.list.forEach(function (it) {
         var slide = document.createElement("div");
         slide.className = "gv-slide";
@@ -447,6 +472,40 @@
     v.node.fav.innerHTML = (v.faved ? ICON_STAR_ON : ICON_STAR) +
       "<span>" + (v.faved ? "已收藏" : "收藏") + "</span>";
     v.node.fav.classList.toggle("on", v.faved);
+    syncHide();
+  }
+
+  /* 隐藏按钮 / 已藏标记跟着当前这张走。长相和状态都在 hide.js，这边只把
+     现场递过去（哪本、第几张、整本列表）。 */
+  function syncHide() {
+    global.WSHide.sync({
+      btn: v.node.hide, track: v.node.track,
+      list: v.list, idx: v.idx, work: v.work
+    });
+  }
+
+  function toggleHide() {
+    var it = current();
+    if (!it || !v.work || !v.work.can_hide_item) return;
+    var on = !it.hidden;
+    global.WSApi.post("/api/gal/item/hidden", {
+      item_id: it.id, hidden: on
+    }).then(function (d) {
+      if (!d || !d.ok) {
+        note((d && d.error) || "改不动，稍后再试", false);
+        return;
+      }
+      it.hidden = on ? 1 : 0;
+      syncHide();
+      /* 整本被藏光了就没什么可看的了：告诉用户一声并收起来。这种作品集
+         在墙上也不会再出现（服务端把 n 算成可见张数），所以留在这儿只会
+         看到一面半透明的墙。 */
+      if (d.left === 0) {
+        global.WSChat && global.WSChat.sysNote("这本的图全藏起来了，已从墙上下架");
+        closeViewer();
+        global.WSGallery.reload();
+      }
+    });
   }
 
   function toggleFav() {
