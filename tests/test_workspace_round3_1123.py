@@ -155,16 +155,21 @@ class TestRefsActuallyApply(unittest.TestCase):
         self.assertNotIn('row["hidden"]', seg)
 
     def test_frontend_shows_ref_state(self):
-        js = _read("web/workspace/js/chat.js")
+        # 轮询里读 job.ref_note 的代码在 gen_flow.js（2026-11-24 从 chat.js 拆出）
+        js = _read("web/workspace/js/gen_flow.js")
         self.assertIn("job.ref_note", js, "排队/生成中要把参考图状态说出来")
 
     def test_frontend_reuses_refs_on_rerun(self):
-        """点了重画也要带着同一份参考图。"""
+        """点了重画也要带着同一份参考图。
+
+        「重画」按钮本身在 card.js，真正把 refs 递回去的接线在 chat.js 的
+        `buildActs` 包装里（hooks.again → submitJob(..., c.refs)）。
+        """
         js = _read("web/workspace/js/chat.js")
         i = js.index("function buildActs")
         seg = js[i:i + 1800]
-        self.assertIn("card.refs", seg)
-        self.assertNotIn("submitJob(card.prompt, card.skill, [])", seg)
+        self.assertIn("c.refs", seg)
+        self.assertNotIn("submitJob(c.prompt, c.skill, [])", seg)
 
     def test_use_same_fills_prompt(self):
         """画同款要把图读出来的描述填进输入框，不能只挂缩略图。"""
@@ -180,7 +185,8 @@ class TestRefsActuallyApply(unittest.TestCase):
 
 class TestCardActsSeparated(unittest.TestCase):
     def test_two_buttons_have_distinct_classes(self):
-        js = _read("web/workspace/js/chat.js")
+        # 按钮长相层 2026-11-24 拆到了 card.js
+        js = _read("web/workspace/js/card.js")
         i = js.index("function buildActs")
         seg = js[i:i + 2000]
         self.assertIn('"act act-text"', seg)
@@ -198,7 +204,7 @@ class TestCardActsSeparated(unittest.TestCase):
         i = css.index(".card .acts button {")
         seg = css[i:i + 500]
         self.assertNotIn("border-radius: 50%", seg)
-        js = _read("web/workspace/js/chat.js")
+        js = _read("web/workspace/js/card.js")
         self.assertIn("<span>复制</span>", js)
         self.assertIn("<span>重画</span>", js)
 

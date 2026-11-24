@@ -221,8 +221,8 @@ class TestFriendIdentity(_TempMixin, unittest.TestCase):
     def test_输出目录按账号分三段(self):
         d = self.mk_task(name="C20261110-01_加了料的饮料")
         out = comic_quota.output_base(d)
-        self.assertEqual(out, "群友漫画台/%s/C20261110-01_加了料的饮料" % QQ)
-        self.assertEqual(len(out.split("/")), 3)   # 第 4 段留给渠道，_MAX_DEPTH=4
+        self.assertEqual(out, "工作台/群友漫画台/%s/C20261110-01_加了料的饮料" % QQ)
+        self.assertEqual(len(out.split("/")), 4)   # 第 5 段留给渠道，_MAX_DEPTH=5
         self.assertEqual(comic_quota.output_base(
             self.mk_task(name="B1", owner=None)), "")
         self.assertEqual(comic._out_dir_for(mock.Mock(dir=d, task_id="X")), out)

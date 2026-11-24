@@ -5,32 +5,20 @@
 (function (global) {
   "use strict";
 
-  var COLLAPSE_AT = 1000;   // 用户单条超过这个字数就折叠
-  var HEAD_KEEP = 300;      // 折叠后先露这么多
-  var POLL_MS = 2000;
-  var MAX_FAIL = 5;         // 连续失败这么多次就停轮询，别无限打接口
-  /* 卡死兜底（2026-11-24 用户：「昨天晚上的图现在还显示排队中，卡死了」）。
-     后端已经有超时，但它只管「线程还在跑」的情形；服务重启 / 任务丢掉之后
-     存档里那条会永远停在「排队中」。所以前端**自己**也计时：
-       · 一直没轮到（排队 / 准备中）超过 SETTLE_MS → 判它卡住了；
-       · 真在画的那张按渠道给得更宽，别误杀。
-     判超时不是「报错完事」：卡片上给一个「重试」，用户点了就按同一份提示词
-     重排一张。 */
-  var SETTLE_MS = 8 * 60 * 1000;
-  var PAINT_MS = 25 * 60 * 1000;
-  /* 聊天区铺的图：长边从大往小试、取第一张不超过 1MB 的那一档 WebP（和服务端
-     `fit` 对齐，见 image/routes.py 的 `_IMG_FIT_W`）。
-
-     2026-11-24 用户改的口径：「现在只有 102k 还是太小了……直接压到 1m 即可，
-     不管什么图片，只要是工作台的，服务端压缩到 1m 再传过来，点击图片不需要
-     重新传 10m 的原图，我们默认就只给 1m 即可」——所以这里**就是最终那一份**：
-     列表、点开、下载全部用它，不存在「点一下再拉原图」这回事了。 */
-  var FIT = "1m";
+  /* 气泡折叠、轮询间隔、超时两条线都不在这份文件里了（2026-11-24 拆的）：
+        · 折叠在 card.js（`WSCard.COLLAPSE_AT`），气泡就是那边画的；
+        · 轮询 / 超时在 gen_flow.js（`SETTLE_MS` 排队 8 分钟、`PAINT_MS`
+          真在画 25 分钟）；
+        · 铺图的档位在 shot.js（`WSShot.FIT = "1m"`）。
+     这里只留状态和编排，值一律不再抄第二份。 */
 
   var el = {};
   var S = {
     skill: "", channels: [], pending: {}, timer: null, fails: 0,
-    msgs: []       // 存档：每条消息一条记录，见 archive.js
+    msgs: [],      // 存档：每条消息一条记录，见 archive.js
+    /* 存档记录 → 它的卡片 DOM（2026-11-24）。用户连点「重画」时要认出
+       「上一条还是同一份请求」，没有这张表就只能靠提示词去 DOM 里翻。 */
+    cards: {}
   };
 
   function $(id) { return document.getElementById(id); }
@@ -110,13 +98,7 @@
   // ── 消息区 ────────────────────────────────────────────
 
   function paintNote(text) {
-    hideEmpty();
-    var p = document.createElement("p");
-    p.className = "card note";
-    p.style.alignSelf = "center";
-    p.style.border = "0";
-    p.textContent = text;
-    box().appendChild(p);
+    var p = global.WSCard.paintNote(text);
     scrollBottom();
     return p;
   }
@@ -142,49 +124,11 @@
     };
   }
 
-  /* 用户气泡。refs 非空时把这一轮的参考图缩略图排在上面——豆包也是这样：
-     发出去的那条消息里能看见自己当时喂的是哪张图，回头翻记录还知道。
-     气泡是消息的一部分，所以图地址走同一个 item id，刷新后照样能显示。 */
+  /* 用户气泡 / 提示 / 卡片壳 / 按钮全在 card.js（2026-11-24 拆的）。
+     那边只管长相，往哪写、写完要不要落盘由这里决定，所以先把它接上我们
+     自己的「塞进根消息区 + 滚到底」。 */
   function paintUser(text, refs) {
-    hideEmpty();
-    var b = document.createElement("div");
-    b.className = "bubble";
-    var list = (refs || []).filter(function (r) { return r && r.id; });
-    if (list.length) {
-      var strip = document.createElement("div");
-      strip.className = "bubble-refs";
-      list.forEach(function (r) {
-        var im = document.createElement("img");
-        im.alt = "参考图";
-        im.loading = "lazy";
-        im.decoding = "async";
-        im.src = r.url || ("/api/gal/img/" + r.id + "?s=t");
-        im.addEventListener("click", function () {
-          if (global.WSGallery) global.WSGallery.open({ id: r.wid }, r.id);
-        });
-        strip.appendChild(im);
-      });
-      b.appendChild(strip);
-    }
-    var span = document.createElement("span");
-    b.appendChild(span);
-
-    if (text.length > COLLAPSE_AT) {
-      span.textContent = text.slice(0, HEAD_KEEP) + "…";
-      var more = document.createElement("button");
-      more.type = "button";
-      more.className = "more";
-      more.textContent = "展开全部（" + text.length + " 字）";
-      more.addEventListener("click", function () {
-        span.textContent = text;
-        more.remove();
-      });
-      b.appendChild(more);
-    } else {
-      span.textContent = text;
-    }
-
-    box().appendChild(b);
+    var b = global.WSCard.paintUser(text, refs);
     scrollBottom();
     return b;
   }
@@ -202,292 +146,50 @@
     log({ k: "user", t: text, refs: briefRefs(refs) });
   }
 
-  /* 通用卡片壳：图卡和漫画卡共用一套外观（谁用谁往里塞内容） */
-  function shell(cls) {
-    hideEmpty();
-    var node = document.createElement("div");
-    node.className = "card" + (cls ? " " + cls : "");
-
-    var body = document.createElement("div");
-    body.className = "card-body";
-
-    var note = document.createElement("p");
-    note.className = "note";
-
-    var acts = document.createElement("div");
-    acts.className = "acts";
-    acts.hidden = true;
-
-    /* 「终止」放在 note 旁边（2026-11-23 用户：「这里一直挂着，我都不知道
-       有没有在跑图」）。它只在排队 / 出图中出现，出图或失败后自动收起来。 */
-    var stop = document.createElement("button");
-    stop.type = "button";
-    stop.className = "stop-run";
-    stop.hidden = true;
-    stop.textContent = "终止";
-
-    node.appendChild(body);
-    node.appendChild(note);
-    node.appendChild(stop);
-    node.appendChild(acts);
-    box().appendChild(node);
-    scrollBottom();
-
-    return {
-      node: node,
-      body: body,
-      note: note,
-      stop: stop,
-      acts: acts,
-      say: function (text, bad) {
-        note.hidden = false;
-        note.className = "note" + (bad ? " err" : "");
-        note.textContent = text;
-        scrollBottom();
-      },
-      show: function () {
-        if (!acts.hidden) return;
-        acts.hidden = false;
-        scrollBottom();
-      }
-    };
+  function shell(cls) { return global.WSCard.shell(cls); }
+  function spawn(card) { return global.WSCard.spawn(card); }
+  function flash(card) { return global.WSCard.flash(card); }
+  function buildActs(card, retryLabel) {
+    return global.WSCard.buildActs(card, retryLabel, {
+      again: function (c) { submitJob(c.prompt, c.skill, c.refs || []); },
+      download: function (c) { downloadImage(c); }
+    });
   }
 
+  /* 一张新的出图卡。**先只有一行「排队中…」**：没有占位块、没有 3:4 的底，
+     真的要开始画了才 `spawn()`（见 gen_flow.js 里 tick 的 running 分支）。 */
   function newCard(prompt, skill, rec) {
     var c = shell();
-    var ph = document.createElement("div");
-    ph.className = "ph";
-    c.body.appendChild(ph);
     c.say("排队中…");
-
-    return { node: c.node, body: c.body, ph: ph, note: c.note, stop: c.stop,
-             acts: c.acts, prompt: prompt, skill: skill, job: "", rec: rec };
+    return { node: c.node, body: c.body, line: c.line, ph: null,
+             note: c.note, stop: c.stop, acts: c.acts, fill: c.fill,
+             /* 失败后重排要复用它：restart() 会把这一行字改回「排队中…」 */
+             say: c.say,
+             prompt: prompt, skill: skill, job: "", rec: rec };
   }
 
-  var ICON_COPY =
-    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
-    'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
-    '<rect x="9" y="9" width="11" height="11" rx="2.4"/>' +
-    '<path d="M15 5.6A2.6 2.6 0 0 0 12.4 3H6.6A2.6 2.6 0 0 0 4 5.6v5.8A2.6 2.6 0 0 0 6.6 14"/></svg>';
-
-  var ICON_AGAIN =
-    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
-    'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
-    '<path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4.6V10h-5.4"/></svg>';
-
-  var ICON_DOWN =
-    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
-    'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
-    '<path d="M12 4.5v10.4"/><path d="M7.8 11.4L12 15.6l4.2-4.2"/>' +
-    '<path d="M4.8 18.4v1.1h14.4v-1.1"/></svg>';
-
-  /* 卡片底部三个按钮：复制提示词 | 下载到本机 | 换种子重画。
-     它们原来紧贴在一起（都是小圆圈、间距 8px），用户反馈「很容易误触」——
-     改成两边是纯文字按钮、中间是图标按钮，中间留空推开，一个管复制
-     一个管下载一个管重画，手指不会点串。
-
-     **复制拿的是实际出这张图用的那串提示词**（服务端翻完 / 拼完参考图之后
-     的英文 tags），不是用户敲的那句话——见 submitJob 里 `card.prompt`
-     被 d.job.prompt 覆盖那一段。存档里记的也是它，所以恢复出来的旧卡片
-     一样复制得到 tags。
-
-     下载（2026-11-24 定稿）：拉「≤1MB」那一档，先问浏览器本地缓存。 */
-  /* 默认的「重画」文案写死在字面量里：这一条有测试钉着（按钮必须带文字）。 */
-  function buildActs(card, retryLabel) {
-    if (card.acts.childElementCount && !retryLabel) return;
-    if (retryLabel) card.acts.innerHTML = "";
-    card.acts.hidden = false;
-
-    var copy = document.createElement("button");
-    copy.type = "button";
-    copy.className = "act act-text";
-    copy.title = "复制提示词";
-    copy.setAttribute("aria-label", "复制提示词");
-    copy.innerHTML = ICON_COPY + "<span>复制</span>";
-    copy.addEventListener("click", function () {
-      copyText(card.prompt).then(function (ok) {
-        copy.innerHTML = ok ? '<span class="ok">✓ 已复制</span>' : "复制失败";
-        setTimeout(function () {
-          copy.innerHTML = ICON_COPY + "<span>复制</span>";
-        }, 1200);
-      });
-    });
-
-    var save = document.createElement("button");
-    save.type = "button";
-    save.className = "act act-icon";
-    save.title = "下载到本机";
-    save.setAttribute("aria-label", "下载到本机");
-    save.innerHTML = ICON_DOWN + "<span>下载</span>";
-    save.addEventListener("click", function () {
-      downloadImage(card);
-    });
-
-    /* 「重画」= 换种子再来一张；卡住的那张换成「重试」，同一个意思但
-       用户点下去是「它卡住了、帮我再排一次」，不是「我不满意这张」。 */
-    var again = document.createElement("button");
-    again.type = "button";
-    again.className = "act act-text";
-    again.title = retryLabel ? "重新排一次" : "换种子重画";
-    again.setAttribute("aria-label", again.title);
-    if (retryLabel) again.innerHTML = ICON_AGAIN + "<span>" + retryLabel + "</span>";
-    else again.innerHTML = ICON_AGAIN + "<span>重画</span>";
-    again.addEventListener("click", function () {
-      submitJob(card.prompt, card.skill, card.refs || []);
-    });
-
-    card.acts.appendChild(copy);
-    card.acts.appendChild(save);
-    card.acts.appendChild(again);
-  }
-
-  /* 点一下把这张**放大到原尺寸看**（2026-11-24 用户改口径后：不再拉原图）。
-     原地放大而不是开一个查看器：少一套 DOM，也不会多出「关了查看器消息
-     位置跳走」这类毛病。再点一下收回去。 */
-  function toggleFull(img) {
-    var on = img.classList.toggle("shot-full");
-    if (!on) return;
-    // 铺开后这张比气泡宽得多，横向要能滑到底看右边，不然等于只看到左半张
-    var b = box();
-    if (b) {
-      global.requestAnimationFrame(function () {
-        var r = img.getBoundingClientRect();
-        var br = b.getBoundingClientRect();
-        if (r.left < br.left || r.right > br.right) {
-          b.scrollLeft += (r.left - br.left) - 12;
-        }
-      });
-    }
-  }
-
-  /* 缓存 key 和请求地址是两样东西（2026-11-24）：地址上带站点签名 `k=`，
-     签名每次会话都可能换（服务重启就换），所以**key 里不带它**，否则重启
-     一次本地缓存全成孤儿。`keyOf` 只做一件事：把 `&k=...` 摘掉。 */
-  function keyOf(url) {
-    return String(url || "").replace(/[&?]k=[^&]*/g, "");
-  }
-
-  /* 把一张图的字节拉下来存进本地缓存（按 key 判断存过没有）。
-     用 `no-cors`：图本身有站点签名（`k=`），不需要 cookie；写进 IndexedDB
-     只看能不能拿到字节，不看能不能读它。**失败一律不管**——缓存是优化，
-     页面上的 <img> 自己照样会去请求。 */
-  function pull(key, url) {
-    if (!key || !global.WSImg) return;
-    url = url || key;
-    global.WSImg.has(key).then(function (yes) {
-      if (yes) return undefined;
-      return global.fetch(url, { credentials: "omit", mode: "no-cors" })
-        .then(function (r) { return r.blob(); })
-        .then(function (b) {
-          // no-cors 的响应可能是 opaque（size 0），那就没有可存的东西
-          if (b && b.size) return global.WSImg.put(key, b);
-          return undefined;
-        });
-    })["catch"](function () { /* 存不进去就算了 */ });
-  }
-
-  /* 存一个 Blob 到本机（下载流程的最后一步）。 */
-  function saveBlob(blob, name) {
-    var url = global.URL.createObjectURL(blob);
-    var a = document.createElement("a");
-    a.href = url;
-    a.download = name;
-    a.rel = "noopener";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    /* 立刻 revoke 会让部分浏览器来不及存盘，给一个宽限期 */
-    global.setTimeout(function () { global.URL.revokeObjectURL(url); }, 60000);
-  }
-
-  /* 下载这张图（2026-11-24 用户：「点下载的时候会有延迟，得等个七八秒钟才会
-     显示」）。
-
-     以前两步都在错的地方：
-       ① `<a download href>` 是导航式下载，**不查 HTTP 缓存**，等于把图重下
-          一遍（2026-11-24 上午改成 fetch，但拉的是**原图**——一张 8MB，缓存
-          里本来就没有，点了当然要等七八秒）；
-       ② 现在下载的是**列表上那张 1MB 的压缩档**，它的字节早就躺在本地缓存
-          里（显示时顺手存过），点下去是零网络。
-
-     顺序：本地缓存 → fetch（HTTP 缓存 / 服务端）→ 老办法兜底。 */
-  function downloadImage(card) {
-    var file = card.file || (card.rec && card.rec.file) || "";
-    if (!file) {
-      sysNote("这张还没出来，等它画完再点下载");
-      return;
-    }
-    var name = String(file).split("/").pop() || "image.png";
-    var src = global.WSGen.img(file, FIT);
-    var key = global.WSGen.imgKey(file, FIT);   // 缓存认这个（不带签名）
-
-    function fromNet() {
-      if (typeof global.fetch !== "function") { fallback(); return; }
-      global.fetch(src, { credentials: "same-origin", cache: "default" })
-        .then(function (r) {
-          if (!r.ok) throw new Error("HTTP " + r.status);
-          return r.blob();
-        })
-        .then(function (b) {
-          if (!b || !b.size) throw new Error("空文件");
-          saveBlob(b, name);
-          if (global.WSImg) global.WSImg.put(key, b);
-        })
-        ["catch"](fallback);
-    }
-
-    function fallback() {
-      // 最后一道：直接让浏览器去下。慢，但点了总有反应。
-      var a = document.createElement("a");
-      a.href = src;
-      a.download = name;
-      a.rel = "noopener";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    }
-
-    if (!global.WSImg) { fromNet(); return; }
-    global.WSImg.get(key).then(function (b) {
-      if (b && b.size) saveBlob(b, name);
-      else fromNet();
-    })["catch"](fromNet);
-  }
-
-  /* 聊天区里铺的是 **1MB 那一档**（2026-11-24 用户：「直接压到 1m 即可，
-     不管什么图片，只要是工作台的，服务端压缩到 1m 再传过来」）。原图常有
-     2~8MB，一张卡一张原图，恢复历史十几张就是几十 MB 全从这台机器往上走
-     ——家里那条上行扛不住。
-
-     一份到底：点开不再是「换原图地址」，而是把已经下下来的这张放大
-     （见 toggleFull），所以这儿不挂原图地址。
-
-     另外它顺手把这张的字节 `pull` 进本地缓存：下载和下次打开都直接拿。 */
-  function shotEl(file) {
-    var img = document.createElement("img");
-    img.alt = "生成结果";
-    img.loading = "lazy";
-    img.decoding = "async";
-    img.src = global.WSGen.img(file, FIT);
-    img.dataset.file = file || "";
-    img.className = "shot";
-    img.addEventListener("click", function () { toggleFull(img); });
-    pull(global.WSGen.imgKey(file, FIT), img.src);
-    return img;
-  }
+  /* 铺图 / 放大 / 下载都搬到 shot.js 了（2026-11-24）：这边已经一千多行，
+     那三件事只跟「一张已经出好的图」有关，跟排队、存档、重画都无关。
+     FIT 还是那个 1MB 档，值只在 shot.js 里写一次，这里转发一下给老调用点。 */
+  var FIT = global.WSShot.FIT;
+  function shotEl(file) { return global.WSShot.shotEl(file); }
+  function downloadImage(card) { return global.WSShot.download(card); }
 
   function showImage(card, job) {
+    var img = shotEl(job.file);
+    img.addEventListener("error", function () {
+      card.note.hidden = false;
+      card.note.className = "note err";
+      card.note.textContent = "图不在了，重画一张";
+    });
     if (card.ph) {
-      var img = shotEl(job.file);
-      img.addEventListener("error", function () {
-        card.note.hidden = false;
-        card.note.className = "note err";
-        card.note.textContent = "图不在了，重画一张";
-      });
       card.ph.parentNode.replaceChild(img, card.ph);
-      card.ph = null;
-      card.img = img;                 // 留个引用：下载/预览都靠它
+    } else {
+      card.body.appendChild(img);
     }
+    card.ph = null;
+    card.img = img;                 // 留个引用：下载/预览都靠它
+    if (card.fill) card.fill();     // 有图了：空壳变回真卡片
     card.note.hidden = true;
     card.stop && (card.stop.hidden = true);
     card.file = job.file || "";
@@ -518,7 +220,15 @@
     card.note.hidden = false;
     card.note.className = "note err";
     card.note.textContent = msg || "这张没出来，点重画再来一次";
-    if (card.ph) card.ph.style.opacity = ".3";
+    /* 失败不再留一张 3:4 的大空壳在那里（用户 2026-11-24：「网络报错……都是
+       使用一个大卡片显示的……每次滑动都是一大堆的大卡片」）。还没出图就把
+       那块底纹撤掉、壳退回「一行字」的 idle 态；真出过图的那张
+       （`card.img`）留着图不动，`.is-idle` 本来就摘掉了。 */
+    if (card.ph) {
+      card.ph.remove();
+      card.ph = null;
+      if (card.node) card.node.classList.add("is-idle");
+    }
     buildActs(card, stuck ? "重试" : "");
     if (card.rec) {
       card.rec.note = card.note.textContent;
@@ -536,194 +246,34 @@
 
   // ── 生图 ──────────────────────────────────────────────
 
-  /* refs：这一轮要带上的参考图 id。生图接口本身是按描述出图，参考图随请求
-     一起交给后端（它按渠道能力决定用不用），前端不自己拼提示词。 */
-  /* `described`（2026-11-24）：这些参考图**已经读成描述写进 prompt 了**
-     （「画同款」就是这种）。带上它，后端就不再识一次图——用户确认过的
-     口径是「不再识，用输入栏那段」。 */
+  /* 提交 / 轮询 / 判超时 / 终止全在 gen_flow.js（2026-11-24 拆的）：
+     那边只做「发请求、看状态」，画卡片的活儿由 card.js 干，这里只负责
+     把三样东西交给它——存档数组、落盘函数、和上面那几个渲染函数。 */
   function submitJob(prompt, skill, refs, described) {
-    if (!skill) {
-      sysNote("还没拿到渠道列表，去跑图台看一眼再回来");
-      return;
-    }
-    var rec = { k: "img", cls: "", prompt: prompt, skill: skill,
-                refs: (refs || []).slice(),
-                described: !!described,
-                job: "", file: "", note: "排队中…", err: false };
-    var card = newCard(prompt, skill, rec);
-    card.rec = rec;
-    // 卡片自己记住参考图：点「重画」要按同一份角色重来，不能悄悄丢图
-    card.refs = rec.refs;
-    card.described = !!described;
-    card.since = Date.now();       // 超时从这里起算，见 tick()
-    card.noted = "排队中…";
-    log(rec);
-    var body = { skill: skill, prompt: prompt };
-    if (refs && refs.length) {
-      body.refs = refs;
-      // 读过了就别让后端再读一遍，也别把同一段描述拼第二遍
-      if (described) body.ref_described = true;
-    }
-    global.WSGen.submit(body).then(function (d) {
-      if (!d || !d.ok) {
-        fail(card, (d && d.error) || "没排上队");
-        return;
-      }
-      card.job = d.job.id;
-      rec.job = card.job;
-      /* 复制拿的是**实际出这张图用的那串提示词**，不是用户敲的那句话
-         （2026-11-24 用户：「点击复制，结果拿到的是我发送给 ai 的原始需求，
-         而不是 ai 生成这个图片使用的英文提示词 tags」）。
-         服务端在这趟里做完了翻译/画师串/参考图描述合并，`job.prompt` 就是
-         最终进模型的那串英文 tags，直接记下来当复制源。 */
-      if (d.job.prompt) {
-        card.prompt = d.job.prompt;
-        rec.prompt = d.job.prompt;
-      }
-      armStop(card);
-      S.pending[card.job] = card;
-      startPoll();
-    });
+    return global.WSGenFlow.submit(prompt, skill, refs, described);
   }
-
-  /* 挂上「终止」：只有在卡片真的还挂着任务时才露出来（出图 / 失败时
-     `disarmStop` 收起来）。点了就把本台的 job 取消——服务端会把排队中那张
-     摘掉、正在跑那张定向掐停，并且**不投递**。 */
-  function armStop(card) {
-    var b = card.stop;
-    if (!b) return;
-    b.hidden = false;
-    b.disabled = false;
-    b.textContent = "终止";
-    b.onclick = function () {
-      if (!card.job) { b.hidden = true; return; }
-      b.disabled = true;
-      b.textContent = "停止中…";
-      global.WSGen.cancel(card.job).then(function (d) {
-        if (!d || !d.ok) {
-          b.disabled = false;
-          b.textContent = "终止";
-          if (d && /结束了/.test(d.error || "")) disarmStop(card);
-          return;
-        }
-        card.note.hidden = false;
-        card.note.className = "note";
-        card.note.textContent = "正在停，稍等…";
-      })["catch"](function () {
-        b.disabled = false;
-        b.textContent = "终止";
-      });
-    };
-  }
-
-  function disarmStop(card) {
-    if (card.stop) { card.stop.hidden = true; card.stop.onclick = null; }
-    card.job = "";
-  }
-
-  function startPoll() {
-    if (S.timer) return;
-    S.fails = 0;
-    S.timer = setInterval(tick, POLL_MS);
-  }
-
-  function stopPoll() {
-    if (S.timer) { clearInterval(S.timer); S.timer = null; }
-  }
-
-  /* 状态接口连续失败时别再打接口，但**不要把卡片判死**：网络抖一下不等于
-     这张图没了。把它们的计时按下暂停（`since` 往后推），等下一次状态恢复
-     再接着算——否则一次断网就能把半个小时的画白等。 */
-  function pauseClock() {
-    var now = Date.now();
-    Object.keys(S.pending).forEach(function (id) {
-      var card = S.pending[id];
-      if (card.since) card.since = now - (card.since - now);
-    });
-  }
-
-  /* 判超时。两条线：
-       · 一直没轮到（排队 / 准备中 / 还没进 ComfyUI）超过 SETTLE_MS；
-       · 已经在画（running）超过 PAINT_MS。
-     判了不是「报错完事」：卡片换成「重试」，用户点一下就按同一份提示词重排。
-     这一步也不能把「画得慢」误杀——真在画的那张只看它自己的 PAINT_MS。 */
-  function checkTimeout(card, ph) {
-    if (!card.since) return false;
-    var limit = (ph === "running") ? PAINT_MS : SETTLE_MS;
-    if (Date.now() - card.since < limit) return false;
-    var mins = Math.round(limit / 60000);
-    delete S.pending[card.job];
-    fail(card, (ph === "running")
-      ? "等了 " + mins + " 分钟还在画，可能卡住了。点重试重排一张"
-      : "排队等了 " + mins + " 分钟还没轮到，卡住了。点重试重排一张", true);
-    return true;
-  }
-
-  function tick() {
-    if (!Object.keys(S.pending).length) { stopPoll(); return; }
-    global.WSGen.status().then(function (d) {
-      if (!d || !d.ok) {
-        S.fails += 1;
-        if (S.fails >= MAX_FAIL) { stopPoll(); pauseClock(); }
-        return;
-      }
-      S.fails = 0;
-      var byId = {};
-      (d.jobs || []).forEach(function (j) { byId[j.id] = j; });
-
-      Object.keys(S.pending).forEach(function (id) {
-        var card = S.pending[id];
-        var job = byId[id];
-        // 任务不在列表里 = 进程重启过，这张再也回不来，别让它一直转。
-        // （服务端也会把「线程没了」的收成 error，这里只是兜住更早的那一下）
-        if (!job) {
-          delete S.pending[id];
-          fail(card, "服务重启过，这张没了，点重试再排一次", true);
-          return;
-        }
-        if (job.state === "done") {
-          delete S.pending[id];
-          disarmStop(card);
-          showImage(card, job);
-        } else if (job.state === "error" || job.state === "cancelled") {
-          delete S.pending[id];
-          disarmStop(card);
-          // stuck=true 是服务端判的「线程丢了，这张根本没跑」
-          fail(card, job.error || "这张没出来", !!job.stuck);
-        } else {
-          // 带上参考图时把它读图的结果说清楚：读到了就说「照着参考图画」，
-          // 没读到就说「按描述画」——用户不该猜这张图到底用没用上。
-          var refs = job.ref_note || "";
-          var tail = refs ? "（" + refs + "）" : "";
-          // 说清楚它**现在到底在哪**（2026-11-23）：`phase` 是后端去 ComfyUI
-          // 现问的——排队 / 准备中 / 真在画 / 掉队了。原来一律写「正在生成」，
-          // ComfyUI 重启后还挂在那儿转圈，用户根本不知道它是不是死了。
-          var ph = job.phase || "";
-          if (checkTimeout(card, ph)) return;
-          var text;
-          if (ph === "lost") {
-            text = "ComfyUI 那边已经没有这张了（重启过），重新发一次吧";
-          } else if (ph === "running") {
-            text = "正在画…" + tail;
-          } else if (ph === "queued") {
-            var n = d.queue_depth;
-            text = (typeof n === "number" && n > 0)
-              ? "排队中，前面还有 " + n + " 张" + tail : "排队中…" + tail;
-          } else {
-            text = "准备中（等显卡空出来）" + tail;
-          }
-          card.note.hidden = false;
-          card.note.className = "note" + (ph === "lost" ? " err" : "");
-          card.note.textContent = text;
-          card.noted = text;
-          if (card.rec) card.rec.note = text;
-        }
-      });
-
-      if (!Object.keys(S.pending).length) {
-        stopPoll();
-        if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
-      }
+  function armStop(card) { return global.WSGenFlow.armStop(card); }
+  function disarmStop(card) { return global.WSGenFlow.disarmStop(card); }
+  function startPoll() { return global.WSGenFlow.startPoll(); }
+  function bindFlow() {
+    global.WSGenFlow.bind({
+      state: function () { return S; },
+      save: function (rec) {
+        if (rec) log(rec);
+        else if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
+      },
+      patch: function (rec, fields) {
+        if (global.WSStore) global.WSStore.patch(rec, fields);
+      },
+      newCard: function (prompt, skill, rec) {
+        var c = newCard(prompt, skill, rec);
+        S.cards[rec] = c;
+        return c;
+      },
+      spawn: spawn,
+      showImage: showImage,
+      fail: fail,
+      sysNote: sysNote
     });
   }
 
@@ -813,27 +363,8 @@
     });
   }
 
-  function copyText(text) {
-    if (global.navigator.clipboard && global.navigator.clipboard.writeText) {
-      return global.navigator.clipboard.writeText(text)
-        .then(function () { return true; })
-        .catch(function () { return fallbackCopy(text); });
-    }
-    return Promise.resolve(fallbackCopy(text));
-  }
-
-  function fallbackCopy(text) {
-    var ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    var ok = false;
-    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
-    document.body.removeChild(ta);
-    return ok;
-  }
+  /* 复制走 card.js 那一份（按钮就在那边，两边共用同一段剪贴板逻辑） */
+  function copyText(text) { return global.WSCard.copyText(text); }
 
   // ── 画风 ──────────────────────────────────────────────
 
@@ -882,6 +413,14 @@
     el.cam = $("file-camera");
     el.album = $("file-album");
     el.skillName = $("skill-name");
+
+    /* card.js / gen_flow.js 都不知道消息区在哪儿，也不知道存档怎么落盘：
+       这两件事还是这边说了算，启动时一次性交给它们。 */
+    global.WSCard.attach(function (node) {
+      if (node) box().appendChild(node);
+      scrollBottom();
+    }, scrollBottom);
+    bindFlow();
 
     global.addEventListener("resize", fitWhenSized);
 
@@ -965,6 +504,11 @@
        各下一遍）。见 archive.js 的 replay()。 */
     shotEl: shotEl,
     buildActs: buildActs,
+    /* 重画收口用（2026-11-24）：存档重放时把「记录 → 卡片」交给这张表，
+       用户再点重画才能认得出上一条是同一份请求。 */
+    cards: S.cards,
+    spawn: spawn,
+    flash: flash,
     box: box,
     hideEmpty: hideEmpty,
     scrollBottom: scrollBottom,

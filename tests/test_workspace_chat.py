@@ -12,7 +12,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WS = os.path.join(ROOT, "web", "workspace")
 
 CHAT_FILES = ("chat.html", "css/chat.css", "css/sheet.css",
-              "js/gen.js", "js/chat.js", "js/stack.js", "js/views.js")
+              "js/gen.js", "js/chat.js", "js/stack.js", "js/views.js",
+              "js/card.js", "js/gen_flow.js", "js/shot.js")
 
 
 def _read(rel):
@@ -69,7 +70,8 @@ class TestWorkspaceChatComposer(unittest.TestCase):
     def test_input_limits(self):
         html = _read("chat.html")
         self.assertIn('maxlength="20000"', html, "输入上限 2 万字")
-        js = _read("js/chat.js")
+        # 2026-11-24 晚：折叠写在 card.js（气泡就是那边画的）
+        js = _read("js/card.js")
         self.assertIn("1000", js, "超过 1 千字要折叠")
 
     def test_plus_menu_has_two_create_entries(self):
@@ -107,13 +109,15 @@ class TestWorkspaceChatGen(unittest.TestCase):
         self.assertNotIn("https://", js, "接口不能写死域名")
 
     def test_bubble_actions_and_queue_text(self):
-        js = _read("js/chat.js")
+        # 2026-11-24 晚：按钮文案在 card.js（卡片长什么样那儿画的）
+        js = _read("js/card.js") + _read("js/chat.js")
         self.assertIn("复制", js)
         self.assertIn("重画", js)
         self.assertIn("排队", js, "生成中要告诉用户前面还有多少人")
 
     def test_polling_can_stop(self):
-        js = _read("js/chat.js")
+        # 2026-11-24 晚：轮询搬到 gen_flow.js（chat.js 破六百行）
+        js = _read("js/gen_flow.js")
         self.assertIn("setInterval", js)
         self.assertIn("clearInterval", js, "轮询必须能停，不能无限打接口")
 

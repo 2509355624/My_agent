@@ -1243,9 +1243,12 @@ def _src_label(job):
     """队列快照里给这张图标来源（状态页用，2026-11-22）。
 
     QQ 侧 target 是 group/private；网页端各入口 target 全是 None，只能靠
-    入队时自己带的标记区分：moss 漫画的 out_dir 进 `web/moss漫画/`、
-    漫画工作台带 batch="comic"、换装/扮演配图 out_dir 就是现成的标签，
-    都没有的（跑图台直出）归「网页」。
+    入队时自己带的标记区分：moss 漫画的 out_dir 进 `web/moss漫画/`
+    （群友的进 `工作台/群友漫画台/moss`）、漫画工作台带 batch="comic"、
+    换装/扮演配图 out_dir 就是现成的标签，都没有的（跑图台直出）归「网页」。
+
+    `工作台/` 下的一律标成「工作台·xxx」：2026-11-24 用户把群友的东西全挪进
+    工作台之后，状态页上「网页」这个标签已经分不清是谁的任务了。
     """
     if getattr(job, "target", None) in ("group", "private"):
         return "QQ"
@@ -1255,7 +1258,11 @@ def _src_label(job):
     if getattr(job, "batch", "") == "comic":
         return "漫画台"
     if od:
-        return od.rstrip("/").split("/")[-1] or "网页"
+        tail = od.rstrip("/").split("/")[-1] or "网页"
+        parts = [p for p in od.replace("\\", "/").split("/") if p]
+        if parts and parts[0] == "工作台":
+            return "工作台·" + tail
+        return tail
     return "网页"
 
 

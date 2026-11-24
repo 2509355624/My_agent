@@ -38,9 +38,11 @@ class TestSameAsIsPromptReverse(unittest.TestCase):
 
     def test_refs_reach_the_submit_call(self):
         """参考图要真带上，不能只挂个缩略图好看。"""
-        js = _read("js/chat.js")
+        # 提交请求体 2026-11-24 拆到了 gen_flow.js；取列表还在 chat.js
+        js = _read("js/gen_flow.js")
         self.assertIn("body.refs = refs", js, "发送时要把参考图 id 一起交过去")
-        self.assertIn("WSRef.list()", js)
+        chat = _read("js/chat.js")
+        self.assertIn("WSRef.list()", chat)
 
 
 class TestComicPanelsComeFromAdmin(unittest.TestCase):
@@ -89,8 +91,9 @@ class TestChatPersists(unittest.TestCase):
         self.assertNotIn("WSStore.save", arch)
 
     def test_unfinished_jobs_are_rejoined(self):
-        chat = _read("js/chat.js")
-        self.assertIn("S.pending[", chat)
+        # 轮询表 2026-11-24 拆到了 gen_flow.js（`S().pending[...]` 取代 `S.pending[...]`）
+        flow = _read("js/gen_flow.js")
+        self.assertIn("S().pending[card.job] = card", flow)
         arch = _read("js/archive.js")
         self.assertIn("WSChat.pending[a.rec.job]", arch, "生图任务要接回轮询")
         self.assertIn("WSCreate.resume", arch, "漫画任务要接回轮询")
@@ -99,8 +102,9 @@ class TestChatPersists(unittest.TestCase):
 
     def test_job_missing_is_reported_not_spinning(self):
         """进程重启后任务号没了：要说清楚，不能一直转圈。"""
-        chat = _read("js/chat.js")
-        self.assertIn("服务重启过", chat)
+        # 「任务号查不到」这个判定跟着轮询一起搬到了 gen_flow.js
+        flow = _read("js/gen_flow.js")
+        self.assertIn("服务重启过", flow)
 
 
 class TestLoginEntry(unittest.TestCase):

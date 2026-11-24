@@ -142,26 +142,6 @@ class FrontendDownloadTest(unittest.TestCase):
             os.path.abspath(__file__))), "web", *parts)
         return io.open(base, encoding="utf-8").read()
 
-    def test_chat_uses_fit_band(self):
-        """列表铺的是「≤512KB」那一档（2026-11-24 第二轮换掉 640）。"""
-        s = self._read("workspace", "js", "chat.js")
-        self.assertIn('var FIT = "512k"', s, "聊天区的图没走压缩档")
-        self.assertIn("WSGen.img(file, FIT)", s)
-        self.assertIn("dataset.full", s, "没留原图地址，点开升级不了")
-
-    def test_archive_uses_fit_band(self):
-        s = self._read("workspace", "js", "archive.js")
-        self.assertIn('var FIT = "512k"', s, "历史重放没走压缩档")
-        self.assertIn("global.WSGen.img(m.file, FIT)", s)
-
-    def test_download_goes_through_fetch(self):
-        s = self._read("workspace", "js", "chat.js")
-        i = s.index("function downloadImage")
-        body = s[i:i + 1600]
-        self.assertIn("fetch(", body, "下载没先走 fetch，还是会重下一遍")
-        self.assertIn('cache: "default"', body,
-                      "没指定 cache: default，可能绕过缓存")
-
     def test_gen_img_supports_fit_param(self):
         """`img(file, fit)`：第二轮换成体积档，站点签名 `k=` 也挂在这里。"""
         s = self._read("workspace", "js", "gen.js")

@@ -7,9 +7,9 @@
 (function (global) {
   "use strict";
 
-  /* 列表里铺的那一档：和服务端 `/api/gen/img?fit=` 对齐（长边从大往小试、
-     取第一张 ≤1MB）。和 chat.js 里的 `FIT` 是同一个值，两边改一处必须一起改。 */
-  var FIT = "1m";
+  /* 列表里铺的那一档（服务端 `/api/gen/img?fit=` 长边 ≤1MB）：
+     铺图的活儿全在 shot.js，这边只转一下值。 */
+  var FIT = global.WSShot.FIT;
 
   // ── 重放 ──────────────────────────────────────────────
 
@@ -18,9 +18,13 @@
      那些函数会顺手再写一次存档（重放一遍就等于把记录翻倍）。 */
   function restoreShell(m, cls) {
     var node = document.createElement("div");
-    node.className = "card" + (cls ? " " + cls : "");
+    /* 默认是 idle 态（一行字、不占位），真挂了图 / 格子之后由调用方
+       `fill()` 变回真卡片。见 chat.js 的 shell() 注释。 */
+    node.className = "card is-idle" + (cls ? " " + cls : "");
     var body = document.createElement("div");
     body.className = "card-body";
+    var line = document.createElement("div");
+    line.className = "card-line";
     var note = document.createElement("p");
     note.className = "note" + (m.err ? " err" : "");
     note.textContent = m.note || "";
@@ -35,34 +39,19 @@
     stop.className = "stop-run";
     stop.hidden = true;
     stop.textContent = "终止";
+    line.appendChild(note);
+    line.appendChild(stop);
     node.appendChild(body);
-    node.appendChild(note);
-    node.appendChild(stop);
+    node.appendChild(line);
     node.appendChild(acts);
     global.WSChat.box().appendChild(node);
-    return { node: node, body: body, note: note, stop: stop, acts: acts };
-  }
 
-  /* 缓存 key：把地址上的站点签名 `k=` 摘掉（它每次会话都可能换，带着当
-     key，服务一重启缓存全成孤儿；域名本来就不在 key 里）。 */
-  function keyOf(url) {
-    return String(url || "").replace(/[&?]k=[^&]*/g, "");
-  }
+    function fill() { node.classList.remove("is-idle"); }
 
-  /* 把一张图的字节存进本地缓存（存过就跳过）。no-cors：地址上有站点签名，
-     不需要 cookie。失败一律不管——缓存是优化，不能影响显示。 */
-  function pull(url) {
-    if (!url || !global.WSImg) return;
-    var key = keyOf(url);
-    global.WSImg.has(key).then(function (yes) {
-      if (yes) return undefined;
-      return global.fetch(url, { credentials: "omit", mode: "no-cors" })
-        .then(function (r) { return r.blob(); })
-        .then(function (b) {
-          if (b && b.size) return global.WSImg.put(key, b);
-          return undefined;
-        });
-    })["catch"](function () { return undefined; });
+    /* 登记「记录 → 卡片」：用户在这条上再点重画时，chat.js 才认得出
+       上一条是同一份请求（见 findTwin），不会越点越多。 */
+    return { node: node, body: body, line: line, note: note, stop: stop,
+             acts: acts, fill: fill, rec: m };
   }
 
   function restoreRef(m) {
@@ -151,12 +140,14 @@
         lastRefAt = i;
       } else if (m.k === "img") {
         var c = restoreShell(m);
+        if (global.WSChat.cards) global.WSChat.cards[m] = c;
         if (m.file) {
           // 恢复历史也铺**1MB 那一档**（2026-11-24）：翻一次记录可能十几张，
           // 每张原图 2~8MB，全从家用上行出就是「打开页面等半天」的由来。
           // `FIT` 和 chat.js 里同一个值；点开只是放大这一张，不再换原图。
           var img = global.WSChat.shotEl(m.file);
           c.body.appendChild(img);
+          c.fill();                    // 有图：idle 态变回真卡片
           // 重放时把 prompt / skill 一起交给 buildActs：不带的话「复制」
           // 复制的是空串、「重画」也排不上队（新版多了下载，同样要 file）
           global.WSChat.buildActs({
@@ -164,20 +155,20 @@
             refs: m.refs || [], file: m.file, rec: m
           });
         } else {
-          var ph = document.createElement("div");
-          ph.className = "ph";
-          ph.style.opacity = ".3";
-          c.body.appendChild(ph);
           /* 没有 file 也没有 job 的 `img` 记录 = 提交过、但没等到结果就
              没了（服务重启 / 页面关太早）。存下来的 note 十有八九是
              「排队中…」，重放时如果照抄就是一张**永远排队的假卡**
              （2026-11-24 用户：「我重新进入网页，又出现了上面的这个
              排队中，我知道上面的那个肯定是假的排队状态」）。
-             改成一张明确的「这条没跑完」+ 重试，别再骗人。 */
+             改成一行明确的「这条没跑完」+ 重试，别再骗人——而且不再铺
+             那块 3:4 的灰底（用户 2026-11-24：「每次滑动都是一大堆的
+             大卡片，影响观看」）。 */
           global.WSChat.failCard({
-            node: c.node, body: c.body, ph: ph, note: c.note,
-            stop: c.stop, acts: c.acts,
-            prompt: m.prompt || "", skill: m.skill || "", job: "", rec: m,
+            node: c.node, body: c.body, ph: null, note: c.note,
+            stop: c.stop, acts: c.acts, fill: c.fill,
+            /* 点重画时 chat.js 认人是靠 rec 反查 S.cards，所以 card.rec 必须挂上 */
+            rec: m,
+            prompt: m.prompt || "", skill: m.skill || "", job: "",
             refs: m.refs || [], described: !!m.described
           }, "这条没跑完就断了（服务重启 / 页面关太早），点重试再排一次",
              true);

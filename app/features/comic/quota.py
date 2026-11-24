@@ -36,6 +36,12 @@ from app.config import BASE_DIR
 _FILE = os.path.join(BASE_DIR, "state", "comic_friend.json")
 _LOCK = threading.RLock()
 
+# 群友作品的顶层分组名。**它的上一层是 `工作台/`**（2026-11-24 用户拍板：
+# 不是站主自己的东西一律进工作台，见 `output_base`）。写成一个常量是因为
+# `delivery`（zip 落点）要和它字字相同——两边拼出来的不是同一棵目录树，
+# 用户在资源管理器里就找不到自己那本。
+FRIEND_COMIC_ROOT = "群友漫画台"
+
 # 免费默认（2026-11-11 改为全 0，用户拍板）。原来的默认送次数（script 1 /
 # revise 3 / comic 1 / portrait 2）已被「中转站优先」模型取代：编剧/修订走公用
 # 中转站，在线就免费不限次（见 comic_api._friend_llm），次数只管「中转站挂了
@@ -163,11 +169,17 @@ def can_read(task_dir, qq):
 
 
 def output_base(task_dir):
-    """群友任务在 ComfyUI `output/` 下的目录体：`群友漫画台/<QQ>/<作品>`。
+    """群友任务在 ComfyUI `output/` 下的目录体：`工作台/群友漫画台/<QQ>/<作品>`。
+
+    2026-11-24 用户拍板把群友的东西全部收进 `工作台/`：
+    「网页端的工作台，要单独一个文件夹存，叫做"工作台"，不要和我的 web 混淆
+    啊，只要不是我这边的东西，都给我放到工作台的文件夹里面，我不是有一个
+    群友漫画台的吗？这个就存群友的 moss 漫画和其他的漫画」。
 
     返回空串 = 站主任务，沿用原来的 `web/漫画_<任务号>`。`comfy_out.body_for`
-    会再拼一层渠道名，所以这里**只能给三段**：`_join` 的 `_MAX_DEPTH=4`
-    会把更深的层级截掉，渠道那一段必须留给它。
+    会再拼一层渠道名，所以这里**只能给四段**（`_join` 的 `_MAX_DEPTH=5`
+    会把更深的层级截掉）：`工作台` / `群友漫画台` / `<QQ>` / `<作品>`，
+    渠道那一段留给 `body_for`。
 
     目录名过一遍 `comfy_out._join`：任务号可能带中文标题，标题里出现 `:` `?`
     这类 Windows 非法字符要先洗掉，否则 ComfyUI 写盘直接失败。
@@ -177,7 +189,7 @@ def output_base(task_dir):
         return ""
     from app.features.image import comfy_out
     name = os.path.basename(str(task_dir).rstrip("\\/")) or "作品"
-    return comfy_out._join("群友漫画台", qq, name)
+    return comfy_out._join("工作台", FRIEND_COMIC_ROOT, qq, name)
 
 
 # ─── 模型白名单 ────────────────────────────────────────

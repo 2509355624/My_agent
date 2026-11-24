@@ -30,7 +30,8 @@ IP 限流挡住，跟「每天几张」无关。
 
 ## 图存哪
 
-- ComfyUI 出图落 `output/群友页_<qq>/moss/`（走 enqueue 的 out_dir）
+- ComfyUI 出图落 `output/工作台/群友页_<qq>/moss/`（走 enqueue 的 out_dir）——
+  2026-11-24 用户拍板：不是站主自己的东西一律进 `工作台/`，别和他的 `web/` 混
 - 出图后**复制一份**到 `state/friend_gallery/<qq>/<tag>.png`，因为主 output
   目录会被定期清理；群友的历史不该跟着一起消失
 - 图库总量封顶 `GALLERY_CAP` 字节，超了按最老删
@@ -360,7 +361,7 @@ def api_submit():
                 s["name"] = names.get(s["slot"], "")
         job, reason = image_jobs.enqueue(
             "private", qq, wf, skill=SKILL, prompt=prompt, seed=seed,
-            out_dir="群友页_" + qq, quiet=not send_qq)
+            out_dir="工作台/群友页_" + qq, quiet=not send_qq)
         if job is None:
             return jsonify({"ok": False, "error": reason or "队列拒收"}), 429
         tag = job.tag

@@ -50,7 +50,7 @@ class BodyTest(unittest.TestCase):
 
     def test_web_side_without_target(self):
         job = self._job(None, None, "silver")
-        self.assertEqual(comfy_out.body_for(job), "web/生图页/silver")
+        self.assertEqual(comfy_out.body_for(job), "工作台/生图页/silver")
 
     def test_explicit_out_dir_wins(self):
         """漫画任务号只有它自己知道，入队时显式传。"""
@@ -68,8 +68,10 @@ class BodyTest(unittest.TestCase):
         self.assertEqual(comfy_out._safe("..."), "_")
 
     def test_depth_is_capped(self):
+        """上限 5 段（2026-11-24 从 4 提上去的）：群友漫画挪进
+        `工作台/` 之后最深的一条是五段，停在 4 会把渠道那层截掉。"""
         job = self._job(None, None, "s", out_dir="a/b/c/d/e/f")
-        self.assertEqual(comfy_out.body_for(job).count("/"), 3)
+        self.assertEqual(comfy_out.body_for(job).count("/"), 4)
 
 
 class PruneSamePanelRunsTest(unittest.TestCase):

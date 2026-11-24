@@ -273,37 +273,42 @@ class GalleryGroupTest(unittest.TestCase):
 class FrontendTest(unittest.TestCase):
     """前端事实：档位一致、超时给重试、下载走本地缓存、重放先问服务端。"""
 
+    # 2026-11-24 晚：铺图 / 点开放大 / 下载搬到 shot.js（chat.js 破千行），
+    # 档位只在那儿写一次，chat.js 和 archive.js 都是引用它。
     def test_chat_uses_fit_1m(self):
-        s = _src("web", "workspace", "js", "chat.js")
+        s = _src("web", "workspace", "js", "shot.js")
         self.assertIn('var FIT = "1m"', s)
         self.assertIn("WSGen.img(file, FIT)", s, "列表/下载没走压缩档")
+        c = _src("web", "workspace", "js", "chat.js")
+        self.assertIn("global.WSShot.FIT", c, "chat.js 自己又抄了一份档位")
 
     def test_click_does_not_fetch_original(self):
         """2026-11-24 用户：「点击图片不需要重新传 10m 的原图」。
         所以点开只能是放大这一张，不许再挂一个不带 fit 的地址。"""
-        s = _src("web", "workspace", "js", "chat.js")
+        s = _src("web", "workspace", "js", "shot.js")
         self.assertNotIn("dataset.full", s, "还在点开时换原图地址")
         self.assertIn("function toggleFull", s)
 
     def test_archive_uses_same_fit(self):
         s = _src("web", "workspace", "js", "archive.js")
-        self.assertIn('var FIT = "1m"', s)
+        self.assertIn("global.WSShot.FIT", s, "重放那边自己又抄了一份档位")
         self.assertIn("global.WSChat.shotEl(m.file)", s,
                       "重放没复用同一张（地址不同就多下一遍）")
 
     def test_download_hits_local_cache_first(self):
-        s = _src("web", "workspace", "js", "chat.js")
-        i = s.index("function downloadImage")
+        s = _src("web", "workspace", "js", "shot.js")
+        i = s.index("function download(card)")
         body = s[i:i + 1800]
         self.assertIn("WSImg.get", body, "下载没先问本地缓存")
         self.assertIn("saveBlob", body)
 
     def test_timeout_gives_retry(self):
-        s = _src("web", "workspace", "js", "chat.js")
+        # 2026-11-24 晚：超时 / 轮询搬到 gen_flow.js；「重试」按钮在 chat.js 的 fail()
+        s = _src("web", "workspace", "js", "gen_flow.js")
         self.assertIn("SETTLE_MS", s)
         self.assertIn("PAINT_MS", s)
         self.assertIn("checkTimeout", s)
-        self.assertIn('"重试"', s)
+        self.assertIn('"重试"', _src("web", "workspace", "js", "chat.js"))
 
     def test_restore_asks_status_before_polling(self):
         s = _src("web", "workspace", "js", "archive.js")
@@ -325,7 +330,7 @@ class FrontendTest(unittest.TestCase):
         i = g.index("function imgKey")
         seg = g[i:].split("\n  }", 1)[0]        # 只看这个函数体
         self.assertNotIn("SIGN", seg, "imgKey 里不该掺签名")
-        c = _src("web", "workspace", "js", "chat.js")
+        c = _src("web", "workspace", "js", "shot.js")
         self.assertIn("imgKey(file, FIT)", c, "下载没按不带签名的 key 查缓存")
 
     def test_chat_html_loads_imgcache(self):

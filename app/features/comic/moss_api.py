@@ -139,7 +139,16 @@ OUT_ROOT = "web/moss漫画"
 # 群友的图另起一棵树（2026-11-24 用户拍板）：**只分「站主 / 群友」两层**，
 # 群友全堆在一起，不按 QQ 细分。站主仍是 OUT_ROOT，老任务原地不动——判据
 # 是任务目录里有没有 owner.json，有就把根换成这里。
-OUT_ROOT_FRIEND = "群友moss漫画"
+#
+# 2026-11-24 晚第二次拍板：群友的东西一律收进 `工作台/`
+# （「只要不是我这边的东西，都给我放到工作台的文件夹里面」），所以根从
+# `群友moss漫画` 变成 `工作台/群友漫画台/moss`——和群友漫画台
+# （`工作台/群友漫画台/<QQ>/`）同在一棵 `群友漫画台` 下，用户翻文件夹时
+# 「群友的画」只有一个入口。老任务在 `群友moss漫画/` 原地不动，不搬。
+OUT_ROOT_FRIEND = "工作台/群友漫画台/moss"
+# 上一版给群友用的根（2026-11-24 白天定过 `群友moss漫画`）。只在
+# 「同一个任务以前出过图」时拿来兜底读，免得刚跑完的那本看起来是空的。
+OUT_ROOT_FRIEND_OLD = "群友moss漫画"
 # 老任务出图所在的历史渠道目录（换渠道后旧图还得能显示；新的排前面）
 LEGACY_SKILLS = ("moss-qunyou", "moss8", "moss50")
 
@@ -230,7 +239,8 @@ def out_root(d):
     """这个任务目录的图该落在 ComfyUI `output/` 下的哪棵树上。
 
     - 站主：`web/moss漫画`
-    - 群友：`群友moss漫画`
+    - 群友：`工作台/群友漫画台/moss`（2026-11-24 晚起；白天那版是
+      `群友moss漫画`，那个根仍在 `out_roots` 里兜底读，不搬）
 
     判据是任务目录里的 `owner.json`，跟漫画工作台共用同一个约定
     （`comic_quota.is_friend_task`）——**不看当前请求**：出图跑在后台线程里，
@@ -248,6 +258,24 @@ def out_root(d):
     return OUT_ROOT
 
 
+def out_roots(d):
+    """这个任务的图**可能**在哪几个根下（新根在前，老根在后兜底）。
+
+    为什么要有这个：2026-11-24 一天之内群友的根搬过两次
+    （`群友moss漫画` → `工作台/群友漫画台/moss`），已经出好的那几本还躺在
+    老地方。按顺序挨个找，用户打开刚跑完的那本不会看到一片空白；**不搬文件**
+    ——搬完 `/view` 就找不到它了，还得给每处取图逻辑补「去哪个目录找」。
+    """
+    roots = [out_root(d)]
+    try:
+        from app.features.comic import quota as comic_quota
+        if comic_quota.is_friend_task(d) and OUT_ROOT_FRIEND_OLD not in roots:
+            roots.append(OUT_ROOT_FRIEND_OLD)
+    except Exception:                      # noqa: BLE001
+        pass
+    return roots
+
+
 def _legacy_files(d):
     """老任务的出图（没有 state.json 的那些）。
 
@@ -260,13 +288,17 @@ def _legacy_files(d):
     """
     if not COMFYUI_OUTPUT_DIR:
         return {}
-    root = out_root(d)
-    base = os.path.join(COMFYUI_OUTPUT_DIR, root.replace("/", os.sep),
-                        os.path.basename(d))
     out = {}
     for skill in LEGACY_SKILLS:
-        folder = os.path.join(base, skill)
-        if not os.path.isdir(folder):
+        # 新根找过再找老根（见 out_roots）：搬过一次家的那几本也能打开
+        folder = None
+        for root in out_roots(d):
+            probe = os.path.join(COMFYUI_OUTPUT_DIR, root.replace("/", os.sep),
+                                 os.path.basename(d), skill)
+            if os.path.isdir(probe):
+                folder = probe
+                break
+        if not folder:
             continue
         for f in sorted(os.listdir(folder)):
             m = re.search(r"_P0*(\d+)_", f)
@@ -1070,7 +1102,11 @@ def _run(d, spec, nums, seed_base, loras=None, steps=None, abort=None):
         # 布局图，排查排版时有用。
         lettering = soda_letter.enabled()
         by_n = {p.get("n"): p for p in spec.get("pages") or []}
-        out_dir = "%s/%s" % (out_root(d), os.path.basename(d))
+        # 群友的根现在是 `工作台/群友漫画台/moss`（2026-11-24 晚挪进工作台），
+        # 拼上任务名就已经四段；`comfy_out.body_for` 还要再加一层渠道。
+        # 走 `_join`（不是字符串 %）才有那道层级上限兜着。
+        from app.features.image import comfy_out as _co
+        out_dir = _co._join(out_root(d), os.path.basename(d))
         for i, n in enumerate(nums):
             page = by_n.get(n)
             if not page:

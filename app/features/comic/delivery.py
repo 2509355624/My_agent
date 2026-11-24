@@ -22,7 +22,7 @@ QQ 里收到的名字是「<作品名> 无气泡 / 有气泡」，不用「底�
 
 ## 落盘与生命周期
 
-`output/群友漫画台/<QQ>/<作品>/zip/`。**不自动删**：协议端拉本机文件是异步的
+`output/工作台/群友漫画台/<QQ>/<作品>/zip/`。**不自动删**：协议端拉本机文件是异步的
 （`app/image_out.py:KEEP_SECONDS` 那条血泪教训），发完立刻删会发出空文件；
 用户也明确说「服务端不持久化由我自己清」。zip 留着还顺手支持手动重发。
 
@@ -90,12 +90,19 @@ def pack_name(task_dir, label):
 
 
 def delivery_dir(task_dir, qq):
-    """`output/群友漫画台/<QQ>/<作品>/zip/`。output 没配就退回 state 下。"""
+    """`output/工作台/群友漫画台/<QQ>/<作品>/zip/`。output 没配就退回 state 下。
+
+    2026-11-24 用户拍板：群友的东西一律在 `工作台/` 里（他自己的 `web/` 不掺）。
+    分组名和 `comic_quota.output_base` 共用同一个常量，两边拼的必须是同一棵树
+    ——否则 zip 和成图会落在两个地方。
+    """
+    from app.features.comic import quota as comic_quota
     root = (COMFYUI_OUTPUT_DIR or "").strip()
     if not root:
         root = os.path.join(BASE_DIR, "state", "comic_delivery")
     name = os.path.basename(str(task_dir).rstrip("\\/")) or "作品"
-    return os.path.join(root, "群友漫画台", str(qq), name, "zip")
+    return os.path.join(root, "工作台", comic_quota.FRIEND_COMIC_ROOT,
+                        str(qq), name, "zip")
 
 
 def delivery_state(task_dir):

@@ -1526,7 +1526,7 @@ class GenerateImageSplitTest(unittest.TestCase):
     def test_web_still_waits_and_returns_url(self):
         """网页侧拿到的是 /api/image/ 地址；2026-10-18 起后面还带目录。"""
         out = self._call((None, None))
-        self.assertIn("/api/image/web/生图页/", out)
+        self.assertIn("/api/image/工作台/生图页/", out)
         self.assertTrue(out.rstrip().endswith("/a.png"), out)
 
     def test_web_reports_timeout(self):

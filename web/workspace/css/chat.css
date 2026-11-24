@@ -135,6 +135,56 @@
 /* 卡片内容区：图卡、漫画卡共用这一层壳 */
 .card-body { min-width: 0; }
 
+/* ── 还没出图的那张：只剩一行字（2026-11-24）─────────────
+   用户原话：「网络报错或者已经有一张在排队了，都是使用一个大卡片显示的，
+   我点击重画也是一个大卡片，直接占据大量冗余空间……每次滑动都是一大堆的
+   大卡片，影响观看」。所以「有没有东西」决定占不占位：
+
+     · .is-idle —— 没有图、没有格子。去掉玻璃底纹/边框/内边距，宽度收成
+       内容宽度，不占 3:4，整张卡就是状态行那一句。
+     · 图出来了（chat.js 的 fill()）摘掉这个类，它才变回原来那张卡。 */
+.card.is-idle {
+  width: auto;
+  max-width: min(100%, 340px);
+  padding: 2px 2px 6px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+.card.is-idle .card-body { display: none; }
+
+/* 状态行 +「终止」同一行：一行字不配独占一张卡，也不再单独占一行按钮 */
+.card-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.card-line .note {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 再点一次重画：这一行字闪一下（高亮 → 渐隐），不新增任何节点。
+   用户原话：「用户还是不断地点击重画就直接闪烁一下那行字，高亮一下即可，
+   然后逐渐消失，不要遮挡画面」。 */
+@keyframes ws-blink {
+  0%   { background: var(--brand-soft); color: var(--brand); }
+  45%  { background: var(--brand-soft); color: var(--brand); }
+  100% { background: transparent; color: inherit; }
+}
+
+.card-line .note.blink {
+  border-radius: 8px;
+  padding: 4px 8px;
+  animation: ws-blink .9s ease-out 1 both;
+}
+
 .card .ph {
   aspect-ratio: 3 / 4;
   border-radius: 14px;
@@ -435,6 +485,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .bubble, .card, .card .ph, .plus-menu { animation: none; }
+  /* 闪一下是为了「让你看见我又点了一次」，不该变成动效负担：降级只留高亮 */
+  .card-line .note.blink { animation: none; background: var(--brand-soft); }
 }
 
 /* 画风按钮上的当前画风名：选了就是默认，靠这里显示，不再弹一条提示 */

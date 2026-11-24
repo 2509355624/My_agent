@@ -1080,7 +1080,7 @@ class DrawTest(unittest.TestCase):
         self.assertEqual(kw["skill"], "anima-line")
         # 图落网页侧目录，不混进 QQ 私聊
         self.assertEqual(comfy_out.session_base(None, "2509355624"),
-                         "web/生图页")
+                         "工作台/生图页")
 
     def test_prompt_goes_into_the_workflow(self):
         self._patch()

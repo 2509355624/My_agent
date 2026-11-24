@@ -68,7 +68,8 @@ class TestBubbleKeepsRefs(unittest.TestCase):
     """2. 发出去的消息带着参考图。"""
 
     def test_paint_user_takes_refs(self):
-        js = _read("js/chat.js")
+        # 气泡长相层 2026-11-24 拆到了 card.js（chat.js 只留一层转发）
+        js = _read("js/card.js")
         self.assertIn("function paintUser(text, refs)", js)
         self.assertIn("bubble-refs", js)
 
@@ -93,9 +94,10 @@ class TestDownloadButton(unittest.TestCase):
     """3. 复制旁边要有下载。"""
 
     def test_three_buttons_in_order(self):
-        js = _read("js/chat.js")
+        # 三个按钮的拼装 2026-11-24 拆到了 card.js
+        js = _read("js/card.js")
         i = js.index("function buildActs")
-        seg = js[i:js.index("function downloadImage", i)]
+        seg = js[i:js.index("function copyText", i)]
         self.assertIn("下载", seg)
         self.assertLess(seg.index("acts.appendChild(copy)"),
                         seg.index("acts.appendChild(save)"))
@@ -103,13 +105,21 @@ class TestDownloadButton(unittest.TestCase):
                         seg.index("acts.appendChild(again)"))
 
     def test_download_uses_anchor(self):
-        js = _read("js/chat.js")
-        i = js.index("function downloadImage")
-        seg = js[i:js.index("function shotEl", i)]
-        self.assertIn("a.download =", seg, "用 <a download> 存文件，不走 canvas")
-        self.assertIn("WSGen.img", seg, "地址仍走同源 /api/gen/img")
-        # 下载拿的就是列表里那张（同一个 fit），不是另一份原图
-        self.assertIn("WSGen.img(file, FIT)", seg)
+        """下载**落在本机**这一步用 `<a download>`；取字节走本地缓存优先。
+
+        2026-11-24 口径变了（用户：「点下载得等七八秒」）：下载的是列表上
+        那张压缩档，字节本地缓存里就有，所以取字节从 `download()`（shot.js）
+        改成「缓存 → fetch」两步；`<a download>` 只在 `saveBlob()` 里。
+        """
+        js = _read("js/shot.js")
+        i = js.index("function download")
+        seg = js[i:js.index("function saveBlob", i)] if "function saveBlob" in js[i:] else js[i:]
+        self.assertIn("global.WSGen.img(file, FIT)", seg, "下载拿的就是列表那张（同一个 fit）")
+        self.assertIn("global.WSImg", seg, "先查本地缓存，别重下 8MB 原图")
+        # 存盘那步仍是 <a download>，不走 canvas
+        j = js.index("function saveBlob")
+        blob_seg = js[j:j + 600]
+        self.assertIn("a.download =", blob_seg, "用 <a download> 存文件，不走 canvas")
 
     def test_card_keeps_its_file(self):
         """卡片得知道自己是哪张图，否则下载按钮拿不到文件名。"""

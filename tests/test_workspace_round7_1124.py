@@ -28,8 +28,9 @@ class TestCopyGivesRealPrompt(unittest.TestCase):
     """复制拿到的必须是服务端翻完 / 拼完的那串英文 tags。"""
 
     def test_card_prompt_takes_job_prompt(self):
-        js = _read("js", "chat.js")
-        i = js.index("function submitJob")
+        # 2026-11-24 晚：提交 / 轮询搬到 gen_flow.js 了，这一段跟着过去
+        js = _read("js", "gen_flow.js")
+        i = js.index("function fire(card, rec, refs, described)")
         seg = js[i:js.index("function armStop", i)]
         self.assertIn("d.job.prompt", seg,
                       "提交成功要把 job.prompt 记成复制源")

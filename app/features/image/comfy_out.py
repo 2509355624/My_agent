@@ -41,8 +41,11 @@ import re
 # 哪天把群名放进来（`_safe("原神:交流")` → `原神_交流`）也不会炸。
 _BAD = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
-# 相对路径的层级上限：防着哪天拼出个七八层的怪路径
-_MAX_DEPTH = 4
+# 相对路径的层级上限：防着哪天拼出个七八层的怪路径。
+# 2026-11-24 从 4 提到 5：群友的漫画挪进 `工作台/` 之后最深的一条是
+# `工作台/群友漫画台/<QQ>/<作品>/<渠道>`（5 段），停在 4 会把渠道名截掉、
+# 两本书的图全糊在一个目录里。
+_MAX_DEPTH = 5
 
 
 def _safe(seg):
@@ -76,12 +79,21 @@ def _join(*parts):
 
 
 def session_base(target, target_id):
-    """会话 → 顶层目录。`group`/`private` 是 image_jobs 的两种 target。"""
+    """会话 → 顶层目录。`group`/`private` 是 image_jobs 的两种 target。
+
+    **网页侧（target=None）落 `工作台/`**（2026-11-24 用户拍板）：
+    「网页端的工作台，要单独一个文件夹存，叫做"工作台"，不要和我的 web 混淆
+    啊……工作台就存群友网页端的生图，你不要什么东西都放到我自己的文件夹
+    里面 D:\\AI\\ComfyUI-nightly\\output\\web，这个是我自己用的文件夹」。
+
+    `web/` 从此只放站主自己的东西（他本人跑图台 / 漫画台 / moss 台出的图），
+    网页工作台上群友出的图一律进 `工作台/生图页/<渠道>/`。
+    """
     if target == "group":
         return _join("qq", "群_%s" % target_id)
     if target == "private":
         return _join("qq", "私聊_%s" % target_id)
-    return _join("web", "生图页")
+    return _join("工作台", "生图页")
 
 
 def base_for(job):
