@@ -234,6 +234,53 @@ class ScanPathTest(_Base):
             self.assertEqual(gallery.grp_for(p),
                              gallery._root_name(self.root))
 
+    def test_subdir_inside_root_scans_only_that_subdir(self):
+        """选根里面的一本，只扫这一本。
+
+        2026-11-24 用户报的 bug：选 `moss漫画\\20261124_1236_xxx`，结果把
+        整个 `moss漫画` 下所有本子一起扫了。老代码「落在配置根里就扫整个根」，
+        扫一本等于重扫整棵树。
+        """
+        self.mk("moss漫画/20261124_1236_魔法少女", "a.png")
+        self.mk("moss漫画/20261031_2321_旧本", "b.png")
+        self.mk("moss漫画/20261031_2321_旧本", "c.png")
+        one = os.path.join(self.root, "moss漫画", "20261124_1236_魔法少女")
+        with mock.patch.object(gallery, "GALLERY_ROOTS",
+                               (("moss漫画", self.root),)):
+            out = gallery.scan_path(one)
+        self.assertEqual(out["items"], 1, "只该扫选中的那一本里的 1 张")
+        # 临时根叫 `<root名>/moss漫画`，所以标题带一层前缀；关键是兄弟本没进来
+        self.assertEqual(len(self.works()), 1)
+        self.assertTrue(self.works()[0]["title"].endswith("20261124_1236_魔法少女"))
+
+    def test_subdir_scan_keeps_root_relative_title_and_grp(self):
+        """只扫子目录时，标题口径不能变——还是相对配置根算。"""
+        self.mk("moss漫画/novel/ch1", "a.png")
+        self.mk("moss漫画/novel/ch2", "b.png")
+        one = os.path.join(self.root, "moss漫画", "novel")
+        with mock.patch.object(gallery, "GALLERY_ROOTS",
+                               (("moss漫画", self.root),)):
+            out = gallery.scan_path(one)
+        self.assertEqual(out["items"], 2)
+        got = sorted(w["title"] for w in self.works())
+        # 相对**配置根**算：ch1 → `novel/ch1`（不是 `moss漫画/novel/ch1`）
+        self.assertEqual(got, ["novel/ch1", "novel/ch2"])
+        # 分类跟着 root_title 走（配置根的名字），和「扫描范围」无关
+        self.assertEqual({w["grp"] for w in self.works()}, {"moss漫画"})
+
+    def test_subdir_scan_leaves_siblings_untouched(self):
+        """只扫这一本，别把兄弟本的 seen 刷新、也别新建记录。"""
+        self.mk("moss漫画/bookA", "a.png")
+        self.mk("moss漫画/bookB", "b.png")
+        one = os.path.join(self.root, "moss漫画", "bookA")
+        with mock.patch.object(gallery, "GALLERY_ROOTS",
+                               (("moss漫画", self.root),)):
+            gallery.scan_path(one)
+            n_after_first = len(self.works())
+            gallery.scan_path(one)
+        self.assertEqual(n_after_first, 1)
+        self.assertEqual(len(self.works()), 1, "兄弟本不该被顺手登记进来")
+
     def test_rescan_does_not_reorder_existing_works(self):
         """单独扫一个子目录，不能把别的作品集挤到后面去。"""
         self.mk("a/1", "x.png")

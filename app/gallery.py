@@ -292,19 +292,23 @@ def _assign_categories(found):
     return out
 
 
-def _title_for(root, cur, root_title):
+def _title_for(root, cur, root_title, base=None):
     """作品集在墙上的名字。
 
     扫的是配置根 → 用分组名；站主临时选的子目录 → 用它自己的名字
     （不然选 `new\\35` 会冒出一个叫「图库」的作品集）；再往下取相对路径。
+
+    `base` 是「算相对路径的起点」，单独扫子目录时传配置根进来：只扫
+    `moss漫画\\2026xxx` 时，它自己就叫 `2026xxx`（名字取自它自己的目录名），
+    下面的子目录叫 `2026xxx/ch1`，而不是相对这层再套一层。
     """
-    rel = os.path.relpath(cur, root)
+    rel = os.path.relpath(cur, base or root)
     if rel == ".":
-        return root_title or os.path.basename(os.path.abspath(cur))
+        return (root_title or os.path.basename(os.path.abspath(cur)))
     return rel.replace(os.sep, "/")
 
 
-def _walk(grp, root, cur, out, depth=0, root_title=None):
+def _walk(grp, root, cur, out, depth=0, root_title=None, base=None):
     try:
         entries = list(os.scandir(cur))
     except OSError:
@@ -325,13 +329,13 @@ def _walk(grp, root, cur, out, depth=0, root_title=None):
             continue
     if files:
         files.sort(key=lambda x: _natkey(x.name))
-        out.append((grp, _title_for(root, cur, root_title),
+        out.append((grp, _title_for(root, cur, root_title, base),
                     os.path.abspath(cur),
                     [(f.name, _size(f)) for f in files], root))
     if depth >= 8:
         return
     for d in sorted(dirs, key=lambda x: _natkey(x.name)):
-        _walk(grp, root, d.path, out, depth + 1, root_title)
+        _walk(grp, root, d.path, out, depth + 1, root_title, base)
 
 
 def _size(entry):
@@ -350,8 +354,11 @@ def _fingerprint(files):
 def scan(roots=None):
     """扫站主目录，登记所有「直接含图」的目录。
 
-    roots 的元素是 `(分组名, 绝对路径)`，或者 `(分组名, 绝对路径, 根标题)`——
-    第三项只在「根目录自己也直接放图」时决定那个作品集叫什么。
+    roots 的元素是 `(分组名, 绝对路径)`，或者 `(分组名, 绝对路径, 根标题)`，
+    再或者 `(分组名, 绝对路径, 根标题, 只扫这个子树)`——
+    第三项只在「根目录自己也直接放图」时决定那个作品集叫什么；
+    第四项用来「只扫某个子目录」：标题按第二项算相对路径，但只建第四项
+    及其子目录下的作品集，别把它兄弟目录一起重扫一遍。
 
     → {"works": 新增+更新的作品集数, "items": 图片数, "skipped": 没变的目录数,
        "seconds": 耗时}
@@ -374,10 +381,15 @@ def scan(roots=None):
     for item in roots:
         grp, root = item[0], item[1]
         root_title = item[2] if len(item) > 2 else grp
+        only = item[3] if len(item) > 3 else ""
         if not os.path.isdir(root):
             log.warning("画廊根目录不存在：%s", root)
             continue
-        _walk(grp, root, root, found, 0, root_title)
+        if only:
+            # 单独扫一个子目录：走它自己的子树，标题仍相对 root 算
+            _walk(grp, root, os.path.abspath(only), found, 0, root_title, root)
+        else:
+            _walk(grp, root, root, found, 0, root_title)
     found = _assign_categories(_drop_noise_tail(found))
 
     now = time.time()
@@ -476,23 +488,25 @@ def grp_for(path):
 
 
 def scan_path(path):
-    """只扫站主指定的那一个目录（含子目录）。站主在网页上自己挑的路径。
+    """只扫站主指定的那一个目录（它自己和它下面的子目录）。
 
-    如果选中的目录落在某个配置根里面，就**扫整个根**，而不是只扫这一层：
-    分类名和标题都要相对根目录算，只扫子目录会把 `silver系列/便利店` 算成
-    「便利店」分类。扫根只是多走几个目录，不开图，实测一万三千张也只要
-    零点几秒。
+    站主在网页上挑哪个文件夹，就只扫那个文件夹——选 `moss漫画\\20261124_1236_xxx`
+    不该把整个 `moss漫画` 下几百本一起重扫（2026-11-24 用户报的 bug：
+    「我扫描具体文件夹的时候，是整个 moss 漫画都扫描的」）。
+
+    标题仍按**配置根**算相对路径，这样 `Pictures\\new\\35` 在墙上还是叫 `35`、
+    分类还是 `new`，不会因为只扫子目录就冒出一个叫 `new\\35` 的怪标题。
     """
     p = os.path.abspath(str(path or "").strip())
     if not os.path.isdir(p):
         return {"error": "目录不存在：%s" % p}
-    root = p
+    base = p                    # 标题/分类的基准目录（配置根，找不到就是自己）
     for _grp, r in GALLERY_ROOTS:
         if safe_inside(r, p):
-            root = os.path.abspath(r)
+            base = os.path.abspath(r)
             break
-    name = _root_name(root)
-    out = scan([(grp_for(p), root, name)])
+    name = _root_name(base)
+    out = scan([(grp_for(p), base, name, p)])
     out["path"] = p
     return out
 
