@@ -57,6 +57,21 @@ UPLOAD = state_path("gallery_upload")
 
 IMG_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
 
+# 两档缓存的边长。`t` 是墙上的格子，`v` 是点开看/下载的那张。
+#
+# `v` 从 1600 提到 2048：站主原图长边 2048~3840（PNG 4~8MB），1600 那档
+# 只有 88KB，点开放大就发虚。2048 是「512K 级别」想要的那个量级，又不至于
+# 像原图那样一拖几个 G。
+#
+# 画质留 85：实测同一张 2048×3072 的图 q90 比 q85 大 15%，肉眼分不出来
+# ——像素级细节靠的是边长，不是这两个点的量化步长。
+# 文件名带版本号（见 cache_path）：改尺寸必须换名字，否则老 1600 的缓存
+# 会被当成命中直接发出去，看着像「改了没生效」。
+THUMB_EDGE = 360
+PREVIEW_EDGE = 2048
+PREVIEW_QUALITY = 85
+CACHE_VER = {"t": "t", "v": "v2"}
+
 # 一个作品集最多存几张。群友会分几次往同一个作品集里加图（一次传不完
 # 十张就先传一批），所以上限得管在「作品集」这一层，而不是只管一次请求。
 WORK_MAX = 100
@@ -571,11 +586,14 @@ def _norm_mode(im):
     return im.convert("RGB")
 
 
-def reuse_direct(src, edge=1600):
+def reuse_direct(src, edge=PREVIEW_EDGE):
     """已经是我们自己压过的 webp、且不比 edge 大 —— 直接发源文件。
 
     群友上传的图在落盘时就是 1600px WebP，再压一次只掉画质、还多占一份缓存。
     只认 `.webp`：站主那边的小 PNG/JPEG 转 webp 仍然划算（体积能差十倍）。
+
+    `edge` 默认跟随预览档（2048）：群友那种 1600px 的也算「不用再动」，
+    上采样到 2048 只是把字节数做大，画质一个像素也补不回来。
     """
     if not str(src).lower().endswith(".webp"):
         return False
@@ -588,24 +606,29 @@ def reuse_direct(src, edge=1600):
 
 def cache_path(src, kind):
     """某张图的缓存落在哪。文件名用路径的哈希：同一个文件改了名就该重算，
-    所以只认路径不认内容。"""
+    所以只认路径不认内容。
+
+    文件名尾段带 `CACHE_VER`：改边长/画质之后老缓存必须自然失效，
+    和缓存年龄无关。`_v2` 之前的 1600px 文件留在盘上不再被命中。
+    清干净用 `gallery_api` 里那句 `python -c` 的提示（见 README 处注释）。
+    """
     key = hashlib.sha1(src.encode("utf-8", "replace")).hexdigest()[:20]
-    return os.path.join(CACHE, key + "_" + kind + ".webp")
+    return os.path.join(CACHE, key + "_" + CACHE_VER.get(kind, kind) + ".webp")
 
 
 def thumb(src, kind="t"):
     """按需生成缓存图。→ 缓存文件绝对路径，失败返回 None。
 
-    kind: `t` 网格缩略（360px）、`v` 预览（1600px）。画廊只发这两种，
+    kind: `t` 网格缩略（360px）、`v` 预览/下载（2048px）。画廊只发这两种，
     原图不出服务端。
     """
-    edge = {"t": 360, "v": 1600}.get(kind)
+    edge = {"t": THUMB_EDGE, "v": PREVIEW_EDGE}.get(kind)
     if not edge:
         return src if os.path.isfile(src) else None
     if not os.path.isfile(src):
         return None
 
-    # 本来就是 1600px 的 webp，预览版就是它自己。省下一次解码编码，
+    # 本来就是 webp 且不比预览档大的，预览版就是它自己。省下一次解码编码，
     # 也省一份磁盘——后台按作品集预热时才不会白跑。
     if kind == "v" and reuse_direct(src):
         return src
@@ -629,7 +652,9 @@ def thumb(src, kind="t"):
                 im = _norm_mode(im)
                 im.thumbnail((edge, edge), Image.LANCZOS)
                 tmp = "%s.%d.%d.tmp" % (out, os.getpid(), threading.get_ident())
-                im.save(tmp, "WEBP", quality=85, method=4)
+                im.save(tmp, "WEBP",
+                        quality=PREVIEW_QUALITY if kind == "v" else 85,
+                        method=4)
             os.replace(tmp, out)
             return out
         except Exception:

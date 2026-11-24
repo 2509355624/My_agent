@@ -282,7 +282,30 @@ class ThumbTest(_Base):
         self.assertTrue(t.endswith(".webp") and os.path.isfile(t))
         self.assertTrue(v.endswith(".webp") and os.path.isfile(v))
         with Image.open(t) as im:
-            self.assertLessEqual(max(im.size), 360)
+            self.assertLessEqual(max(im.size), gallery.THUMB_EDGE)
+        with Image.open(v) as im:
+            self.assertLessEqual(max(im.size), gallery.PREVIEW_EDGE)
+
+    def test_preview_keeps_full_2048_edge(self):
+        """预览档要真的用满 2048，不是悄悄退回 1600。
+
+        用户的诉求是「点开别糊」：原图中位 2048×3072，1600 那档只有 88KB，
+        放大就发虚。这条钉住边长，改动档位必须显式改测试。
+        """
+        p = os.path.join(self.root, "1", "big.png")
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        Image.new("RGB", (2048, 3072), (90, 120, 160)).save(p, "PNG")
+        v = gallery.thumb(p, "v")
+        with Image.open(v) as im:
+            self.assertEqual(max(im.size), 2048)
+
+    def test_preview_cache_name_carries_version(self):
+        """改尺寸必须换缓存文件名，否则老的 1600px 会被当命中发出去。"""
+        p = self.mk("1", "a.png")
+        self.assertIn("_v2.webp", gallery.cache_path(p, "v"))
+        self.assertIn("_t.webp", gallery.cache_path(p, "t"))
+        self.assertNotEqual(gallery.cache_path(p, "t"),
+                            gallery.cache_path(p, "v"))
 
     def test_second_call_hits_cache(self):
         p = self.mk("1", "a.png")
