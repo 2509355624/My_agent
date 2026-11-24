@@ -24,6 +24,12 @@
   .topbar h1 { font-size: 17px; font-weight: 500; }
   .topbar .pill { font-size: 11px; color: var(--accent); border: 1px solid var(--accent-dim);
     border-radius: 10px; padding: 2px 8px; }
+  /* 站主 / 群友切换：跟 pill 同一档字号，选中的那半用主题色描边 */
+  .hbtn { font-size: 11px; font-family: inherit; cursor: pointer;
+    background: transparent; color: var(--text-dim);
+    border: 1px solid var(--border-soft); border-radius: 10px; padding: 3px 9px; }
+  .hbtn:hover { color: var(--text); }
+  .hbtn.on { color: var(--accent); border-color: var(--accent-dim); }
   /* 手机上长 pill + 历史下拉把顶栏撑到 163px：pill 收起、下拉限宽 */
   @media (max-width: 640px) {
     .topbar { gap: 8px 12px; padding: 10px 0 14px; }
@@ -258,7 +264,13 @@
     <span class="pill">一页一次生成</span>
     <span id="line-tag" class="ltag" style="display:none"></span>
     <div class="spacer"></div>
-    <div id="hist"><select id="histsel"><option value="">— 最近任务 —</option></select></div>
+    <div id="hist">
+      <!-- 站主 / 群友分开看（2026-11-24）：两边的图本来就落在不同的树下
+           （web/moss漫画 vs 群友moss漫画），只有这个下拉是混着的。 -->
+      <button id="histOwn" class="hbtn on" type="button" title="我自己跑的">我的</button>
+      <button id="histFri" class="hbtn" type="button" title="QQ 群里跑的">群友</button>
+      <select id="histsel"><option value="">— 最近任务 —</option></select>
+    </div>
     <a class="back" href="/" >← 回首页</a>
   </div>
 
@@ -1354,13 +1366,27 @@ $("btn-continue").addEventListener("click", async function () {
   }
 });
 
+/* 历史下拉看哪一半（2026-11-24）：默认「我的」，即站主自己在 moss 漫画台跑的。
+   老任务没有 owner.json，后端一律算站主，所以它们只会出现在「我的」里。 */
+var HOWN = "owner";
+
+function setHistScope(v) {
+  HOWN = (v === "friend") ? "friend" : "owner";
+  $("histOwn").classList.toggle("on", HOWN === "owner");
+  $("histFri").classList.toggle("on", HOWN === "friend");
+}
+
+$("histOwn").addEventListener("click", function () { setHistScope("owner"); loadList(); });
+$("histFri").addEventListener("click", function () { setHistScope("friend"); loadList(); });
+
 async function loadList() {
-  var r = await api("/api/moss/list");
+  var r = await api("/api/moss/list?owner=" + encodeURIComponent(HOWN));
   if (!r.ok) return;
   var sel = $("histsel");
   var keep = sel.value;
+  var items = r.items || [];
   sel.innerHTML = '<option value="">— 最近任务 —</option>' +
-    (r.items || []).map(function (it) {
+    items.map(function (it) {
       /* 续集本标题常和上一本一样，靠「第 02 页」才分得清先后（2026-11-24） */
       var head = it.line_n ? "第" + ("0" + it.line_n).slice(-2) + "页 · " : "";
       return '<option value="' + esc(it.task) + '">' + esc(head + it.mtime + " · " + it.title) +
@@ -1369,7 +1395,7 @@ async function loadList() {
   var has = Array.prototype.some.call(sel.options, function (o) { return o.value === keep; });
   sel.value = has ? keep : (S.task && Array.prototype.some.call(sel.options, function (o) {
     return o.value === S.task; }) ? S.task : "");
-  fillContFrom(r.items || []);
+  fillContFrom(items);
 }
 
 $("histsel").addEventListener("change", async function () {

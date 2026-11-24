@@ -737,6 +737,9 @@ def api_comic_tasks():
     out = []
     qq = _qq()
     include_test = request.args.get("include_test") == "1"
+    # 站主可选只看一半：`owner`（我的）/ `friend`（群友的）。不给 = 全部，
+    # 老页面和其他调用方行为一个字节都不变。
+    scope = str(request.args.get("scope") or "").strip()
     try:
         names = os.listdir(_COMICS_ROOT)
     except OSError:
@@ -752,11 +755,22 @@ def api_comic_tasks():
         script = os.path.join(path, "script.md")
         if not os.path.isfile(script):
             continue
+        # 站主视角再分一次「我的 / 群友的」（2026-11-24）：这些历史的成图本来
+        # 就是分开落盘的（站主 `web/漫画_*`、群友 `群友漫画台/<QQ>/`），只有
+        # 这个下拉是混着的，站主挑续集时得在几十本别处的作品里翻。
+        # 群友那条路上面已经按 QQ 收窄过了，scope 对他们无意义，一律不给过滤
+        # ——保持他们现在的下拉长度，不多也不少。
+        if (not qq and scope == "owner" and comic_quota.is_friend_task(path)):
+            continue
+        if (not qq and scope == "friend" and not comic_quota.is_friend_task(path)):
+            continue
         # 测试空壳默认不进历史下拉；磁盘本身没删（已移归档），include_test 能看回
         if not include_test and _is_test_shell(path, name):
             continue
         item = {"task": name, "title": "", "panels": 0, "done": 0,
-                "updated": "", "prev": ""}
+                "updated": "", "prev": "",
+                # 前端拿它在下拉里把「群友的」标出来，别跟自己的作品混着看
+                "owner": "friend" if comic_quota.is_friend_task(path) else "owner"}
         try:
             meta, panels = comic.parse_script(script)
             item["title"] = (meta or {}).get("title", "")

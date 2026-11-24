@@ -32,6 +32,8 @@ def rep(s, old, new, tag):
 CSS = r"""
   /* ── 群友版补丁：母本 UI 一律保留，这里只加就地反馈 / 双 Tab / 耗时 / 发送卡 ── */
   .hidden-by-friend { display: none !important; }
+  /* 「我的 / 群友」切换只对站主有意义（群友只看得到自己的那批），藏掉 */
+  #tbOwn, #tbFri { display: none !important; }
   .inline-status { display: none; margin-top: 9px; padding: 9px 11px;
     border-radius: var(--radius-sm); background: var(--bg-input);
     border: 1px solid var(--border); font-size: 12px; line-height: 1.65;

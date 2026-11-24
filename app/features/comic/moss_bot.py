@@ -434,6 +434,25 @@ def _owner(target, target_id):
         return ""
 
 
+def _task_owner(target, target_id):
+    """`moss_bot` 建出来的任务目录该算站主还是群友——写进 owner.json。
+
+    返回非空 = 群友，图落到 `群友moss漫画/`；空串 = 站主。
+    **群友全堆一起，不按 QQ 细分**（2026-11-24 用户拍板）。
+
+    这个模块只有 QQ 机器人一个入口：`start()` 的调用方全是 qq_bot
+    那几个指令（`moss漫画` / `moss续集` / `moss重画`）。网页端 moss 漫画台
+    走的是 `moss_api` 那几条 `/api/moss/*` 路由，压根不经过这里——所以
+    这里建出来的一律是群友的，拿会话键当标记就够，不用再判别的。
+    """
+    try:
+        return series_mod.session_key(target, target_id)
+    except ValueError:
+        # 群里取不到会话键也要算群友：宁可多归一个，也别把群友的图
+        # 误记成站主的（那样分目录就白分了）。
+        return "qq"
+
+
 def _miss_note(quote_text, payload, owner=""):
     """定位失败时，说清是**哪种**失败。
 
@@ -758,7 +777,8 @@ def _do_redo(target, target_id, sid, page_id, reply_to, sender_uin):
 
     # 新建任务目录：**绝不覆盖原图**。重画经常画得比原来还差，
     # 用户得能说「还是原来那张好」。
-    d = moss_api._new_task_dir(spec)            # noqa: SLF001
+    d = moss_api._new_task_dir(                 # noqa: SLF001
+        spec, _task_owner(target, target_id))
     moss_api._save(d, spec)                     # noqa: SLF001  raw=None 不写剧本原文
     seed = random.randint(1, 2 ** 31 - 1)
     series_mod.mutate(sid, lambda x: series_mod.bump(
@@ -877,7 +897,8 @@ def _write_spec(target, target_id, brief, layout, prev, prev_scene, cast,
              "moss漫画没成：剧本没写出来%s\n换个说法再试一次？"
              % (("（%s）" % err) if err else ""), reply_to)
         return None, "", err
-    d = moss_api._new_task_dir(spec)            # noqa: SLF001  同包复用
+    d = moss_api._new_task_dir(                 # noqa: SLF001  同包复用
+        spec, _task_owner(target, target_id))
     moss_api._save(d, spec, raw)                # noqa: SLF001
     return spec, d, ""
 

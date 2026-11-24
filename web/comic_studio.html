@@ -40,6 +40,9 @@
   .btn:disabled { opacity: .45; cursor: not-allowed; }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .btn.small { padding: 4px 10px; font-size: 12px; }
+  /* 历史任务的「我的 / 群友」切换（2026-11-24）：选中的那半用主题色描边 */
+  .btn.small.tb { padding: 3px 9px; color: var(--text-dim); }
+  .btn.small.tb.on { color: var(--accent); border-color: var(--accent-dim); }
   .btn.danger { color: var(--error); }
   /* 阶段向导：把控件按「写剧本 → 确认分镜 → 出图调整」三步分层，一次只看当前步。
      stage-pane 是外层壳，内部元素自身的 display 仍归 applyMode 管，两层正交不打架。 */
@@ -165,6 +168,9 @@
     </div>
     <div class="row" style="margin-bottom:10px">
       <span style="color:var(--text-dim);font-size:12px">历史任务</span>
+      <!-- 我的 / 群友分开看（2026-11-24）：成图本来就分开落盘，只有这个下拉是混的 -->
+      <button class="btn small tb hidden-by-friend" id="tbOwn" onclick="setTaskScope('owner')" title="我自己跑的">我的</button>
+      <button class="btn small tb hidden-by-friend" id="tbFri" onclick="setTaskScope('friend')" title="QQ 群友跑的">群友</button>
       <select id="taskPick" style="width:300px;max-width:46vw" onchange="switchTask(this.value)"
               title="剧本都存着：选一个就切过去，看它当时的剧本和格子（不会删任何东西）">
         <option value="">（当前没有任务）</option>
@@ -2126,6 +2132,7 @@ async function restoreSession() {
   // 会显示 free，但仍保留 POV 的「跳过查库」，并隐藏 silver 模式选择。
   syncModeInputs();
   applyMode();
+  setTaskScope('owner', true);        // 只摆高亮，列表下面那行统一拉
   await loadTasks();                  // 下拉先填好（一个任务都没有也要给个空选项）
   await loadChannels();               // 渠道下拉同样先填好（没任务也能先挑渠道）
   let saved = null;
@@ -2148,9 +2155,22 @@ async function restoreSession() {
 //   「接上一集」= 把某一集的气泡+旁白当成前情喂给编剧（后端抽，不带画面行）。
 let TASK_LIST = [];
 
+/* 历史下拉看哪一半（2026-11-24）：站主自己的作品 / QQ 群友跑的。
+   成图早就分开落盘了（站主 web/漫画_*、群友 群友漫画台/<QQ>/），只有这个
+   下拉一直混着。后端 `?scope=` 只对站主生效，群友版页面照旧拿全部-自己那批。 */
+let TASK_SCOPE = "owner";
+
+function setTaskScope(v, noReload) {
+  TASK_SCOPE = (v === "friend") ? "friend" : "owner";
+  const a = document.getElementById('tbOwn'), b = document.getElementById('tbFri');
+  if (a) a.classList.toggle('on', TASK_SCOPE === 'owner');
+  if (b) b.classList.toggle('on', TASK_SCOPE === 'friend');
+  if (!noReload) loadTasks();
+}
+
 async function loadTasks() {
   let d;
-  try { d = await api('/api/comic/tasks'); }
+  try { d = await api('/api/comic/tasks?scope=' + encodeURIComponent(TASK_SCOPE)); }
   catch (e) { console.warn('列任务失败', e); return; }
   TASK_LIST = d.tasks || [];
   const pick = document.getElementById('taskPick');

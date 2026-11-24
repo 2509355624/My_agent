@@ -573,5 +573,54 @@ class ContinueTest(_Base):
         self.assertEqual(row["line_of"], 2)
 
 
+class OwnerSplitTest(_Base):
+    """站主 / 群友只分两层（2026-11-24 用户拍板）。
+
+    钉死三件事：
+      1. 有 owner.json 的任务出图落 `群友moss漫画/`，没有的留在 `web/moss漫画`；
+      2. 老任务（没有 owner.json）一律算站主，**原地不动**，不搬迁不猜；
+      3. 列表能按 owner=fri​end 切出来，且不返回群友 QQ（只做二分）。
+    """
+
+    def _friend_task(self, name="20261124_1800_群友的"):
+        name, d = self._mk_task(name)
+        from app.features.comic import quota as comic_quota
+        comic_quota.set_owner(d, "10086")
+        return name, d
+
+    def test_friend_goes_to_friend_tree(self):
+        _n, d = self._friend_task()
+        self.assertEqual(moss_api.out_root(d), moss_api.OUT_ROOT_FRIEND)
+
+    def test_owner_stays_in_old_tree(self):
+        _n, d = self._mk_task()
+        self.assertEqual(moss_api.out_root(d), moss_api.OUT_ROOT)
+
+    def test_new_task_dir_writes_owner_only_for_friend(self):
+        d1 = moss_api._new_task_dir({"title": "站主的本"})
+        d2 = moss_api._new_task_dir({"title": "群友的本"}, "g123")
+        self.assertFalse(os.path.isfile(os.path.join(d1, "owner.json")))
+        self.assertTrue(os.path.isfile(os.path.join(d2, "owner.json")))
+        self.assertEqual(moss_api.out_root(d1), moss_api.OUT_ROOT)
+        self.assertEqual(moss_api.out_root(d2), moss_api.OUT_ROOT_FRIEND)
+
+    def test_list_filters_by_owner(self):
+        self._mk_task("20261124_1800_站主的")
+        fname, _d = self._friend_task()
+        own = self.c.get("/api/moss/list?owner=owner").get_json()["items"]
+        fri = self.c.get("/api/moss/list?owner=friend").get_json()["items"]
+        self.assertEqual([x["task"] for x in fri], [fname])
+        self.assertNotIn(fname, [x["task"] for x in own])
+        # 不给参数 = 全部（老页面行为不变）
+        allx = self.c.get("/api/moss/list").get_json()["items"]
+        self.assertEqual(len(allx), 2)
+
+    def test_list_does_not_leak_qq(self):
+        """只回 owner/friend 两个值——群友 QQ 不该出现在站主以外的地方。"""
+        self._friend_task()
+        for it in self.c.get("/api/moss/list").get_json()["items"]:
+            self.assertIn(it["owner"], ("owner", "friend"))
+
+
 if __name__ == "__main__":
     unittest.main()

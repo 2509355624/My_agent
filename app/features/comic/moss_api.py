@@ -61,6 +61,20 @@ log = logging.getLogger(__name__)
 # 任务根目录钉死绝对路径：Flask 的启动 cwd 可能不是项目根。
 STATE_ROOT = os.path.join(BASE_DIR, "state", "moss_comic")
 
+
+def _friend_qq():
+    """当前请求的群友 QQ；站主（直连 5174）返回空串。
+
+    `comic_api` 是靠 `before_request` 把身份挂到 `g` 上的，moss 是另一个
+    blueprint、没有那段钩子，所以这里直接问一次 `friend_qq()`。它只认 5175
+    转发时才带的那枚内部令牌，站主自己点页面天然是空串。
+    """
+    try:
+        from app.features.comic import quota as comic_quota
+        return comic_quota.friend_qq()
+    except Exception:                      # noqa: BLE001 - 拿不到就按站主处理
+        return ""
+
 # 出图渠道与参数（2026-10-28 用户拍板：**完全照群友原版，不自创参数**）。
 # 依据 `skills/_moss_comic/CHARTER.md` §5：参数**只认这里**——workflow.json 里
 # 的 steps / 宽高会被下面三行覆盖，改参数改这里，别去改 workflow（改了也白改）。
@@ -122,6 +136,10 @@ DEFAULT_STYLE = ("black and white manga page, crisp inked lineart, screentone do
 WIDTH, HEIGHT = 1024, 1536
 SEED_BASE = 20261501
 OUT_ROOT = "web/moss漫画"
+# 群友的图另起一棵树（2026-11-24 用户拍板）：**只分「站主 / 群友」两层**，
+# 群友全堆在一起，不按 QQ 细分。站主仍是 OUT_ROOT，老任务原地不动——判据
+# 是任务目录里有没有 owner.json，有就把根换成这里。
+OUT_ROOT_FRIEND = "群友moss漫画"
 # 老任务出图所在的历史渠道目录（换渠道后旧图还得能显示；新的排前面）
 LEGACY_SKILLS = ("moss-qunyou", "moss8", "moss50")
 
@@ -149,8 +167,16 @@ def _slug(text, limit=14):
     return (s or "untitled")[:limit]
 
 
-def _new_task_dir(spec):
-    """建任务目录 `<日期>_<时间>_<标题>`。同一分钟同名再加 `_2`，不静默复用。"""
+def _new_task_dir(spec, owner=None):
+    """建任务目录 `<日期>_<时间>_<标题>`。同一分钟同名再加 `_2`，不静默复用。
+
+    `owner`：群友 QQ（空串 = 站主）。给了就写一份 `owner.json`，这是
+    「站主 / 群友」唯一的落盘判据——出图跑在后台线程里，那时候没有 request
+    上下文，只能靠文件记（见 `out_root`）。
+
+    为什么要传进来而不是在这里现查：建目录有三个入口（新开 / 两段式 /
+    续集），只有调用方知道自己跑在请求线程里、能取到群友身份。
+    """
     base = "%s_%s" % (time.strftime("%Y%m%d_%H%M"), _slug(spec.get("title")))
     d = os.path.join(STATE_ROOT, base)
     k = 2
@@ -158,6 +184,13 @@ def _new_task_dir(spec):
         d = os.path.join(STATE_ROOT, "%s_%d" % (base, k))
         k += 1
     os.makedirs(d, exist_ok=True)
+    if str(owner or "").strip():
+        try:
+            from app.features.comic import quota as comic_quota
+            comic_quota.set_owner(d, str(owner).strip())
+        except Exception:                  # noqa: BLE001 - 归属写不进去也该能画
+            log.warning("moss 任务 %s 写 owner 失败", os.path.basename(d),
+                        exc_info=True)
     return d
 
 
@@ -193,6 +226,28 @@ def _state_path(d):
     return os.path.join(d, "state.json")
 
 
+def out_root(d):
+    """这个任务目录的图该落在 ComfyUI `output/` 下的哪棵树上。
+
+    - 站主：`web/moss漫画`
+    - 群友：`群友moss漫画`
+
+    判据是任务目录里的 `owner.json`，跟漫画工作台共用同一个约定
+    （`comic_quota.is_friend_task`）——**不看当前请求**：出图跑在后台线程里，
+    没有 Flask 的 request 上下文，归属必须落盘才判得出来。
+
+    老任务没有 owner.json，一律算站主，留在原来的 `web/moss漫画` 原地不动
+    （2026-11-24 用户明确要求：旧的不动，新的才分）。
+    """
+    try:
+        from app.features.comic import quota as comic_quota
+        if comic_quota.is_friend_task(d):
+            return OUT_ROOT_FRIEND
+    except Exception:                      # noqa: BLE001 - 归属层异常不该拖垮出图
+        pass
+    return OUT_ROOT
+
+
 def _legacy_files(d):
     """老任务的出图（没有 state.json 的那些）。
 
@@ -205,7 +260,8 @@ def _legacy_files(d):
     """
     if not COMFYUI_OUTPUT_DIR:
         return {}
-    base = os.path.join(COMFYUI_OUTPUT_DIR, OUT_ROOT.replace("/", os.sep),
+    root = out_root(d)
+    base = os.path.join(COMFYUI_OUTPUT_DIR, root.replace("/", os.sep),
                         os.path.basename(d))
     out = {}
     for skill in LEGACY_SKILLS:
@@ -220,7 +276,7 @@ def _legacy_files(d):
                 continue
             n = int(m.group(1))
             if n not in out:                    # 先找到的优先，不覆盖
-                out[n] = "/".join([OUT_ROOT, os.path.basename(d), skill, f])
+                out[n] = "/".join([root, os.path.basename(d), skill, f])
     return out
 
 
@@ -627,7 +683,7 @@ def api_moss_write():
         return jsonify({"ok": False,
                         "error": "编剧没写出能解析的剧本：%s" % err,
                         "raw": (raw or "")[:1500]}), 502
-    d = _new_task_dir(spec)
+    d = _new_task_dir(spec, _friend_qq())
     spec, ps = _save(d, spec, raw)
     out = _payload(d, spec, ps)
     out["brief"] = brief
@@ -711,7 +767,7 @@ def api_moss_two_agent():
     # 写在出口而不是 generate 内部，用户手改 spec 前的第一份事实就统一。
     spec["style"] = DEFAULT_STYLE
 
-    d = _new_task_dir(spec)
+    d = _new_task_dir(spec, _friend_qq())
     spec, ps = _save(d, spec, None)
     if report.get("script_md"):
         with open(os.path.join(d, "script.md"), "w", encoding="utf-8") as fh:
@@ -830,7 +886,7 @@ def api_moss_continue():
     spec["line"] = {"series": sid, "parent": page.get("id") or "",
                     "parent_n": head, "from_n": page.get("n") or 0}
 
-    nd = _new_task_dir(spec)
+    nd = _new_task_dir(spec, _friend_qq())
     spec, ps = _save(nd, spec, None)
     rep = {k: v for k, v in report.items() if k != "script_md"}
     with open(os.path.join(nd, "twopass_report.json"), "w", encoding="utf-8") as fh:
@@ -1014,7 +1070,7 @@ def _run(d, spec, nums, seed_base, loras=None, steps=None, abort=None):
         # 布局图，排查排版时有用。
         lettering = soda_letter.enabled()
         by_n = {p.get("n"): p for p in spec.get("pages") or []}
-        out_dir = "%s/%s" % (OUT_ROOT, os.path.basename(d))
+        out_dir = "%s/%s" % (out_root(d), os.path.basename(d))
         for i, n in enumerate(nums):
             page = by_n.get(n)
             if not page:
@@ -1426,6 +1482,7 @@ def api_moss_list():
     """
     items = []
     idx = {}
+    from app.features.comic import quota as comic_quota   # 函数内 import，避开加载期循环
     try:
         idx = {k: (v[0], v[1].get("n"), len(v[2].get("pages") or []))
                for k, v in _series_index().items()}
@@ -1459,6 +1516,9 @@ def api_moss_list():
                 "done": len(have),
                 "line_n": ln,
                 "line_of": lof,
+                # 站主 / 群友（2026-11-24）：老任务没有 owner.json，一律算站主。
+                # 只做二分，不返回群友 QQ —— 用户要的就是「我的」和「群友的」。
+                "owner": "friend" if comic_quota.is_friend_task(d) else "owner",
                 "mtime": time.strftime("%m-%d %H:%M",
                                        time.localtime(os.path.getmtime(sp))),
                 "thumb": ("/api/moss/img?task=%s&n=%s" % (name, first[0]))
@@ -1468,4 +1528,8 @@ def api_moss_list():
     items.sort(key=lambda x: x.get("_ts") or 0, reverse=True)
     for it in items:
         it.pop("_ts", None)
+    # ?owner=owner / friend 只看一半；不给 = 全部（老页面行为不变）
+    want = str(request.args.get("owner") or "").strip()
+    if want in ("owner", "friend"):
+        items = [it for it in items if it.get("owner") == want]
     return jsonify({"ok": True, "items": items})
