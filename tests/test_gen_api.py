@@ -542,6 +542,18 @@ class ImgTest(unittest.TestCase):
     def setUp(self):
         self.c = main.app.test_client()
 
+    def _img(self, q, headers=None):
+        """取图要带内部令牌（2026-11-24：`/api/gen/img` 收紧了校验）。
+
+        以前这条路由不需要令牌；为了给「浏览器本地缓存」签发站点签名，它现在
+        和画廊一样走 `_guard()`——不带令牌的请求一律 403。5175 转发时本来就带
+        着这个头，线上行为不变。
+        """
+        from app.gateways import friend_auth
+        h = {"X-Friend-Token": friend_auth.secret()}
+        h.update(headers or {})
+        return self.c.get(q, headers=h, base_url="http://localhost:5174")
+
     def test_path_traversal_and_junk_are_rejected(self):
         """相对路径是**允许**的（输出图按会话分目录），但 `..` 和怪名字一律不放。
 
@@ -550,14 +562,14 @@ class ImgTest(unittest.TestCase):
         """
         for bad in ("", "..", "../x.png", "a/../../x.png", "x.png;.js",
                     "..\\x.png", "a/..", "空名字?.png"):
-            r = self.c.get("/api/gen/img?f=" + bad)
+            r = self._img("/api/gen/img?f=" + bad)
             self.assertEqual(r.status_code, 400, bad)
 
     def test_relative_path_passes_the_subfolder_through(self):
         resp = mock.Mock(status_code=200, content=b"\x89PNG-fake")
         with mock.patch.object(gen_api._session, "get",
                                return_value=resp) as g:
-            r = self.c.get("/api/gen/img?f=web/生图页/silver/Anima_1_.png")
+            r = self._img("/api/gen/img?f=web/生图页/silver/Anima_1_.png")
             self.assertEqual(r.status_code, 200)
             self.assertEqual(g.call_args.kwargs["params"],
                              {"filename": "Anima_1_.png",
@@ -567,7 +579,7 @@ class ImgTest(unittest.TestCase):
         resp = mock.Mock(status_code=200, content=b"\x89PNG-fake")
         with mock.patch.object(gen_api._session, "get",
                                return_value=resp) as g:
-            r = self.c.get("/api/gen/img?f=Ani4K_00001_.png")
+            r = self._img("/api/gen/img?f=Ani4K_00001_.png")
             self.assertEqual(r.status_code, 200)
             self.assertEqual(r.data, b"\x89PNG-fake")
             self.assertEqual(r.mimetype, "image/png")
@@ -580,7 +592,7 @@ class ImgTest(unittest.TestCase):
                                return_value="C:/safe/nai"), \
              mock.patch.object(gen_api, "send_from_directory",
                                return_value=sent) as send:
-            r = self.c.get("/api/gen/img?f=nai:nai_ab12.png")
+            r = self._img("/api/gen/img?f=nai:nai_ab12.png")
             self.assertEqual(r.status_code, 200)
             self.assertEqual(r.data, b"png")
             # 2026-11-23 晚：出图不再 no-store，改成 conditional + 长缓存
@@ -591,21 +603,21 @@ class ImgTest(unittest.TestCase):
             self.assertIn("max-age=", sent.headers["Cache-Control"])
 
     def test_nai_absolute_path_is_rejected(self):
-        r = self.c.get("/api/gen/img?f=nai:C:/Windows/win.ini")
+        r = self._img("/api/gen/img?f=nai:C:/Windows/win.ini")
         self.assertEqual(r.status_code, 400)
 
     def test_comfy_offline_is_502_with_reason(self):
         import requests
         with mock.patch.object(gen_api._session, "get",
                                side_effect=requests.ConnectionError("refused")):
-            r = self.c.get("/api/gen/img?f=x.png")
+            r = self._img("/api/gen/img?f=x.png")
             self.assertEqual(r.status_code, 502)
             self.assertIn("不在线", r.get_json()["error"])
 
     def test_missing_file_is_404(self):
         resp = mock.Mock(status_code=200, content=b"")
         with mock.patch.object(gen_api._session, "get", return_value=resp):
-            r = self.c.get("/api/gen/img?f=gone.png")
+            r = self._img("/api/gen/img?f=gone.png")
             self.assertEqual(r.status_code, 404)
 
 

@@ -98,6 +98,16 @@ _NAI_PREFIX_MAX = 2000
 # mtime 校验），这边不重写那一套，只做「参数白名单」和「找不到就退回原图」。
 _IMG_THUMB_W = (240, 480, 640, 900)
 
+# 「能存下来看」的那一档（2026-11-24 用户：「有办法使用工作台的话，图片压缩到
+# 512k 吗？下载就默认下这个 512k 的，和画廊一样的大小即可」）。
+#
+# 为什么不是再列几个宽度：宽度和体积对不上——1280 的复杂插画 WebP 能到 600KB，
+# 而 1024 的平涂只有 200KB。用户要的是一个**体积上限**，所以这一档单独走：
+# 长边从小往大试，取第一张不超过 cap 的；全都不够小才用它本身（再缩就糊了）。
+# 文件名的 kind 带 cap（`w1280c512`），改了上限自然换缓存，不会读到旧档。
+_IMG_FIT_W = (768, 1024, 1280, 1536)
+_IMG_FIT_CAP = 512 * 1024
+
 
 def _img_thumb_w(raw):
     """解析 `?w=`：只认白名单里的宽度，其余一律当「不要缩略图」。"""
@@ -106,6 +116,39 @@ def _img_thumb_w(raw):
     except (TypeError, ValueError):
         return 0
     return w if w in _IMG_THUMB_W else 0
+
+
+def _img_fit(raw):
+    """`?fit=512k` → 字节上限；不认识的值返回 0。"""
+    if str(raw or "").strip().lower() in ("512k", "512"):
+        return _IMG_FIT_CAP
+    return 0
+
+
+def _img_fit_file(src, cap):
+    """长边从中往大试，取第一张 ≤ cap 的 WebP。都超了就给最小的那张。
+
+    缓存直接落在 `gallery.cache_path` 定好的位置（`state/thumb/` 同一套目录、
+    同一把锁、同样的 mtime 校验），不另开一套缓存——只是「选哪一档宽度」这
+    件事 gallery.thumb 做不了：它按宽度缩一次就完事。
+    """
+    try:
+        from app.features.gallery import gallery as _gallery
+        best = None
+        for w in _IMG_FIT_W:
+            p = _gallery.thumb(src, edge_override=w)
+            if not p:
+                return None
+            best = p
+            try:
+                if os.path.getsize(p) <= cap:
+                    return p
+            except OSError:
+                return None
+        return best
+    except Exception:                       # noqa: BLE001
+        log.debug("512K 档生成失败 %s", src, exc_info=True)
+        return None
 
 
 def _img_thumb_file(src, w):
@@ -120,6 +163,18 @@ def _img_thumb_file(src, w):
     except Exception:                       # noqa: BLE001
         log.debug("缩略图生成失败 %s w=%s", src, w, exc_info=True)
         return None
+
+
+def _img_send(path):
+    """发一张缩略图 / 压缩档（WebP + 长缓存 + 可协商 304）。
+
+    mimetype 必须是 `image/webp`：gallery.thumb 产的是 WebP，标成 jpeg 会让
+    浏览器按 JPEG 解析然后裂图。
+    """
+    resp = send_file(path, mimetype="image/webp",
+                     conditional=True, max_age=_IMG_MAX_AGE)
+    resp.headers["Cache-Control"] = _IMG_CACHE_CTL
+    return resp
 
 
 def _nai_prompt(prompt, prefix):
@@ -322,7 +377,7 @@ def _public(job):
     """任务记录脱敏给前端（内部字段不下发）。"""
     return {k: job.get(k) for k in ("id", "skill", "prompt", "seed",
                                     "state", "error", "file", "ts",
-                                    "phase", "pid",
+                                    "phase", "pid", "stuck",
                                     "steps", "steps_label", "cfg",
                                     "negative", "width", "height",
                                     "size_label", "secs", "landscape",
@@ -488,6 +543,12 @@ def _run(job):
                         "file": "", "ts": job["ts"], "ok": False,
                         "error": msg})
         log.warning("跑图台 %s 失败：%s", job["id"], msg)
+    finally:
+        # 线程退场了（成功 / 失败 / 被中断都算）。`_reap_stuck` 靠这个标记
+        # 认「这张已经没人管了」——不置的话，任何一条异常退出的路径都会
+        # 变成前端永远「排队中」的那张图。
+        with _JOBS_LOCK:
+            job["_thread_alive"] = False
 
 
 def generate_image_build(skill, prompt, seed):
@@ -640,6 +701,13 @@ def api_submit():
     # 读图失败不拦提交：图读不出来不该让用户整条消息白写——明确说一声、按
     # 纯文字出图，并把这件事记在 job 上让前端显示出来。
     ref_ids, ref_note = _ref_ids(data.get("refs"))
+    # 「画同款」已经把这张读成描述填进输入框了，用户点发送时那句话里就有
+    # 它。再看一次图不只是白花一次额度，还会把同一段描述**又拼一遍**
+    # （提示词里出现两份），2026-11-24 用户确认的口径：前端带了
+    # `ref_described` 就说明读过了，不再识图。
+    if data.get("ref_described"):
+        ref_ids = []
+        ref_note = ""
     if ref_ids:
         ref_text = _describe_refs(ref_ids)
         if ref_text:
@@ -674,6 +742,7 @@ def api_submit():
                "secs": None,
                "state": "queued", "error": "", "file": "",
                "ts": time.time(),
+               "_thread_alive": True,     # 见 _reap_stuck
                # 中断信号（2026-11-04 跑图台「中断」按钮）：
                # 置位后排队中的由 image_jobs worker 跳过、正在跑的由
                # wait_done 走**定向** /interrupt（只停这一张，不误伤 QQ 的图）。
@@ -736,6 +805,58 @@ def _new_job_id():
                               time.strftime("%H%M%S", st), ms)
 
 
+# ─── 卡死兜底（2026-11-24 用户：「昨天晚上的图现在还显示排队中，卡死了」）────
+#
+# 前端现在自己计时（见 chat.js 的 `SETTLE_MS`），但它只认得见的那一张——
+# 用户关掉页面、换个设备再看，存档里那条还是「排队中…」。服务重启之后
+# `_JOBS` 是空的，前端也就再也查不到它的下落。所以在服务端也补一层：
+# **worker 线程起不来 / 被吞掉**这种状态，超时后明确判成「没跑成」，
+# 而不是让一条记录永远挂着。
+#
+# 判据只用时间：从提交到现在超过「排队上限 + 单张上限」就算。既不用
+# ComfyUI 探活（探不到不等于死了），也不去猜提示词——只报事实。
+#
+# 上限按渠道取（qwen 系 420 秒是既有配置，见 jobs.SKILL_TIMEOUTS），
+# 再留出排队与提交前等待的余量。
+_QUEUE_SLACK = 15 * 60
+
+
+def _stuck_after(skill):
+    try:
+        from app.features.image import jobs as _jobs
+        per = float(_jobs.task_timeout(skill) or _jobs.TASK_TIMEOUT)
+    except Exception:                        # noqa: BLE001
+        per = 180.0
+    return per + _QUEUE_SLACK
+
+
+def _reap_stuck():
+    """把「worker 线程已经没了、记录却还是 queued」的任务标成失败。
+
+    纯事实判断：不用 ComfyUI 探活（探不到不等于死了），不猜提示词，也不
+    凭空超时——画得慢但还在跑的图不能被杀。这里只回答一个问题：**这张
+    图还有人在等它吗？** 没有就是它再也不会有结果，明说。
+    """
+    dead = []
+    now = time.time()
+    with _JOBS_LOCK:
+        for job in _JOBS.values():
+            if job.get("state") != "queued":
+                continue
+            if job.get("_thread_alive", True):
+                continue
+            dead.append(job)
+        for job in dead:
+            job["state"] = "error"
+            job["error"] = "这一张没跑起来（服务那边丢了它的线程），点重试再来"
+            job["stuck"] = True
+    if dead:
+        log.warning("跑图台收掉 %d 张卡住的任务：%s 已挂 %.0f 秒",
+                    len(dead), ", ".join(j["id"] for j in dead),
+                    now - float(dead[0].get("ts") or now))
+    return len(dead)
+
+
 @bp.route("/api/gen/status")
 def api_status():
     """进行中/近期任务 + ComfyUI 队列水深（含 QQ 那边的，好解释为什么慢）。
@@ -750,6 +871,7 @@ def api_status():
     探针只问**本台正在跑的那一张**，最多 1 次 /queue，不会因为状态轮询把
     ComfyUI 打爆；问不到（超时、离线）返回 None，前端按「探不到」处理。
     """
+    _reap_stuck()
     with _JOBS_LOCK:
         jobs = sorted(_JOBS.values(), key=lambda j: j["ts"], reverse=True)
     try:
@@ -860,6 +982,59 @@ def api_clear():
     return jsonify({"ok": True})
 
 
+@bp.route("/api/gen/imgsign")
+def api_imgsign():
+    """给图片地址签一个短时有效的 token（2026-11-24）。
+
+    ## 为什么要它
+
+    群友拿到的是 Cloudflare 临时隧道地址，**隧道一重连就换域名**
+    （`xxxx.trycloudflare.com` → `yyyy.trycloudflare.com`）。浏览器缓存是按
+    完整 URL 存的，域名一变，昨天存下的所有图全部作废——这就是用户说的
+    「我每次重新进入这个工作台，图片好像不是从缓存里面拿的」。
+
+    前端因此要把图片地址里的域名拿掉：只记**相对路径 + token**，渲染时用
+    `当前页面的 origin + 相对路径` 拼回去。这样换域名后地址不变，缓存照命中。
+    token 是为了让「不带登录 cookie 也能取图」——本地缓存那套（`wsimg.js`）
+    用 `no-cors` 请求图片字节时带不了凭据，而 5175 网关对 `/api/gen/img` 本身
+    不拦（读接口放行），拦的只是 5174 的 token 校验。
+
+    token = HMAC(secret, "imgsign")，只用来证明「这个请求是本站页面发起的」，
+    不带任何身份——所以不需要过期时间，也不需要存盘。
+    """
+    import hashlib
+    import hmac
+    from app.gateways import friend_auth
+    try:
+        secret = friend_auth.secret()
+    except Exception:                            # noqa: BLE001
+        return jsonify({"ok": False, "error": "服务未就绪"}), 503
+    if not secret:                               # 密钥还没生成：别签一个空串出去
+        return jsonify({"ok": False, "error": "服务未就绪"}), 503
+    sig = hmac.new(str(secret).encode("utf-8"), b"gen:img:1",
+                   hashlib.sha256).hexdigest()[:32]
+    return jsonify({"ok": True, "token": sig})
+
+
+def _img_sign_ok(raw):
+    """校验 `?k=`（前端带来的短时 token）。"""
+    got = str(raw or "").strip()
+    if not got:
+        return False
+    try:
+        import hashlib
+        import hmac
+        from app.gateways import friend_auth
+        secret = friend_auth.secret()
+    except Exception:                            # noqa: BLE001
+        return False
+    if not secret:
+        return False
+    want = hmac.new(str(secret).encode("utf-8"), b"gen:img:1",
+                    hashlib.sha256).hexdigest()[:32]
+    return hmac.compare_digest(got, want)
+
+
 @bp.route("/api/gen/img")
 def api_img():
     """按图片引用取图：`nai:<filename>` 走 NAI 临时目录，其余走 ComfyUI。
@@ -877,8 +1052,24 @@ def api_img():
 
     以前写的是 `no-store`，等于每刷一次页面所有图都从 origin 重下一遍，
     走 Cloudflare 隧道时就是美国绕一圈回来。
+
+    ## 两个新参数（2026-11-24）
+
+    · `fit=512k` —— 发「长边试到 ≤512KB」的那一档 WebP，工作区的下载和
+      列表都用它（和画廊一个量级）。见 `_img_fit_file`。
+    · `k=<token>` —— 站点签名（`/api/gen/imgsign` 下发）。前端把图存本地缓存
+      时要自己取一次字节，那条路带不了内部令牌，所以**只在这条路由上**额外
+      认它：有它就和带内部令牌等价。没带的老请求照旧走 `_guard()`。
     """
     f = str(request.args.get("f") or "").replace("\\", "/").strip("/")
+    # `k=` 只在「本台取图」这一条路上被认可：它不是登录凭据，也调不动别的
+    # 接口，只证明「这个请求是本站页面发的」。有它就当内部请求放行；没有就
+    # 按老规矩走 `_guard()`（5175 带的内部令牌 / 本机直连免检）。
+    if not _img_sign_ok(request.args.get("k")):
+        from app.features.gallery import routes as _gal
+        bad = _gal._guard()
+        if bad:
+            return bad
     if f.startswith("nai:"):
         name = f[4:]
         if not _NAI_REF_RE.fullmatch(f) or not _IMG_NAME_RE.fullmatch(name):
@@ -909,15 +1100,16 @@ def api_img():
         # 缩略图落 `state/thumb/`（按「原图路径+mtime+w」命名），同尺寸
         # 只算一次；失败就退回原图，缩略图只是优化不是前置条件。
         w = _img_thumb_w(request.args.get("w"))
+        fit = _img_fit(request.args.get("fit"))
+        if fit:
+            # 「存下来看」那一档：和上面同一条路，只是宽度由体积上限挑。
+            got = _img_fit_file(local, fit)
+            if got:
+                return _img_send(got)
         if w:
             thumb = _img_thumb_file(local, w)
             if thumb:
-                # gallery.thumb 产出的是 WebP；mimetype 要跟着变，否则
-                # 浏览器按 image/jpeg 解析 WebP 会直接裂图。
-                resp = send_file(thumb, mimetype="image/webp",
-                                 conditional=True, max_age=_IMG_MAX_AGE)
-                resp.headers["Cache-Control"] = _IMG_CACHE_CTL
-                return resp
+                return _img_send(thumb)
         resp = send_file(local, conditional=True, max_age=_IMG_MAX_AGE)
         resp.headers["Cache-Control"] = _IMG_CACHE_CTL
         return resp

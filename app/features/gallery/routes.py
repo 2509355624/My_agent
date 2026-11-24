@@ -266,14 +266,25 @@ def api_list():
         # 公开 tab 是群友上传。否则点进一个空分类会看到空白墙。
         if scope == "owner":
             # 下架的目录不占分类条：整个分类都被隐藏时，那个标签点进去是空墙。
-            gsql = ("SELECT DISTINCT grp FROM works WHERE n>0 AND grp<>''"
+            gsql = ("SELECT DISTINCT grp, path FROM works WHERE n>0 AND grp<>''"
                     " AND src='owner' AND hidden=0")
         elif scope == "pub":
-            gsql = ("SELECT DISTINCT grp FROM works WHERE n>0 AND grp<>''"
+            gsql = ("SELECT DISTINCT grp, path FROM works WHERE n>0 AND grp<>''"
                     " AND src='user'")
         else:
-            gsql = "SELECT DISTINCT grp FROM works WHERE n>0 AND grp<>''"
-        grps = [r["grp"] for r in con.execute(gsql)]
+            gsql = "SELECT DISTINCT grp, path FROM works WHERE n>0 AND grp<>''"
+        # 目录被清空（站主「清空 web」之后那种）时 `n` 还是旧值，库里仍然
+        # 说这个分类有图——标签留着，点进去一面空白墙。所以这里顺手判一下
+        # 目录在不在，整组目录都没了就不列它（2026-11-24 用户要求）。
+        # 「任何一条还活着」就算这个分类还在：漫画一个任务一个目录，删掉一本
+        # 不该把「漫画」整个标签带走。
+        alive = {}
+        rows_g = con.execute(gsql).fetchall()
+        if _needs_dir_check(rows_g):
+            for r in rows_g:
+                g = r["grp"]
+                alive[g] = alive.get(g, False) or _dir_alive(r["path"])
+        grps = [r["grp"] for r in rows_g if alive.get(r["grp"], True)]
         # 漫画归一：只要库里还有漫画行，就把 7 个 `漫画_C...` 碎标签撤掉，
         # 换成一个「漫画」。web 组本身保留（还有「生图页」那 1 条真·非漫画）。
         # 判据用 grp/title 两个字段：单渠道本藏在 web 组、只体现在 title 里。
@@ -290,10 +301,37 @@ def api_list():
             grps.append(COMIC_LABEL)
 
     more = len(rows) > size
+    out_grps = sorted((g for g in grps if g), key=gallery._natkey)
+    # 当前选中的分类已经不存在了（目录被清空 / 图全被隐藏）→ 前端该退回
+    # 「全部」，而不是停在一面空墙上看「这一格还是空的」。
     return jsonify({"ok": True, "works": [_work_row(r, qq or "") for r in rows[:size]],
-                    "grps": sorted((g for g in grps if g), key=gallery._natkey),
+                    "grps": out_grps,
+                    "grp_gone": bool(grp) and grp not in out_grps,
                     "has_more": more,
                     "page": page, "owner": _is_owner(qq), "guest": not qq})
+
+
+def _needs_dir_check(rows):
+    """要不要去 stat 目录。
+
+    本机开发 / 生产都是真实绝对路径；但很多单测插的是 `/tmp/x` 这种占位路径，
+    真去判会把这些行全滤掉，测试就变成在测「本机有没有 /tmp/x」。所以先看
+    这批路径里有没有真存在的一个——一个都没有，说明是占位数据，不判。
+    （线上不会出现「所有目录同时被删」这种状态，最坏只是跳过这一层过滤。）
+    """
+    for r in rows[:50]:
+        p = str(r["path"] or "").strip()
+        if p and os.path.isabs(p) and os.path.isdir(p):
+            return True
+    return False
+
+
+def _dir_alive(path):
+    """这个作品集的目录还在不在。空路径 / 相对路径一律当「在」（没法判就不判）。"""
+    p = str(path or "").strip()
+    if not p or not os.path.isabs(p):
+        return True
+    return os.path.isdir(p)
 
 
 @bp.route("/mine")
@@ -397,6 +435,16 @@ def api_img(iid):
     src = row["path"]
     if not os.path.isfile(src):
         return jsonify({"ok": False, "error": "文件不在了"}), 404
+
+    # `fit=512k`（2026-11-24）：和跑图台那条同一个口径——长边试到不超过
+    # 512KB。画廊网格 / 工作台下载都用它，图片大小就和「看的这一份」一致了。
+    # 复用 `_img_fit_file`（同一套缩略图缓存），不在这儿重写一份。
+    if str(request.args.get("fit") or "").strip().lower() in ("512k", "512"):
+        from app.features.image.routes import _IMG_FIT_CAP, _img_fit_file
+        got = _img_fit_file(src, _IMG_FIT_CAP)
+        if got:
+            return _img(got)
+        # 缩不出来就退回下面的常规档（不报错：压缩只是优化）
 
     # 画廊只发压缩图。原图中位 5MB、库里最大一张 149MB，一个作品集被完整
     # 拖一遍就是几个 GB 的上行；站主要原图直接开磁盘，不必过网页。

@@ -123,8 +123,10 @@ class TestRefsActuallyApply(unittest.TestCase):
         src = _read("app/features/image/routes.py")
         self.assertIn("_ref_ids", src)
         self.assertIn("_describe_refs", src)
+        # 4000 不够了：2026-11-24 在 `_ref_ids(...)` 前面加了
+        # `ref_described` 那段注释，把它挤出了窗口——拉长到 5200。
         i = src.index("def api_submit")
-        seg = src[i:i + 4000]
+        seg = src[i:i + 5200]
         self.assertIn("_ref_ids(data.get(\"refs\"))", seg)
         self.assertIn("画面参考", seg, "参考图描述要拼进提示词")
 

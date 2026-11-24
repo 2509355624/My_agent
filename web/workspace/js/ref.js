@@ -94,7 +94,17 @@
     // 立刻把这张读成一段描述填进输入框：用户点「画同款」要的是「照着它」，
     // 光挂一张缩略图什么都不会发生。读出来就填，读不出来就让用户自己写一句
     // ——两种情况都给明确反馈，不留「点了没反应」的空档。
-    if (itemId) describeInto(itemId, say);
+    if (itemId) {
+      describeInto(itemId, say).then(function (text) {
+        /* 读成功 → 给这张图打上「已读」标记。发送时（chat.js 的 send）
+           看到这个标记就直接拿去出图，不再让后端识一次——用户 2026-11-24
+           确认的口径：「不再识，用输入栏那段」。 */
+        if (!text) return;
+        S.refs.forEach(function (r) {
+          if (r.id === itemId) { r.pre = true; r.text = text; }
+        });
+      });
+    }
     global.dispatchEvent(new Event("resize"));
   }
 

@@ -761,7 +761,20 @@ def proxy_gen(sub):
     读接口放行，提交必须登录：提交能直接占 GPU 队列，不能匿名打。
     不套 `/api/friend` 那一份 per-QQ 额度——那是群友页 LoRA 面板专用的，
     它要求请求里带 qq；新界面这条只借用「提清单 + 提交 + 轮询」的最小面。
+
+    `imgsign`（2026-11-24）：工作区要把图存进浏览器本地缓存，取字节时用的是
+    `no-cors` 请求（带不了 cookie）。所以这个签名口子**不要求登录**——它只
+    下发一个「本站页面」的签名，不带任何身份；没有它，登录态之外的取图请求
+    全都会被 5174 的令牌校验挡掉，缓存那套就白做了。
     """
+    # `img`（2026-11-24）：只读一张图，和 `/api/gal/img/<id>` 同性质，
+    # 所以登录态和「站点签名（`k=`）」都放行。要它放行签名，是因为工作区
+    # 要把图存进浏览器本地缓存——那条路用 `no-cors` 取字节，带不了 cookie。
+    # 缓存换域名后还能命中，全靠这个（见 web/workspace/js/imgcache.js）。
+    if sub == "imgsign":
+        return _forward("/api/gen", sub)
+    if sub == "img" and request.args.get("k"):
+        return _forward("/api/gen", sub)
     if request.method == "POST" and not _logged_in():
         return _secure(jsonify({"ok": False, "error": "没登录"})), 401
     return _forward("/api/gen", sub)

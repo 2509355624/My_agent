@@ -45,14 +45,19 @@ class ThumbTest(unittest.TestCase):
     def setUpClass(cls):
         cls.client = main.app.test_client()
         cls.rel = _pick_image()
+        # 取图要带内部令牌（2026-11-24 起和画廊一致）；5175 转发时本来就带。
+        from app.gateways import friend_auth
+        cls.h = {"X-Friend-Token": friend_auth.secret()}
 
     def setUp(self):
         if not self.rel:
             self.skipTest("本机没有可用的演示图（ComfyUI output 目录为空）")
 
     def _get(self, query="", headers=None):
+        h = dict(self.h)
+        h.update(headers or {})
         return self.client.get("/api/gen/img?f=" + self.rel + query,
-                               headers=headers or {})
+                               headers=h, base_url="http://localhost:5174")
 
     def test_whitelist_widths_accepted(self):
         """240/480/640/900 都认，返回的是缩略图（比原图小得多）。"""
@@ -137,16 +142,17 @@ class FrontendDownloadTest(unittest.TestCase):
             os.path.abspath(__file__))), "web", *parts)
         return io.open(base, encoding="utf-8").read()
 
-    def test_chat_uses_thumb_width(self):
+    def test_chat_uses_fit_band(self):
+        """列表铺的是「≤512KB」那一档（2026-11-24 第二轮换掉 640）。"""
         s = self._read("workspace", "js", "chat.js")
-        self.assertIn("WSGen.img(job.file, 640)", s,
-                      "聊天区的图没走缩略图")
+        self.assertIn('var FIT = "512k"', s, "聊天区的图没走压缩档")
+        self.assertIn("WSGen.img(file, FIT)", s)
         self.assertIn("dataset.full", s, "没留原图地址，点开升级不了")
 
-    def test_archive_uses_thumb_width(self):
+    def test_archive_uses_fit_band(self):
         s = self._read("workspace", "js", "archive.js")
-        self.assertIn("WSGen.img(m.file, 640)", s,
-                      "历史重放还在拉原图")
+        self.assertIn('var FIT = "512k"', s, "历史重放没走压缩档")
+        self.assertIn("global.WSGen.img(m.file, FIT)", s)
 
     def test_download_goes_through_fetch(self):
         s = self._read("workspace", "js", "chat.js")
@@ -156,10 +162,11 @@ class FrontendDownloadTest(unittest.TestCase):
         self.assertIn('cache: "default"', body,
                       "没指定 cache: default，可能绕过缓存")
 
-    def test_gen_img_supports_width_param(self):
+    def test_gen_img_supports_fit_param(self):
+        """`img(file, fit)`：第二轮换成体积档，站点签名 `k=` 也挂在这里。"""
         s = self._read("workspace", "js", "gen.js")
-        self.assertIn("function img(file, w)", s)
-        self.assertIn('"&w="', s)
+        self.assertIn("function img(file, fit)", s)
+        self.assertIn('"&fit="', s)
 
 
 if __name__ == "__main__":

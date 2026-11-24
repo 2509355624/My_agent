@@ -9,6 +9,19 @@
   var HEAD_KEEP = 300;      // 折叠后先露这么多
   var POLL_MS = 2000;
   var MAX_FAIL = 5;         // 连续失败这么多次就停轮询，别无限打接口
+  /* 卡死兜底（2026-11-24 用户：「昨天晚上的图现在还显示排队中，卡死了」）。
+     后端已经有超时，但它只管「线程还在跑」的情形；服务重启 / 任务丢掉之后
+     存档里那条会永远停在「排队中」。所以前端**自己**也计时：
+       · 一直没轮到（排队 / 准备中）超过 SETTLE_MS → 判它卡住了；
+       · 真在画的那张按渠道给得更宽，别误杀。
+     判超时不是「报错完事」：卡片上给一个「重试」，用户点了就按同一份提示词
+     重排一张。 */
+  var SETTLE_MS = 8 * 60 * 1000;
+  var PAINT_MS = 25 * 60 * 1000;
+  /* 聊天区铺的图：长边试到不超过 512KB 的那一档 WebP（和服务端 `fit` 对齐）。
+     用户口径是「和画廊一样的大小即可」——画廊网格 360 / 预览 1600，512KB
+     正好落在中间：手机上看着够清楚，一张 0.2~0.5MB，十几张也就几 MB。 */
+  var FIT = "512k";
 
   var el = {};
   var S = {
@@ -252,10 +265,12 @@
      它们原来紧贴在一起（都是小圆圈、间距 8px），用户反馈「很容易误触」——
      改成两边是纯文字按钮、中间是图标按钮，中间留空推开，一个管复制
      一个管下载一个管重画，手指不会点串。
-     下载（2026-11-23 用户要的）：走 `<a download>` 拉原始尺寸那张，
-     不经过 canvas，手机浏览器会直接落到「下载」目录。 */
-  function buildActs(card) {
-    if (card.acts.childElementCount) return;
+     下载（2026-11-24 定稿）：拉「≤512KB」那一档，先问浏览器本地缓存，
+     见 downloadImage；不经过 canvas，手机浏览器直接落到「下载」目录。 */
+  /* 默认的「重画」文案写死在字面量里：这一条有测试钉着（按钮必须带文字）。 */
+  function buildActs(card, retryLabel) {
+    if (card.acts.childElementCount && !retryLabel) return;
+    if (retryLabel) card.acts.innerHTML = "";
     card.acts.hidden = false;
 
     var copy = document.createElement("button");
@@ -283,12 +298,15 @@
       downloadImage(card);
     });
 
+    /* 「重画」= 换种子再来一张；卡住的那张换成「重试」，同一个意思但
+       用户点下去是「它卡住了、帮我再排一次」，不是「我不满意这张」。 */
     var again = document.createElement("button");
     again.type = "button";
     again.className = "act act-text";
-    again.title = "换种子重画";
-    again.setAttribute("aria-label", "换种子重画");
-    again.innerHTML = ICON_AGAIN + "<span>重画</span>";
+    again.title = retryLabel ? "重新排一次" : "换种子重画";
+    again.setAttribute("aria-label", again.title);
+    if (retryLabel) again.innerHTML = ICON_AGAIN + "<span>" + retryLabel + "</span>";
+    else again.innerHTML = ICON_AGAIN + "<span>重画</span>";
     again.addEventListener("click", function () {
       submitJob(card.prompt, card.skill, card.refs || []);
     });
@@ -298,15 +316,45 @@
     card.acts.appendChild(again);
   }
 
-  /* 点缩略图看原图（2026-11-24）：聊天区默认只铺 640 的 JPEG，
-     真要细看才拉原图。原地把 src 换掉而不是开一个查看器——少一套
-     DOM，也不会多出「关了查看器消息位置跳走」这类毛病。 */
+  /* 点缩略图看原图（2026-11-24）：列表里铺的是 512KB 那一档，真要细看才
+     拉原图。**先问本地缓存**：之前点开过一次的原图已经躺在 IndexedDB 里，
+     再点就是 0 请求（换过隧道域名也一样命中，见 imgcache.js）。
+     原地把 src 换掉而不是开一个查看器——少一套 DOM，也不会多出「关了查看器
+     消息位置跳走」这类毛病。 */
   function openFull(img) {
     var full = img.dataset.full || "";
     if (!full || img.dataset.fullLoaded === "1") return;
     img.dataset.fullLoaded = "1";
     img.classList.add("shot-full");
     img.src = full;
+    // 顺手存一份：下次点开、下次「下载原图」都不用再穿一次隧道。
+    pull(keyOf(full), full);
+  }
+
+  /* 缓存 key 和请求地址是两样东西（2026-11-24）：地址上带站点签名 `k=`，
+     签名每次会话都可能换（服务重启就换），所以**key 里不带它**，否则重启
+     一次本地缓存全成孤儿。`keyOf` 只做一件事：把 `&k=...` 摘掉。 */
+  function keyOf(url) {
+    return String(url || "").replace(/[&?]k=[^&]*/g, "");
+  }
+
+  /* 把一张图的字节拉下来存进本地缓存（按 key 判断存过没有）。
+     用 `no-cors`：图本身有站点签名（`k=`），不需要 cookie；写进 IndexedDB
+     只看能不能拿到字节，不看能不能读它。**失败一律不管**——缓存是优化，
+     页面上的 <img> 自己照样会去请求。 */
+  function pull(key, url) {
+    if (!key || !global.WSImg) return;
+    url = url || key;
+    global.WSImg.has(key).then(function (yes) {
+      if (yes) return undefined;
+      return global.fetch(url, { credentials: "omit", mode: "no-cors" })
+        .then(function (r) { return r.blob(); })
+        .then(function (b) {
+          // no-cors 的响应可能是 opaque（size 0），那就没有可存的东西
+          if (b && b.size) return global.WSImg.put(key, b);
+          return undefined;
+        });
+    })["catch"](function () { /* 存不进去就算了 */ });
   }
 
   /* 存一个 Blob 到本机（下载流程的最后一步）。 */
@@ -323,16 +371,17 @@
     global.setTimeout(function () { global.URL.revokeObjectURL(url); }, 60000);
   }
 
-  /* 下载这张图（2026-11-24 用户：「图片已经加载完成了，点下载竟然是从服务器
-     下载的，而不是直接拿已经缓存的图片」）。
+  /* 下载这张图（2026-11-24 用户：「点下载的时候会有延迟，得等个七八秒钟才会
+     显示」）。
 
-    以前是直接 `<a download href=...>` —— 那等于让浏览器**另起一个下载请求**，
-     和页面上那张 <img> 的缓存是两回事：`download` 属性触发的是导航式下载，
-     多数浏览器对这种情况**不查 HTTP 缓存**，于是同一张图又完整走了一遍隧道。
+     以前两步都在错的地方：
+       ① `<a download href>` 是导航式下载，**不查 HTTP 缓存**，等于把图重下
+          一遍（2026-11-24 上午改成 fetch，但拉的是**原图**——一张 8MB，缓存
+          里本来就没有，点了当然要等七八秒）；
+       ② 现在下载的是**列表上那张 512KB 的压缩档**，和画廊一个量级；它的字节
+          早就躺在本地缓存里（显示时顺手存过），点下去是零网络。
 
-     现在先 `fetch(src)`：同源、`cache: "default"`，浏览器会把已经躺在缓存里的
-     那份直接交出来（`immutable` 一年，命中就是不联网）。拿不到（缓存被清 /
-     换了隧道域名 / 网络抖动）再退回老办法，不至于点了没反应。 */
+     顺序：本地缓存 → fetch（HTTP 缓存 / 服务端）→ 老办法兜底。 */
   function downloadImage(card) {
     var file = card.file || (card.rec && card.rec.file) || "";
     if (!file) {
@@ -340,9 +389,26 @@
       return;
     }
     var name = String(file).split("/").pop() || "image.png";
-    var src = global.WSGen.img(file);
+    var src = global.WSGen.img(file, FIT);
+    var key = global.WSGen.imgKey(file, FIT);   // 缓存认这个（不带签名）
+
+    function fromNet() {
+      if (typeof global.fetch !== "function") { fallback(); return; }
+      global.fetch(src, { credentials: "same-origin", cache: "default" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.blob();
+        })
+        .then(function (b) {
+          if (!b || !b.size) throw new Error("空文件");
+          saveBlob(b, name);
+          if (global.WSImg) global.WSImg.put(key, b);
+        })
+        ["catch"](fallback);
+    }
 
     function fallback() {
+      // 最后一道：直接让浏览器去下。慢，但点了总有反应。
       var a = document.createElement("a");
       a.href = src;
       a.download = name;
@@ -352,33 +418,36 @@
       a.remove();
     }
 
-    if (typeof global.fetch !== "function") { fallback(); return; }
-    global.fetch(src, { credentials: "same-origin", cache: "default" })
-      .then(function (r) {
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.blob();
-      })
-      .then(function (b) {
-        if (!b || !b.size) throw new Error("空文件");
-        saveBlob(b, name);
-      })
-      ["catch"](fallback);
+    if (!global.WSImg) { fromNet(); return; }
+    global.WSImg.get(key).then(function (b) {
+      if (b && b.size) saveBlob(b, name);
+      else fromNet();
+    })["catch"](fromNet);
   }
 
-  /* 聊天区里铺的是**缩略图**（2026-11-24 用户：「图片生成之后，要加载
-     非常的慢」）。原图常有 2~8MB，一张卡一张原图，恢复历史十几张就是
-     几十 MB 全从这台机器往上走——家里那条上行根本扛不住。
-     `w=640` 大约 30~50KB，小两个数量级；想看清晰的原图就点一下，
-     那时才拉原图（`openFull`），不是不给。 */
+  /* 聊天区里铺的是 **512KB 那一档**（2026-11-24 用户：「图片生成之后，要加载
+     非常的慢」「工作台其实是没有 qq 好用的，而且对带宽的压力也比较大」
+     「压缩图片和画廊的一样的大小」）。原图常有 2~8MB，一张卡一张原图，
+     恢复历史十几张就是几十 MB 全从这台机器往上走——家里那条上行扛不住。
+     点一下才拉原图（`openFull`），不是不给。
+
+     另外它顺手把这张的字节 `pull` 进本地缓存：下载和下次打开都直接拿。 */
+  function shotEl(file) {
+    var img = document.createElement("img");
+    img.alt = "生成结果";
+    img.loading = "lazy";
+    img.decoding = "async";
+    img.src = global.WSGen.img(file, FIT);
+    img.dataset.full = global.WSGen.img(file);
+    img.className = "shot";
+    img.addEventListener("click", function () { openFull(img); });
+    pull(global.WSGen.imgKey(file, FIT), img.src);
+    return img;
+  }
+
   function showImage(card, job) {
     if (card.ph) {
-      var img = document.createElement("img");
-      img.alt = "生成结果";
-      img.loading = "lazy";
-      img.decoding = "async";
-      img.src = global.WSGen.img(job.file, 640);
-      img.dataset.full = global.WSGen.img(job.file);
-      img.className = "shot";
+      var img = shotEl(job.file);
       img.addEventListener("error", function () {
         card.note.hidden = false;
         card.note.className = "note err";
@@ -387,10 +456,12 @@
       card.ph.parentNode.replaceChild(img, card.ph);
       card.ph = null;
       card.img = img;                 // 留个引用：下载/预览都靠它
-      img.addEventListener("click", function () { openFull(img); });
     }
     card.note.hidden = true;
+    card.stop && (card.stop.hidden = true);
     card.file = job.file || "";
+    card.since = 0;
+    card.noted = "";
     buildActs(card);
     if (card.rec) {
       card.rec.file = job.file;
@@ -402,13 +473,17 @@
     scrollBottom();
   }
 
-  function fail(card, msg) {
+  /* 失败 / 超时。`stuck` 决定给什么按钮口径：卡住的那张给「重试」
+     （按同一份提示词重排），普通失败给「重画」（换种子）。 */
+  function fail(card, msg, stuck) {
     disarmStop(card);
+    card.since = 0;
+    card.noted = "";
     card.note.hidden = false;
     card.note.className = "note err";
     card.note.textContent = msg || "这张没出来，点重画再来一次";
     if (card.ph) card.ph.style.opacity = ".3";
-    buildActs(card);
+    buildActs(card, stuck ? "重试" : "");
     if (card.rec) {
       card.rec.note = card.note.textContent;
       card.rec.err = true;
@@ -422,21 +497,32 @@
 
   /* refs：这一轮要带上的参考图 id。生图接口本身是按描述出图，参考图随请求
      一起交给后端（它按渠道能力决定用不用），前端不自己拼提示词。 */
-  function submitJob(prompt, skill, refs) {
+  /* `described`（2026-11-24）：这些参考图**已经读成描述写进 prompt 了**
+     （「画同款」就是这种）。带上它，后端就不再识一次图——用户确认过的
+     口径是「不再识，用输入栏那段」。 */
+  function submitJob(prompt, skill, refs, described) {
     if (!skill) {
       sysNote("还没拿到渠道列表，去跑图台看一眼再回来");
       return;
     }
     var rec = { k: "img", cls: "", prompt: prompt, skill: skill,
                 refs: (refs || []).slice(),
+                described: !!described,
                 job: "", file: "", note: "排队中…", err: false };
     var card = newCard(prompt, skill, rec);
     card.rec = rec;
     // 卡片自己记住参考图：点「重画」要按同一份角色重来，不能悄悄丢图
     card.refs = rec.refs;
+    card.described = !!described;
+    card.since = Date.now();       // 超时从这里起算，见 tick()
+    card.noted = "排队中…";
     log(rec);
     var body = { skill: skill, prompt: prompt };
-    if (refs && refs.length) body.refs = refs;
+    if (refs && refs.length) {
+      body.refs = refs;
+      // 读过了就别让后端再读一遍，也别把同一段描述拼第二遍
+      if (described) body.ref_described = true;
+    }
     global.WSGen.submit(body).then(function (d) {
       if (!d || !d.ok) {
         fail(card, (d && d.error) || "没排上队");
@@ -495,12 +581,32 @@
     if (S.timer) { clearInterval(S.timer); S.timer = null; }
   }
 
-  function markStuck() {
+  /* 状态接口连续失败时别再打接口，但**不要把卡片判死**：网络抖一下不等于
+     这张图没了。把它们的计时按下暂停（`since` 往后推），等下一次状态恢复
+     再接着算——否则一次断网就能把半个小时的画白等。 */
+  function pauseClock() {
+    var now = Date.now();
     Object.keys(S.pending).forEach(function (id) {
       var card = S.pending[id];
-      fail(card, "状态断了，点重画再来一次");
+      if (card.since) card.since = now - (card.since - now);
     });
-    S.pending = {};
+  }
+
+  /* 判超时。两条线：
+       · 一直没轮到（排队 / 准备中 / 还没进 ComfyUI）超过 SETTLE_MS；
+       · 已经在画（running）超过 PAINT_MS。
+     判了不是「报错完事」：卡片换成「重试」，用户点一下就按同一份提示词重排。
+     这一步也不能把「画得慢」误杀——真在画的那张只看它自己的 PAINT_MS。 */
+  function checkTimeout(card, ph) {
+    if (!card.since) return false;
+    var limit = (ph === "running") ? PAINT_MS : SETTLE_MS;
+    if (Date.now() - card.since < limit) return false;
+    var mins = Math.round(limit / 60000);
+    delete S.pending[card.job];
+    fail(card, (ph === "running")
+      ? "等了 " + mins + " 分钟还在画，可能卡住了。点重试重排一张"
+      : "排队等了 " + mins + " 分钟还没轮到，卡住了。点重试重排一张", true);
+    return true;
   }
 
   function tick() {
@@ -508,7 +614,7 @@
     global.WSGen.status().then(function (d) {
       if (!d || !d.ok) {
         S.fails += 1;
-        if (S.fails >= MAX_FAIL) { stopPoll(); markStuck(); }
+        if (S.fails >= MAX_FAIL) { stopPoll(); pauseClock(); }
         return;
       }
       S.fails = 0;
@@ -518,8 +624,13 @@
       Object.keys(S.pending).forEach(function (id) {
         var card = S.pending[id];
         var job = byId[id];
-        // 任务不在列表里 = 进程重启过，这张再也回不来，别让它一直转
-        if (!job) { delete S.pending[id]; fail(card, "服务重启过，这张没了，点重画"); return; }
+        // 任务不在列表里 = 进程重启过，这张再也回不来，别让它一直转。
+        // （服务端也会把「线程没了」的收成 error，这里只是兜住更早的那一下）
+        if (!job) {
+          delete S.pending[id];
+          fail(card, "服务重启过，这张没了，点重试再排一次", true);
+          return;
+        }
         if (job.state === "done") {
           delete S.pending[id];
           disarmStop(card);
@@ -527,7 +638,8 @@
         } else if (job.state === "error" || job.state === "cancelled") {
           delete S.pending[id];
           disarmStop(card);
-          fail(card, job.error || "这张没出来");
+          // stuck=true 是服务端判的「线程丢了，这张根本没跑」
+          fail(card, job.error || "这张没出来", !!job.stuck);
         } else {
           // 带上参考图时把它读图的结果说清楚：读到了就说「照着参考图画」，
           // 没读到就说「按描述画」——用户不该猜这张图到底用没用上。
@@ -537,6 +649,7 @@
           // 现问的——排队 / 准备中 / 真在画 / 掉队了。原来一律写「正在生成」，
           // ComfyUI 重启后还挂在那儿转圈，用户根本不知道它是不是死了。
           var ph = job.phase || "";
+          if (checkTimeout(card, ph)) return;
           var text;
           if (ph === "lost") {
             text = "ComfyUI 那边已经没有这张了（重启过），重新发一次吧";
@@ -552,6 +665,7 @@
           card.note.hidden = false;
           card.note.className = "note" + (ph === "lost" ? " err" : "");
           card.note.textContent = text;
+          card.noted = text;
           if (card.rec) card.rec.note = text;
         }
       });
@@ -615,6 +729,16 @@
     if (global.WSCreate && global.WSCreate.mode() === "comic") {
       global.WSRef.commit();
       global.WSCreate.runComic(text, refs.map(function (r) { return r.id; }));
+      return;
+    }
+
+    /* 「画同款」把图读成描述填进输入栏之后，那张参考图就**已经**被读过了
+       （`pre` 标记），用户点发送时不该再让它识一次图——否则同一段描述会被
+       拼进提示词两遍，还白花一次视觉模型。见 ref.js 的 `same`。 */
+    var pre = refs.filter(function (r) { return r && r.pre && r.id; });
+    if (pre.length) {
+      global.WSRef.commit();
+      submitJob(text, S.skill, pre.map(function (r) { return r.id; }), true);
       return;
     }
 
@@ -747,7 +871,13 @@
 
     grow();
     syncSend();
-    if (global.WSArchive) global.WSArchive.restore();
+    /* 先取图片签名再重放存档：`WSGen.img()` 拼出来的地址要带 `k=`，本地缓存
+       那条路才走得通（拿不到也不拦，页面照旧按 URL 显示图）。 */
+    global.WSGen.imgsign().then(function () {
+      if (global.WSArchive) global.WSArchive.restore();
+    }, function () {
+      if (global.WSArchive) global.WSArchive.restore();
+    });
     global.WSRef.init();
     bootChannels();
   }
@@ -771,6 +901,10 @@
     scrollBottom: scrollBottom,
     pending: S.pending,
     msgs: function () { return S.msgs; },
-    startPoll: startPoll
+    startPoll: startPoll,
+    /* 重放存档时用（见 archive.js）：把一条「其实已经没在跑」的卡片就地
+       判成失败并给「重试」，以及给还活着的那条挂上终止/计时。 */
+    failCard: fail,
+    armStop: armStop
   };
 })(window);

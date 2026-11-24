@@ -11,6 +11,7 @@
   var BASE = "/api/gen";
   var SKILL_KEY = "ws_skill";
   var CACHE = null;          // 渠道清单一次会话拿一次就够，画风抽屉与发送共用
+  var SIGN = "";             // 图片地址的站点签名，见 imgsign()
 
   function channels(force) {
     if (CACHE && !force) return Promise.resolve(CACHE);
@@ -34,14 +35,38 @@
     return global.WSApi.post(BASE + "/cancel", { id: id });
   }
 
-  /* 图片地址。`w` 是缩略图宽度（2026-11-24）：原图常有 2~8MB，聊天区
-     和画廊列表里铺十几张就是几十 MB 全走家用上行。带上 w 服务端发
-     「长边 w 的 JPEG」，一张 30~70KB；**不带 w 就是原图**，点开大图、
-     下载都走那条。服务端只认 240/480/640/900 这几个宽度，其它值当没传。 */
-  function img(file, w) {
+  /* 图片地址。不带参数就是原图；带 `fit` 是「长边试到不超过这个体积」的
+     WebP（服务端目前认 `512k`）——和画廊一个量级，聊天区、下载都用它。
+
+     **不加 `w=`**：612KB 的压缩档比 640 宽的缩略图（32KB）大，但用户要的是
+     「看着可以、能存下来」的那一档；真要省流量可以传 w，见 chat.js 的说明。
+     **也不带域名**：`WSImg` 是按这条相对路径存字节的，域名一换缓存不该作废
+     （见 imgcache.js 的开头）。`k=` 是站点签名，见 imgsign()。 */
+  function img(file, fit) {
     var u = BASE + "/img?f=" + encodeURIComponent(file || "");
-    if (w) u += "&w=" + encodeURIComponent(w);
+    if (fit) u += "&fit=" + encodeURIComponent(fit);
+    if (SIGN) u += "&k=" + encodeURIComponent(SIGN);
     return u;
+  }
+
+  /* 缓存 key：**把签名摘掉**。签名是每次会话从 `/imgsign` 取的，服务重启
+     就换一个——带着它当 key，重启一次所有本地缓存都成了孤儿。
+     （域名本来就不在 key 里，见 imgcache.js 开头。） */
+  function imgKey(file, fit) {
+    var u = BASE + "/img?f=" + encodeURIComponent(file || "");
+    if (fit) u += "&fit=" + encodeURIComponent(fit);
+    return u;
+  }
+
+  /* 取一次站点签名。本地缓存要自己 fetch 一次图片字节并落到 IndexedDB，
+     那条路是 `no-cors`（带不了 cookie），所以地址上得有这个签名才过得去
+     5174 的令牌校验。失败就空着——页面照旧用 URL 直接显示图，只是不缓存。 */
+  function imgsign() {
+    if (SIGN) return Promise.resolve(SIGN);
+    return global.WSApi.get(BASE + "/imgsign").then(function (d) {
+      if (d && d.ok && d.token) SIGN = String(d.token);
+      return SIGN;
+    })["catch"](function () { return ""; });
   }
 
   function defaultSkill() {
@@ -58,6 +83,9 @@
     status: status,
     cancel: cancel,
     img: img,
+    imgKey: imgKey,
+    imgsign: imgsign,
+    sign: function () { return SIGN; },
     defaultSkill: defaultSkill,
     setDefaultSkill: setDefaultSkill
   };

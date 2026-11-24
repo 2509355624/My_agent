@@ -56,6 +56,15 @@
     });
   }
 
+  /* 把选中态跟 S.grp 对齐（不重建节点，所以不会把横向滚动位置弄丢） */
+  function markTabOn() {
+    if (!el.tabs) return;
+    Array.prototype.forEach.call(el.tabs.children, function (x) {
+      x.classList.toggle("on", x.textContent === (S.grp || "全部"));
+    });
+    markTabIntoView();
+  }
+
   /* 选中的那个标签要自己露出来：从深层文件夹跳回来时它可能滚在屏外 */
   function markTabIntoView() {
     if (!el.tabs) return;
@@ -97,7 +106,11 @@
       img.loading = "lazy";
       img.decoding = "async";
       img.alt = work.title;
-      img.src = "/api/gal/img/" + work.cover + "?s=t";
+      /* `&fit=512k`（2026-11-24）：画廊网格原来铺 360px 缩略图，在手机上
+         两列一格约 180 CSS px，360 正好够；但放大屏 / 平板就显得糊。带上
+         fit 可以让服务端挑一档更清楚的（≤512KB），竖图那种又高又窄的
+         封面尤其明显。服务端不认就当没传，退回原来的 s=t。 */
+      img.src = "/api/gal/img/" + work.cover + "?s=t&fit=512k";
       pic.appendChild(img);
     }
 
@@ -156,6 +169,17 @@
         return;
       }
       fillTabs(d.grps || []);
+
+      /* 当前分类没了（目录被清空、或那面墙的图全被隐藏）→ 退回「全部」。
+         2026-11-24 用户：「清空 web 的时候这个文件夹目录是空的了，然后这个
+         标签就应该隐藏」——标签由 fillTabs 按服务端给的新列表重建，这里负责
+         把选中态也收回来，别停在一面空墙上。 */
+      if (d.grp_gone && S.grp) {
+        S.grp = "";
+        markTabOn();
+        load(true);
+        return;
+      }
 
       (d.works || []).forEach(function (w) {
         S.works.push(w);
