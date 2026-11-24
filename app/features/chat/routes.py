@@ -202,6 +202,54 @@ def api_archive_post():
     return jsonify({"ok": True, "n": len(msgs), "added": added})
 
 
+@bp.route("/archive", methods=["PATCH"])
+def api_archive_patch():
+    """就地改一条已有记录（按 `job` 认人）。→ {ok, hit}
+
+    前端推的是「追加」，改不了已经存下来的那条：出图卡片从「排队中…」
+    变成「这张没了 / 已出图」时，服务端那份还停在旧状态，下次换设备登录
+    读回来又是一张假卡片（2026-11-24 用户：「重新进入网页，又出现了那个
+    排队中，我知道是假的」）。
+
+    body: `{"job": "GP-...", "m": {...}}` 或带上裸字段：
+    `{"job": "...", "note": "…", "err": true}`。
+
+    只改 `k:"img"` 且 `job` 相同的那一条；找不到就 hit=0，不报错——卡片
+    可能已经被截断掉了，不值得为它拦一次请求。
+    """
+    qq = _who()
+    if not qq:
+        return jsonify({"ok": False, "error": "没登录"}), 401
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "参数不对"}), 400
+    job = str(body.get("job") or "").strip()
+    if not job:
+        return jsonify({"ok": False, "error": "没给 job"}), 400
+    patch = body.get("m")
+    if not isinstance(patch, dict):
+        patch = {k: v for k, v in body.items() if k != "job"}
+
+    with _LOCK:
+        msgs = _load(qq)
+        hit = 0
+        for m in reversed(msgs):
+            if not isinstance(m, dict) or m.get("k") != "img":
+                continue
+            if str(m.get("job") or "") != job:
+                continue
+            m.update(patch)
+            hit += 1
+            break
+        if hit:
+            try:
+                _save(qq, msgs)
+            except OSError:
+                log.warning("聊天存档改写失败 qq=%s", qq, exc_info=True)
+                return jsonify({"ok": False, "error": "存不下"}), 500
+    return jsonify({"ok": True, "hit": hit})
+
+
 @bp.route("/archive", methods=["DELETE"])
 def api_archive_clear():
     """清空这一档（用户在「我的」里点「清空聊天记录」时用）。

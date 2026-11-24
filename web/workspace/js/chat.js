@@ -285,8 +285,13 @@
      它们原来紧贴在一起（都是小圆圈、间距 8px），用户反馈「很容易误触」——
      改成两边是纯文字按钮、中间是图标按钮，中间留空推开，一个管复制
      一个管下载一个管重画，手指不会点串。
-     下载（2026-11-24 定稿）：拉「≤512KB」那一档，先问浏览器本地缓存，
-     见 downloadImage；不经过 canvas，手机浏览器直接落到「下载」目录。 */
+
+     **复制拿的是实际出这张图用的那串提示词**（服务端翻完 / 拼完参考图之后
+     的英文 tags），不是用户敲的那句话——见 submitJob 里 `card.prompt`
+     被 d.job.prompt 覆盖那一段。存档里记的也是它，所以恢复出来的旧卡片
+     一样复制得到 tags。
+
+     下载（2026-11-24 定稿）：拉「≤1MB」那一档，先问浏览器本地缓存。 */
   /* 默认的「重画」文案写死在字面量里：这一条有测试钉着（按钮必须带文字）。 */
   function buildActs(card, retryLabel) {
     if (card.acts.childElementCount && !retryLabel) return;
@@ -337,14 +342,8 @@
   }
 
   /* 点一下把这张**放大到原尺寸看**（2026-11-24 用户改口径后：不再拉原图）。
-
-     以前这里是把 src 换成不带 fit 的原图（一张 2~8MB，走一次家用上行，等十几
-     秒），用户明确否掉了：「点击图片不需要重新传 10m 的原图，我们默认就只给
-     1m 即可」。所以现在点开只是把已经下下来的那份铺开——100% 原尺寸、允许
-     手指缩放，**零额外请求**。
-
-     原地放大而不是开一个查看器：少一套 DOM，也不会多出「关了查看器消息位置
-     跳走」这类毛病。再点一下收回去。 */
+     原地放大而不是开一个查看器：少一套 DOM，也不会多出「关了查看器消息
+     位置跳走」这类毛病。再点一下收回去。 */
   function toggleFull(img) {
     var on = img.classList.toggle("shot-full");
     if (!on) return;
@@ -408,8 +407,8 @@
        ① `<a download href>` 是导航式下载，**不查 HTTP 缓存**，等于把图重下
           一遍（2026-11-24 上午改成 fetch，但拉的是**原图**——一张 8MB，缓存
           里本来就没有，点了当然要等七八秒）；
-       ② 现在下载的是**列表上那张 512KB 的压缩档**，和画廊一个量级；它的字节
-          早就躺在本地缓存里（显示时顺手存过），点下去是零网络。
+       ② 现在下载的是**列表上那张 1MB 的压缩档**，它的字节早就躺在本地缓存
+          里（显示时顺手存过），点下去是零网络。
 
      顺序：本地缓存 → fetch（HTTP 缓存 / 服务端）→ 老办法兜底。 */
   function downloadImage(card) {
@@ -499,6 +498,11 @@
       card.rec.file = job.file;
       card.rec.note = "";
       card.rec.err = false;
+      /* 先在服务端存档里把这条从「排队中」改成「已出图」，再清掉 job：
+         只清本地不写服务端的话，换设备登录读回来的还是「排队中…」
+         （用户 2026-11-24 看到的那张假卡就是这样留下的）。 */
+      global.WSStore.patch(card.rec, { file: job.file, note: "", err: false,
+                                       job: "" });
       card.rec.job = "";
       if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
     }
@@ -519,6 +523,11 @@
     if (card.rec) {
       card.rec.note = card.note.textContent;
       card.rec.err = true;
+      /* 先在服务端存档里把这条从「排队中」改成失败态，再清掉 job：
+         只清本地不写服务端的话，换设备登录读回来的还是「排队中…」
+         （用户 2026-11-24 看到的那张假卡就是这样留下的）。 */
+      global.WSStore.patch(card.rec, { job: card.rec.job || "",
+                                       note: card.note.textContent, err: true });
       card.rec.job = "";
       if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
     }
@@ -562,6 +571,15 @@
       }
       card.job = d.job.id;
       rec.job = card.job;
+      /* 复制拿的是**实际出这张图用的那串提示词**，不是用户敲的那句话
+         （2026-11-24 用户：「点击复制，结果拿到的是我发送给 ai 的原始需求，
+         而不是 ai 生成这个图片使用的英文提示词 tags」）。
+         服务端在这趟里做完了翻译/画师串/参考图描述合并，`job.prompt` 就是
+         最终进模型的那串英文 tags，直接记下来当复制源。 */
+      if (d.job.prompt) {
+        card.prompt = d.job.prompt;
+        rec.prompt = d.job.prompt;
+      }
       armStop(card);
       S.pending[card.job] = card;
       startPoll();

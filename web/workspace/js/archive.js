@@ -168,14 +168,19 @@
           ph.className = "ph";
           ph.style.opacity = ".3";
           c.body.appendChild(ph);
-          if (m.job) {
-            again.push({ rec: m, card: {
-              node: c.node, body: c.body, ph: ph, note: c.note,
-              stop: c.stop, acts: c.acts,
-              prompt: m.prompt || "", skill: m.skill || "", job: m.job, rec: m,
-              refs: m.refs || [], described: !!m.described
-            } });
-          }
+          /* 没有 file 也没有 job 的 `img` 记录 = 提交过、但没等到结果就
+             没了（服务重启 / 页面关太早）。存下来的 note 十有八九是
+             「排队中…」，重放时如果照抄就是一张**永远排队的假卡**
+             （2026-11-24 用户：「我重新进入网页，又出现了上面的这个
+             排队中，我知道上面的那个肯定是假的排队状态」）。
+             改成一张明确的「这条没跑完」+ 重试，别再骗人。 */
+          global.WSChat.failCard({
+            node: c.node, body: c.body, ph: ph, note: c.note,
+            stop: c.stop, acts: c.acts,
+            prompt: m.prompt || "", skill: m.skill || "", job: "", rec: m,
+            refs: m.refs || [], described: !!m.described
+          }, "这条没跑完就断了（服务重启 / 页面关太早），点重试再排一次",
+             true);
         }
       } else if (m.k === "comic") {
         var cc = restoreShell(m, "card-comic");

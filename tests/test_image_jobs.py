@@ -4255,10 +4255,16 @@ class AbortBatchTest(_Base):
         self.assertFalse(c.done.is_set())
 
     def test_cancel_batch_returns_the_inflight_slot(self):
-        image_jobs.enqueue(None, None, {"1": {}}, skill="krea2", batch="comic")
-        self.assertEqual(image_jobs.inflight_count(None, None), 1)
+        # 2026-11-24：无名主（漫画台 / 跑图台）的会话键改成每次入队现生成，
+        # `inflight_count(None, None)` 按约定恒返回 0（见 jobs.inflight_count）。
+        # 名额有没有还回去，直接看通道里的在途表——那才是减回去的那份账。
+        job, _ = image_jobs.enqueue(None, None, {"1": {}}, skill="krea2",
+                                    batch="comic")
+        chan = image_jobs._channel_of("krea2")
+        self.assertEqual(chan.per_session.get(job.lock_key), 1)
         image_jobs.cancel_batch("comic")
-        self.assertEqual(image_jobs.inflight_count(None, None), 0)
+        self.assertNotIn(chan.per_session.get(job.lock_key), (1, 2),
+                         "摘掉之后名额要还回去")
 
     def test_running_batch_finds_the_taken_job(self):
         """正在跑的那张已经不在队列里（worker 取进了 running），摘不到——

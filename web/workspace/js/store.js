@@ -133,6 +133,27 @@
       });
   }
 
+  /* 改服务端存档里的某一条（按 `job` 认人）。失败不重试、不提示：它只影响
+     「下次换设备读回来时这条显示成什么」，改不动也不该拦用户出图。
+
+     为什么需要它：push 只追加，一条记录写上去就不会再变。出图卡片从
+     「排队中…」变成「已出图 / 这张没了」时，服务端那份还停在旧状态，
+     换设备登录读回来又是一张假卡（2026-11-24 用户报的「假排队」）。 */
+  function patch(rec, fields) {
+    var job = String((rec && rec.job) || "").trim();
+    if (!job) return Promise.resolve(null);
+    var body = { job: job };
+    var f = fields || {};
+    Object.keys(f).forEach(function (k) { body[k] = f[k]; });
+    return fetch(API, {
+      method: "PATCH",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; });
+  }
+
   /* 退出登录：本地清掉。服务端那份**不删**——它属于这个 QQ 号，换台设备
      登录还得能看见（用户 2026-11-24 的要求）。共享设备上的隔离由服务端
      按登录态分档保证，不靠清本地。 */
@@ -147,6 +168,7 @@
     clear: clear,
     pull: pull,
     push: push,
+    patch: patch,
     KEY: KEY
   };
 })(window);

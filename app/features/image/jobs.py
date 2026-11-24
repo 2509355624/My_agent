@@ -849,8 +849,21 @@ class Job:
         return self.entry
 
 
+# 无名主（各台自助提交）每次入队的流水号，只给 `_key` 拼唯一尾巴用。
+# 用列表装是为了让 `_key` 直接原地 +1，不必再传一个「刚才那个序号」进来。
+_LOCAL_SEQ = [0]
+
+
 def _key(target, target_id, who=""):
     """限流用的会话键：(target, target_id)。
+
+    `target` 为空（`enqueue(None, None, ...)`）时**每次入队都算一个新的主人**
+    （2026-11-24 修，与 MAX_INFLIGHT=1 配套）。从前空 target 一律拼成键
+    `("", "")`，全机共用一个名额：跑图台、漫画台、MOSS 台提交时都不带会话，
+    于是一张漫画正在画，跑图台点发送就被判成「你已经有一张在画了」；
+    用户看到的是 5174 闲着自己点不动图，排队中/失败来回跳。
+    名额的**本意**是「一个人别一口气推一堆」，而机器自己排的活没有「人」可言，
+    真正的总闸是 `max_queue` / `max_heavy`，那两条不受影响。
 
     `who` 是本轮说话的 QQ 号，**只有群聊要传**（2026-11-24）：群聊里
     `target_id` 是群号，全群共用一把锁，于是「A 在画图，B 就被拒」——
@@ -867,6 +880,10 @@ def _key(target, target_id, who=""):
     tid = str(target_id or "")
     if who and str(target) == "group":
         tid = "%s:%s" % (tid, who)
+    elif not str(target or ""):
+        # 无名主：拿流水号当唯一尾巴（`_LOCAL_SEQ`，只增不减）。每次入队
+        # 都不同，所以既不跟真实会话键撞、也不会被上一张占着。
+        tid = "#%d" % _LOCAL_SEQ[0]
     return (str(target or ""), tid)
 
 
@@ -902,7 +919,13 @@ def inflight_count(target, target_id, who=""):
 
     `who` 同 `_key`（2026-11-24）：群聊按人算名额，问「这个人」就得带上他
     的号，否则数出来的是整个群的。
+
+    空 target 在这里一律按 0 算（2026-11-24）：无名主的键是每次入队现生成的
+    `("", "#N")`，事后拿 `("", "")` 去问一个都对不上，会永远数出 0 张。
+    各台自助提交本来就该由 `max_queue` / `max_heavy` 管，不归这条。
     """
+    if not str(target or ""):
+        return 0
     key = _key(target, target_id, who)
     with _lock:
         return sum(c.per_session.get(key, 0) for c in (_COMFY, _NAI))
@@ -1330,6 +1353,8 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
     # 私聊/网页取到的 who 或者为空、或者拼不进去（见 `_key`），行为不变。
     from app.features.qq import api as qq_api
     who = qq_api.current_sender_uin() if str(target) == "group" else ""
+    # 无名主（各台自助提交）用流水号当唯一尾巴，见 `_key`。
+    _LOCAL_SEQ[0] += 1
     key = _key(target, target_id, who)
     chan = _channel_of(skill)
     weight = skill_priority(skill)
