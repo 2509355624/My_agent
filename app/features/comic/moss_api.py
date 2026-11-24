@@ -35,6 +35,7 @@ Exception——线程里必须 `except BaseException`，否则失败是静默的
 """
 
 import json
+import logging
 import os
 import re
 import threading
@@ -54,6 +55,7 @@ from app.core.skills import load_workflow
 from app.tools.normal.generate_image import apply_prompt_placeholders
 
 bp = Blueprint("moss_api", __name__)
+log = logging.getLogger(__name__)
 
 # 任务根目录钉死绝对路径：Flask 的启动 cwd 可能不是项目根。
 STATE_ROOT = os.path.join(BASE_DIR, "state", "moss_comic")
@@ -232,6 +234,19 @@ def _load_state(d):
     return _read_json(_state_path(d), {})
 
 
+def _rel_exists(rel):
+    """state 里记的相对路径是否真的还在磁盘上。
+
+    只认「路径 + 文件存在」两件事：图被手动清掉 / output 被清空后，state
+    还写着 done，这时候既有 url 也打不开，又要按没画过处理重新排。
+    """
+    if not rel:
+        return False
+    full = rel if os.path.isabs(rel) else os.path.join(
+        COMFYUI_OUTPUT_DIR or "", rel.replace("/", os.sep))
+    return bool(full) and os.path.isfile(full)
+
+
 def _set_page(d, n, **kw):
     with _STATE_LOCK:
         st = _read_json(_state_path(d), {})
@@ -346,6 +361,12 @@ def _payload(d, spec=None, prompts=None):
         s = st.get(str(n)) or {}
         rel = s.get("file") or legacy.get(int(n)) or ""
         status = s.get("status") or ("done" if rel else "pending")
+        # 「有图就是已出图」（2026-11-24 用户：「第一页已经画过的显示准备中，
+        # 这些标识必须解决」）。单页终止 / 整批终止会把**已经有图的页**也写成
+        # canceled，那样页面上就出现「已终止」的徽标配一张完好的图，或者刷新后
+        # 当作没画过又排一次。图还在磁盘上就是画过的，状态以图为准。
+        if rel and _rel_exists(rel):
+            status = "done"
         item = dict(page)
         item.update({
             "prompt": prompts.get(str(n), ""),
@@ -763,10 +784,19 @@ def api_moss_abort_page():
         log.warning("moss 第 %s 页：掐 image_jobs 里那张失败", n, exc_info=True)
     with _RUN_LOCK:
         _PAGE_STOP.setdefault(d, set()).add(n)
-    _set_page(d, n, status="canceled", error="用户终止了这一页",
-              rev=int(time.time()))
-    log.info("moss 任务 %s：终止第 %s 页（队列命中=%s）",
-             os.path.basename(d), n, hit)
+    # 已经有图的页：这一页本来就不用「停」，图也不该被标成终止（2026-11-24）。
+    # 队列里掐掉是必要的（可能残留上一批的同页号条目），但状态保持 done，
+    # 不覆盖 file / rev——否则页面上会出现「已终止」的徽标配一张好图。
+    has_img = _rel_exists(((_load_state(d).get("pages") or {}).get(str(n)) or {})
+                          .get("file"))
+    if not has_img:
+        _set_page(d, n, status="canceled", error="用户终止了这一页",
+                  rev=int(time.time()))
+    log.info("moss 任务 %s：终止第 %s 页（队列命中=%s，已有图=%s）",
+             os.path.basename(d), n, hit, has_img)
+    if has_img:
+        return jsonify({"ok": True, "page": n, "hit": hit, "keep": True,
+                        "message": "这一页已经画好了，不用停"})
     return jsonify({"ok": True, "page": n, "hit": hit,
                     "message": "这一页已终止，后面的照画"} if hit else
                    {"ok": True, "page": n, "hit": False,
@@ -805,6 +835,13 @@ def api_moss_pages_state():
         rec = st.get(str(n)) or {}
         phase = ""
         ahead = None
+        if _rel_exists(rec.get("file")):
+            # 已经有图 = 这一页画完了（2026-11-24）。队列里可能还残留着上一批
+            # 同页号的旧条目，不能拿它去盖「已完成」——那正是用户看到的
+            # 「第一页画过了还写准备中」。
+            out[str(n)] = {"phase": "done", "ahead": None,
+                           "error": "", "secs": rec.get("secs")}
+            continue
         if tag in running:
             phase, ahead = "submit", 0
             pid = running[tag].get("pid")
@@ -887,11 +924,7 @@ def api_moss_render():
         todo = []
         for n in nums:
             s = st.get(str(n)) or {}
-            rel = s.get("file") or ""
-            full = "" if not rel else (rel if os.path.isabs(rel) else os.path.join(
-                COMFYUI_OUTPUT_DIR or "", rel.replace("/", os.sep)))
-            # 图还在磁盘上才算画过：文件被清掉的话重跑是应该的
-            if s.get("status") == "done" and full and os.path.isfile(full):
+            if _rel_exists(s.get("file")):
                 skipped.append(n)
             else:
                 todo.append(n)
@@ -924,7 +957,10 @@ def api_moss_render():
 
     with _RUN_LOCK:
         if _RUNNING.get(d):
-            return jsonify({"ok": False, "error": "这个任务正在画，等它画完"}), 409
+            cur = _RUNNING[d].get("n")
+            return jsonify({"ok": False, "busy": True, "page": cur,
+                            "error": "这一本已经在画第 %s 页了，这一批跑完再点" %
+                                     (cur if cur else "?")}), 409
         _RUNNING[d] = {"t0": time.time(), "n": nums[0]}
         ev = _ABORT[d] = threading.Event()
 

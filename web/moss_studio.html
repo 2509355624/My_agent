@@ -818,14 +818,18 @@ function patch(p) {
     if (!box) return;
     var badge = box.querySelector('[data-role="badge"]');
     var ph0 = S.phase && S.phase[String(it.n)] ? S.phase[String(it.n)].phase : "";
-    var live = ph0 === "running" ? "画图中…"
+    /* 有图 = 已完成，这一条压过一切阶段（2026-11-24 用户：「第一页已经画过的
+       显示准备中，这些标识必须解决」）。上一批残留的队列条目、ComfyUI 里还没
+       清掉的旧 prompt，都不该让一张已经躺在页面上的图再变成「准备中」。 */
+    var live = it.url ? ""
+             : ph0 === "running" ? "画图中…"
              : ph0 === "submit" ? "准备中…"
              : ph0 === "queued" ? "排队中…"
              : ph0 === "lost" ? "掉队了" : "";
     var label = live || ({ pending: "未出图", running: "画图中…", done: "已完成",
                           error: "失败", canceled: "已终止" }[it.status] || it.status);
     badge.className = "badge b-" + (it.status || "pending") +
-      (ph0 === "lost" ? " b-bad" : "");
+      (ph0 === "lost" && !it.url ? " b-bad" : "");
     badge.textContent = label;
     var seed = box.querySelector('[data-role="seed"]');
     seed.textContent = it.seed ? ("seed " + it.seed + (it.secs ? " · " + it.secs + "s" : "")) : "";
@@ -860,10 +864,12 @@ function patch(p) {
         ph.innerHTML = "还没出图<br>点右上角「出图」";
       }
     }
-    /* 单页「终止」按钮：这一页正在排队或在画时才露出来 */
+    /* 单页「终止」按钮：这一页正在排队或在画时才露出来。已经有图的页不给停
+       ——停它只会把好图标成终止（2026-11-24）。 */
     var stp = box.querySelector('[data-act="stop"]');
     if (stp) {
-      var on = ph0 === "running" || ph0 === "submit" || ph0 === "queued";
+      var on = !it.url &&
+        (ph0 === "running" || ph0 === "submit" || ph0 === "queued");
       stp.style.display = on ? "" : "none";
     }
     var pt = box.querySelector('[data-role="prompt"]');
@@ -1092,7 +1098,18 @@ async function draw(pageNo, reroll) {
   S.aborted = false;
   var r = await api("/api/moss/render", body);
   btns.forEach(function (b) { b.disabled = false; });
-  if (!r.ok) { toast(r.error || "没排上队", true); return; }
+  if (!r.ok) {
+    /* 409 = 这一本已经有一批在跑（2026-11-24）。以前只弹一句错误，用户会以为
+       按钮没生效；这里明说当前跑到哪一页，并把轮询接上，让进度自己刷出来。 */
+    if (r.busy) {
+      toast(r.error || "已经在画了，等这一批跑完");
+      startPoll();
+      refreshStatus();
+      return;
+    }
+    toast(r.error || "没排上队", true);
+    return;
+  }
   S.aborted = false;          // 重新开跑：上一次的「已终止」不带到这一批
   /* 「全部出图」只补没画的：服务端会把已完成的页剔掉，这里如实播报一声，
      免得用户以为整本在重跑（2026-11-24）。 */

@@ -374,5 +374,70 @@ class SkipDoneTest(_Base):
         self.assertIn(1, got)
 
 
+class PageLabelTest(_Base):
+    """每页标识只能有一个真相：有图 = 已完成（2026-11-24）。
+
+    用户报「第一页已经画过的显示准备中，这些标识必须解决」。根因有三层：
+    ① 单页终止接口里用了未定义的 `log`，每次 500，页没停成；
+    ② 终止会把已经有图的页也写成 canceled，徽标和图片打架；
+    ③ pages_state 拿队列里的旧条目盖掉「已完成」。
+    """
+
+    def _mk(self):
+        name, d = self._mk_task()
+        os.makedirs(os.path.join(moss_api.COMFYUI_OUTPUT_DIR, "web", "moss漫画",
+                                 name, "moss50"), exist_ok=True)
+        rel = "web/moss漫画/%s/moss50/1.png" % name
+        full = os.path.join(moss_api.COMFYUI_OUTPUT_DIR, rel.replace("/", os.sep))
+        with open(full, "wb") as fh:
+            fh.write(b"\x89PNG")
+        return name, d, rel
+
+    def test_done_page_with_file_reports_done_even_if_canceled(self):
+        name, d, rel = self._mk()
+        moss_api._set_page(d, 1, status="canceled", error="用户终止", file=rel)
+        out = self.c.get("/api/moss/status?task=%s" % name).get_json()
+        page = out["pages"][0]
+        self.assertEqual(page["status"], "done")
+        self.assertTrue(page["url"])
+
+    def test_pages_state_says_done_not_queued_for_drawn_page(self):
+        """队列里残留同页号的旧条目，也不能把已出图的页说成排队/准备中。"""
+        name, d, rel = self._mk()
+        moss_api._set_page(d, 1, status="done", file=rel)
+        fake = {"running": None, "queued": [{"tag": "%s#1" % name, "ahead": 2}]}
+        with mock.patch.object(moss_api.image_jobs, "snapshot", return_value=fake):
+            out = self.c.get("/api/moss/pages_state?task=%s" % name).get_json()
+        self.assertEqual(out["pages"]["1"]["phase"], "done")
+
+    def test_abort_page_succeeds_and_keeps_image(self):
+        """单页终止接口不能 500（之前 `log` 未定义直接炸）。"""
+        name, d, rel = self._mk()
+        moss_api._set_page(d, 1, status="done", file=rel, seed=7)
+        r = self.c.post("/api/moss/abort_page", json={"task": name, "page": 1})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["ok"])
+        self.assertTrue(r.get_json().get("keep"))
+        st = moss_api._load_state(d)["pages"]["1"]
+        self.assertEqual(st["file"], rel)             # 图没被抹掉
+        self.assertEqual(st["status"], "done")        # 状态没被写坏
+
+    def test_abort_page_marks_canceled_when_no_image(self):
+        name, d, _rel = self._mk()
+        r = self.c.post("/api/moss/abort_page", json={"task": name, "page": 1})
+        self.assertEqual(r.status_code, 200)
+        st = moss_api._load_state(d)["pages"]["1"]
+        self.assertEqual(st["status"], "canceled")
+
+    def test_render_busy_reports_page(self):
+        name, d, _rel = self._mk()
+        with mock.patch.object(moss_api, "_RUNNING", {d: {"t0": 0, "n": 3}}):
+            r = self.c.post("/api/moss/render", json={"task": name})
+        self.assertEqual(r.status_code, 409)
+        body = r.get_json()
+        self.assertTrue(body["busy"])
+        self.assertEqual(body["page"], 3)
+
+
 if __name__ == "__main__":
     unittest.main()
