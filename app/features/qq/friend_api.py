@@ -64,7 +64,11 @@ bp = Blueprint("friend", __name__)
 # 只开这一条渠道（用户 2026-10-30：「暴露在公网的就只有这个 moss 预设网页」）
 SKILL = "moss-qunyou"
 
-PER_INFLIGHT = 2            # 每人在途上限
+# 每人在途上限（2026-11-24 用户拍板 2 → 1）：和 `image_jobs.MAX_INFLIGHT`
+# 一个口径——串行队列下一个人占两个位，后面的人就多等一张（moss 中位 72 秒）。
+# 这里比 jobs 那道闸更早拒，所以两边必须同值，否则群友会先被这里放过、再被
+# jobs 拒，看到的是「排上了」然后没图。
+PER_INFLIGHT = 1            # 每人在途上限
 ALL_INFLIGHT = 6            # 群友合计在途上限
 GALLERY_CAP = 1 << 30       # 图库总量 1GB，超了删最老
 # 群友页提示词上限（2026-10-30 按用户要求 2000 → 20000）。
@@ -327,7 +331,9 @@ def api_submit():
         mine, total = _inflight(qq)
         if mine >= PER_INFLIGHT:
             return jsonify({"ok": False,
-                            "error": "你还有 %d 张没画完，等一等" % mine}), 429
+                            "error": ("你上一张还在画，等它出来再点"
+                                      if mine <= 1 else
+                                      "你还有 %d 张没画完，等一等" % mine)}), 429
         if total >= ALL_INFLIGHT:
             return jsonify({"ok": False,
                             "error": "现在人有点多（%d 张在排），过会儿再来"

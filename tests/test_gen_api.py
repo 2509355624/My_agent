@@ -225,19 +225,25 @@ class SubmitTest(unittest.TestCase):
         self.assertIsNone(r.get_json()["job"]["steps"])
 
     def test_active_cap_rejects_sixth(self):
-        """在途满 5 张时第 6 张被拒（image_jobs 每会话在途也是 5，话术要先说清）。"""
+        """在途满上限时再提交一张被拒，且话术说得清「上一张还在画」。
+
+        2026-11-24 上限 5 → 1：一次只跑一张，所以第一张成功、第二张就该被拒。
+        条数跟着 `_MAX_ACTIVE` 走，改常量时不用再改这个文件。
+        """
         gate = threading.Event()
 
         def _block(job):
             gate.wait(5)
 
+        cap = gen_api._MAX_ACTIVE
         with mock.patch.object(gen_api, "_run", _block):
-            for _ in range(5):
+            for _ in range(cap):
                 self.assertEqual(self._submit().status_code, 200)
             r = self._submit()
             self.assertEqual(r.status_code, 400)
-            self.assertIn("等一张再发", r.get_json()["error"])
-            gate.set()      # 放 5 条占位线程退场，别留挂在测试进程里
+            err = r.get_json()["error"]
+            self.assertIn("在画" if cap <= 1 else "等一张再发", err)
+            gate.set()      # 放占位线程退场，别留挂在测试进程里
 
 
 class CancelTest(unittest.TestCase):

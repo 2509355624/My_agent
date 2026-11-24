@@ -65,7 +65,10 @@ _session.trust_env = False
 # 刷新页面丢掉进行中任务是可接受的（图还在队列里跑，账本里会出现）。
 _JOBS = {}
 _JOBS_LOCK = threading.Lock()
-_MAX_ACTIVE = 5          # 本台同时在跑/排队的上限（image_jobs 每会话在途也是 5）
+# 本台同时在跑/排队的上限（2026-11-24 起跟 `image_jobs.MAX_INFLIGHT` 同值）：
+# 这里是**更早**的那道闸（前端点下去就拒，不让它进队列再被拒），所以两边
+# 不同值会出现「本台说排上了、队列说你还有一张在画」的矛盾提示。改动时一起改。
+_MAX_ACTIVE = 1
 _JOB_KEEP = 40           # 内存里最多留几个任务记录
 _LORA_SAVE_LOCK = threading.Lock()   # 「存为默认」是改模板文件，串行化
 # 提示词长度上限（2026-10-30 由 4000 提到 10 万）：这个台是给长稿用的——
@@ -725,9 +728,13 @@ def api_submit():
     with _JOBS_LOCK:
         active = sum(1 for j in _JOBS.values() if j["state"] == "queued")
         if active >= _MAX_ACTIVE:
+            # 上限是 1 时这句话就是「你上一张还在画」，直接这么说，别让它
+            # 读成「还有 1 张」（那个「1」会让人以为还能再塞）。
             return jsonify({"ok": False,
-                            "error": "已经在跑/排队的还有 %d 张，等一张再发"
-                                     % active}), 400
+                            "error": ("上一张还在画，等它出来再发"
+                                      if active <= 1 else
+                                      "已经在跑/排队的还有 %d 张，等一张再发"
+                                      % active)}), 400
         job = {"id": _new_job_id(), "skill": skill, "prompt": prompt,
                "seed": (None if skill in image_jobs.NAI_SKILLS
                         else random.randint(0, 2 ** 31 - 1)),

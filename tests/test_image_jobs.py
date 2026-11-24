@@ -435,8 +435,9 @@ class QueueTest(_Base):
         self.assertEqual(image_jobs.queue_depth(), 3)
 
     def test_ahead_counts_the_running_one(self):
-        a, _ = self._enqueue()
-        b, _ = self._enqueue()
+        # 两个不同会话：同一会话上限是 1（2026-11-24），排不进第二张。
+        a, _ = self._enqueue(("group", "9"))
+        b, _ = self._enqueue(("group", "8"))
         self.assertEqual(image_jobs.ahead_of(a), 0)
         self.assertEqual(image_jobs.ahead_of(b), 1)
         image_jobs._take_nowait()          # 相当于 worker 开始跑 a
@@ -458,39 +459,43 @@ class QueueTest(_Base):
         self.assertEqual(image_jobs.nai_depth(), (1, 0))
 
     def test_per_session_limit(self):
+        """每个会话只能占 `MAX_INFLIGHT` 个位，超了拒收并给出理由。
+
+        2026-11-24 上限 5 → 1：一次只能排一张。断言不写死张数，跟着常量走。
+        """
         for _ in range(image_jobs.MAX_INFLIGHT):
             job, reason = self._enqueue()
             self.assertIsNone(reason)
             self.assertIsNotNone(job)
         job, reason = self._enqueue()
         self.assertIsNone(job)
-        self.assertIn("排着", reason)
+        self.assertIn("在画" if image_jobs.MAX_INFLIGHT <= 1 else "排着", reason)
 
-    def test_one_session_can_queue_five_in_a_row(self):
-        """一个会话能连排 5 张。
+    def test_one_session_only_holds_one_slot(self):
+        """2026-11-24 用户拍板：一个人一次只能排一张图。
 
-        2026-10-03 用户提的：原来在途上限是 2，第 3 张起被拒收，而拒收理由里
-        明写着「别跟对方提这张图，当没画过」——所以对方看到的是「连点 5 张只
-        来 2 张」，连句解释都没有。
-
-        ⚠️ 这条**故意写死 5**，不引用 `MAX_INFLIGHT`：上面那条符号化的用例在
-        常量被改回 2 时一样会绿，而它抓不住的就是这种「退回旧值」的回归。想
-        调这个数就把这条数字一起改——它就是需求的记录。
-        """
-        for i in range(5):
-            job, reason = self._enqueue(wf={"1": {"p": i}})
-            self.assertIsNone(reason, "第 %d 张不该被拒" % (i + 1))
-            self.assertIsNotNone(job)
-        job, reason = self._enqueue(wf={"1": {"p": "over"}})
-        self.assertIsNone(job)
-        self.assertIn("排着", reason)
+        串行队列下连排 5 张＝让后面四个人白等 5 张（moss 实测中位 72 秒一张）。
+        这条**故意写死 1**，不引用 `MAX_INFLIGHT`——常量被悄悄改回 5 时上面
+        那条符号化的用例照样绿，只有这条能抓住「又变成一人占满队列」。
+        改需求就一起改这里。"""
+        job, reason = self._enqueue(wf={"1": {"p": 1}})
+        self.assertIsNone(reason, "第一张不该被拒")
+        second, reason = self._enqueue(wf={"1": {"p": 2}})
+        self.assertIsNone(second, "第二张必须被拒：上一张还没跑完")
+        self.assertIn("在画", reason)
+        # 跑完一张，名额立刻还回来，能排第二张。
+        image_jobs._take_nowait()
+        image_jobs._finish(job)
+        again, reason = self._enqueue(wf={"1": {"p": 3}})
+        self.assertIsNone(reason, "上一张跑完就该能排下一张")
+        self.assertIsNotNone(again)
 
     def test_global_queue_has_room_for_several_sessions(self):
-        """全局队列要容得下好几个会话各排满——一个会话最多占 1/4。
+        """全局队列要容得下好几个会话各排满。
 
-        5（MAX_INFLIGHT）× 4 = 20（MAX_QUEUE）。这条守的是 2026-10-03 那个
-        耦合：把每会话上限提到 5 却留着全局 10 的话，**两个活跃群就能把队列
-        占满**，第三个群一张都排不进来，直接收到「排队的人太多」。
+        2026-10-03：5（MAX_INFLIGHT）× 4 = 20（MAX_QUEUE），守的是「两个活跃群
+        别把队列占满」。2026-11-24 上限改成 1 之后这条自动满足（20 ≥ 4），
+        等式变成「20 个会话各一张」——比原来宽松得多，所以照原样保留。
         """
         self.assertGreaterEqual(image_jobs.MAX_QUEUE,
                                 image_jobs.MAX_INFLIGHT * 4,
@@ -754,9 +759,11 @@ class QueuePriorityTest(_Base):
 
         qwen 先入队却排在后面，按入队顺序数就会报成 0 —— 模型于是跟对方说
         「已经在画了」，而实际前面还压着一张 anima。
+
+        两个**不同会话**：同一会话上限是 1（2026-11-24），排不进第二张。
         """
-        self._enqueue(skill="hd_3_soft")
-        heavy, _ = self._enqueue(skill="qwen_image_v1")
+        self._enqueue(("group", "9"), skill="hd_3_soft")
+        heavy, _ = self._enqueue(("group", "8"), skill="qwen_image_v1")
         self.assertEqual(image_jobs.ahead_of(heavy), 1)
 
     def test_no_heavy_ceiling_anymore(self):
@@ -1465,15 +1472,20 @@ class GenerateImageSplitTest(unittest.TestCase):
     def test_qq_says_how_many_are_ahead(self):
         """排队时要告诉模型前面还有几张，好让它跟对方交代一句。
 
-        第二张必须换个词：**同样的词会被查重拦下**（见
-        test_the_same_request_while_in_flight_is_not_submitted_twice），
-        那是另一条规则，这里要测的是排队提示本身。
+        **两个不同会话**（2026-11-24 起同一会话上限是 1，排不进第二张）：
+        第一张占住队首，第二张在别的会话里排进来，报给它的应是「前面还有 1 张」。
+        第二张仍换个词，免得被查重规则先拦下（那是另一条规则，这里要测的是
+        排队提示本身）。
         """
         with mock.patch.object(qq_api, "current_context",
                                return_value=("group", "9")), \
                 mock.patch.object(image_jobs, "wait_done",
                                   return_value={"outputs": {}}):
             generate_image.tool["function"]("a cat")        # 先占住队首
+        with mock.patch.object(qq_api, "current_context",
+                               return_value=("group", "8")), \
+                mock.patch.object(image_jobs, "wait_done",
+                                  return_value={"outputs": {}}):
             out = generate_image.tool["function"]("a dog")  # 这一张排在后面
         self.assertIn("前面还有 1 张", out)
 
@@ -1540,7 +1552,8 @@ class GenerateImageSplitTest(unittest.TestCase):
                 generate_image.tool["function"]("cat %d" % i)
             out = generate_image.tool["function"]("cat over")   # 被拒
             image_jobs._drain()
-        self.assertIn("排着", out)
+        # 上限=1 时话术是「你已经有一张在画了」，调大之后才回到「排着 N 张」。
+        self.assertIn("在画" if image_jobs.MAX_INFLIGHT <= 1 else "排着", out)
         # 只有真正入了队的那几张被送进 ComfyUI
         self.assertEqual(qp.call_count, image_jobs.MAX_INFLIGHT)
 
@@ -1692,7 +1705,11 @@ class SeedSubmissionTest(unittest.TestCase):
 
     def test_pinned_seed_splits_the_duplicate_check(self):
         """点名的种子进意图指纹：同种子同提示词提交两遍算重复（那张就在队里），
-        换个种子则是「真要两张」，照排。"""
+        换个种子则是「真要两张」，照排。
+
+        2026-11-24 起同一会话上限是 1，所以「换个种子照排」这条要用**另一个
+        会话**验证——限流和查重是两道独立的闸，这里测的是查重那道。
+        """
         with mock.patch.object(image_jobs, "wait_done",
                                return_value={"outputs": {}}), \
                 mock.patch.object(qq_api, "current_context",
@@ -1700,10 +1717,17 @@ class SeedSubmissionTest(unittest.TestCase):
             generate_image.load_skill.return_value = {"workflow": self._anima()}
             generate_image.tool["function"]("a cat", seed=1)
             same = generate_image.tool["function"]("a cat", seed=1)
+        with mock.patch.object(image_jobs, "wait_done",
+                               return_value={"outputs": {}}), \
+                mock.patch.object(qq_api, "current_context",
+                                  return_value=("group", "8")):
+            generate_image.load_skill.return_value = {"workflow": self._anima()}
             other = generate_image.tool["function"]("a cat", seed=2)
         self.assertIn("没有执行", same)
         self.assertNotIn("没有执行", other)
-        self.assertEqual(image_jobs.inflight_count("group", "9"), 2)
+        # 两个会话各一张：查重没拦、限流也没拦。
+        self.assertEqual(image_jobs.inflight_count("group", "9"), 1)
+        self.assertEqual(image_jobs.inflight_count("group", "8"), 1)
 
     def test_random_seed_does_not_split_the_duplicate_check(self):
         """**没点名时的随机数绝不进指纹**：否则模型两次「画一只猫」会被算成两个
@@ -4214,10 +4238,12 @@ class AbortBatchTest(_Base):
     """
 
     def test_cancel_batch_drops_only_that_batch(self):
+        # 同一会话要同时在途两张，只有优先票走得通（上限是 1，见 MAX_INFLIGHT）：
+        # 独占批量「一次推一整批」正是这么入队的，这条用例要的就是那个形态。
         a, _ = image_jobs.enqueue(None, None, {"1": {}}, skill="krea2",
-                                  batch="comic")
+                                  batch="comic", priority=True)
         b, _ = image_jobs.enqueue(None, None, {"1": {}}, skill="krea2",
-                                  batch="comic")
+                                  batch="comic", priority=True)
         c, _ = image_jobs.enqueue("group", "9", {"1": {}}, skill="krea2")
         self.assertEqual(image_jobs.cancel_batch("comic"), 2)
         # 漫画那两张没了；群里那张一根汗毛都没动

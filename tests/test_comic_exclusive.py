@@ -94,7 +94,8 @@ class EnqueuePriorityTest(unittest.TestCase):
             self.assertIsNone(reason)
         over, reason = image_jobs.enqueue(ctx[0], ctx[1], {"1": {}}, None)
         self.assertIsNone(over)
-        self.assertIn("排着", reason)
+        # 上限=1 时话术是「你已经有一张在画了」，调大之后才回到「排着 N 张」。
+        self.assertIn("在画" if image_jobs.MAX_INFLIGHT <= 1 else "排着", reason)
         prio, reason = image_jobs.enqueue(ctx[0], ctx[1], {"1": {}}, None,
                                           priority=True)
         self.assertIsNone(reason, "优先票不该被每会话上限拒掉")
