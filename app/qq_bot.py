@@ -1446,7 +1446,8 @@ class SessionRunner:
         if not borrowed:
             try:
                 jobs_line = image_jobs.recent_line(self.target, self.target_id,
-                                                   IMAGE_RECALL_COUNT)
+                                                   IMAGE_RECALL_COUNT,
+                                                   str(batch[0].get("sender_uin") or ""))
                 if jobs_line:
                     extra_context = (extra_context + "\n\n" + jobs_line
                                      if extra_context else jobs_line)

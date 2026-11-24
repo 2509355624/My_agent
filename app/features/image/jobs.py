@@ -717,9 +717,15 @@ class Job:
                  nai_i2i=None, tag=None, prompt=None, intent=None, seed=None,
                  chan=None, landscape=False, quiet=False, batch=None,
                  out_dir=None, comfy_down=False, reply_to="", at_user=None,
-                 i2i_src=None, i2i_name="", anima_draw=None):
+                 i2i_src=None, i2i_name="", anima_draw=None, lock_key=None):
         self.target = target
         self.target_id = target_id
+        # 限流名额的键（2026-11-24）。群聊里是 `(group, "群号:用户号")`，
+        # 私聊/网页就是 `(target, target_id)`。**必须入队时算好存下来**：
+        # 出队（`_finish`）要在 worker 线程里减回去，那时候 qq_api 的线程
+        # 本地变量早不是本轮了，现算会取不到说话人 → 减错锁 → 名额永久泄漏。
+        # None = 手工构造的 Job（测试），按 `_key(target, target_id)` 现算。
+        self.lock_key = lock_key
         self.workflow = workflow
         # 生图渠道：决定进哪条通道（见 _channel_of）、要不要先 /free、权重多少
         self.skill = skill
@@ -843,18 +849,61 @@ class Job:
         return self.entry
 
 
-def _key(target, target_id):
-    return (str(target or ""), str(target_id or ""))
+def _key(target, target_id, who=""):
+    """限流用的会话键：(target, target_id)。
+
+    `who` 是本轮说话的 QQ 号，**只有群聊要传**（2026-11-24）：群聊里
+    `target_id` 是群号，全群共用一把锁，于是「A 在画图，B 就被拒」——
+    实测群里一分钟内连着挡掉两个人。私聊的 `target_id` 本来就是用户号，
+    一人一把锁，所以 `who` 传了也不拼（私聊里 target_id 已经唯一）。
+
+    拼的是 `群号:用户号` 而不是换个 key 类型：`per_session` 的 key 一直是
+    二元组，出队（`_finish`）要用同一个字符串原样减回去，拼进 target_id
+    那一格最省事，也方便日志里直接看出「哪个群的谁」。
+
+    拼出来的值**只给限流用**：`job.target_id` 保持原样，发图还发到群里
+    （见 `_send_image`）。
+    """
+    tid = str(target_id or "")
+    if who and str(target) == "group":
+        tid = "%s:%s" % (tid, who)
+    return (str(target or ""), tid)
 
 
-def inflight_count(target, target_id):
+def _job_key(job):
+    """这张图占的是哪个名额。入队时存进 `Job.lock_key`，出队/中断按原样减回去。
+
+    手工构造的 Job（测试里那一堆 `Job(...)`）没有 lock_key，退回按
+    `(target, target_id)` 现算——它们本来也不带说话人。
+    """
+    key = getattr(job, "lock_key", None)
+    return key if key is not None else _key(job.target, job.target_id)
+
+
+def _recent_key(rec):
+    """`_recent` 里一条记录占的是哪个名额。
+
+    新记录带 `lock`（入队时算好的那条）；老记录（进程重启前写进去的）没有，
+    退回按 target/target_id 现算——它们本来就是群号，只影响升级那一刻的
+    历史，不影响之后按人算。
+    """
+    lock = rec.get("lock")
+    if lock is not None:
+        return lock
+    return _key(rec.get("target"), rec.get("target_id"))
+
+
+def inflight_count(target, target_id, who=""):
     """这个会话还有几张在途（含排队中）——**两条通道一起算**。
 
     模型看到的是「这个人还有几张图在路上」，跟他点的是本地还是云端无关：
     上面那句「对方说没收到图时先想这几张」（见 agents.private_quota_line）
     数漏一张就会让它把「在跑的 NAI 图」当成没画过，再提交一遍。
+
+    `who` 同 `_key`（2026-11-24）：群聊按人算名额，问「这个人」就得带上他
+    的号，否则数出来的是整个群的。
     """
-    key = _key(target, target_id)
+    key = _key(target, target_id, who)
     with _lock:
         return sum(c.per_session.get(key, 0) for c in (_COMFY, _NAI))
 
@@ -929,7 +978,7 @@ def cancel_tag(tag, reason="用户中断了这张"):
                     keep.append(job)
                 if len(keep) != len(chan.queue):
                     chan.queue = keep
-                    key = _key(hit_job.target, hit_job.target_id)
+                    key = _job_key(hit_job)
                     n = chan.per_session.get(key, 0) - 1
                     if n > 0:
                         chan.per_session[key] = n
@@ -976,7 +1025,7 @@ def cancel_batch(batch="comic", reason="用户中断了整批渲染"):
             if len(keep) != len(chan.queue):
                 chan.queue = keep
         for chan, job in hit:
-            key = _key(job.target, job.target_id)
+            key = _job_key(job)
             n = chan.per_session.get(key, 0) - 1
             if n > 0:
                 chan.per_session[key] = n
@@ -1012,7 +1061,7 @@ def nai_depth():
         return len(_NAI.running), len(_NAI.queue)
 
 
-def recent_outcomes(target, target_id, limit=3):
+def recent_outcomes(target, target_id, limit=3, who=""):
     """本会话最近 limit 张图的结局（旧的在前，最新的在后）。
 
     只认「本会话」的：别的群/私聊画了什么跟当前对话无关，混进来只会让模型
@@ -1020,29 +1069,29 @@ def recent_outcomes(target, target_id, limit=3):
     """
     if target is None:
         return []
-    key = _key(target, target_id)
+    key = _key(target, target_id, who)
     with _lock:
         picked = [r for r in _recent
-                  if _key(r["target"], r["target_id"]) == key]
+                  if _recent_key(r) == key]
     if limit and limit > 0:
         picked = picked[-limit:]
     return picked
 
 
-def _inflight_of(target, target_id, limit=3):
+def _inflight_of(target, target_id, limit=3, who=""):
     """本会话**还没出图**的任务（正在跑 + 排队中），按入队顺序，旧的在前。
 
     回执原先只报「已经跑完的」，模型于是分不清「刚提交、还在跑」和「早就
     跑完」——它会把上一条已完成当成对方刚发的那张。把在途任务也报出来，
     「这张到底提交过没有」就从推理题变成看得见的事实。
     """
-    key = _key(target, target_id)
+    key = _key(target, target_id, who)
     with _lock:
         items = [(j, "排队中") for c in (_COMFY, _NAI) for j in c.queue
-                 if _key(j.target, j.target_id) == key]
+                 if _job_key(j) == key]
         for c in (_COMFY, _NAI):
             items += [(j, "正在跑") for j in c.running
-                      if _key(j.target, j.target_id) == key]
+                      if _job_key(j) == key]
     # 按**入队时刻**排，不按 seq：seq 是每条通道各自发号的，跨通道没有可比性。
     items.sort(key=lambda pair: pair[0].created)
     if limit and limit > 0:
@@ -1050,7 +1099,7 @@ def _inflight_of(target, target_id, limit=3):
     return items
 
 
-def recent_line(target, target_id, limit=3):
+def recent_line(target, target_id, limit=3, who=""):
     """把「已完成」和「还没出图」渲染成一段给模型看；两者都没有就返回空串。
 
     为什么需要它（2026-09-29 用户提）：图由 worker 直接发回会话，模型在
@@ -1068,8 +1117,8 @@ def recent_line(target, target_id, limit=3):
     """
     if target is None:
         return ""
-    done = recent_outcomes(target, target_id, limit)
-    doing = _inflight_of(target, target_id, limit)
+    done = recent_outcomes(target, target_id, limit, who)
+    doing = _inflight_of(target, target_id, limit, who)
     if not done and not doing:
         return ""
     lines = ["[最近生图]（只列你在这个会话提交过的，按提交先后，最新在后）"]
@@ -1103,7 +1152,7 @@ def recent_line(target, target_id, limit=3):
 RECENT_DONE_WINDOW = 900.0
 
 
-def recent_activity(target, target_id, within=RECENT_DONE_WINDOW):
+def recent_activity(target, target_id, within=RECENT_DONE_WINDOW, who=""):
     """本会话「还在跑 + 刚出图」的条数。给 agent 的生图空头承诺守卫用。
 
     那道守卫的判据是「**这一轮**没调 generate_image 却声称在画图」，而
@@ -1118,19 +1167,19 @@ def recent_activity(target, target_id, within=RECENT_DONE_WINDOW):
     """
     if target is None:
         return 0
-    key = _key(target, target_id)
+    key = _key(target, target_id, who)
     now = time.time()
     with _lock:
         n = sum(1 for c in (_COMFY, _NAI)
                 for j in list(c.queue) + c.running
-                if _key(j.target, j.target_id) == key)
+                if _job_key(j) == key)
         n += sum(1 for r in _recent
-                 if _key(r["target"], r["target_id"]) == key
+                 if _recent_key(r) == key
                  and now - (r.get("ts") or 0.0) <= within)
     return n
 
 
-def find_pending_duplicate(target, target_id, intent):
+def find_pending_duplicate(target, target_id, intent, who=""):
     """本会话里「还没出图、意图又完全一样」的任务；没有就返回 None。
 
     只认**在途**的（排队中 / 正在跑）：已经出过图的那张，对方看过之后再点一次
@@ -1140,11 +1189,11 @@ def find_pending_duplicate(target, target_id, intent):
     """
     if target is None or not intent:
         return None
-    key = _key(target, target_id)
+    key = _key(target, target_id, who)
     with _lock:
         for c in (_COMFY, _NAI):
             for j in list(c.queue) + c.running:
-                if _key(j.target, j.target_id) == key and j.intent == intent:
+                if _job_key(j) == key and j.intent == intent:
                     return j
     return None
 
@@ -1274,9 +1323,14 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
 
     out_dir 是**输出目录**（2026-10-18）：不传就按 target 推（群 / 私聊 / 生图页，
     见 app/comfy_out.py）；漫画工作台传 `web/漫画_<任务号>`，因为它入队时才知道
-    任务号。图会落在 `output/<out_dir>/<渠道>/`，与手动在 ComfyUI 终端跑的图分开。
+    任务号。    图会落在 `output/<out_dir>/<渠道>/`，与手动在 ComfyUI 终端跑的图分开。
     """
-    key = _key(target, target_id)
+    # 群聊按人上锁（2026-11-24）：`who` 是本轮说话的 QQ 号，**只在这里取**——
+    # 和 reply_to / 横屏同一个道理，worker 线程里 qq_api 的上下文已经不是本轮。
+    # 私聊/网页取到的 who 或者为空、或者拼不进去（见 `_key`），行为不变。
+    from app.features.qq import api as qq_api
+    who = qq_api.current_sender_uin() if str(target) == "group" else ""
+    key = _key(target, target_id, who)
     chan = _channel_of(skill)
     weight = skill_priority(skill)
     # 横屏（2026-10-07）：判据**只能在这里**算——入队线程就是 qq_bot 的会话
@@ -1328,7 +1382,7 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
                   out_dir=out_dir, comfy_down=comfy_down,
                   reply_to=reply_to, at_user=at_user,
                   i2i_src=i2i_src, i2i_name=i2i_name,
-                  anima_draw=anima_draw)
+                  anima_draw=anima_draw, lock_key=key)
         # 优先票（2026-11-11 漫画台「独占通道」）：worker 拿锁时登记优先票，
         # 排到所有已排队普通票前面（见 comfy_gate.hold 的 priority 说明）。
         # 只影响独木桥顺序，不改变任何出图行为；QQ / 群友路径不传，恒 False。
@@ -2585,7 +2639,7 @@ def _finish(job):
     chan = _channel_of_job(job)
     refund = False
     with _lock:
-        key = _key(job.target, job.target_id)
+        key = _job_key(job)
         n = chan.per_session.get(key, 0) - 1
         if n > 0:
             chan.per_session[key] = n
@@ -2609,6 +2663,9 @@ def _finish(job):
         _recent.append({
             "target": job.target,
             "target_id": job.target_id,
+            # 名额键单独记一份（2026-11-24）：群聊里 target_id 是群号，
+            # 查「这个人最近出了几张」不能拿群号去比。
+            "lock": _job_key(job),
             "skill": job.skill or "",
             "ok": ok,
             "err": (_reason(job.error) if job.error else ""),

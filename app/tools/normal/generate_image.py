@@ -1116,7 +1116,10 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
             except RuntimeError as e:
                 return str(e)
         intent = _intent_key(prompt, skill, lora)
-        if image_jobs.find_pending_duplicate(target, target_id, intent) is not None:
+        # 群聊按人上锁（2026-11-24），口径同 ComfyUI 那条。
+        who = (qq_api.current_sender_uin() or "") if str(target) == "group" else ""
+        if image_jobs.find_pending_duplicate(target, target_id, intent,
+                                             who) is not None:
             log.info("拦下重复生图（NAI）：%s %s 已有一张同参数的图在途",
                      target, target_id)
             return _DUPLICATE_NOTE
@@ -1346,12 +1349,16 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 的线程本地上下文。
     from app.features.qq import api as qq_api
     target, target_id = qq_api.current_context()
+    # 群聊按人上锁（2026-11-24）：说话人的号也得在这里快照，理由同上——
+    # `enqueue` 里能自己取，但查重要在那之前，两边必须是同一个人。
+    who = (qq_api.current_sender_uin() or "") if str(target) == "group" else ""
     # 同一件事还没出图又被提交一遍：不再排第二张。模型这一轮要么是没看到
     # 上一轮的回执（上下文被压缩 / 守卫误判成空头承诺），要么是把「再跑一张」
     # 当成了默认动作——两种都不该真的多出一张图。只在**在途**时拦（见
     # image_jobs.find_pending_duplicate）。
     intent = _intent_key(prompt, skill, lora, seed if seed_pinned else None)
-    if image_jobs.find_pending_duplicate(target, target_id, intent) is not None:
+    if image_jobs.find_pending_duplicate(target, target_id, intent,
+                                         who) is not None:
         log.info("拦下重复生图：%s %s 已有一张同参数的图在途，不再排第二张",
                  target, target_id)
         return _DUPLICATE_NOTE

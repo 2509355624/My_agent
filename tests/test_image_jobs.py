@@ -4587,6 +4587,65 @@ class OrderRefTest(_Base):
         self.assertIsNone(job.at_user)
 
 
+class GroupPerUserLimitTest(_Base):
+    """群聊按「群号 + 用户号」上锁（2026-11-24）。
+
+    起因：群里的 target_id 一直是**群号**，于是全群共用一把锁——A 在画图，
+    B 发一句就被拒。实测 2026-11-24 16:58 一分钟内连着挡掉两个人，日志里
+    是同一句「你已经有一张在画了」。
+
+    私聊的 target_id 本来就是用户号，一人一把，所以私聊行为一个字节都没变。
+    """
+
+    def _bind(self, target, tid, uin):
+        qq_api.bind_context("%s_%s" % (target, tid), target, tid,
+                            message_id="153", sender_uin=uin)
+        self.addCleanup(qq_api.clear_context)
+
+    def test_two_people_in_one_group_do_not_block_each_other(self):
+        self._bind("group", "9", 1001)
+        a, why_a = image_jobs.enqueue("group", "9", {"1": {}}, "hd_3_soft")
+        self.assertIsNone(why_a)
+        # 换个人在同一个群说话：他该有自己的名额
+        self._bind("group", "9", 1002)
+        b, why_b = image_jobs.enqueue("group", "9", {"1": {}}, "hd_3_soft")
+        self.assertIsNone(why_b, "同一个群里的第二个人不该被第一个挡住")
+        self.assertIsNotNone(a)
+        self.assertIsNotNone(b)
+
+    def test_one_person_still_waits_for_his_own_picture(self):
+        """按人上锁 = 同一个人在群里也还是一次一张。"""
+        self._bind("group", "9", 1001)
+        image_jobs.enqueue("group", "9", {"1": {}}, "hd_3_soft")
+        _, why = image_jobs.enqueue("group", "9", {"1": {}}, "hd_3_soft")
+        self.assertIsNotNone(why)
+        self.assertIn("你已经有一张在画了", why)
+
+    def test_private_is_unchanged(self):
+        """私聊本来就是一人一把锁：不同的人各排各的，用同一个 target_id 也不会互相挡。"""
+        image_jobs.enqueue("private", "1001", {"1": {}}, "hd_3_soft")
+        job, why = image_jobs.enqueue("private", "1002", {"1": {}}, "hd_3_soft")
+        self.assertIsNone(why)
+
+    def test_slot_is_returned_under_the_same_key(self):
+        """出队要按入队那把锁减回去，否则名额永久泄漏。"""
+        self._bind("group", "9", 1001)
+        job, _ = image_jobs.enqueue("group", "9", {"1": {}}, "hd_3_soft")
+        self.assertEqual(image_jobs.inflight_count("group", "9", "1001"), 1)
+        image_jobs._finish(job)
+        self.assertEqual(image_jobs.inflight_count("group", "9", "1001"), 0)
+
+    def test_queue_key_carries_the_speaker(self):
+        """钥匙长什么样：群号 + 冒号 + 用户号；私聊原样。"""
+        self._bind("group", "9", 1001)
+        job, _ = image_jobs.enqueue("group", "9", {"1": {}}, "hd_3_soft")
+        self.assertEqual(job.lock_key, ("group", "9:1001"))
+        # 发图还发到群里，target_id 不能被污染
+        self.assertEqual(job.target_id, "9")
+        job2, _ = image_jobs.enqueue("private", "77", {"1": {}}, "hd_3_soft")
+        self.assertEqual(job2.lock_key, ("private", "77"))
+
+
 class I2iSourceQueueTest(unittest.TestCase):
     """垫图的源图跟着任务进队列（2026-10-31 用户拍板）。
 
