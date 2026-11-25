@@ -16,7 +16,11 @@
   var MAX_FAIL = 5;
   var IDLE_MAX = 4;       // 没在跑、也没进展，连续这么多次就收手
 
-  var S = { mode: "img" };
+  /* 模式要记住（2026-11-25 用户：「我退出之后进不去了，没办法再重新进入到漫画台」）。
+     原来只活在内存里：点一下 ✕ 或刷新一下页面就变回「图片生成」，再说话就是在
+     生图，用户找不到回去的路。跟画风 / 渠道一样存 localStorage，下次进来还是它。 */
+  var LS_MODE = "ws_create_mode";
+  var S = { mode: "img", started: [], books: [] };
   var el = {};
 
   function $(id) { return document.getElementById(id); }
@@ -25,8 +29,25 @@
 
   function mode() { return S.mode; }
 
+  /* 「这一本开过没有」：重放存档时用它决定那颗按钮打不打「打开整本」。
+     打开整本 = 压一层 `book` 子页，而子页是押在聊天页上面的——聊天页还没
+     起来就压，等于在空白页上盖一张，✕ 退回去什么都没有。 */
+  function used(task) {
+    if (!task) return false;
+    for (var i = 0; i < S.started.length; i++) {
+      if (S.started[i] === task) return true;
+    }
+    return false;
+  }
+
+  function savedMode() {
+    try { return global.localStorage.getItem(LS_MODE) === "comic" ? "comic" : "img"; }
+    catch (e) { return "img"; }
+  }
+
   function setMode(m, quiet) {
     S.mode = m === "comic" ? "comic" : "img";
+    try { global.localStorage.setItem(LS_MODE, S.mode); } catch (e) { /* 存不下就只活在这次 */ }
     if (!el.tag) return;
     var comic = S.mode === "comic";
     el.tag.hidden = !comic;
@@ -135,6 +156,7 @@
     if (!task) return giveUp(run, "剧本好了但没给出任务号");
     run.task = task;
     run.rec.task = task;
+    if (S.started.indexOf(task) < 0) S.started.push(task);
     run.card.say("剧本好了，正在开画…");
     run.rec.note = "剧本好了，正在开画…";
     push(run);
@@ -342,9 +364,76 @@
     }
   }
 
+  /* 「打开整本」不再直接推子页（2026-11-25 用户：「我点击之后它应该是显示一个
+     卡片的才对，像之前那个跳出来那个图片卡片一样，点卡片之后打开整本」）。
+
+     为什么原来是直接推：`book` 子页是压在聊天页上面的，聊天页里那条漫画卡
+     刚好被盖住——用户点完只看到一页图，退出来才发现「我点过的东西没了」。
+     现在分两步：先在聊天记录里落下**一张书卡**（跟出图卡同一种壳、同一套
+     按钮），点书卡才进整本。书卡进存档，刷新 / 换设备也还在。
+
+     已经贴过就不再贴：同一本书点两次「打开整本」不该攒出两张卡。 */
   function openBook(run) {
     if (!run.task) return;
-    global.WSStack.push("book", { task: run.task, title: run.title || run.task });
+    var task = run.task;
+    if (S.books.indexOf(task) >= 0) { enterBook(task, run.title); return; }
+    var rec = { k: "book", task: task, title: run.title || "",
+                cover: (run.rec.cells || []).filter(Boolean).slice(-1)[0] || "" };
+    global.WSChat.log(rec);
+    drawBook(rec);
+    global.WSChat.scrollBottom();
+  }
+
+  /* 铺一张书卡。**只按记录铺**——openBook 和存档重放共用这一条，
+     这样刷新前后长得一模一样（重放走 archive.js → restoreBook）。 */
+  function drawBook(rec) {
+    if (!rec || !rec.task) return;
+    if (S.books.indexOf(rec.task) < 0) S.books.push(rec.task);
+    var task = rec.task;
+    var card = global.WSChat.card("card-book");
+    card.node.classList.add("is-book");
+    card.say((rec.title || task) + " · 点一下看整本");
+    card.fill();
+    card.body.appendChild(bookCover(rec.cover ? [rec.cover] : [], task));
+    var box = card.acts;
+    box.hidden = false;
+    box.appendChild(btn("read", "看整本", function () { enterBook(task, rec.title); }));
+    card.node.addEventListener("click", function (e) {
+      // 卡面上的图 / 标题都能点进去，只有按钮区自己按自己的走
+      if (e.target.closest(".acts")) return;
+      enterBook(task, rec.title);
+    });
+    return card;
+  }
+
+  function restoreBook(rec) { drawBook(rec); }
+
+  /* 书卡上的封面：用这一本最后一页（画完的那页最有信息量），没有就留空框。
+     只显示一张，不铺九宫格——书卡的作用是「入口」，不是又一份结果。 */
+  function bookCover(cells, task) {
+    var cover = document.createElement("div");
+    cover.className = "bcover";
+    var src = "";
+    for (var i = cells.length - 1; i >= 0; i -= 1) {
+      if (cells[i]) { src = cells[i]; break; }
+    }
+    if (src) {
+      var img = document.createElement("img");
+      img.alt = "封面";
+      img.decoding = "async";
+      img.src = src;
+      cover.appendChild(img);
+    } else {
+      cover.classList.add("empty");
+      cover.textContent = "还没出页";
+    }
+    cover.dataset.task = task;
+    return cover;
+  }
+
+  function enterBook(task, title) {
+    if (!task) return;
+    global.WSStack.push("book", { task: task, title: title || task });
   }
 
   function downloadAll(run) {
@@ -366,6 +455,8 @@
     el.hint = document.querySelector("#chat-empty p");
     var clear = $("mode-clear");
     if (clear) clear.addEventListener("click", function () { setMode("img"); });
+    // 没选过就从头开始；选过漫画就还原（见上面 LS_MODE 的说明）
+    S.mode = savedMode();
     setMode(S.mode, true);
   }
 
@@ -373,8 +464,10 @@
     init: init,
     mode: mode,
     setMode: setMode,
+    used: used,
     runComic: runComic,
     resume: resume,
-    repaint: repaint
+    repaint: repaint,
+    restoreBook: restoreBook
   };
 })(window);

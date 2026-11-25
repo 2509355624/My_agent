@@ -241,6 +241,13 @@
           global.WSCreate.repaint(cc, m);
         }
         if (m.task && !m.done) again.push({ rec: m, card: cc, comic: true });
+      } else if (m.k === "book") {
+        /* 书卡（「打开整本」在聊天里落下的那张入口）：重放只铺壳，不压子页。
+           点它才进整本——跟当初点「打开整本」是同一条路，见 create.js
+           openBook / restoreBook。 */
+        if (global.WSCreate && global.WSCreate.restoreBook) {
+          global.WSCreate.restoreBook(m);
+        }
       }
     });
 

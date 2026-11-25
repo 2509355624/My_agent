@@ -90,6 +90,53 @@ class TestCreateComicFlow(unittest.TestCase):
         self.assertIn("下载全部", js)
 
 
+class TestCreateBookBugfix1125(unittest.TestCase):
+    """用户 2026-11-25 报的两个 bug：
+
+    ① 「打开整本」应该先落一张卡片，点卡片才进整本；
+    ② 退出漫画模式（✕ / 刷新）之后回不去了，找不到进漫画台的路。
+    """
+
+    def test_open_book_drops_a_card_first(self):
+        js = _read("js/create.js")
+        i = js.index("function openBook(")
+        body = js[i:js.index("function bookCover(")]
+        # 铺卡在前、进整本只能由点卡片触发
+        self.assertIn("drawBook(rec)", body, "打开整本必须先落一张书卡")
+        self.assertNotIn('WSStack.push("book"', body,
+                         "打开整本不能直接推子页（会盖住聊天页里那张卡）")
+        self.assertIn("enterBook", body)
+
+    def test_book_card_is_clickable_and_saved(self):
+        js = _read("js/create.js")
+        self.assertIn('k: "book"', js, "书卡必须进存档，刷新后还在")
+        i = js.index("function drawBook(")
+        body = js[i:i + 1200]
+        self.assertIn("enterBook", body, "点书卡要能进整本")
+        self.assertIn("看整本", body)
+
+    def test_book_card_is_replayed(self):
+        js = _read("js/archive.js")
+        self.assertIn('m.k === "book"', js, "存档重放要认得书卡")
+        self.assertIn("restoreBook", js)
+
+    def test_same_book_does_not_duplicate_cards(self):
+        js = _read("js/create.js")
+        self.assertIn("S.books.indexOf(task)", js)
+
+    def test_comic_mode_survives_reload(self):
+        js = _read("js/create.js")
+        self.assertIn("ws_create_mode", js, "模式要存盘，否则退出后回不去")
+        self.assertIn("savedMode()", js)
+        i = js.index("function init()")
+        self.assertIn("savedMode()", js[i:i + 800], "init 时要把上次的模式还原")
+
+    def test_book_card_has_style(self):
+        css = _read("css/create.css")
+        self.assertIn(".card-book", css)
+        self.assertIn(".bcover", css)
+
+
 class TestCreateStyles(unittest.TestCase):
 
     def test_uses_tokens_and_does_not_crop_grid(self):
