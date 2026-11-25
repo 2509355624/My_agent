@@ -688,16 +688,18 @@ assert.equal(again, 1, "同一颗重画按钮连点只收一次");
         with open(api, encoding="utf-8") as f:
             py = f.read()
         self.assertIn("PER_INFLIGHT = 5", py)
-        # 高峰不再写死在群友页：两处都读 jobs 的同一口径，提示也共用。
+        # 群友页不自己写判定，两处都读 jobs 的同一口径，提示也共用。
         self.assertIn("image_jobs.inflight_limit()", py)
         self.assertIn("image_jobs.inflight_busy_text", py)
         jobs = os.path.join(ROOT, "app", "features", "image", "jobs.py")
         with open(jobs, encoding="utf-8") as f:
             py = f.read()
         self.assertIn("MAX_INFLIGHT = 5", py)
-        self.assertIn("(10, 12, \"早高峰\"", py)
-        self.assertIn("(22, 24, \"晚高峰\"", py)
-        self.assertIn("min(limit, chan.max_inflight)", py)
+        # 2026-11-25 用户拍板：高峰时段那条整条删掉（10–12 / 22–24 收紧到 1
+        # 是后加的，之前从来没有）。现在任何时间都是 5 张。
+        self.assertNotIn("PEAK_WINDOWS", py)
+        self.assertNotIn("早高峰", py)
+        self.assertIn("if cur >= chan.max_inflight and not priority:", py)
 
     def test_download_has_no_panel_and_failure_is_one_line(self):
         hide = _read("js/hide.js")

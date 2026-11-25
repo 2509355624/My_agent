@@ -2,13 +2,14 @@
 """「连续多图」批量出图（2026-11-25）守卫测试。
 
 测的是**判定与账目**，不真出图：把 `_run_batch` 换成桩，只验证
-「整单先校验 → 重复渠道拒整单 → 高峰拒 → 一组只占一个在途名额 →
+「整单先校验 → 一图多风重复渠道拒整单 → 没有任何配额/限流 →
 全部入队后只发一条回执 → 一图多风只反推一次」。
 
 为什么要单独锁这几条：它们都是「错了也照样出图、只是体验崩掉」的那类问题
 （重复渠道偷偷去重、回执发 5 条、反推 5 遍白烧额度），跑图跑通了看不出错。
 """
 import os
+import time
 import unittest
 
 import app as app_pkg  # noqa: F401  （确保 app 包先加载）
@@ -157,29 +158,91 @@ class ParseBatchTest(unittest.TestCase):
         self.assertEqual(err, "")
         self.assertEqual(rb._PROMPT_MAX_BATCH, 20000)
 
+    def test_same_mode_drops_prompt(self):
+        # 2026-11-25 用户拍板：一图多风**没有提示词输入栏**，「它本身就是反推
+        # 图片，然后跑 5 种不同的渠道而已」。前端就算还传了 prompt，后端也要
+        # 丢掉，不许掺进反推串里。
+        body = {"mode": "same", "prompt": "一只猫在跑",
+                "items": [{"skill": self.ids[0], "image": IMG}]}
+        (_, rows), err, _ = rb._parse_batch(body)
+        self.assertEqual(err, "")
+        self.assertEqual(rows[0]["prompt"], "", "一图多风不该带需求")
 
-class WeighTest(unittest.TestCase):
-    """在途名额：普通任务 1 个，同一批次整组 1 个。"""
+    def test_text_mode_needs_prompt(self):
+        body = {"mode": "text", "prompt": "",
+                "items": [{"skill": self.ids[0]}]}
+        _, err, _ = rb._parse_batch(body)
+        self.assertIn("提示词", err)
 
-    def test_single_jobs_count_one_each(self):
-        rows = [{"state": "running"}, {"state": "queued"}]
-        self.assertEqual(rb._weigh(rows), 2)
+    def test_text_mode_runs_how_many_channels_chosen(self):
+        # 用户原话：「如果没有选渠道，那就默认跑 3 格、两格」——选几个跑几个。
+        body = {"mode": "text", "prompt": "一只猫",
+                "items": [{"skill": self.ids[0]}, {"skill": ""},
+                          {"skill": self.ids[1]}, {"skill": ""}, {"skill": ""}]}
+        (mode, rows), err, _ = rb._parse_batch(body)
+        self.assertEqual(err, "")
+        self.assertEqual(mode, "text")
+        self.assertEqual(len(rows), 2, "只选 2 个渠道就跑 2 张")
+        self.assertTrue(all(r["image"] == "" for r in rows), "文生图不带图")
+        self.assertTrue(all(r["prompt"] == "一只猫" for r in rows))
 
-    def test_one_batch_of_five_counts_one(self):
-        rows = [{"batch": "B1"} for _ in range(5)]
-        self.assertEqual(rb._weigh(rows), 1)
+    def test_text_mode_allows_same_channel(self):
+        body = {"mode": "text", "prompt": "一只猫",
+                "items": [{"skill": self.ids[0]}, {"skill": self.ids[0]}]}
+        (_, rows), err, _ = rb._parse_batch(body)
+        self.assertEqual(err, "")
+        self.assertEqual(len(rows), 2)
 
-    def test_batch_plus_single(self):
-        rows = [{"batch": "B1"} for _ in range(5)] + [{}]
-        self.assertEqual(rb._weigh(rows), 2)
+    def test_text_mode_needs_at_least_one_channel(self):
+        body = {"mode": "text", "prompt": "一只猫",
+                "items": [{"skill": ""}, {"skill": ""}]}
+        _, err, _ = rb._parse_batch(body)
+        self.assertIn("渠道", err)
 
-    def test_two_batches_count_two(self):
-        rows = [{"batch": "B1"}] * 5 + [{"batch": "B2"}] * 5
-        self.assertEqual(rb._weigh(rows), 2)
+
+class NoLimitTest(unittest.TestCase):
+    """2026-11-25 用户拍板：跑图台**没有任何配额/限流**。
+
+    删掉的是四条（原来都在 `bench/web.py`）：每 IP 每小时 8 张、高峰禁批量、
+    全局在途 ≤4、每令牌在途 ≤1。这里锁住「它们不许回来」——任何人再往
+    gen-many 里加一道闸，这几条会立刻红。
+    """
+
+    def setUp(self):
+        self.src = open(rb.__file__, encoding="utf-8").read()
+
+    def test_no_ip_hour_quota(self):
+        for name in ("_SUBMIT_PER_IP_HOUR", "_ip_ok", "_IP_SUBMITS",
+                     "这一小时发太多次"):
+            self.assertNotIn(name, self.src, "每 IP 每小时限额必须彻底删掉")
+
+    def test_no_peak_window_block(self):
+        # 只查「还有没有会拦人的代码」，不查注释——注释里保留「曾经有过、
+        # 已按用户要求删掉」的说明是有价值的。
+        for name in ("_batch_peak_blocked", "PEAK_WINDOWS", "peak_label"):
+            self.assertNotIn(name, self.src, "高峰禁批量必须彻底删掉")
+        self.assertNotIn("一次只能跑一张", self.src, "高峰话术不许回来")
+
+    def test_no_inflight_caps(self):
+        for name in ("_PER_TOKEN_INFLIGHT", "_ALL_INFLIGHT", "_inflight(",
+                     "_token_inflight", "_weigh"):
+            self.assertNotIn(name, self.src, "在途名额闸必须彻底删掉")
+
+    def test_jobs_has_no_peak_layer(self):
+        import app.features.image.jobs as image_jobs
+        self.assertFalse(hasattr(image_jobs, "PEAK_WINDOWS"),
+                         "jobs 里的时段表必须删掉")
+        self.assertEqual(image_jobs.MAX_INFLIGHT, 5,
+                         "唯一规则：一个会话最多同时在途 5 张")
+        # inflight_limit 保留（三处调用点在用），但任何时间都必须是 5。
+        for hour in (0, 9, 10, 11, 21, 22, 23):
+            ts = time.mktime((2026, 11, 25, hour, 30, 0, 0, 0, -1))
+            self.assertEqual(image_jobs.inflight_limit(ts)[0], 5,
+                             "%d 点也该是 5 张，不该有高峰" % hour)
 
 
 class BatchEndpointTest(unittest.TestCase):
-    """接口层：高峰拒、重复渠道拒、正常单回批次号。"""
+    """接口层：重复渠道拒、正常单回批次号。"""
 
     def setUp(self):
         self.app = _app()
@@ -188,31 +251,19 @@ class BatchEndpointTest(unittest.TestCase):
         self.ids = _chan_ids(6)
         rb._JOBS.clear()
         rb._BATCHES.clear()
-        rb._IP_SUBMITS.clear()
-        self._old_peak = rb._batch_peak_blocked
         self._old_run = rb._run_batch
         rb._run_batch = lambda *a, **k: None        # 不真跑
 
     def tearDown(self):
-        rb._batch_peak_blocked = self._old_peak
         rb._run_batch = self._old_run
         rb._JOBS.clear()
         rb._BATCHES.clear()
-        rb._IP_SUBMITS.clear()
 
     def _post(self, body):
         return self.c.post("/api/runbench/gen-many", json=dict(body, k=self.tok))
 
-    def test_peak_is_rejected(self):
-        rb._batch_peak_blocked = lambda: (True, "早高峰（10点到12点）排队最挤")
-        r = self._post({"mode": "same", "prompt": "x",
-                        "items": [{"skill": self.ids[0], "image": IMG}]})
-        self.assertEqual(r.status_code, 429)
-        self.assertIn("高峰", r.get_json()["error"])
-
     def test_duplicate_is_rejected_before_anything_starts(self):
-        rb._batch_peak_blocked = lambda: (False, "")
-        r = self._post({"mode": "same", "prompt": "x", "items": [
+        r = self._post({"mode": "same", "prompt": "", "items": [
             {"skill": self.ids[0], "image": IMG},
             {"skill": self.ids[0], "image": IMG}]})
         self.assertEqual(r.status_code, 400)
@@ -220,7 +271,6 @@ class BatchEndpointTest(unittest.TestCase):
 
     def test_same_channel_twice_is_ok_in_each_mode(self):
         # 五图各画：同渠道 3 张应当正常收单，不被重复校验拦。
-        rb._batch_peak_blocked = lambda: (False, "")
         r = self._post({"mode": "each", "prompt": "", "items": [
             {"skill": self.ids[0], "image": IMG},
             {"skill": self.ids[0], "image": IMG},
@@ -228,8 +278,21 @@ class BatchEndpointTest(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.get_json()["count"], 3)
 
+    def test_five_in_a_row_all_accepted(self):
+        # 用户原话：「5 张就是 5 张」——连跑 5 张全部收单，不再有额度和在途闸。
+        r = self._post({"mode": "each", "prompt": "", "items": [
+            {"skill": self.ids[i], "image": IMG} for i in range(5)]})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["count"], 5)
+
+    def test_repeat_submit_is_not_blocked(self):
+        # 原来「上一批没跑完不让开下一批」，删掉后连着提交第二批必须放行。
+        for _ in range(3):
+            r = self._post({"mode": "text", "prompt": "一只猫", "items": [
+                {"skill": self.ids[0]}, {"skill": self.ids[1]}]})
+            self.assertEqual(r.status_code, 200, r.get_json())
+
     def test_ok_returns_bid(self):
-        rb._batch_peak_blocked = lambda: (False, "")
         r = self._post({"mode": "each", "prompt": "", "items": [
             {"skill": self.ids[0], "image": IMG},
             {"skill": self.ids[1], "image": IMG}]})
@@ -268,7 +331,6 @@ class BatchReceiptTest(unittest.TestCase):
 
         rb._run_channel = fake_channel
         rb._recall_once = fake_recall
-        rb._batch_peak_blocked = lambda: (False, "")
 
         import app.features.image.jobs as image_jobs
         self._old_send = image_jobs._send_text
@@ -346,9 +408,34 @@ class PageGuardTest(unittest.TestCase):
         self.assertIn('data-tab="batch"', self.html)
         self.assertNotIn('data-tab="preset"', self.html)
 
-    def test_batch_panel_has_both_modes(self):
+    def test_batch_panel_has_all_three_modes(self):
         self.assertIn('data-mode="same"', self.html)
         self.assertIn('data-mode="each"', self.html)
+        # 2026-11-25 新增：文生图五连（一句话，5 家渠道各画一张）
+        self.assertIn('data-mode="text"', self.html)
+
+    def test_prompt_box_only_in_text_mode(self):
+        # 用户原话：「一图多风删掉那个什么粘贴框、提示词输入栏，不要了」；
+        # 「文生图五连只需要有一个提示词输入栏就行了」。
+        # 判据：需求框默认是 hidden，且只有 text 模式才显示。
+        self.assertIn('<div id="promptWrap" class="hidden">', self.html)
+        self.assertIn('$("promptWrap").classList.toggle("hidden", bMode !== "text");',
+                      self.html)
+
+    def test_text_mode_has_no_image_slot(self):
+        # 文生图五连不要图：只有 each / same 第一格才画图片区。
+        self.assertIn('if(showPic || (bMode === "same" && i === 0))', self.html)
+
+    def test_all_same_pops_visible_tip(self):
+        # 用户原话：「必须弹出来这样一个提示，已全部同第一款」。
+        self.assertIn('id="flashTip"', self.html)
+        self.assertIn("已全部同第一款", self.html)
+        self.assertIn("function flashTip(", self.html)
+
+    def test_no_limit_wording_left(self):
+        # 那句「这一小时发太多次了，歇会儿」和高峰话术都不许出现在页面上。
+        self.assertNotIn("发太多次", self.html)
+        self.assertNotIn("高峰期", self.html)
 
     def test_uses_batch_endpoint_once(self):
         self.assertIn("/api/runbench/gen-many", self.html)
@@ -397,7 +484,9 @@ class PageGuardTest(unittest.TestCase):
                          "不许再静默 return")
         self.assertIn("这批还在跑", body)      # bBusy 要说
         self.assertIn("先切过去", body)        # 模式不对要说
-        self.assertIn("铺到全部", body)        # 成功要说
+        # 2026-11-25 用户原话：「必须弹出来这样一个提示，已全部同第一款」。
+        self.assertIn("已全部同第一款", body)
+        self.assertIn("flashTip(", body, "成功必须弹提示条，不能只写状态行")
 
     def test_same_all_pins_select_value_to_data(self):
         # 光改 bSlots 不够：界面上的 <select> 还得跟着变，否则用户看到的是

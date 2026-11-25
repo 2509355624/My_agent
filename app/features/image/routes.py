@@ -744,7 +744,7 @@ def api_submit():
     # 那样会变成循环导入（只判"有没有拿到档位"，判断权仍归 chat 那套）。
     from app.features.chat import routes as chat_routes
     owner = chat_routes._who() or "__anonymous__"
-    limit, peak_label, _window = image_jobs.inflight_limit()
+    limit, _peak_label, _window = image_jobs.inflight_limit()
     with _JOBS_LOCK:
         # 本台独立 worker 线程与公共 NAI 队列分别计数，避免重复计同一任务。
         active = sum(1 for j in _JOBS.values()
@@ -752,9 +752,8 @@ def api_submit():
                      and j["state"] in ("queued", "running"))
         if active >= limit:
             # 界面上一句话就够（前端只闪这一行），不带喂给模型的指令。
-            text = ("高峰期一次只能画一张，等这张出来再画。"
-                    if peak_label else
-                    "同时最多画 %d 张，等一张出来再画。" % limit)
+            # 2026-11-25：高峰期那档删掉，任何时间都是「最多同时 5 张」。
+            text = "同时最多画 %d 张，等一张出来再画。" % limit
             return jsonify({"ok": False, "busy": True, "error": text}), 429
         job = {"id": _new_job_id(), "owner": owner,
                "skill": skill, "prompt": prompt,

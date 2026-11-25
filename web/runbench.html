@@ -151,6 +151,14 @@
   .sameall .sub{display:block;font-size:12px;font-weight:400;
     color:rgba(255,255,255,.82);margin-top:3px;}
 
+  /* 一次性提示条：居中偏上，操作后 1.6 秒自动消失，不挡点击 */
+  #flashTip{position:fixed;left:50%;top:18%;transform:translate(-50%,-8px);
+    z-index:99;max-width:86vw;padding:14px 20px;border-radius:14px;
+    background:rgba(34,197,94,.96);color:#fff;font-size:14.5px;font-weight:600;
+    line-height:1.55;text-align:center;box-shadow:0 10px 32px rgba(0,0,0,.28);
+    opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;}
+  #flashTip.on{opacity:1;transform:translate(-50%,0);}
+
   /* 五个格子：桌面两列（第一个跨两列当参考图），手机单列 */
   .slots{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;
     margin-bottom:14px;}
@@ -230,24 +238,27 @@
     <div class="seg" id="modeSeg">
       <button class="on" data-mode="same">一图多风</button>
       <button data-mode="each">五图各画</button>
+      <button data-mode="text">文生图五连</button>
     </div>
     <p class="bhelp" id="bHelp"></p>
 
-    <!-- 全部同第一款：**只在五图各画里出现**，位置在图片格正上方、做成醒目的
-         高亮整条按钮。用户原话：「放在五图各画的那个开头上面，第一个图头顶
-         那边，一个大大的那个标记的一个大大的高亮的按钮」。一图多风里没有这个
-         按钮——那个玩法本来就要求 5 个不同渠道，铺成同一个毫无意义。 -->
+    <!-- 全部同第一款：**只在五图各画 / 文生图五连里出现**，位置在图片格正上方、
+         做成醒目的高亮整条按钮。用户原话：「放在五图各画的那个开头上面，第一个
+         图头顶那边，一个大大的那个标记的一个大大的高亮的按钮」。一图多风里没有
+         这个按钮——那个玩法本来就要求 5 个不同渠道，铺成同一个毫无意义。 -->
     <button class="btn sameall hidden" id="btnSame">
-      全部同第一款 <span class="sub">点一下，5 格都用第一张的渠道</span>
+      全部同第一款 <span class="sub">点一下，全部格子都用第一格的渠道</span>
     </button>
 
     <div class="slots" id="slots"></div>
 
-    <!-- 一图多风才有需求框；五图各画没有（用户：「五图各画不需要有这个
-         提示词框的，本质上就是上传图片去跑，相当于走识图反推」） -->
-    <div id="promptWrap">
+    <!-- 需求框**只有文生图五连才有**（2026-11-25 用户拍板）：
+         - 一图多风：本身就是「反推图片、跑 5 个不同渠道」，不需要写字，删掉。
+         - 五图各画：每格上传图片，靠识图反推，也不需要写字。
+         - 文生图五连：没有图可反推，一句话必填，5 家渠道各画一张。 -->
+    <div id="promptWrap" class="hidden">
       <div class="pbar"><button type="button" id="btnPasteB">粘贴</button></div>
-      <textarea id="bPrompt" placeholder="写一句你想画的内容，几个渠道画同一个需求…&#10;不写也行，直接一键开跑 = 按参考图反推的提示词画"
+      <textarea id="bPrompt" placeholder="写一句你想画的内容，几个渠道各画一张…（必填）"
         style="width:100%;min-height:88px;resize:vertical;background:var(--input);
         border:1px solid var(--border);border-radius:11px;color:var(--text);
         padding:12px;font-size:15px;font-family:inherit;line-height:1.6;outline:none;"></textarea>
@@ -261,6 +272,10 @@
 
   <div class="status" id="status"></div>
 </div>
+
+<!-- 「全部同第一款」这类操作的一次性提示条：居中浮一层，1.6 秒自动消失，
+     不挡操作（pointer-events:none）。用户要求「必须弹出来这样一个提示」。 -->
+<div id="flashTip"></div>
 
 <!-- 出图弹框 -->
 <div class="mask" id="mask">
@@ -453,6 +468,7 @@
   function renderSlots(){
     var host = $("slots");
     // 一图多风只有一个参考图位置：把图片格收敛成一个，其余格子只留渠道。
+    // 文生图五连根本没有图（纯提示词），一个图片格都不画。
     var showPic = (bMode === "each");
     host.innerHTML = "";
     bSlots.forEach(function(s, i){
@@ -460,7 +476,7 @@
       el.className = "slot" + (showPic ? "" : " full") + (s.img ? " has" : "")
                    + (s.done ? " done" : "");
       var pic = "";
-      if(showPic || i === 0){
+      if(showPic || (bMode === "same" && i === 0)){
         pic = '<div class="pic" data-i="'+i+'">'
           + '<span class="no">'+(i+1)+'</span>'
           + (s.img ? '<img src="'+s.img+'" alt="">'
@@ -526,6 +542,10 @@
         else keep[v] = 1;
       });
       if(!bSlots[0].skill) bSlots[0].skill = "silver";
+    } else if(m === "text"){
+      // 文生图五连不要图：切过来时把格子里残留的图清掉，免得看着像「上传了
+      // 却不发」。渠道保留（用户刚选的不用重选）。
+      for(var j=0;j<bSlots.length;j++) bSlots[j].img = "";
     }
     syncModeUI();
     renderSlots();
@@ -534,13 +554,17 @@
 
   function syncModeUI(){
     var same = bMode === "same";
-    $("promptWrap").classList.toggle("hidden", !same);
-    // 「全部同第一款」只在五图各画出现：一图多风本来就要求 5 格不同渠道，
-    // 铺成同一个会立刻被服务端整单拒掉，按钮摆在那儿只会误导。
+    // 需求框只有文生图五连才有
+    $("promptWrap").classList.toggle("hidden", bMode !== "text");
+    // 「全部同第一款」只在五图各画 / 文生图五连出现：一图多风本来就要求
+    // 各格不同渠道，铺成同一个会立刻被服务端整单拒掉，按钮摆在那儿只会误导。
     $("btnSame").classList.toggle("hidden", same);
     $("bHelp").innerHTML = same
-      ? "<b>一张参考图 + 几个渠道</b>：传一张图、写一句需求，选几个渠道就出几张，图只反推一次。<b>需求可以不写</b>——不写就按参考图反推出来的提示词画。每个格子不能用同一个渠道。"
-      : "<b>上传几张图就跑几张</b>：每格单独选渠道，不用写需求——直接识图反推出提示词再画。同一个渠道可以画多张。";
+      ? "<b>一张参考图 + 几个渠道</b>：传一张图，选几个渠道就出几张——图只反推一次，不用写需求。每个格子不能用同一个渠道。"
+      : (bMode === "text"
+        ? "<b>一句话，几家渠道各画一张</b>：写下需求、选渠道，没选渠道的格子直接跳过（选 3 个就跑 3 张）。同一个渠道可以画多张。"
+        : "<b>上传几张图就跑几张</b>：每格单独选渠道，不用写需求——直接识图反推出提示词再画。同一个渠道可以画多张。");
+    $("bPrompt").placeholder = "写一句你想画的内容，几个渠道各画一张…（必填）";
   }
 
   // ── 弹框 ──────────────────────────────
@@ -723,20 +747,18 @@
   });
 
   // 全部同第一款：把第一格的渠道铺到其余所有格子。
-  // 只在「五图各画」里出现（一图多风那边整条按钮是隐藏的），那边重复渠道
-  // 合法，所以就是一路铺满，没有「只能用一次」的限制。
+  // 「全部同第一款」在五图各画 / 文生图五连里出现（一图多风那边整条按钮是
+  // 隐藏的），这两个玩法里重复渠道合法，所以就是一路铺满。
   //
   // 2026-11-25 修：原来开头一句 `if(bBusy || bMode !== "each") return;` 是**静默
   // 返回**——条件不成立就什么都不做、也不吭声，用户在界面上看到的就是「点了
-  // 没反应，也没有提示」。现在每种没铺成的情况都说话：
-  //   · 正在跑：说「这一批还在跑，跑完再铺」
-  //   · 不在五图各画：说「先切到五图各画」
-  //   · 第一格没选：说「先选第一格」（这条原来就有）
-  // 铺成功也带上具体格数，别只丢一句冷冰冰的「已铺」。
+  // 没反应，也没有提示」。现在每种没铺成的情况都说话；**铺成功必须弹一个明显
+  // 的提示**（用户原话：「必须弹出来这样一个提示，已全部同第一款」），而不是
+  // 只在状态行里飘一行小字。
   $("btnSame").addEventListener("click", function(){
     if(bBusy){ setBStatus("这批还在跑，等它跑完再铺", true); return; }
-    if(bMode !== "each"){
-      setBStatus("「全部同第一款」只在「五图各画」里用，先切过去", true);
+    if(bMode === "same"){
+      setBStatus("「全部同第一款」只在「五图各画」「文生图五连」里用，先切过去", true);
       return;
     }
     var first = bSlots[0].skill;
@@ -747,12 +769,34 @@
       bSlots[i].skill = first;
       n++;
     }
-    setBStatus(n
-      ? "✅ 已把「" + first + "」铺到全部 " + bSlots.length + " 格（改了 " + n + " 格）"
-      : bSlots.length + " 格已经都是「" + first + "」了，不用再铺");
+    var label = chanLabel(first);
+    setBStatus("✅ 已全部同第一款：全部 " + bSlots.length + " 格都是「"
+               + label + "」（刚改了 " + n + " 格）");
     savePref();
     renderSlots();
+    // 状态行之外再弹一个，保证「点了没反应」这种情况彻底消失。
+    flashTip(n
+      ? "已全部同第一款<br>全部 " + bSlots.length + " 格都改成「" + label + "」（改了 " + n + " 格）"
+      : "全部 " + bSlots.length + " 格已经是「" + label + "」了");
   });
+
+  function chanLabel(id){
+    for(var i=0;i<(allChannels||[]).length;i++){
+      if(allChannels[i].id === id) return allChannels[i].label;
+    }
+    return id;
+  }
+
+  // 一闪而过的居中提示条（不是 alert，不挡操作，1.6 秒自动消失）。
+  var tipTimer = null;
+  function flashTip(html){
+    var el = $("flashTip");
+    if(!el) return;
+    el.innerHTML = html;
+    el.classList.add("on");
+    if(tipTimer) clearTimeout(tipTimer);
+    tipTimer = setTimeout(function(){ el.classList.remove("on"); }, 1600);
+  }
 
   function setBStatus(msg, isErr){
     var el = $("bStatus");
@@ -788,11 +832,10 @@
     var items = [];
     if(bMode === "same"){
       if(!bSlots[0].img){ setBStatus("先传一张参考图", true); return; }
-      // 需求框**可以留空**（用户拍板）：留空 = 只靠这张参考图反推提示词，
-      // 按选中的渠道各出一张。原来这里硬拦「写一句想画的内容」，把用户
-      // 上传好图、选好渠道之后的一键开跑直接挡住，报的错还看不懂。
-      // 一图多风：参考图**只发一份**（挂在第一项上），服务端负责铺给所有渠道。
-      // 发 5 份同样的 data URL 会让请求体白白翻 5 倍，手机上更明显。
+      // 一图多风**没有需求框**（用户 2026-11-25 删掉）：这个玩法就是「反推
+      // 这张图，跑 5 个不同渠道」，出图全靠反推出来的提示词。
+      // 参考图**只发一份**（挂在第一项上），服务端负责铺给所有渠道。发 5 份
+      // 同样的 data URL 会让请求体白白翻 5 倍，手机上更明显。
       var ref = bSlots[0].img;
       bSlots.forEach(function(s, i){
         if(s.skill) items.push({ skill:s.skill, image: i === 0 ? ref : "" });
@@ -801,6 +844,14 @@
       if(!items[0].image){        // 第一格没选渠道时，把参考图挪到第一个有效项
         items[0].image = ref;
       }
+    } else if(bMode === "text"){
+      // 文生图五连：没有图可反推，所以提示词必填。没选渠道的格子直接跳过
+      // （选 3 个就跑 3 张，选 2 个就跑 2 张）。
+      if(!prompt){ setBStatus("写一句提示词再开跑", true); $("bPrompt").focus(); return; }
+      bSlots.forEach(function(s){
+        if(s.skill) items.push({ skill:s.skill, image:"" });
+      });
+      if(!items.length){ setBStatus("至少选一个渠道", true); return; }
     } else {
       bSlots.forEach(function(s){
         if(s.img) items.push({ skill:s.skill, image:s.img });
@@ -810,7 +861,7 @@
       if(noSkill.length){ setBStatus("还有格子没选渠道", true); return; }
     }
     // 开跑前先在本地挡一遍重复渠道（服务端还会再挡一次，这里只为早报错）。
-    // 只有一图多风禁重复；五图各画本来就是「同一个渠道画 5 张」。
+    // 只有一图多风禁重复；五图各画 / 文生图五连本来就是「同一个渠道画多张」。
     if(bMode === "same"){
       var seen = {}, dup = "";
       items.forEach(function(x){
@@ -818,7 +869,7 @@
         seen[x.skill] = 1;
       });
       if(dup){
-        setBStatus("「" + dup + "」选了两遍，一图多风每个格子要换不同的渠道", true);
+        setBStatus("「" + chanLabel(dup) + "」选了两遍，一图多风每个格子要换不同的渠道", true);
         return;
       }
     }
@@ -904,7 +955,7 @@
       // $("cntPreset").textContent = (j.presets||[]).length;
       // 连续多图的格子依赖渠道列表，等列表回来再建
       var pref = loadPref();
-      if(pref.mode === "each" || pref.mode === "same") bMode = pref.mode;
+      if(pref.mode === "each" || pref.mode === "same" || pref.mode === "text") bMode = pref.mode;
       $("modeSeg").querySelectorAll("button").forEach(function(x){
         x.classList.toggle("on", x.getAttribute("data-mode") === bMode);
       });

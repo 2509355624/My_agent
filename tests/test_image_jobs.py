@@ -4791,10 +4791,12 @@ class ComfyRejectLogTest(unittest.TestCase):
 
 
 class PeakInflightTest(_Base):
-    """分时段限流：早 10-12 / 晚 22-24 每人 1 张，其余 5 张。
+    """在途上限：**只有一条规则**——一个会话最多同时在途 5 张。
 
-    判定用真实时刻构造时间戳（不硬编码 Unix 秒），但**入队那一步仍钉住**，
-    免得跑测时间漂进别的用例——本类自己明确传高峰值进去。
+    2026-11-25 用户拍板：原来那层分时段限流（早 10-12 / 晚 22-24 每人 1 张）
+    整条删掉。用户原话：「没有所谓的高峰期……本身用户就这么点，他们想怎么跑
+    就怎么跑，反正我这边是串行排队的」。这里锁住「任何时间都是 5」，免得以后
+    又有人把时段表加回来。
     """
 
     REAL_LIMIT = staticmethod(image_jobs.inflight_limit)
@@ -4803,39 +4805,35 @@ class PeakInflightTest(_Base):
     def _ts(hour, minute=30):
         return datetime(2026, 11, 25, hour, minute).timestamp()
 
-    def test_peak_windows_are_one(self):
-        for hour in (10, 11, 22, 23):
-            limit, label, window = self.REAL_LIMIT(self._ts(hour))
-            self.assertEqual(1, limit, "%d 点应在高峰窗内" % hour)
-            self.assertTrue(label)
-            self.assertTrue(window)
-
-    def test_other_hours_keep_five(self):
-        for hour in (0, 1, 9, 12, 13, 20, 21):
+    def test_no_peak_windows_any_hour(self):
+        # 原来高峰是 10-12 / 22-24，现在这些点也必须和别的时间一样。
+        for hour in (0, 1, 9, 10, 11, 12, 13, 20, 21, 22, 23):
             limit, label, window = self.REAL_LIMIT(self._ts(hour))
             self.assertEqual(image_jobs.MAX_INFLIGHT, limit,
-                             "%d 点不该被高峰限流" % hour)
-            self.assertEqual(("", ""), (label, window))
+                             "%d 点不该被限流" % hour)
+            self.assertEqual(("", ""), (label, window),
+                             "%d 点不该再有高峰话术" % hour)
 
-    def test_peak_rejects_second_image_with_plain_text(self):
-        why_peak = (1, "晚高峰", "22点到24点")
-        p = mock.patch.object(image_jobs, "inflight_limit", return_value=why_peak)
-        p.start()
-        self.addCleanup(p.stop)
+    def test_peak_table_is_gone(self):
+        self.assertFalse(hasattr(image_jobs, "PEAK_WINDOWS"))
+        self.assertFalse(hasattr(image_jobs, "PEAK_HINT"))
+
+    def test_full_session_rejects_the_sixth(self):
+        # 5 张在途时再提交，要被拒并说明原因；这条与时段无关。
         ctx = ("group", "9")
-        first, reason = self._enqueue(ctx)
-        self.assertIsNone(reason)
-        self.assertIsNotNone(first)
-        second, reason = self._enqueue(ctx)
-        self.assertIsNone(second)
-        self.assertIn("早高峰 10点到12点，晚高峰 22点到24点", reason)
-        self.assertNotIn("当没画过", reason,
-                         "高峰提示本来就说给用户听，不能又叫模型当没发生过")
+        for _ in range(image_jobs.MAX_INFLIGHT):
+            job, reason = self._enqueue(ctx)
+            self.assertIsNone(reason)
+            self.assertIsNotNone(job)
+        sixth, reason = self._enqueue(ctx)
+        self.assertIsNone(sixth)
+        self.assertIn("排着", reason)
+        self.assertIn("等前面跑完", reason)
 
-    def test_offpeak_reason_keeps_model_note(self):
-        for cur, word in ((1, "有一张在画"), (2, "排着")):
-            reason = image_jobs.inflight_busy_text(cur, "")
-            self.assertIn(word, reason)
+    def test_busy_text_has_no_peak_words(self):
+        reason = image_jobs.inflight_busy_text(5)
+        self.assertNotIn("高峰", reason)
+        self.assertIn("排着", reason)
 
 
 if __name__ == "__main__":

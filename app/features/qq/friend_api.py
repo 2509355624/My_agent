@@ -65,11 +65,11 @@ bp = Blueprint("friend", __name__)
 # 只开这一条渠道（用户 2026-10-30：「暴露在公网的就只有这个 moss 预设网页」）
 SKILL = "moss-qunyou"
 
-# 每人在途上限（2026-11-25 用户拍板）：和 `image_jobs.MAX_INFLIGHT` 一个口径。
-# 这里比 jobs 那道闸更早拒，所以两边必须同源——真正判定走
-# `image_jobs.inflight_limit()`：早高峰 10-12、晚高峰 22-24 每人 1 张，其余 5 张。
+# 每人在途上限（2026-11-25 用户拍板）：和 `image_jobs.MAX_INFLIGHT` 一个口径——
+# 一个会话最多同时在途 5 张，**没有高峰期**（时段限制已整条删除）。
+# 真正判定走 `image_jobs.inflight_limit()`，任何时间都返回 5。
 # 留这个常量只是给别处引用/核对用，别在这里写死判定。
-PER_INFLIGHT = 5            # 非高峰每人在途上限（高峰由 inflight_limit 动态返回 1）
+PER_INFLIGHT = 5            # 每人在途上限（恒 5，不分时段）
 ALL_INFLIGHT = 6            # 群友合计在途上限
 GALLERY_CAP = 1 << 30       # 图库总量 1GB，超了删最老
 # 群友页提示词上限（2026-10-30 按用户要求 2000 → 20000）。
@@ -330,10 +330,10 @@ def api_submit():
 
     with _SUBMIT_LOCK:
         mine, total = _inflight(qq)
-        limit, label, _window = image_jobs.inflight_limit()
+        limit, _label, _window = image_jobs.inflight_limit()
         if mine >= limit:
             return jsonify({"ok": False, "busy": True,
-                            "error": image_jobs.inflight_busy_text(mine, label)}), 429
+                            "error": image_jobs.inflight_busy_text(mine)}), 429
         if total >= ALL_INFLIGHT:
             return jsonify({"ok": False, "busy": True,
                             "error": "现在人有点多（%d 张在排），过会儿再来"

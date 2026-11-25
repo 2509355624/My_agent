@@ -31,9 +31,16 @@ QQ 私聊/群发 `/跑图台` → 机器人回一条带令牌的网页链接 →
 出图结果**只推回 QQ**（`_translate`+`_enqueue` 内部 `image_jobs` 自动发图），
 网页只需要「已提交 / 提交失败」这一句，不做缩略图轮询。
 
-## 限流 / 防滥用
+## 限流 / 防滥用（2026-11-25 用户拍板：**全部删掉**）
 
-- 令牌免登录，但每令牌在途 ≤ 1、全局在途 ≤ 4、每 IP 提交 ≤ 8/小时。
+原来这里有「每令牌在途 ≤ 1、全局在途 ≤ 4、每 IP 提交 ≤ 8/小时、高峰禁批量」
+四道闸，全是这套令牌免登录骨架自带的。用户原话：「没有这种所谓的限额，直接
+给我删掉」「高峰期也去掉」「ComfyUI 走的是串行队列，压根不会崩」。
+
+现在的规则只剩一条，而且不在本模块：一个会话最多同时在途 5 张
+（`image_jobs.MAX_INFLIGHT`，`jobs.enqueue()` 里判）。跑图台提交几张就是几张，
+串行反推、串行入队，一张跑完才跑下一张，跟 QQ 那边完全一样。
+
 - 令牌 6 小时过期 + HMAC 签名（签名域 runbench:，与换装/fr_sess 分开）。
 """
 
@@ -54,30 +61,31 @@ log = logging.getLogger("runbench_web")
 
 bp = Blueprint("runbench", __name__)
 
-_PER_TOKEN_INFLIGHT = 1          # 每令牌在途 ≤ 1
-_ALL_INFLIGHT = 4                # 全局在途 ≤ 4
-_SUBMIT_PER_IP_HOUR = 8          # 每 IP 每小时 ≤ 8 张
 _PROMPT_MAX = 10000              # 提示词长度上限（2026-11-13 用户要 1 万：
                                  # 有人会把整套 tag 串/分镜脚本直接贴进来，
                                  # 400 字连一段 danbooru 串都放不下）
-
 # ── 「连续多图」批量（2026-11-25 用户拍板）──────────────────────────
 #
-# 两种玩法，共用同一个批量接口：
-#   - `same`（一图多风）：**一张参考图 + 一份需求 + 最多 5 个渠道**，参考图只
-#     反推一次拿英文 tags，5 个渠道共用（反推是整条链里最贵的一步，一张反推
-#     一次等于白烧 4 次）。
+# 三种玩法，共用同一个批量接口：
+#   - `same`（一图多风）：**一张参考图 + 最多 5 个渠道**，参考图只反推一次拿
+#     英文 tags，5 个渠道共用（反推是整条链里最贵的一步，一张反推一次等于
+#     白烧 4 次）。**没有需求框**——这个玩法本身就是「反推图片、跑 5 个不同
+#     渠道」，用户不需要再写字。
 #   - `each`（五图各画）：**最多 5 张图，每张自己选渠道**，没有提示词框——
 #     走的就是「上传图 → 识图反推 → 出图」，需求为空。
+#   - `text`（文生图五连）：**不要图，一句提示词必填**，5 个格子各选一个渠道，
+#     同一句提示词在 5 家各画一张。没选渠道的格子直接跳过（选 3 个就跑 3 张）。
 #
-# 三条硬约束（都是用户原话）：
-#   1. **同一批里不允两个格子选同一个渠道**（「不允许选同一个渠道」）——
+# 两条硬约束（都是用户原话）：
+#   1. **一图多风里不允两个格子选同一个渠道**（「不允许选同一个渠道」）——
 #      选重了整单拒，不是默默去重（去重会让人以为 5 张都在跑）。
-#   2. **高峰禁止批量**（10–12 / 22–24）：高峰每会话只让挂 1 张，一批 5 张
-#      会把整条队列堵死 5 分钟，其它人一张都排不进。
-#   3. **回执合并成一条**，且在**最后一张也入队之后**才发——每张发一条就是
+#   2. **回执合并成一条**，且在**最后一张也入队之后**才发——每张发一条就是
 #      刷屏；发早了会让人以为「后面几张也画好了」。
-_BATCH_MAX = 5                   # 一批最多几张（UI 也是 5 格）
+#
+# 2026-11-25 用户拍板删掉的两条（原来在这里）：
+#   - 高峰禁止批量（10–12 / 22–24）——「高峰期去掉吧，压根没用」。
+#   - 每 IP 每小时 8 张——「没有这种所谓的限额」。
+_BATCH_MAX = 5                   # 一次最多 5 张（UI 也是 5 格）
 _PROMPT_MAX_BATCH = 20000        # 批量模式的提示词上限（用户：「我最长是允许
                                  # 2 万字的」）。单张那条 1 万的限制不动。
 _IMAGE_MAX = 6 << 20             # 单张缩略图 data URL 上限（与单张一致）
@@ -101,33 +109,13 @@ def _cached_json(payload, max_age=RUNBENCH_LIST_MAX_AGE):
 
 # 进程内任务表：tag -> {token, kind, name, prompt, state, error, ts, batch}
 # kind = "channel"（官方渠道）| "preset"（我的预设）
-# batch 非空 = 这一格属于某个「连续多图」批次，值是批次号。计数时**同一批次
-# 只算 1**（见 `_inflight` / `_token_inflight` 的 `_weigh`），否则一个人开一批
-# 就把全局 4 个名额全占了。
+# batch 非空 = 这一格属于某个「连续多图」批次，值是批次号。**只用于查进度和
+# 合并回执**，不参与任何名额折算（2026-11-25 用户拍板：5 张就是 5 张，没有
+# 「一批」这个概念）。
 _JOBS = {}
 _JOBS_LOCK = threading.Lock()
-_IP_SUBMITS = {}                 # ip -> [timestamps]（每小时滑窗）
-_IP_LOCK = threading.Lock()
 _BATCHES = {}                    # 批次号 -> {state, total, queued, fail, ts}
 _BATCH_LOCK = threading.Lock()
-
-
-def _weigh(rows):
-    """把任务行折算成「占几个名额」：普通任务 1 个，同一批次整体按 1 个算。
-
-    用户拍板：「一次占 5 个名额，其实就对」是指**占队列名额**（ComfyUI 那边
-    该排 5 张就排 5 张）；而网页端的在途限制是**防一个人把入口堵死**的，一组
-    五连是用户一次有意的点击，按 5 个单位算会直接把人挡在门外。
-    """
-    total = 0
-    batches = set()
-    for r in rows:
-        b = r.get("batch")
-        if b:
-            batches.add(b)
-        else:
-            total += 1
-    return total + len(batches)
 
 
 def _check_token():
@@ -139,43 +127,6 @@ def _check_token():
         return None, (jsonify({"ok": False,
                                "error": "链接无效或已过期，回 QQ 再发一次 /跑图台"}), 401)
     return k, parsed
-
-
-def _inflight():
-    with _JOBS_LOCK:
-        rows = [r for r in _JOBS.values()
-                if r.get("state") in ("queued", "running")]
-    return _weigh(rows)
-
-
-def _token_inflight(k):
-    with _JOBS_LOCK:
-        rows = [r for r in _JOBS.values()
-                if r.get("token") == k
-                and r.get("state") in ("queued", "running")
-                and not r.get("batch")]     # 批量整组算一个单位，在下面单独判
-        batches = {r.get("batch") for r in _JOBS.values()
-                   if r.get("token") == k
-                   and r.get("state") in ("queued", "running")
-                   and r.get("batch")}
-    return len(rows) + len(batches)
-
-
-def _ip_ok(ip, cost=1):
-    """记一次提交并判额度。cost = 这一单算几张（批量按真实张数算）。"""
-    now = time.time()
-    with _IP_LOCK:
-        hits = [t for t in _IP_SUBMITS.get(ip, []) if now - t < 3600]
-        if len(hits) + cost > _SUBMIT_PER_IP_HOUR:
-            _IP_SUBMITS[ip] = hits
-            return False
-        hits.extend([now] * max(1, int(cost)))
-        _IP_SUBMITS[ip] = hits
-        if len(_IP_SUBMITS) > 5000:
-            for key in [k for k, v in _IP_SUBMITS.items()
-                        if not v or now - v[-1] > 3600]:
-                _IP_SUBMITS.pop(key, None)
-    return True
 
 
 def _channel_rows():
@@ -281,16 +232,9 @@ def api_gen():
             return jsonify({"ok": False,
                             "error": "没有「%s」这个渠道" % name}), 404
 
-    ip = (request.headers.get("CF-Connecting-IP")
-          or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-          or request.remote_addr or "?")
-    if not _ip_ok(ip):
-        return jsonify({"ok": False, "error": "这一小时发太多次了，歇会儿"}), 429
-    if _token_inflight(k) >= _PER_TOKEN_INFLIGHT:
-        return jsonify({"ok": False, "error": "上一张还在跑，等它出来再点下一张"}), 429
-    if _inflight() >= _ALL_INFLIGHT:
-        return jsonify({"ok": False, "error": "前面排队的人有点多，稍等再试"}), 429
-
+    # 2026-11-25 用户拍板：这里原来有三道闸（每 IP 每小时 8 张、每令牌在途 1、
+    # 全局在途 4），全删。唯一的限制在 `image_jobs.enqueue()`：一个会话最多
+    # 同时在途 5 张，那是全站统一的那一条，跑图台不另设。
     tag = "RB-" + time.strftime("%Y%m%d-%H%M%S") + "-" + os.urandom(2).hex()
     with _JOBS_LOCK:
         _JOBS[tag] = {"token": k, "kind": kind, "name": name, "prompt": prompt,
@@ -300,30 +244,14 @@ def api_gen():
     return jsonify({"ok": True, "tag": tag, "kind": kind, "name": name})
 
 
-def _batch_peak_blocked():
-    """高峰档禁止批量。返回 (是否拦下, 给的提示话术)。
-
-    判据现读 `image_jobs.PEAK_WINDOWS`（真实事实源），不另抄一份时段表——
-    以后调时段只改那一处，这里跟着变。
-    """
-    from datetime import datetime as _dt
-    from app.features.image import jobs as image_jobs
-    hour = _dt.now().hour
-    for start, end, label, window in image_jobs.PEAK_WINDOWS:
-        if start <= hour < end:
-            return True, ("%s（%s）排队最挤，一次只能跑一张。"
-                          "过了这段时间再来批量。" % (label, window))
-    return False, ""
-
-
 def _parse_batch(body):
-    """校验整单。→ (rows, err_msg, http_code)。
+    """校验整单。→ ((mode, rows), err_msg, http_code)。
 
     rows 每项 {image, prompt, skill}。**整单先验完再动手**：半路才拒的话，
     前面几张已经入队了，用户看到的是「报了错，图却跑出来了」。
     """
     mode = str(body.get("mode") or "").strip()
-    if mode not in ("same", "each"):
+    if mode not in ("same", "each", "text"):
         return None, "出图方式不对", 400
     items = body.get("items")
     if not isinstance(items, list) or not items:
@@ -332,10 +260,15 @@ def _parse_batch(body):
     if len(prompt) > _PROMPT_MAX_BATCH:
         return None, ("提示词太长（%d 字，最多 %d）"
                       % (len(prompt), _PROMPT_MAX_BATCH)), 400
-    # 需求框**可以留空**（2026-11-25 用户拍板：「它是可以留空的呀……留空的时候
-    # 点击一键开跑，就是默认反推提示词，然后按照这些渠道去跑图」）。留空 = 只靠
-    # 参考图反推出来的英文提示词出图，所以下面不再要求 same 模式必须有 prompt。
-    # 判「没东西可画」放到最后统一判：图也没有、话也没有，才是真没法画。
+    # 三种玩法各自的「信息源」：
+    #   - same（一图多风）：**只要参考图**，没有需求框（用户 2026-11-25 拍板：
+    #     「一图多风根本就没有必要加那个什么提示词输入栏，因为它本身就是反推
+    #     图片，然后跑 5 种不同的渠道而已」）。前端若仍传了 prompt，这里直接
+    #     丢掉，不让它掺进反推串里。
+    #   - each（五图各画）：每格自己的图，也没有需求框。
+    #   - text（文生图五连）：不要图，**一句提示词必填**。
+    if mode == "same":
+        prompt = ""
 
     known = {c["id"] for c in _channel_rows()}
     rows, seen = [], set()
@@ -343,9 +276,12 @@ def _parse_batch(body):
         it = it if isinstance(it, dict) else {}
         skill = str(it.get("skill") or "").strip()
         image = str(it.get("image") or "").strip()
-        # 五图各画里「没传图的格子」= 用户还没填，**跳过**而不是报错（传几张
-        # 就跑几张）。渠道没选也算没填——这一格里反正什么都没有可画。
+        # 五图各画里「没传图的格子」、文生图五连里「没选渠道的格子」= 用户还没
+        # 填，**跳过**而不是报错。用户 2026-11-25：「如果没有选渠道，那就默认
+        # 跑 3 格、两格」——选了几个渠道就跑几张。
         if mode == "each" and not image:
+            continue
+        if mode == "text" and not skill:
             continue
         if not skill:
             return None, "第 %d 格没选渠道" % i, 400
@@ -370,8 +306,8 @@ def _parse_batch(body):
         # 「图也没有、话也没有」不用在这儿判：一图多风会在下面把参考图摊给
         # 所有格（只挂第一项、其余项天生是空串，在这儿判会把第 2 格误拒——
         # 用户看到的报错是「第 2 格没有图，也没有写需求」，可他明明传了图）；
-        # 五图各画则在上面 348 行已经把没图的格子 continue 掉了。真正「什么
-        # 都没有」的整单，由下面按模式各自的「先传一张参考图 / 先上传图片」兜住。
+        # 五图各画在上面已经把没图的格子 continue 掉了，文生图五连则不看图。
+        # 真正「什么都没有」的整单，由下面按模式各自的兜底判住。
         rows.append({"image": image, "prompt": prompt, "skill": skill})
 
     if len(rows) > _BATCH_MAX:
@@ -380,7 +316,7 @@ def _parse_batch(body):
         # 一图多风：一张参考图，多个渠道共用。有几个渠道就出几张。
         # 参考图**只发一份**（前端挂在第一项上，省请求体积），所以这里取
         # 「第一个带了图的项」，而不是死盯 rows[0]——第一格没选渠道时，图会在
-        # 别的位置上。
+        # 别的位置上。**没有需求**，出图全部靠这张图反推出来的提示词。
         img = ""
         for r in rows:
             if r["image"]:
@@ -388,7 +324,16 @@ def _parse_batch(body):
                 break
         if not img:
             return None, "先传一张参考图", 400
-        rows = [{"image": img, "prompt": prompt, "skill": r["skill"]}
+        rows = [{"image": img, "prompt": "", "skill": r["skill"]}
+                for r in rows]
+    elif mode == "text":
+        # 文生图五连：一句提示词，选中的几个渠道各画一张；没有图可反推，所以
+        # 提示词必填——空着就什么都画不出来。
+        if not prompt:
+            return None, "写一句提示词再开跑", 400
+        if not rows:
+            return None, "至少选一个渠道", 400
+        rows = [{"image": "", "prompt": prompt, "skill": r["skill"]}
                 for r in rows]
     else:
         # 五图各画：一格一张图，**不要求每格都传**（传几张跑几张），但每张
@@ -407,9 +352,13 @@ def api_gen_many():
 
     用户拍板（不要前端 for 循环发 5 次）：「一个接口收整单、服务端批量排队」。
 
-    流程：验令牌 → 整单校验（渠道/图片/重复渠道）→ 配额 → 起一个后台线程 →
+    流程：验令牌 → 整单校验（渠道/图片/重复渠道）→ 起一个后台线程 →
     线程里**串行**逐张识图、**识完一张立刻入队一张**（不等后面几张）→ 全部
     入队后**发一条合并回执**（每张发一条会刷屏）。
+
+    2026-11-25 用户拍板：这里**没有任何配额/限流**（原来有「高峰禁批量」和
+    「每 IP 每小时 8 张」两条，删了）。收到 5 张就是 5 张——串行反推、串行
+    入队，ComfyUI 那边本来就是我们自己的串行队列，一张跑完才跑下一张。
 
     返回里带批次号，前端轮询 `/api/runbench/batch` 看进度打绿勾。绿勾是**进度
     提示、不是准入门槛**：本接口一返回，前端就可以退出页面，剩下的都在服务端跑。
@@ -424,23 +373,6 @@ def api_gen_many():
     if err:
         return jsonify({"ok": False, "error": err}), code
     mode, rows = parsed_batch
-
-    blocked, why = _batch_peak_blocked()
-    if blocked:
-        return jsonify({"ok": False, "error": why}), 429
-
-    # 配额：按**真实张数**记账（这一单就是 5 张，不该只算 1 次）；而在途名额
-    # 按「一整组」算（见 `_weigh`）——一个人开一批不该把全局 4 个名额吃光。
-    ip = (request.headers.get("CF-Connecting-IP")
-          or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-          or request.remote_addr or "?")
-    if not _ip_ok(ip, cost=len(rows)):
-        return jsonify({"ok": False, "error": "这一小时发太多次了，歇会儿"}), 429
-    if _token_inflight(k) >= _PER_TOKEN_INFLIGHT:
-        return jsonify({"ok": False,
-                        "error": "你还有一批在跑，等它跑完再开下一批"}), 429
-    if _inflight() >= _ALL_INFLIGHT:
-        return jsonify({"ok": False, "error": "前面排队的人有点多，稍等再试"}), 429
 
     bid = "B-" + time.strftime("%Y%m%d-%H%M%S") + "-" + os.urandom(2).hex()
     with _BATCH_LOCK:

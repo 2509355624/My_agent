@@ -236,12 +236,21 @@ class AheadOfTest(unittest.TestCase):
         self.assertEqual(comfy_gate.pending_mine(), 0)
 
     def test_rejected_enqueue_does_not_count(self):
-        """被限流拒掉的单子根本没进队列，不能占一个名额。"""
-        with mock.patch.object(image_jobs, "inflight_limit",
-                               return_value=(1, "", "")):
-            self._enqueue(target_id="10001")
+        """被拒掉的单子根本没进队列，不能占一个名额。
+
+        2026-11-25 起没有时段限制，`inflight_limit()` 恒返回 5。要模拟「满了」
+        得让前面那张先占住名额——上限是通道建的时候拍下来的（`chan.max_inflight`），
+        这里把它临时压到 1，等价于「这个会话只剩 0 个空位」。
+        """
+        self._enqueue(target_id="10001")
+        chan = image_jobs._channel_of("anima-line")
+        old = chan.max_inflight
+        try:
+            chan.max_inflight = 1          # 这个会话只剩 0 个空位
             job, reason = image_jobs.enqueue("private", "10001", {},
                                              skill="anima-line")
+        finally:
+            chan.max_inflight = old
         self.assertIsNone(job)
         self.assertTrue(reason)
         self.assertEqual(comfy_gate.pending_mine(), 1, "只有第一张算数")
