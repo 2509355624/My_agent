@@ -47,6 +47,7 @@ from app.features.comic import soda_letter
 from app.features.image import lora_slots
 from app.features.comic import moss_comic
 from app.features.comic import moss_agent
+from app.features.comic import moss_revise
 from app.features.comic import moss_series
 from app.features.comic import moss_twopass
 from app.integrations import llm
@@ -798,6 +799,9 @@ def api_moss_two_agent():
     # 画风由代码定档，不用模型每本自填的 scenes[1]：那句随剧情变化，跨本会漂。
     # 写在出口而不是 generate 内部，用户手改 spec 前的第一份事实就统一。
     spec["style"] = DEFAULT_STYLE
+    # 原始需求存进 spec（2026-11-25）：逐页聊天要拿「作者原来要什么」当最高
+    # 优先级，否则改一句就跑偏。之前只有返回值里带 brief，落盘的 spec 里没有。
+    spec["brief"] = brief
 
     d = _new_task_dir(spec, _friend_qq())
     spec, ps = _save(d, spec, None)
@@ -1478,6 +1482,160 @@ def api_moss_loras():
 # ══════════════════════════════════════════════════════════
 #  读：状态 / 图 / 历史
 # ══════════════════════════════════════════════════════════
+@bp.route("/api/moss/page_chat", methods=["POST"])
+def api_moss_page_chat():
+    """**跟这一页聊一句，改这一页**（2026-11-25 用户要求）。
+
+    用户原话：「我会在每一页这边……我就在下面有一个输入栏，开始打字说，这一页
+    什么什么问题……点发送，AI 去修改……相当于 AI 指定输出一个格式代码，去解析
+    之后进行一个替换。……会说某个格子有问题，上面那个格子有问题，或者是左下角
+    或者是右下角那格子有问题，到时候 AI 它就针对性地去优化那一格。」
+
+    为什么是同步：只改一页、只叠一次 LLM 调用（几秒到几十秒），比渲染一页快
+    得多；而且作者就在这一页前面等回话，走 job 轮询只会让 UI 更绕。
+
+    产物写回 `spec.pages[n].prompt_override`（**只动这一页**），然后作者点这一页的
+    「出图」重画即可——不用整本重跑。改之前整页备份到 `spec_chat_backup.json`
+    的 `pages[n]`，「撤销」可回退一级。
+
+    判据全在 `moss_revise.checkin()`：能解析 + 骨架不变 + 有差异才采纳。
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        d = _task_dir(data.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    try:
+        n = int(data.get("n"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "n 不是页号"}), 400
+    message = str(data.get("message") or "").strip()
+    if not message:
+        return jsonify({"ok": False, "error": "先说一句要改什么"}), 400
+
+    # 正在画这一本时不许改稿：改的是 prompt_override，画图线程手上已经有
+    # 旧的那一份快照，落地只会让「我改了但图没变」再发生一次。
+    with _RUN_LOCK:
+        cur = _RUNNING.get(d)
+    if cur:
+        return jsonify({"ok": False,
+                        "error": "这一本正在画第 %s 页，等这一批跑完再聊" % (cur.get("n") or "?")}), 409
+
+    spec = _read_json(os.path.join(d, "spec.json"), {})
+    pages = spec.get("pages") or []
+    page = None
+    for p in pages:
+        if p.get("n") == n:
+            page = p
+            break
+    if page is None:
+        return jsonify({"ok": False, "error": "没有第 %s 页" % n}), 404
+
+    js = moss_revise.parse_prompt(page)
+    brief = str(data.get("brief") or spec.get("brief") or "").strip()
+    outline_line = str(data.get("outline") or "").strip()
+    provider = str(data.get("provider") or "").strip() or None
+    model = str(data.get("model") or "").strip() or None
+
+    def _call(system, user, max_tokens=6000, temperature=None, tag="",
+              provider=None, model=None):
+        return _twopass_call(system, user, max_tokens=max_tokens,
+                             temperature=temperature, tag=tag,
+                             provider=provider, model=model)
+
+    hist = moss_revise.read_history(d)
+    r = moss_revise.checkin(js, n, message, brief=brief, outline_line=outline_line,
+                            history=hist, provider=provider, model=model,
+                            call=_call)
+
+    landed = False
+    if r.get("changed") and r.get("prompt_override"):
+        # 单级回退：改之前把这一页整份存下来。改两次只有最近一次能撤——
+        # 聊天框的定位是小修小改，不是版本管理（同 comic chat_revise 的口径）。
+        try:
+            bak_path = os.path.join(d, "spec_chat_backup.json")
+            bak = _read_json(bak_path, {})
+            if not isinstance(bak, dict):
+                bak = {}
+            bak["pages"] = bak.get("pages") or {}
+            bak["pages"][str(n)] = {"prompt_override": page.get("prompt_override"),
+                                    "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+            _write_json(bak_path, bak)
+        except BaseException:               # noqa: BLE001 - 备份失败不拦改稿
+            log.exception("moss 页面聊天备份失败 %s", d)
+        page["prompt_override"] = r["prompt_override"]
+        _save(d, spec)
+        landed = True
+        log.info("moss 页面聊天落地 %s 第%s页（%d 处）", os.path.basename(d), n,
+                 len(r.get("diff") or []))
+
+    moss_revise.append_history(d, n, message, r.get("reply") or "")
+    out = {"ok": True, "n": n, "reply": r.get("reply") or "",
+           "changed": landed, "diff": r.get("diff") or [],
+           "warnings": r.get("warnings") or []}
+    if landed:
+        # 顺手把最新的 payload 带上：前端不用为了一页刷新整本
+        fresh = _payload(d, spec)
+        out.update({k: fresh.get(k) for k in ("pages", "prompts") if k in fresh})
+        for it in out.get("pages") or []:
+            if it.get("n") == n:
+                out["page"] = it
+                break
+    return jsonify(out)
+
+
+@bp.route("/api/moss/page_chat_undo", methods=["POST"])
+def api_moss_page_chat_undo():
+    """撤销上一句聊天改出来的这一页（只回退一级）。"""
+    data = request.get_json(silent=True) or {}
+    try:
+        d = _task_dir(data.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    try:
+        n = int(data.get("n"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "n 不是页号"}), 400
+    with _RUN_LOCK:
+        if _RUNNING.get(d):
+            return jsonify({"ok": False, "error": "正在画，等这一批跑完再撤"}), 409
+    bak = _read_json(os.path.join(d, "spec_chat_backup.json"), {})
+    slot = ((bak.get("pages") or {}) if isinstance(bak, dict) else {}).get(str(n))
+    if not isinstance(slot, dict) or "prompt_override" not in slot:
+        return jsonify({"ok": False, "error": "没有可撤销的改动"}), 404
+    spec = _read_json(os.path.join(d, "spec.json"), {})
+    for p in spec.get("pages") or []:
+        if p.get("n") == n:
+            p["prompt_override"] = slot.get("prompt_override") or ""
+            break
+    else:
+        return jsonify({"ok": False, "error": "没有第 %s 页" % n}), 404
+    _save(d, spec)
+    # 备份只用一次：撤完就删，避免连点两次「撤销」把事情搅乱
+    try:
+        del bak["pages"][str(n)]
+        _write_json(os.path.join(d, "spec_chat_backup.json"), bak)
+    except BaseException:                   # noqa: BLE001
+        pass
+    fresh = _payload(d, spec)
+    out = {"ok": True, "n": n, "pages": fresh.get("pages") or []}
+    for it in out["pages"]:
+        if it.get("n") == n:
+            out["page"] = it
+            break
+    return jsonify(out)
+
+
+@bp.route("/api/moss/page_chat_history", methods=["GET"])
+def api_moss_page_chat_history():
+    """这一本聊过什么（刷新页面后回填聊天框）。"""
+    try:
+        d = _task_dir(request.args.get("task"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    return jsonify({"ok": True, "history": moss_revise.read_history(d)})
+
+
 @bp.route("/api/moss/status", methods=["GET"])
 def api_moss_status():
     try:

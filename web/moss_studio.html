@@ -172,6 +172,32 @@
     line-height: 1.5; color: var(--text-dim); }
   .errline { color: var(--error); font-size: 11px; margin-top: 6px; word-break: break-all; }
 
+  /* ── 每页下面跟 Agent 聊这一页（2026-11-25） ──────────────────
+     作者在图下方直接提意见，AI 只改这一页的 Layout JSON，改完点「出图」
+     重跑——不用整本重来。放在 .page-block 里、跨两列，图片和编辑器上面。 */
+  .chat { border-top: 1px solid var(--border-soft); padding: 10px 12px;
+          background: #0b0b12; }
+  .chat-log { max-height: 180px; overflow-y: auto; display: grid; gap: 6px;
+              margin-bottom: 8px; }
+  .chat-log:empty { display: none; }
+  .chat-msg { font-size: 12px; line-height: 1.6; padding: 6px 9px;
+              border-radius: var(--radius-sm); white-space: pre-wrap;
+              word-break: break-word; }
+  .chat-msg.me { background: rgba(96,165,250,.12); color: var(--text);
+                 border: 1px solid rgba(96,165,250,.3); }
+  .chat-msg.ai { background: #0f0f17; color: var(--text-dim);
+                 border: 1px solid var(--border-soft); }
+  .chat-msg .who { font-size: 10px; color: var(--text-mute); margin-right: 5px; }
+  .chat-msg .diff { display: block; margin-top: 5px; font-size: 11px;
+                    color: var(--text-mute); }
+  .chat-row { display: flex; gap: 6px; align-items: flex-end; }
+  .chat-row textarea { flex: 1; min-height: 38px; max-height: 120px; resize: vertical;
+                       font-size: 12px; line-height: 1.5; padding: 7px 9px; }
+  .chat-row .btn { white-space: nowrap; }
+  .chat-tip { font-size: 11px; color: var(--text-mute); margin-top: 5px; }
+  .chat-tip.undo { cursor: pointer; text-decoration: underline; }
+  .chat-tip.undo:hover { color: var(--accent); }
+
   /* 任务号是 md5 一类的一长串，直接写在 <h2> 里会把那行撑出卡片
      ——和顶栏那条同一个毛病，用同一套办法：允许收缩 + 省略号。 */
   #spec-task { display: inline-block; max-width: 46ch; vertical-align: bottom;
@@ -767,6 +793,9 @@ function loadPayload(p) {
   renderSpec();
   patch(p);
   showLine(p.line);
+  /* 每页聊过的内容回填（2026-11-25）：刷新 / 换任务都从头拉一次。
+     放在 renderSpec 之后——聊天框是随页渲染出来的，先有 DOM 才贴得进去。 */
+  loadChatHistory();
   // 载入任务：还没出图停在第②步改剧本，已经画过的直接进第③步看图。
   var started = (p.pages || []).some(function (x) {
     return x.status === "done" || x.status === "running";
@@ -896,6 +925,24 @@ function renderPage(page) {
   body.appendChild(cv);
   box.appendChild(body);
 
+  /* 每页下面跟 Agent 聊（2026-11-25 用户要求）：
+     图下面一个输入栏，说「右上那格不对，改成…」，AI 只改这一页的 Layout
+     JSON，改完点「出图」重跑。改的是 prompt_override，不重跑编剧。 */
+  var chat = document.createElement("div");
+  chat.className = "chat";
+  chat.innerHTML =
+    '<div class="chat-log" data-role="chatlog"></div>' +
+    '<div class="chat-row">' +
+    '<textarea data-role="chatinput" data-page="' + page.n + '" ' +
+    'placeholder="这一页哪里不对？例：右上那格外套已经脱了，别再画外套；' +
+    '或者第一格改成从背后拍"></textarea>' +
+    '<button class="btn small primary" data-act="chat" data-page="' + page.n + '">发送</button>' +
+    '</div>' +
+    '<div class="chat-tip">发给编剧 Agent，只改这一页；改好点右上「出图」重跑这一页' +
+    '<span class="chat-tip undo" data-act="chatundo" data-page="' + page.n + '" ' +
+    'style="display:none;margin-left:8px">撤销上一句改动</span></div>';
+  box.appendChild(chat);
+
   var err = document.createElement("div");
   err.className = "errline";
   err.setAttribute("data-role", "err");
@@ -1012,6 +1059,128 @@ async function stopPage(n, btn) {
   if (!r.ok) toast(r.error || "终止失败", true);
   else toast(r.message || ("第 " + n + " 页已终止"));
   refreshStatus();
+}
+
+/* ══ 每页跟 Agent 聊（2026-11-25） ═══════════════════════════
+   作者在图下面说一句「这页哪里不对」，后端把这一页的 Layout JSON 交给
+   编剧 Agent 改，只采纳「骨架不变 + 有差异」的那版，写回 spec 的这一页。
+   改完不用整本重跑——点这一页的「出图」就行。 */
+
+function chatLog(n) {
+  var box = document.querySelector('.page-block[data-page="' + n + '"]');
+  return box ? box.querySelector('[data-role="chatlog"]') : null;
+}
+
+function pushChat(n, who, text, diff) {
+  var log = chatLog(n);
+  if (!log) return;
+  var d = document.createElement("div");
+  d.className = "chat-msg " + (who === "me" ? "me" : "ai");
+  var html = '<span class="who">' + (who === "me" ? "我" : "编剧") + "</span>" + esc(text);
+  if (diff && diff.length) {
+    html += '<span class="diff">' + diff.map(function (x) {
+      return (x.panel ? "格" + x.panel : "整页说明") + "：" +
+        esc(String(x.after || "").slice(0, 60)) + (String(x.after || "").length > 60 ? "…" : "");
+    }).join("　·　") + "</span>";
+  }
+  d.innerHTML = html;
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+}
+
+/* 撤销提示只在「这一页确实聊出过改动」时露出来（后端备份文件有没有这一页）。 */
+function syncChatUndo(n, on) {
+  var box = document.querySelector('.page-block[data-page="' + n + '"]');
+  if (!box) return;
+  var u = box.querySelector('[data-act="chatundo"]');
+  if (u) u.style.display = on ? "" : "none";
+}
+
+async function sendChat(n) {
+  var box = document.querySelector('.page-block[data-page="' + n + '"]');
+  if (!box || !S.task) return;
+  var input = box.querySelector('[data-role="chatinput"]');
+  var btn = box.querySelector('[data-act="chat"]');
+  var text = (input.value || "").trim();
+  if (!text) { toast("先说一句要改什么", true); return; }
+  pushChat(n, "me", text);
+  input.value = "";
+  btn.disabled = true;
+  btn.textContent = "改…";
+  try {
+    var body = { task: S.task, n: n, message: text };
+    // brief / 大纲原话一起带上：改这一页时，「作者原来要什么」是最高优先级
+    body.brief = buildBrief();
+    body.outline = (parseOutline().filter(function (x) { return x.n === n; })[0] || {}).body || "";
+    if ($("prov") && $("prov").value) {
+      body.provider = $("prov").value;
+      if ($("model") && $("model").value) body.model = $("model").value;
+    }
+    var r = await api("/api/moss/page_chat", body);
+    if (!r.ok) {
+      pushChat(n, "ai", r.error || "改失败了，再试一次");
+      toast(r.error || "改失败", true);
+      return;
+    }
+    pushChat(n, "ai", r.reply || "（没有回话）", r.diff);
+    if (r.changed) {
+      /* 采纳了：把这一页的 DOM 重新渲染成新的 prompt / panels。
+         不回填 textarea 之外的整本——只换这一页，别把别的页的编辑状态冲掉。 */
+      var p2 = (r.page || null);
+      if (p2) {
+        var idx = (S.pages || []).findIndex(function (x) { return x.n === n; });
+        if (idx >= 0) S.pages[idx] = p2;
+        if (S.spec && S.spec.pages) {
+          var sp = S.spec.pages.filter(function (x) { return x.n === n; })[0];
+          if (sp && p2 && p2.prompt_override) sp.prompt_override = p2.prompt_override;
+        }
+      }
+      if (r.pages) { S.pages = r.pages; }
+      var pt = box.querySelector('[data-role="prompt"]');
+      if (pt && p2) pt.value = p2.prompt || "";
+      syncChatUndo(n, true);
+      toast("这一页改好了，点「出图」重跑");
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "发送";
+  }
+}
+
+async function undoChat(n) {
+  if (!S.task) return;
+  var r = await api("/api/moss/page_chat_undo", { task: S.task, n: n });
+  if (!r.ok) { toast(r.error || "撤销失败", true); return; }
+  pushChat(n, "ai", "已撤销这一页的上一句改动。");
+  if (r.pages) S.pages = r.pages;
+  var box = document.querySelector('.page-block[data-page="' + n + '"]');
+  var pt = box ? box.querySelector('[data-role="prompt"]') : null;
+  if (pt && r.page) pt.value = r.page.prompt || "";
+  syncChatUndo(n, false);
+  toast("已撤销，记得重新出图");
+}
+
+/* 打开一本时把聊过的内容回填（刷新不丢上下文）。 */
+async function loadChatHistory() {
+  if (!S.task) return;
+  try {
+    var r = await api("/api/moss/page_chat_history?task=" + encodeURIComponent(S.task));
+    if (!r.ok) return;
+    (r.history || []).forEach(function (h) {
+      var m = /^第(\d+)页：/.exec(h.content || "");
+      if (h.role === "user" && m) pushChat(parseInt(m[1], 10), "me",
+        (h.content || "").replace(/^第\d+页：/, ""));
+      else if (h.role === "assistant") {
+        /* 助手回复不知道属于哪一页——按「上一句作者话的页号」贴回去 */
+        var last = null;
+        (r.history || []).slice(0, r.history.indexOf(h)).forEach(function (x) {
+          var mm = /^第(\d+)页：/.exec(x.content || "");
+          if (x.role === "user" && mm) last = parseInt(mm[1], 10);
+        });
+        if (last) pushChat(last, "ai", h.content || "");
+      }
+    });
+  } catch (e) { /* 回填失败不影响使用 */ }
 }
 
 function startPoll() {
@@ -1255,10 +1424,15 @@ function zoomClose() {
 }
 
 document.addEventListener("click", function (e) {
-  var b = e.target.closest && e.target.closest("button[data-act]");
+  /* 聊天栏那两个控件是 span 不是 button（撤销提示要长得像一行小字），
+     所以这里一起收进来，别只认 button。 */
+  var b = e.target.closest && e.target.closest("[data-act]");
   if (b) {
     var n = parseInt(b.dataset.page, 10) || 0;
     if (b.dataset.act === "stop") { stopPage(n, b); return; }
+    if (b.dataset.act === "chat") { sendChat(n); return; }
+    if (b.dataset.act === "chatundo") { undoChat(n); return; }
+    if (b.dataset.act !== "draw" && b.dataset.act !== "reroll") return;
     draw(n || null, b.dataset.act === "reroll");
     return;
   }
@@ -1283,6 +1457,15 @@ document.addEventListener("keydown", function (e) {
   if (e.key === "Escape") { zoomClose(); }
   else if (e.key === "ArrowLeft") { e.preventDefault(); zoomShow(Z.i - 1); }
   else if (e.key === "ArrowRight") { e.preventDefault(); zoomShow(Z.i + 1); }
+});
+
+/* 每页聊天框：Ctrl/Cmd + Enter 直接发送（回车留给换行）。 */
+document.addEventListener("keydown", function (e) {
+  if (!(e.ctrlKey || e.metaKey) || e.key !== "Enter") return;
+  var t = e.target;
+  if (!t || t.getAttribute("data-role") !== "chatinput") return;
+  e.preventDefault();
+  sendChat(parseInt(t.getAttribute("data-page"), 10) || 0);
 });
 
 $("btn-write").addEventListener("click", doWrite);

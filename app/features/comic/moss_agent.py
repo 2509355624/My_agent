@@ -208,6 +208,18 @@ summary.canvas 一格页写 single，多格页写 multi_panel（代码会按格�
 ════ 人：脸是固定的，衣服跟着这一页走 ════
 输入里的「她是谁」通常是一段现成的英文外形串。那是**角色档案**，重点是脸和身材：年龄、体型、发型发色、头带、眼睛、脸型、配饰。
 档案里写的那件衣服不要抄。衣服是她这一集穿的东西，不是她这个人。
+
+⚠ **分集大纲点名要求的衣着状态，优先于本段以下所有服饰规则（2026-11-25 加）。**
+大纲在具体某一页写了穿什么、换掉、脱掉、不带、不着衣物，那一页就照大纲写，
+本段以下规则只用来**填充大纲没指定的部分**，不许反过来推翻大纲点名的状态。
+尤其是「不穿 / 没有外套了 / 光着」这类**减法**：大纲减掉的，这一页的 outfits
+就必须真的没有它——不许因为上一页有这么一件、或者本段说「同一件衣服跨页用同一串词」
+就让它复活。衣服的连贯是**跟大纲走**，不是跟上一页走。
+
+**「不穿」怎么写**：outfits 要写成**正向的状态**，别写 `no shirt` 这种否定式
+（出图模型读否定句只会看见 shirt）。身上没有衣物就正着写她身上是什么——
+`fully nude, bare skin`、`topless, bare chest`、`a plain white underlayer only, no
+outer layer`、宠物就写 `bare fur, no coat`。否定式一句都不要留在 outfits 里。
 · **cast 里必须有一项比例锚点，固定写这一串**：`slender teen proportions, long legs, small head`。
   档案里写 slender small frame / petite / tiny / childlike 的，**换成这一串**——年龄、发型、头带、
   眼睛、配饰一个字都不动，只换这一项。small frame / petite 出图会把她画成小孩，
@@ -916,6 +928,31 @@ _CLOTH = (r"(?:t-shirt|shirt|tee|blouse|dress|gown|uniform|jersey|sweater"
           # 于是「她穿 a navy blue sailor top」被当成没写衣服。
           r"|(?:[a-z]+ )?top)")
 
+
+# 中文大纲里「这句话在讲穿着」的粗判（2026-11-25）。
+#
+# 用途只有一个：`audit()` 靠它决定「要不要把作者原话摆到审查者面前」。
+# **不是**衣着词表闸门——漏检只是少提示一次，误检只是多一条让模型自查的
+# 提示，两种情况都不会拦稿、不会替模型判断穿得对不对。
+# 所以这里刻意写宽：衣着名、穿脱动作、以及「没了 / 光着 / 只穿」这类减法表述。
+_OUTFIT_CN = re.compile(
+    r"衣服|服装|衣着|服饰|外套|大衣|夹克|羽绒|棉袄|毛衣|卫衣|衬衫|衬衣|T恤|"
+    r"裙子|裙|裤子|牛仔裤|短裤|睡衣|浴衣|和服|泳装|泳衣|内搭|内衣|背心|吊带|"
+    r"袜子|丝袜|鞋|靴|围巾|帽子|手套|领带|校服|制服|披风|斗篷|护甲|"
+    r"裸|光着|光身|一丝不挂|赤身|袒露|"
+    r"穿|脱|褪|换|披|裹|摘下|取下")
+
+
+def _mentions_cloth(text):
+    """这一句（中文大纲原话）有没有在讲穿着。只做粗判，不判断内容。"""
+    raw = str(text or "")
+    if not raw.strip():
+        return False
+    if _OUTFIT_CN.search(raw):
+        return True
+    # 大纲也可能直接写英文衣物（作者抄了英文串进来）
+    return bool(re.search(_CLOTH, raw.lower()))
+
 # 半脱：动作的起点和终点叠在一格里。这些句式一旦出现，出图必然穿一件拿一件。
 # 注意不认裸的 halfway——"a hand lifted halfway and frozen" 是合法的定格。
 _MIDSTATE = (r"half[- ]?off|mid[- ]?change|one bare shoulder|one shoulder bare"
@@ -1019,7 +1056,7 @@ _ROLE_LOOK = re.compile(
     r"grey|gray|brown|blond|black|white|green|pale)\b", re.I)
 
 
-def audit(js, cap=12, male_none=False, group=False):
+def audit(js, cap=12, male_none=False, group=False, outline=None):
     """只看可数的事实。返回 `(blocking, warns)`。
 
     `blocking` 是要模型改的：代码补不回来的（格子对不上骨架、文字跑出格子、
@@ -1028,6 +1065,10 @@ def audit(js, cap=12, male_none=False, group=False):
     autofix 会重建 summary、截断页数。
     `male_none=True` 来自输入里的「男主：无」：这一集没有他的话，就不该有他的框。
     `group=True` 是群像模式：跳过 POV 那套「只画女生」的判据，cast 也不再强制只有 girl。
+    `outline` 是 `parse_outline()` 的结果 `[(n, 原文), ...]`：用户逐页点名的原话。
+    **只在「这一页原话里提到衣着」时**，把原话和这一页 outfits 并排摆出来，交给
+    模型自己判断对不对——代码不判「穿得对不对」，只判「这里有一句作者的话，
+    你必须自己核对过」。见下面 `_OUTLINE_CLOTH_HINT` 那段。
     """
     out = []
     warns = []
@@ -1145,6 +1186,28 @@ def audit(js, cap=12, male_none=False, group=False):
                            "照抄进每一格看得到身体的 caption（只写一个女生＝没交作业）"
                            % (n, "/".join(bad), "; ".join(
                                str(v) for v in of.values())[:80]))
+
+    # 大纲点名的衣着 vs 实际交的 outfits（2026-11-25 用户：「有时候我会写没有服装，
+    # 或者裸体……AI 后面那个提示词会写死了服饰」「不能让 AI 写死」）。
+    #
+    # 代码只做**检测**：这一页的大纲原话里有没有在讲穿着。讲了，就把原话和
+    # 这一页 outfits 并排摆出来，要求模型自己核对——「对不对」由它判，
+    # 因为它看得懂「不穿」和「赤着上身」是同一件事，代码看不懂。
+    # 这里不查「准不准」，只保证「作者这句话被摆在审查者面前过」。
+    # 用词表判「这句提没提衣服」不算闸门：漏检只是少提示一次，不会误杀稿子。
+    for n, body in (outline or []):
+        if n < 1 or n > len(pgs):
+            continue
+        if not _mentions_cloth(body):
+            continue
+        of = (pgs[n - 1] or {}).get("outfits")
+        if not isinstance(of, dict) or not of:
+            continue                     # 缺 outfits 上面已经报过，不重复
+        out.append("第%d页：作者在大纲里点名了衣着「%s」，这一页 outfits 写的是「%s」"
+                   "——自己核对一遍：大纲说穿什么就穿什么，大纲说脱掉 / 不带 / "
+                   "不着衣物，outfits 就必须真的没有它，不许因为上一页有就让它复活；"
+                   "对上了就原样保留，一个字都别改" % (n, str(body)[:60], "; ".join(
+                       str(v) for v in of.values())[:80]))
 
     # 场景引用式写法（2026-11-22 粉光除粘液：P2 the same stone plaza 丢了 dusk
     # 画成白天、P6 the same bathroom 丢了瓷砖浴缸换了布局）：每页出图独立送画，
@@ -1390,26 +1453,39 @@ def _stamp_outfits_cells(pj, outfits):
         it["caption"] = (cap.rstrip().rstrip(".") + ". " + bits + ".")
 
 
-def _stamp_outfits(pj, outfits):
+def _stamp_outfits(pj, outfits, note=""):
     """把这一页的衣着状态原文接到页 caption 后面（服饰连贯性）。
 
     outfits 是编剧逐页维护的「这一页身上是什么」。靠模型在格子里自觉抄，
     一定会有格子漏抄 / 写回旧衣（2026-11-22 魔法少女实测：P5 已经脱了裙子
     还画成穿着裙子、P6 该穿水手服变身服又复活）。这里和 palette 同一套
     做法：逐字复制，不猜、不改词、不替它选衣服。
+
+    `note`（2026-11-25）：用户在大纲里给这一页点名的原话，接在最后当锚。
+    outfits 是编剧转述的英文，出图模型只看到转述、看不到用户原话；大纲
+    点名「不穿 / 脱掉 / 换掉」的页，一旦转述漂了，光看英文没人能发现。
+    这里只是**把原话附上**，不翻译、不判断、不覆盖 outfits——判断权在
+    出图前的模型和用户自己。
     """
-    if not isinstance(outfits, dict) or not outfits:
-        return
     if not isinstance(pj.get("summary"), dict):
         return
+    # outfits 空但作者在这一页点了原话，仍然要把原话钉上——编剧漏交 outfits
+    # 的时候，作者这句就是这一页唯一能约束衣服的锚（2026-11-25）。
+    note = (note or "").strip()
+    if not isinstance(outfits, dict):
+        outfits = {}
     bits = "; ".join(
         "%s wears: %s" % (k, str(v).strip().rstrip("."))
         for k, v in outfits.items() if str(v or "").strip())
-    if not bits:
+    if not bits and not note:
         return
     sm = pj["summary"]
-    sm["caption"] = ((sm.get("caption") or "").strip().rstrip(".")
-                     + ". Outfit state for this page: " + bits + ".")
+    cap = (sm.get("caption") or "").strip().rstrip(".")
+    if bits:
+        cap += ". Outfit state for this page: " + bits
+    if note:
+        cap += ". Author's requirement for this page: " + note.rstrip(".")
+    sm["caption"] = cap + "."
 
 
 def _repair_user(brief, pages, js, issues):
@@ -1503,7 +1579,8 @@ def generate(brief, pages, call, progress=None, group=False):
     raw = call(system, user, max_tokens=16000, temperature=0.85, tag="agent_p0") or ""
     js = M.pick_json(raw)                    # 解析不了直接抛，交给上层 502
 
-    issues, warns = audit(js, cap, male_none=male_none, group=group)
+    issues, warns = audit(js, cap, male_none=male_none, group=group,
+                          outline=outline)
     rounds.append({"round": 0, "issues": issues, "warns": warns, "chars": len(raw)})
     say("体检：%s" % ("通过" if not issues else "%d 条待修" % len(issues)))
 
@@ -1521,7 +1598,8 @@ def generate(brief, pages, call, progress=None, group=False):
             say("第 %d 轮没解析出 JSON，保留上一版" % r)
             rounds.append({"round": r, "issues": ["解析失败"], "chars": len(raw2)})
             break
-        new_issues, new_warns = audit(js2, cap, male_none=male_none, group=group)
+        new_issues, new_warns = audit(js2, cap, male_none=male_none, group=group,
+                                      outline=outline)
         rounds.append({"round": r, "issues": new_issues, "warns": new_warns,
                        "chars": len(raw2)})
         # 只有变好才收（问题数变多说明它改崩了）
@@ -1545,7 +1623,8 @@ def generate(brief, pages, call, progress=None, group=False):
         rounds.append({"round": "review", "issues": ["解析失败"],
                        "chars": len(raw_v)})
     else:
-        v_issues, v_warns = audit(js_v, cap, male_none=male_none, group=group)
+        v_issues, v_warns = audit(js_v, cap, male_none=male_none, group=group,
+                                  outline=outline)
         rounds.append({"round": "review", "issues": v_issues,
                        "warns": v_warns, "chars": len(raw_v)})
         if len(v_issues) <= len(issues):
@@ -1603,7 +1682,8 @@ def generate(brief, pages, call, progress=None, group=False):
         _stamp_palette(pj, js.get("palette"))
         # 服饰状态钉进页 caption（P5/P6 连贯性），然后把这个中间字段从
         # 出图 JSON 里摘掉——Layout JSON 只该有出图端认得的字段。
-        _stamp_outfits(pj, p.get("outfits"))
+        _stamp_outfits(pj, p.get("outfits"),
+                       (dict(outline).get(n) or "") if outline else "")
         # **再给它钉进每一格的 caption**（2026-11-24）。页 caption 只管「这一页
         # 身上是什么」，离真正出这一格的那张图还隔着一道：模型完全可以一格写
         # 「一个女生坐在窗边」了事，页 caption 就只是背景资料。用户要的是
