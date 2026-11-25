@@ -211,6 +211,17 @@
              服务端，见下面那段——以前这里直接落到 else 判「没跑完就断了」，
              于是两台同时开着时，另一台一刷新就看到「这张断了，点重排」。 */
           again.push({ rec: m, card: c });
+        } else if (willCheck(m)) {
+          /* 没有 file 也没有 job —— 以前一律判「这条没跑完就断了」。
+             但**提交到一半就被截断**的记录也长这样：点了发送、任务已经在
+             服务端排上队了，页面在这一瞬间刷新，`rec.job` 还没等到回填。
+             用户 2026-11-25 报的正是这个：「任务已经提交到服务端了，刷新
+             回来它应该说正在跑才对」。
+
+             所以这里不急着判死，先按提交时间问一次服务端（见下面
+             `promise()`）：新鲜的、确实在跑的接回轮询；查不到、或者本来就
+             是陈年记录，才说没跑完。 */
+          again.push({ rec: m, card: c, orphan: true });
         } else {
           /* 没有 file 也没有 job 的 `img` 记录 = 提交过、但没等到结果就
              没了（服务重启 / 页面关太早）。存下来的 note 十有八九是
@@ -250,11 +261,25 @@
       else global.WSChat.scrollBottom();
       return;
     }
+    /* `seen` 要拿到两段 then 之间用（认领会往里补一条），所以先声明在外面 */
+    var seen = {};
     global.WSGen.status().then(function (st) {
-      var seen = {};
       if (st && st.ok) {
         (st.jobs || []).forEach(function (j) { seen[j.id] = j; });
       }
+      /* 「提交到一半」那几条先去按时间认领：认到了就把服务端真实的任务号
+         补回记录上，后面跟普通那条走同一条路（出图 / 接回轮询 / 判死）。 */
+      var claims = again.map(function (a) {
+        if (!a.orphan) return Promise.resolve();
+        return promise(a.rec).then(function (job) {
+          if (!job) return;
+          a.rec.job = job.id;
+          a.card.job = job.id;
+          seen[job.id] = job;
+        });
+      });
+      return Promise.all(claims).then(function () { return st; });
+    }).then(function (st) {
       again.forEach(function (a) {
         if (a.comic) return;                       // 漫画走自己的轮询
         var job = seen[a.rec.job];
@@ -262,6 +287,9 @@
           global.WSChat.showImage(a.card, job);
           return;
         }
+        /* 认领过、服务端也确实有它（还在跑）→ 接回轮询。原来那条
+           `job.state !== "error"` 的分支要求「job 存在」，认领回来的正好
+           落在这里；没认到（服务端没这张）就继续往下判死。 */
         if (!st || !st.ok || (job &&
             job.state !== "error" && job.state !== "cancelled")) {
           // 计时起点用服务端的提交时间：昨天提交的那张一接回来就算超时
@@ -272,7 +300,10 @@
         }
         global.WSChat.failCard(a.card,
           (job && job.error) ||
-          "这一条已经没在跑了（服务重启过 / 早结束了），点重试再排一次", true);
+          (a.orphan
+            ? "这条没跑完就断了（服务重启 / 页面关太早），点重试再排一次"
+            : "这一条已经没在跑了（服务重启过 / 早结束了），点重试再排一次"),
+          true);
       });
       /* 服务端说不了话（5174 刚起 / 网络抖）时，上面那段按「不猜」先接回
          轮询；但轮询的第一步就是「任务不在列表里 → 判它没了」，刚接回来的
@@ -335,6 +366,51 @@
 
   function keyOf(m) {
     try { return m ? JSON.stringify(m) : ""; } catch (e) { return ""; }
+  }
+
+  /* 「提交到一半被截断」的记录还值不值得去服务端问一次？
+
+     判据只有时间，而且给得很紧（`FRESH_MS`）：提交后这么久都没等到回填
+     job 号的，基本就是页面关掉了、或者服务重启把任务弄丢了——那时候再挂
+     一句「正在跑」是骗人，用户第二天回来看见一条转了半天的假卡更糟。
+     反过来，刚点完发送就刷新的那种，一定落在这个窗口里。
+
+     老记录（连 userId 都没有的 `old_*`）不问：那些是上个月的事，问了也
+     只是白打一次接口。 */
+  var FRESH_MS = 10 * 60 * 1000;
+
+  function bornAt(m) {
+    /* 记录 id 是 `img` + Date.now().toString(36) + `_序号`（见 chat.js 的
+       newId），时间戳就藏在里面——这是唯一一个不需要额外存字段的出生时间。
+
+       ⚠️ 不能拿 `/^[a-z]+/` 去剥前缀：base36 的时间戳里本来就有字母
+       （1795596642639 → `mwvvuic1s`），那样会把 `mwv` 一起吃掉，解析出来
+       只剩两位数。所以只剥**已知的**那几个前缀词，再按长度兜一道。 */
+    var id = String((m && m.id) || "");
+    var head = id.split("_")[0].replace(/^(img|comic|note|ref|user|u|m)/i, "");
+    if (head.length < 8) return 0;            // 太短，不可能是毫秒时间戳
+    var t = parseInt(head, 36);
+    return isFinite(t) && t > 1e12 ? t : 0;
+  }
+
+  function willCheck(m) {
+    if (!m || m.k !== "img" || m.file || m.err || m.job) return false;
+    var t = bornAt(m);
+    return !!t && (Date.now() - t) < FRESH_MS;
+  }
+
+  /* 「提交到一半」那条：去服务端按**提交时间**认领一个还在跑的任务。
+
+     不加这个接口就只能靠猜——要么一律判死（用户现在遇到的），要么一律
+     说「正在跑」（第二天回来看见假卡）。服务端手里有 `_JOBS` 的完整
+     记录（提交时间、所有者、有没有已经出图），让它自己说这条到底还
+     在不在，比前端猜准得多。 */
+  function promise(rec) {
+    var t = bornAt(rec);
+    if (!t) return Promise.resolve(null);
+    return global.WSGen.adopt(t).then(function (d) {
+      return (d && d.ok && d.job) ? d.job : null;
+    })["catch"](function () { return null; });
   }
 
   /* 按 userId 在「原话 → 气泡」那张表里找人。表是按内容分桶的，这里全扫

@@ -87,6 +87,14 @@
     card.img = img;                 // 留个引用：下载/预览都靠它
     if (card.fill) card.fill();     // 有图了：空壳变回真卡片
     card.note.hidden = true;
+    /* 把状态行**彻底**收掉：隐藏之外还要摘掉 `running`（那一类带着转圈
+       图标的动画）和转圈图标本身。只 hidden 的话，下一轮 tick 万一又把这张
+       卡捞回来，画出来的第一帧还是「图标在转」的样子——用户看到的就是
+       「图已经出来了，卡片还在转圈」。 */
+    if (global.WSCard && global.WSCard.setNote) {
+      global.WSCard.setNote(card.note, "", { run: false });
+      card.note.hidden = true;
+    }
     if (card.stop) card.stop.hidden = true;
     if (card.userNode && global.WSCard) {
       global.WSCard.clearFailLine(card.userNode);
@@ -120,6 +128,11 @@
        不再放重试按钮——反复点重画时原来每次都会刷一行红字 + 一颗按钮。 */
     card.note.hidden = true;
     card.note.textContent = "";
+    /* 同 showImage：收尾就把转圈动画类一起摘掉，别留一个「停不下来」的容器 */
+    if (global.WSCard && global.WSCard.setNote) {
+      global.WSCard.setNote(card.note, "", { run: false });
+      card.note.hidden = true;
+    }
     if (card.acts) { card.acts.innerHTML = ""; card.acts.hidden = true; }
     failUserLine(card, msg || "这张没画出来，点重画再来一次");
     /* 没出图的卡退回空闲态，别留 3:4 的大空壳；出过图的留图不动。 */
@@ -343,6 +356,21 @@
     if (S().timer) { clearInterval(S().timer); S().timer = null; }
   }
 
+  /* 把一张卡从「还在跑」里摘干净（按卡片认，不按 id 认）。
+
+     为什么不能只 `delete S().pending[id]`：同一张卡可能同时挂在多个
+     id 下（认领回来时会换一次号，`restore` 也会按它自己的键塞进去），
+     只删一个键，剩下的那个下一次 tick 还会把它捞出来，于是图出来了卡片
+     仍在转圈。这里按对象身份清，一次清干净。 */
+  function forget(card) {
+    var pending = S().pending;
+    Object.keys(pending).forEach(function (k) {
+      if (pending[k] === card) delete pending[k];
+    });
+    card.since = 0;
+    card.job = "";
+  }
+
   /* 状态接口连续失败时别再打接口，但**不要把卡片判死**：网络抖一下不等于
      这张图没了。把它们的计时按下暂停（`since` 往后推），等下一次状态恢复
      再接着算——否则一次断网就能把半个小时的画白等。 */
@@ -364,10 +392,10 @@
     var limit = (ph === "running") ? PAINT_MS : SETTLE_MS;
     if (Date.now() - card.since < limit) return false;
     var mins = Math.round(limit / 60000);
-    delete S().pending[card.job];
     fail(card, (ph === "running")
       ? "等了 " + mins + " 分钟还在画，可能卡住了。点重试重排一张"
       : "排队等了 " + mins + " 分钟还没轮到，卡住了。点重试重排一张", true);
+    forget(card);
     return true;
   }
 
@@ -383,9 +411,15 @@
       S0.fails = 0;
       var byId = {};
       (d.jobs || []).forEach(function (j) { byId[j.id] = j; });
+      /* 同一张卡可能挂在两个键下（认领换过号 / 存档也塞过一次）。不按卡
+         去重的话，这一轮会把它处理两遍：第一遍出图收尾、第二遍又按「还在
+         跑」把状态行写回去——用户看到的就是「图出来了，卡片还在转圈」。 */
+      var seenCard = [];
 
       Object.keys(S0.pending).forEach(function (id) {
         var card = S0.pending[id];
+        if (seenCard.indexOf(card) >= 0) return;
+        seenCard.push(card);
         var job = byId[id];
         // 任务不在列表里 = 进程重启过，这张再也回不来，别让它一直转。
         // 但状态接口刚恢复的第一次不能这么说：进程重启后 /api/gen/status
@@ -400,32 +434,38 @@
           }
           delete S0.pending[id];
           fail(card, "服务重启过，这张没了，点重试再排一次", true);
+          forget(card);
           return;
         }
         card.graceUntil = 0;
         if (job.state === "done") {
-          delete S0.pending[id];
           disarmStop(card);
           showImage(card, job);
+          /* 这一张到此为止：把它的卡片从这个轮询里彻底摘掉。
+             ⚠️ 以前这里只 `delete pending[id]`，同一张卡要是还挂在别的
+             键下（认领时换过号、`restore` 也按自己的键塞过），下一次 tick
+             又把它当「还在跑」重画一遍状态行——用户看到的就是「图已经出来
+             了，卡片还在转圈」。`forget()` 按对象身份清，一次清干净。 */
+          forget(card);
         } else if (job.state === "error" || job.state === "cancelled") {
-          delete S0.pending[id];
           disarmStop(card);
           if (job.state === "cancelled") {
             card.since = 0;
             card.note.hidden = false;
             paintNote(card, "已终止", false, false);   // 停下来了就别再转圈
             if (card.rec) {
-              card.job = "";
               card.rec.job = "";
               card.rec.note = "已终止";
               card.rec.err = false;
               H.patch(card.rec, { job: "", note: "已终止", err: false });
               H.save(null);
             }
+            forget(card);
             return;
           }
           // stuck=true 是服务端判的「线程丢了，这张根本没跑」
           fail(card, job.error || "这张没出来", !!job.stuck);
+          forget(card);
         } else {
           // 带上参考图时把它读图的结果说清楚：读到了就说「照着参考图画」，
           // 没读到就说「按描述画」——用户不该猜这张图到底用没用上。

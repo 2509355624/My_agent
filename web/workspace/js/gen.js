@@ -29,6 +29,16 @@
     return global.WSApi.get(BASE + "/status");
   }
 
+  /* 按**提交时间**认领一条还在跑的任务（2026-11-25）。
+
+     为什么要它：任务号是 `/submit` 响应回来之后才写进存档的，页面在那一刻
+     刷新，存档里那条就只剩「有提示词、没任务号」。以前前端只能判它「断了」，
+     可服务端还排着队。记录自己的出生时间（id 里的时间戳）是唯一还在的凭据，
+     拿它去问一句，服务端知道答案。`at` 是毫秒。 */
+  function adopt(at) {
+    return global.WSApi.get(BASE + "/adopt?at=" + encodeURIComponent(at));
+  }
+
   /* 终止一张（2026-11-23 用户：「加个终止按钮」）。和服务端同一个口子：
      排队中的从队列摘掉，正在画的走定向 /interrupt 并且**不会投递**。 */
   function cancel(id) {
@@ -81,6 +91,7 @@
     channels: channels,
     submit: submit,
     status: status,
+    adopt: adopt,
     cancel: cancel,
     img: img,
     imgKey: imgKey,

@@ -75,6 +75,11 @@ _MAX_PROMPT = 100000
 # 一次最多认几张参考图。每张都要走一次识图（几秒 + 一份额度），挂十张等于
 # 让用户干等半分钟；超过的部分直接忽略，不报错。
 MAX_REFS = 3
+# `/api/gen/adopt` 认领任务的时间窗（秒）。记录 id 里的时间戳是毫秒精度的
+# 出生时间，用户那条记录就是那一刻建的，正常差不到 1 秒；给 2 分钟是留给
+# 「本机时钟比服务器快一点」「提交接口排队」这类噪声，不能给更大——再宽就
+# 会把同一句话前后两分钟的两次提交认成同一条。
+ADOPT_WINDOW = 120.0
 
 # 账本与「清空截止」（测试进程经 state_path 自动落临时目录，互不污染）。
 _LEDGER = state_path("gen_pad.jsonl")
@@ -953,6 +958,51 @@ def api_status():
             job["phase"] = _phase_of(job)
     return jsonify({"ok": True, "jobs": [_public(j) for j in jobs],
                     "queue_depth": depth, "comfy_online": _comfy_up})
+
+
+@bp.route("/api/gen/adopt")
+def api_adopt():
+    """按**提交时间**认领一条还在跑的任务（刷新页面时用）。
+
+    「点发送 → 页面立刻刷新」这种最普通的操作，前端会丢一次：任务号是
+    提交接口响应回来之后才写进记录的，页面在那一刻刷新，存档里那条就只剩
+    「有提示词、没任务号、没图」。以前前端只能把它判成「这条没跑完就断了」
+    ——可服务端明明还排着队（用户 2026-11-25 报的正是这句）。
+
+    这里给前端一个不靠任务号也能认回来的口子：拿记录自己的提交时间
+    （记录 id 里带着，见 archive.js 的 bornAt）来问，服务端替它找：
+       · 同一个人（`_who()`，5175 网关会注入 qq）；
+       · 提交时间落在 `at` 前后 `ADOPT_WINDOW` 秒内；
+       · 还没结束（queued / running）。
+    多条命中时取时间最接近的那条——时间是唯一的凭据，近的那条才是它。
+
+    只回**已经在跑**的：`done` 的那条不该在这里被"认领"（前端重放时它要么
+    已经有 file，要么已经判过死），结束了的也不回（回一个 error 状态的 job
+    等于让前端替别的记录收尾）。
+    """
+    try:
+        at = float(request.args.get("at") or 0)
+    except (TypeError, ValueError):
+        at = 0.0
+    if at <= 0:
+        return jsonify({"ok": False, "error": "没给时间"}), 400
+    from app.features.chat import routes as chat_routes
+    owner = chat_routes._who() or "__anonymous__"
+    best = None
+    with _JOBS_LOCK:
+        for job in _JOBS.values():
+            if job.get("owner") != owner:
+                continue
+            if job.get("state") not in ("queued", "running"):
+                continue
+            gap = abs(float(job.get("ts") or 0) - at / 1000.0)
+            if gap > ADOPT_WINDOW:
+                continue
+            if best is None or gap < best[0]:
+                best = (gap, job)
+    if best is None:
+        return jsonify({"ok": True, "job": None})
+    return jsonify({"ok": True, "job": _public(best[1])})
 
 
 @bp.route("/api/gen/cancel", methods=["POST"])
