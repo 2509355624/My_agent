@@ -293,6 +293,9 @@
         if (at >= 0) S.msgs.splice(at, 1);
         S.cards.delete(rec);
       },
+      /* 重画一律走**当前选的默认画风**（用户 2026-11-25：换成极光之后点
+         重画就该用极光，不能沿用这张当初的渠道）。 */
+      currentSkill: function () { return S.skill; },
       /* `user` 恒为 null（重画不重画气泡）：新卡贴在列表最底下，
          跟新发一条一样显眼。旧卡和旧气泡都留在原位不动。 */
       submit: function (text, skill, refs, described, user, _defer, finalPrompt) {

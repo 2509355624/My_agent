@@ -269,7 +269,7 @@
       /* 服务端说不了话（5174 刚起 / 网络抖）时，上面那段按「不猜」先接回
          轮询；但轮询的第一步就是「任务不在列表里 → 判它没了」，刚接回来的
          那一下必然判死。所以状态接口告假的时候，先别接轮询，也别判死：
-         留着「准备中…」等下一次刷新或下一次提交把它接上——这比给用户一句
+         留着「正在跑…」等下一次刷新或下一次提交把它接上——这比给用户一句
          假的「服务重启过，这张没了」诚实得多。 */
       again.forEach(function (a) {
         if (a.comic && global.WSCreate && global.WSCreate.resume) {
@@ -279,7 +279,7 @@
       global.WSChat.scrollBottom();
       if (Object.keys(global.WSChat.pending).length) global.WSChat.startPoll();
     }, function () {
-      // 接口不通：不猜，卡面留在「准备中…」，不接轮询（原因见上）
+      // 接口不通：不猜，卡面留在「正在跑…」，不接轮询（原因见上）
       again.forEach(function (a) {
         if (a.comic) {
           if (global.WSCreate && global.WSCreate.resume) {
@@ -290,8 +290,8 @@
         a.card.since = 0;
         a.card.note.hidden = false;
         a.card.note.className = "note";
-        a.card.note.textContent = "准备中，等显卡空出来";
-        a.card.noted = "准备中，等显卡空出来";
+        a.card.note.textContent = "正在跑，画好会自动弹出来";
+        a.card.noted = "正在跑，画好会自动弹出来";
       });
       if (Object.keys(global.WSChat.pending).length) global.WSChat.startPoll();
     });

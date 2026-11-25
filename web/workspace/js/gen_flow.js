@@ -50,6 +50,22 @@
 
   function S() { return H.state(); }
 
+  /* 写卡片上的状态行（带不带转圈由 `run` 定，见 card.js 的 setNote）。
+     `card.noted` 记最后一次写进去的那句，用来避免每 2 秒重置一次动画。 */
+  function paintNote(card, text, bad, run) {
+    if (!card || !card.note) return;
+    if (card.noted !== text) {
+      if (global.WSCard && global.WSCard.setNote) {
+        global.WSCard.setNote(card.note, text, { bad: !!bad, run: run !== false });
+      } else {
+        card.note.hidden = false;
+        card.note.className = "note" + (bad ? " err" : "");
+        card.note.textContent = text;
+      }
+    }
+    card.noted = text;
+  }
+
   // ── 提交 ──────────────────────────────────────────────
 
   /* refs：这一轮要带上的参考图 id。生图接口本身是按描述出图，参考图随请求
@@ -69,7 +85,7 @@
                 described: !!described,
                 userId: userNode ? (userNode._wsUserId || "") : "",
                 userText: userNode ? (userNode._wsUserText || "") : "",
-                job: "", file: "", note: "排队中…", err: false };
+                job: "", file: "", note: "正在提交…", err: false };
     var card = H.newCard(prompt, skill, rec);
     card.rec = rec;
     S().cards.set(rec, card);
@@ -79,7 +95,7 @@
     if (userNode) card.userNode = userNode;
     rec.userNode = userNode || null;
     card.since = Date.now();       // 超时从这里起算，见 tick()
-    card.noted = "排队中…";
+    card.noted = "正在提交…";
     rec.userText = userNode ? (userNode._wsUserText || "") : "";
     rec.userId = userNode ? (userNode._wsUserId || "") : "";
     rec.finalPrompt = !!finalPrompt;
@@ -113,7 +129,7 @@
       S().cards.set(rec, fresh);
       rec.job = "";
       rec.file = "";
-      rec.note = "排队中…";
+      rec.note = "正在提交…";
       rec.err = false;
       fire(fresh, rec, rec.refs, rec.described);
       return;
@@ -122,10 +138,10 @@
     card.refs = rec.refs || [];
     card.described = !!rec.described;
     card.since = Date.now();
-    card.noted = "排队中…";
+    card.noted = "正在提交…";
     rec.job = "";
     rec.file = "";
-    rec.note = "排队中…";
+    rec.note = "正在提交…";
     rec.err = false;
     if (card.img) { card.img.remove(); card.img = null; }
     card.acts.innerHTML = "";
@@ -174,8 +190,8 @@
       }
       armStop(card);
       S().pending[card.job] = card;
-      card.say("排队中…");
-      rec.note = "排队中…";
+      card.say("正在跑，画好会自动弹出来", false, true);
+      rec.note = "正在跑，画好会自动弹出来";
       H.patch(rec, { job: rec.job, prompt: rec.prompt, note: rec.note, err: false });
       startPoll();
       tick();
@@ -208,8 +224,7 @@
           return;
         }
         card.note.hidden = false;
-        card.note.className = "note";
-        card.note.textContent = "正在停，稍等…";
+        paintNote(card, "正在停，稍等…");
       })["catch"](function () {
         b.disabled = false;
         b.textContent = "终止";
@@ -286,9 +301,7 @@
           if (!card.graceUntil) card.graceUntil = Date.now() + GHOST_MS;
           if (Date.now() < card.graceUntil) {
             card.note.hidden = false;
-            card.note.className = "note";
-            card.note.textContent = "准备中，等显卡空出来";
-            card.noted = "准备中，等显卡空出来";
+            paintNote(card, "正在跑，画好会自动弹出来");
             return;
           }
           delete S0.pending[id];
@@ -306,9 +319,7 @@
           if (job.state === "cancelled") {
             card.since = 0;
             card.note.hidden = false;
-            card.note.className = "note";
-            card.note.textContent = "已终止";
-            card.noted = "已终止";
+            paintNote(card, "已终止", false, false);   // 停下来了就别再转圈
             if (card.rec) {
               card.job = "";
               card.rec.job = "";
@@ -331,6 +342,9 @@
           // ComfyUI 重启后还挂在那儿转圈，用户根本不知道它是不是死了。
           var ph = job.phase || "";
           if (checkTimeout(card, ph)) return;
+          /* 文案口径（2026-11-25 用户：「准备中……改成正在跑了，跑好之后会
+             自动弹出来」）：别让用户猜、也别用「准备中」这种听起来没动的词。
+             真有排队人数时给具体数字，没有就一句「正在跑，跑好会自动弹出来」。 */
           var text;
           if (ph === "lost") {
             text = "ComfyUI 那边已经没有这张了（重启过），重新发一次吧";
@@ -338,18 +352,16 @@
             /* 真开始画了才铺那块 3:4 的底纹（2026-11-24）：排队阶段只是
                一行字，别再先占出一个大空壳。 */
             H.spawn(card);
-            text = "正在画…" + tail;
+            text = "正在画了，画好会自动弹出来" + tail;
           } else if (ph === "queued") {
             var n = d.queue_depth;
             text = (typeof n === "number" && n > 0)
-              ? "排队中，前面还有 " + n + " 张" + tail : "排队中…" + tail;
+              ? "正在跑，前面还有 " + n + " 张，画好会自动弹出来" + tail
+              : "正在跑，画好会自动弹出来" + tail;
           } else {
-            text = "准备中（等显卡空出来）" + tail;
+            text = "正在跑，画好会自动弹出来" + tail;
           }
-          card.note.hidden = false;
-          card.note.className = "note" + (ph === "lost" ? " err" : "");
-          card.note.textContent = text;
-          card.noted = text;
+          paintNote(card, text, ph === "lost");
           if (card.rec) card.rec.note = text;
         }
       });

@@ -247,6 +247,25 @@
 
 .card .note.err { color: var(--danger); }
 
+/* 状态行前那一小圈转动的图标（2026-11-25 用户：「准备中……改成正在跑了，
+   跑好之后会自动弹出来」）。转圈就是在说「它真的在动」，比一句静态的
+   「准备中」可信。出图 / 失败 / 已终止时 setNote 不带 run，图标自然消失。 */
+.card .note.running {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.card .note .spin {
+  flex: 0 0 auto;
+  animation: ws-spin 1s linear infinite;
+  opacity: .75;
+}
+@keyframes ws-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
 /* 「终止」小按钮（2026-11-23 群友页要的）：挂在状态文字下面，只在排队 /
    出图中出现。做成低存在感的胶囊，别让它在出图的整段时间里抢镜。 */
 .card .stop-run {
@@ -511,6 +530,9 @@
 
 @media (prefers-reduced-motion: reduce) {
   .bubble, .card, .card .ph, .plus-menu { animation: none; }
+  /* 转圈对「不能看动效」的人是负担：停掉旋转，但那个图标还在，仍然能看出
+     这一条是「在跑」而不是「卡住了」。 */
+  .card .note .spin { animation: none; }
   /* 闪一下是为了「让你看见我又点了一次」，不该变成动效负担：降级只留高亮 */
   .card-line .note.blink { animation: none; background: var(--brand-soft); }
 }

@@ -178,10 +178,8 @@
       stop: stop,
       acts: acts,
       fill: fill,
-      say: function (text, bad) {
-        note.hidden = false;
-        note.className = "note" + (bad ? " err" : "");
-        note.textContent = text;
+      say: function (text, bad, run) {
+        setNote(note, text, { bad: bad, run: run });
         settle();
       },
       show: function () {
@@ -234,6 +232,13 @@
     '<path d="M12 4.5v10.4"/><path d="M7.8 11.4L12 15.6l4.2-4.2"/>' +
     '<path d="M4.8 18.4v1.1h14.4v-1.1"/></svg>';
 
+  /* 排队 / 准备中 / 画图中转的那一小圈（2026-11-25 用户：「正在跑……
+     跑好之后会自动弹出来」）。用 CSS 转，禁用动效的系统设置里会被停掉。 */
+  var ICON_SPIN =
+    '<svg class="spin" width="13" height="13" viewBox="0 0 24 24" fill="none" ' +
+    'stroke="currentColor" stroke-width="2.2" stroke-linecap="round">' +
+    '<path d="M12 3.2a8.8 8.8 0 1 1-6.2 2.6"/></svg>';
+
   /* 卡片底部三个按钮：复制提示词 | 下载到本机 | 换种子重画。
      它们原来紧贴在一起（都是小圆圈、间距 8px），用户反馈「很容易误触」——
      改成两边是纯文字按钮、中间是图标按钮，中间留空推开，一个管复制
@@ -249,6 +254,22 @@
      `hooks.again` 由 chat.js 提供（重画要走「同一份请求只留一张卡」那套
      收口）；`hooks.download` 同理。两个都不传就不挂监听——存档重放需要
      按钮长得一样但点了不能炸。 */
+  /* 状态行（「排队中 / 正在跑 / 已终止」那一行）。
+     `run=true` 时前面带一个转圈的图标，告诉用户「它确实在跑，跑好会自动
+     弹出来」——2026-11-25 用户：「准备中这个提示改一下，说正在跑就行」。
+     `run` 传假（失败 / 已终止 / 出图）就只剩一行字，别让人以为还在动。 */
+  function setNote(note, text, opts) {
+    var o = opts || {};
+    note.hidden = false;
+    note.className = "note" + (o.bad ? " err" : "") + (o.run ? " running" : "");
+    note.innerHTML = (o.run ? ICON_SPIN : "") +
+      '<span class="note-text"></span>';
+    var span = note.querySelector ? note.querySelector(".note-text") : null;
+    if (span) span.textContent = text;
+    else note.textContent = text;      // DOM 桩 / 老浏览器兜底
+    return note;
+  }
+
   function buildActs(card, retryLabel, hooks) {
     hooks = hooks || {};
     if (retryLabel) {
@@ -343,6 +364,7 @@
   global.WSCard = {
     attach: attach,
     paintNote: paintNote,
+    setNote: setNote,
     paintUser: paintUser,
     failLine: failLine,
     clearFailLine: clearFailLine,

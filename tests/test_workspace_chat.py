@@ -217,6 +217,86 @@ Promise.resolve().then(()=>Promise.resolve()).then(()=>{
         self.assertIn('if (pending && pending.id) useSame(null, pending.id)', ref)
         self.assertIn('ws_same_result', ref)
 
+    def test_redraw_uses_current_default_skill_not_the_old_channel(self):
+        """重画取**当前默认画风**，不沿用这张当初的渠道（2026-11-25 用户）。
+
+        用户口径：「我把默认换成极光，点重画就该用极光」。所以 `run()` 里
+        `H.currentSkill()` 必须优先于 `card.skill` / `rec.skill`；只有拿不到
+        当前画风（渠道列表还没回来）才退回去用它自己的。
+        """
+        script = r'''
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+const root = process.argv[1];
+const calls = [];
+let current = "anima-2s";
+let discarded = null;
+const w = {};
+const context = vm.createContext({window:w, Object, JSON, Date, Map, Array});
+vm.runInContext(fs.readFileSync(root+"/js/redraw.js","utf8"),context);
+w.WSRedraw.bind({
+  clearFail:()=>{},
+  msgs:()=>[],
+  save:()=>{},
+  discard:(rec)=>{discarded = rec;},
+  currentSkill:()=>current,
+  submit:(text,skill,refs,described,user,defer,final)=>{
+    calls.push({text,skill,refs,described,user,defer,final});
+    return null;
+  }
+});
+
+// 1) 已经出过图那类：用户刚把默认换成 aurora，点重画必须走 aurora
+const rec1 = {ask:"画猫", prompt:"1girl, cat ears, solo", skill:"anima-2s",
+              file:"cat.webp", refs:["r1"], described:true};
+const card1 = {rec:rec1, skill:"anima-2s", prompt:rec1.prompt, refs:["r1"],
+               described:true, file:"cat.webp"};
+current = "aurora";
+w.WSRedraw.run(card1);
+assert.equal(calls.length,1);
+assert.equal(calls[0].skill,"aurora","重画要走当前默认画风");
+assert.equal(calls[0].text,"1girl, cat ears, solo","出过图用英文 tags");
+assert.equal(calls[0].refs.length,0,"出过图不再带参考图");
+assert.equal(calls[0].final,true,"出过图 = tags 已是终稿");
+assert.equal(calls[0].user,null,"新卡挂在最底部，不挂旧气泡");
+assert.equal(discarded,rec1,"旧图记录要从存档里摘掉");
+
+// 2) 失败那类：没出过图，用当初那句话，参考图照旧带上
+const rec2 = {ask:"画只狗", skill:"anima-2s", refs:["r2"], described:false, err:true};
+const card2 = {rec:rec2, skill:"anima-2s", refs:["r2"], err:true};
+current = "aurora";
+w.WSRedraw.run(card2);
+assert.equal(calls.length,2);
+assert.equal(calls[1].skill,"aurora");
+assert.equal(calls[1].text,"画只狗","失败用用户当初那句话");
+// vm 里建出来的数组原型跟外面不是一个，用长度 + 逐项比，别用 deepEqual
+assert.equal(calls[1].refs.length,1,"没出过图，参考图要带上");
+assert.equal(calls[1].refs[0].id,"r2");
+assert.equal(calls[1].final,false);
+
+// 3) 拿不到当前画风（渠道列表还没回来）才退回它自己的
+current = "";
+const rec3 = {ask:"画鸟", skill:"polaris"};
+w.WSRedraw.run({rec:rec3, skill:"polaris"});
+assert.equal(calls.length,3);
+assert.equal(calls[2].skill,"polaris","取不到默认画风才用它自己的");
+
+// 4) 一次点击只排一张：同一个卡再点一次是新的一次重画（正常，也应当
+//    再排一张），但每次进来只提交一遍
+const rec4 = {ask:"画马", skill:"anima-2s", file:"m.webp", prompt:"horse"};
+const card4 = {rec:rec4, skill:"anima-2s", prompt:"horse", file:"m.webp"};
+current = "aurora";
+const before = calls.length;
+w.WSRedraw.run(card4);
+assert.equal(calls.length - before, 1,"一次点击只提交一遍");
+assert.equal(card4.redrawing, false,"跑完要复位，不然这张以后点不动");
+'''
+        result = subprocess.run(
+            [shutil.which("node"), "-e", script, WS],
+            capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_redraw_flow_keeps_old_result_and_uses_final_prompt(self):
         redraw = _read("js/redraw.js")
         self.assertIn("WSRedraw", redraw)
@@ -234,7 +314,7 @@ Promise.resolve().then(()=>Promise.resolve()).then(()=>{
         flow = _read("js/gen_flow.js")
         self.assertNotIn("findTwin", flow)
         self.assertIn('job.state === "cancelled"', flow)
-        self.assertIn('card.note.textContent = "已终止"', flow)
+        self.assertIn('paintNote(card, "已终止", false, false)', flow)
         routes = _read_app("features/image/routes.py")
         self.assertIn('"owner": owner', routes)
         self.assertIn("image_jobs.inflight_limit()", routes)
@@ -404,7 +484,7 @@ vm.runInContext(fs.readFileSync(root+"/js/shot.js","utf8"),context);
         flow = _read("js/gen_flow.js")
         self.assertIn("GHOST_MS", flow)
         self.assertIn("graceUntil", flow)
-        self.assertIn('"准备中，等显卡空出来"', flow)
+        self.assertIn('paintNote(card, "正在跑，画好会自动弹出来")', flow)
         archive = _read("js/archive.js")
         # 状态接口告假时不许把卡接回轮询（第一步就是判「任务不在列表里」）
         self.assertIn("a.card.since = 0;", archive)
@@ -527,7 +607,7 @@ async function flush() { for(let i=0;i<12;i++) await Promise.resolve(); }
   w.WSGenFlow.submit("画猫","s");
   assert.equal(calls,2,"相同提示词的独立消息分别提交");
   resolvers[0]({ok:true,job:{id:"j1",prompt:"cat tags"}}); await flush();
-  assert.equal(card.note.textContent,"排队中…");
+  assert.equal(card.note.textContent,"正在跑，画好会自动弹出来");
   assert.equal(state.msgs.length,2,"相同文本的两条请求各有独立记录");
   resolvers[1]({ok:true,job:{id:"j2",prompt:"second tags"}}); await flush();
   assert.equal(Object.keys(state.pending).length,2,"两条任务分别进入轮询");
