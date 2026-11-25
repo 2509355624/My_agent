@@ -80,6 +80,32 @@
   animation: ws-in .2s ease-out both;
 }
 
+/* 用户消息下方的失败提示：同一句只留一条，点「重画」就撤掉。
+   不占大卡片、不用刺眼的整块红色，只是一条贴右的小字。 */
+.user-fail {
+  align-self: flex-end;
+  max-width: 84%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 2px 6px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.user-fail-t { min-width: 0; word-break: break-word; }
+.user-fail-btn {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  border: 1px solid var(--line, rgba(127, 127, 127, .3));
+  border-radius: 999px;
+  background: var(--card-2);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.user-fail-btn:active { opacity: .7; }
+
 .bubble .more {
   display: block;
   margin-top: 6px;

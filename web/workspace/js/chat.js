@@ -141,9 +141,14 @@
     });
   }
 
+  /* 用户气泡 → 卡片。失败提示挂在用户那条消息下面，靠这张表找到它。 */
+  var userNodes = [];
+
   function addUser(text, refs) {
-    paintUser(text, refs);
+    var node = paintUser(text, refs);
+    userNodes.push(node);
     log({ k: "user", t: text, refs: briefRefs(refs) });
+    return node;
   }
 
   function shell(cls) { return global.WSCard.shell(cls); }
@@ -151,13 +156,7 @@
   function flash(card) { return global.WSCard.flash(card); }
   function buildActs(card, retryLabel) {
     return global.WSCard.buildActs(card, retryLabel, {
-      again: function (c) {
-        if (c.rec && c.rec.err) {
-          global.WSGenFlow.restart(c, c.rec, c.refs || [], c.described);
-          return;
-        }
-        submitJob((c.rec && c.rec.ask) || c.prompt, c.skill, c.refs || [], c.described);
-      },
+      again: function (c) { redraw(c); },
       download: function (c, button) { downloadImage(c, button); }
     });
   }
@@ -167,11 +166,13 @@
   function newCard(prompt, skill, rec) {
     var c = shell();
     c.say("排队中…");
+    var user = userNodes.length ? userNodes[userNodes.length - 1] : null;
     return { node: c.node, body: c.body, line: c.line, ph: null,
              note: c.note, stop: c.stop, acts: c.acts, fill: c.fill,
              /* 失败后重排要复用它：restart() 会把这一行字改回「排队中…」 */
              say: c.say,
-             prompt: prompt, skill: skill, job: "", rec: rec };
+             prompt: prompt, skill: skill, job: "", rec: rec,
+             userNode: user };
   }
 
   /* 铺图 / 放大 / 下载都搬到 shot.js 了（2026-11-24）：这边已经一千多行，
@@ -184,9 +185,7 @@
   function showImage(card, job) {
     var img = shotEl(job.file);
     img.addEventListener("error", function () {
-      card.note.hidden = false;
-      card.note.className = "note err";
-      card.note.textContent = "图不在了，重画一张";
+      failUserLine(card, "图不在了，点重画再来一次");
     });
     if (card.ph) {
       card.ph.parentNode.replaceChild(img, card.ph);
@@ -198,6 +197,7 @@
     if (card.fill) card.fill();     // 有图了：空壳变回真卡片
     card.note.hidden = true;
     card.stop && (card.stop.hidden = true);
+    if (card.userNode) global.WSCard.clearFailLine(card.userNode);
     card.file = job.file || "";
     card.since = 0;
     card.noted = "";
@@ -223,31 +223,38 @@
     disarmStop(card);
     card.since = 0;
     card.noted = "";
-    card.note.hidden = false;
-    card.note.className = "note err";
-    card.note.textContent = msg || "这张没出来，点重画再来一次";
-    /* 失败不再留一张 3:4 的大空壳在那里（用户 2026-11-24：「网络报错……都是
-       使用一个大卡片显示的……每次滑动都是一大堆的大卡片」）。还没出图就把
-       那块底纹撤掉、壳退回「一行字」的 idle 态；真出过图的那张
-       （`card.img`）留着图不动，`.is-idle` 本来就摘掉了。 */
+    /* 失败提示只挂在用户那条消息下面、且只留一条（用户 2026-11-25：
+       「红色警告会刷屏……点重画按钮就消失」）。AI 卡片这边不再写红字、
+       不再放重试按钮——反复点重画时原来每次都会刷一行红字 + 一颗按钮。 */
+    card.note.hidden = true;
+    card.note.textContent = "";
+    if (card.acts) { card.acts.innerHTML = ""; card.acts.hidden = true; }
+    failUserLine(card, msg || "这张没画出来，点重画再来一次");
+    /* 没出图的卡退回空闲态，别留 3:4 的大空壳；出过图的留图不动。 */
     if (card.ph) {
       card.ph.remove();
       card.ph = null;
       if (card.node) card.node.classList.add("is-idle");
     }
-    buildActs(card, stuck ? "重试" : "重画");
     if (card.rec) {
-      card.rec.note = card.note.textContent;
+      card.rec.note = msg || "这张没画出来";
       card.rec.err = true;
       /* 先在服务端存档里把这条从「排队中」改成失败态，再清掉 job：
-         只清本地不写服务端的话，换设备登录读回来的还是「排队中…」
-         （用户 2026-11-24 看到的那张假卡就是这样留下的）。 */
+         只清本地不写服务端的话，换设备登录读回来的还是「排队中…」。 */
       global.WSStore.patch(card.rec, { job: card.rec.job || "",
-                                       note: card.note.textContent, err: true });
+                                       note: card.rec.note, err: true });
       card.rec.job = "";
       if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
     }
     scrollBottom();
+  }
+
+  /* 把失败提示贴到这张卡对应的用户消息下。找不到（存档重放还没配对）
+     就不画——宁可少一条提示，也不刷屏。点重画时由重排流程撤掉它。 */
+  function failUserLine(card, msg) {
+    var host = card.userNode;
+    if (!host) return;
+    global.WSCard.failLine(host, msg, function () { redraw(card); });
   }
 
   // ── 生图 ──────────────────────────────────────────────
@@ -261,6 +268,55 @@
   function armStop(card) { return global.WSGenFlow.armStop(card); }
   function disarmStop(card) { return global.WSGenFlow.disarmStop(card); }
   function startPoll() { return global.WSGenFlow.startPoll(); }
+  /* 把重画依赖交给 redraw.js。send 回调用 send() 那条正常路径的精简版：
+     识图 → 提交，和手动点发送完全同一套。 */
+  function bindRedraw() {
+    global.WSRedraw.bind({
+      pending: function () { return S.pending; },
+      cancel: function (job) {
+        if (global.WSGen && global.WSGen.cancel) {
+          global.WSGen.cancel(job)["catch"](function () {});
+        }
+      },
+      afterCancel: startPoll,
+      clearFail: function (node) { global.WSCard.clearFailLine(node); },
+      removeUser: function (node) {
+        if (node.parentNode) node.parentNode.removeChild(node);
+        userNodes = userNodes.filter(function (n) { return n !== node; });
+      },
+      removeCard: function (node) {
+        if (node && node.parentNode) node.parentNode.removeChild(node);
+      },
+      msgs: function () { return S.msgs; },
+      removeRec: function (rec, text) {
+        if (rec && S.msgs.indexOf(rec) >= 0) S.msgs.splice(S.msgs.indexOf(rec), 1);
+        if (text) {
+          for (var i = S.msgs.length - 1; i >= 0; i--) {
+            if (S.msgs[i].k === "user" && S.msgs[i].t === text) {
+              S.msgs.splice(i, 1);
+              break;
+            }
+          }
+        }
+        S.cards.delete(rec);
+      },
+      save: function () {
+        if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
+      },
+      defaultSkill: function () { return S.skill; },
+      send: function (text, refs, described, skill) {
+        addUser(text, refs);
+        if (described) {
+          submitJob(text, skill, refs.map(function (r) { return r.id || r; }), true);
+          return;
+        }
+        global.WSRef.ensureDescribed(refs).then(function (read) {
+          submitJob(text, skill, read.map(function (r) { return r.id || r; }));
+        });
+      }
+    });
+  }
+
   function bindFlow() {
     global.WSGenFlow.bind({
       state: function () { return S; },
@@ -279,7 +335,9 @@
       spawn: spawn,
       showImage: showImage,
       fail: fail,
-      sysNote: sysNote
+      sysNote: sysNote,
+      busyTip: function (text) { busyNote(text, 3000); },
+      dropCard: function (card) { global.WSRedraw.drop(card); }
     });
   }
 
@@ -369,6 +427,10 @@
     });
   }
 
+  /* 重画改由 redraw.js 负责（2026-11-25 拆出，chat.js 破 600 行）。
+     bindRedraw() 在 init 里接上，这边只留一个转发。 */
+  function redraw(card) { return global.WSRedraw.run(card); }
+
   /* 复制走 card.js 那一份（按钮就在那边，两边共用同一段剪贴板逻辑） */
   function copyText(text) { return global.WSCard.copyText(text); }
 
@@ -427,6 +489,7 @@
       scrollBottom();
     }, scrollBottom);
     bindFlow();
+    bindRedraw();
 
     global.addEventListener("resize", fitWhenSized);
 

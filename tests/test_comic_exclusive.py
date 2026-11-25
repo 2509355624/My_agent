@@ -81,6 +81,11 @@ class EnqueuePriorityTest(unittest.TestCase):
 
     def setUp(self):
         image_jobs._reset()
+        # 在途上限按时段变；本类按固定的 5 张写预期，钉在非高峰。
+        p = mock.patch.object(image_jobs, "inflight_limit",
+                              return_value=(image_jobs.MAX_INFLIGHT, "", ""))
+        p.start()
+        self.addCleanup(p.stop)
         # worker 线程挡在门外（_Base 的规矩）：任务入队后由测试自己驱动。
         p = mock.patch.object(image_jobs, "_ensure_worker", lambda: None)
         p.start()

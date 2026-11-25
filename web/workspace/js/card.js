@@ -89,6 +89,41 @@
     return b;
   }
 
+  /* 用户那条消息下面的失败提示：一条为限，点重画就撤掉。
+     失败不再往 AI 卡片里堆红色警告 + 重试按钮（反复点会刷屏），
+     改成贴着用户蓝色气泡给一行轻提示，用户一看就知道是哪句没画出来。 */
+  function failLine(host, msg, onRetry) {
+    if (!host || !host.parentNode) return null;
+    var line = host._failLine;
+    if (!line || line.parentNode !== host.parentNode) {
+      line = document.createElement("div");
+      line.className = "user-fail";
+      var t = document.createElement("span");
+      t.className = "user-fail-t";
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "user-fail-btn";
+      b.textContent = "重画";
+      b.addEventListener("click", function () {
+        clearFailLine(host);
+        if (onRetry) onRetry();
+      });
+      line.appendChild(t);
+      line.appendChild(b);
+      host.parentNode.insertBefore(line, host.nextSibling);
+      host._failLine = line;
+    }
+    var text = line.querySelector(".user-fail-t");
+    if (text) text.textContent = msg || "这张没画出来，点重画再来一次";
+    return line;
+  }
+
+  function clearFailLine(host) {
+    if (!host) return;
+    if (host._failLine && host._failLine.parentNode) host._failLine.remove();
+    host._failLine = null;
+  }
+
   // ── AI 卡片 ───────────────────────────────────────────
 
   /* 「有没有图」才是这张卡存不存在的前提。图还没出来时，壳是 `is-idle`：
@@ -301,6 +336,8 @@
     attach: attach,
     paintNote: paintNote,
     paintUser: paintUser,
+    failLine: failLine,
+    clearFailLine: clearFailLine,
     shell: shell,
     spawn: spawn,
     flash: flash,

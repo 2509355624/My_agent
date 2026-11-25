@@ -97,7 +97,49 @@
     var src = global.WSGen.img(file, FIT);
     var key = global.WSGen.imgKey(file, FIT);   // 缓存认这个（不带签名）
 
-    global.WSHide.downloadButton(button, { url: src, key: key, name: name });
+    /* 「下载中…」只是个短暂的「点了」反馈，600ms 后自己恢复。
+       真正的保存仍走下面原来的缓存 → fetch → 兜底三步，不弹任何面板。 */
+    if (button && !button.disabled) {
+      var label = button.innerHTML;
+      button.disabled = true;
+      button.textContent = "下载中…";
+      global.setTimeout(function () {
+        button.innerHTML = label;
+        button.disabled = false;
+      }, 600);
+    }
+
+    function fromNet() {
+      if (typeof global.fetch !== "function") { fallback(); return; }
+      global.fetch(src, { credentials: "same-origin", cache: "default" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.blob();
+        })
+        .then(function (b) {
+          if (!b || !b.size) throw new Error("空文件");
+          saveBlob(b, name);
+          if (global.WSImg) global.WSImg.put(key, b);
+        })
+        ["catch"](fallback);
+    }
+
+    function fallback() {
+      // 最后一道：直接让浏览器去下。慢，但点了总有反应。
+      var a = document.createElement("a");
+      a.href = src;
+      a.download = name;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+
+    if (!global.WSImg) { fromNet(); return; }
+    global.WSImg.get(key).then(function (b) {
+      if (b && b.size) saveBlob(b, name);
+      else fromNet();
+    })["catch"](fromNet);
   }
 
   /* 聊天区里铺的是 **1MB 那一档**（2026-11-24 用户：「直接压到 1m 即可，

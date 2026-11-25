@@ -548,8 +548,20 @@
     /* 具体的取字节 + 存盘规矩在 `hide.js`（`WSHide.save`）。挪出去是因为
        `gallery.js` 有 600 行硬线——那边本来就是「查看器底部按钮」的模块，
        下载按钮是底栏四个按钮里的一个。 */
-    global.WSHide.downloadButton(event.currentTarget, {
-      url: imgUrl(it), name: "gal-" + it.id + ".webp"
+    var btn = event.currentTarget;
+    if (btn && !btn.disabled) {
+      var label = btn.innerHTML;
+      btn.disabled = true;
+      btn.textContent = "下载中…";
+      global.setTimeout(function () {
+        btn.innerHTML = label;
+        btn.disabled = false;
+      }, 600);
+    }
+    global.WSHide.save({
+      url: imgUrl(it),
+      name: "gal-" + it.id + ".webp",
+      onFail: function () { note("这张没下下来，检查一下网络再试", false); }
     });
   }
 

@@ -15,7 +15,7 @@ WS = os.path.join(ROOT, "web", "workspace")
 
 CHAT_FILES = ("chat.html", "css/chat.css", "css/sheet.css",
               "js/gen.js", "js/chat.js", "js/stack.js", "js/views.js",
-              "js/card.js", "js/gen_flow.js", "js/shot.js")
+              "js/card.js", "js/gen_flow.js", "js/shot.js", "js/redraw.js")
 
 
 def _read(rel):
@@ -166,9 +166,53 @@ class TestWorkspaceFeedback(unittest.TestCase):
         self.assertIn('global.WSChat.showImage(a.card, job)', archive)
         self.assertIn('note.className = "note"', archive)
         ref = _read("js/ref.js")
-        self.assertIn('tag.textContent = "正在识图…"', ref)
+        self.assertIn('say.placeholder = "正在识图中…"', ref)
+        self.assertNotIn('say.parentNode.appendChild(tag)', ref)
         self.assertIn('if (pending && pending.id) useSame(null, pending.id)', ref)
         self.assertIn('ws_same_result', ref)
+
+    def test_redraw_resends_and_busy_is_transient(self):
+        redraw = _read("js/redraw.js")
+        self.assertIn("WSRedraw", redraw)
+        self.assertIn("H.send(text, refs, described, skill)", redraw)
+        chat = _read("js/chat.js")
+        self.assertIn("again: function (c) { redraw(c); }", chat)
+        self.assertIn("busyTip: function (text) { busyNote(text, 3000); }", chat)
+        self.assertIn("dropCard: function (card) { global.WSRedraw.drop(card); }", chat)
+        flow = _read("js/gen_flow.js")
+        self.assertIn("if (d && d.busy)", flow)
+        api = os.path.join(ROOT, "app", "features", "qq", "friend_api.py")
+        with open(api, encoding="utf-8") as f:
+            py = f.read()
+        self.assertIn('"busy": True', py)
+
+    def test_inflight_limit_restored_to_five(self):
+        api = os.path.join(ROOT, "app", "features", "qq", "friend_api.py")
+        with open(api, encoding="utf-8") as f:
+            py = f.read()
+        self.assertIn("PER_INFLIGHT = 5", py)
+        # 高峰不再写死在群友页：两处都读 jobs 的同一口径，提示也共用。
+        self.assertIn("image_jobs.inflight_limit()", py)
+        self.assertIn("image_jobs.inflight_busy_text", py)
+        jobs = os.path.join(ROOT, "app", "features", "image", "jobs.py")
+        with open(jobs, encoding="utf-8") as f:
+            py = f.read()
+        self.assertIn("MAX_INFLIGHT = 5", py)
+        self.assertIn("(10, 12, \"早高峰\"", py)
+        self.assertIn("(22, 24, \"晚高峰\"", py)
+        self.assertIn("min(limit, chan.max_inflight)", py)
+
+    def test_download_has_no_panel_and_failure_is_one_line(self):
+        hide = _read("js/hide.js")
+        self.assertNotIn("savePanel", hide)
+        self.assertNotIn("系统保存 / 分享", hide)
+        card = _read("js/card.js")
+        self.assertIn("function failLine", card)
+        self.assertIn("function clearFailLine", card)
+        chat = _read("js/chat.js")
+        self.assertIn("failUserLine(card, msg", chat)
+        gallery_css = _read("css/gallery.css")
+        self.assertIn("overflow: hidden;", gallery_css)
 
     def test_mount_submit_dedup_and_download_feedback(self):
         script = r'''
@@ -224,17 +268,32 @@ async function flush() { for(let i=0;i<12;i++) await Promise.resolve(); }
   assert.equal(state.cards.get(retryRec).note.textContent,"正在提交…");
   resolve({ok:false,error:"offline"}); await flush();
   load("hide.js");
-  const button=new Element(); button.innerHTML="下载";
-  w.WSHide.downloadButton(button,{url:"/image"});
-  assert.equal(button.textContent,"下载中…"); assert.equal(button.disabled,true);
-  await flush(); assert.equal(button.textContent,"已打开保存图片");
+  assert.equal(typeof w.WSHide.save,"function");
+  assert.equal(w.WSHide.downloadButton,undefined,"下载不应再新增面板/分享入口");
   const panel=context.document.body.children.find(n=>n.children.some(c=>c.textContent==="保存图片"));
-  assert.ok(panel,"下载后提供可直接点击及长按的保存入口");
-  timers.splice(0).forEach(fn=>fn());
-  assert.equal(button.disabled,false);
-  w.fetch=async()=>{throw Error("offline");};
-  w.WSHide.downloadButton(button,{url:"/image"}); await flush();
-  assert.equal(button.textContent,"下载失败，请重试");
+  assert.equal(panel,undefined,"下载不应弹出保存面板");
+  // 重画：清掉旧卡/旧记录，再走一次正常发送
+  load("redraw.js");
+  const msgs=[{k:"user",t:"画狗"},{k:"img",ask:"画狗"}];
+  const oldRec=msgs[1];
+  const oldUser=new Element(), oldNode=new Element();
+  w.WSCard.clearFailLine=()=>{};
+  let sent=null, removedRec=null, saved=0, removedNodes=0;
+  w.WSRedraw.bind({
+    pending:()=>({}), cancel(){}, afterCancel(){}, clearFail(){},
+    removeUser(){}, removeCard(){removedNodes++;},
+    msgs:()=>msgs, removeRec:(rec)=>{removedRec=rec; msgs.splice(msgs.indexOf(rec),1);},
+    save:()=>{saved++;}, defaultSkill:()=>"s",
+    send:(text,refs,described,skill)=>{sent={text,refs,described,skill};}
+  });
+  w.WSRedraw.run({rec:oldRec, refs:[{id:"ref1"}], skill:"s",
+                  userNode:oldUser, node:oldNode, prompt:"cat tags"});
+  assert.equal(removedRec,oldRec,"旧存档记录被摘掉");
+  assert.equal(msgs.length,1,"旧用户消息被摘掉");
+  assert.equal(removedNodes,1,"旧卡节点被摘掉");
+  assert.equal(saved,1,"存档落盘一次");
+  assert.deepEqual(sent,{text:"画狗",refs:[{id:"ref1"}],described:false,skill:"s"},
+                   "同一句话+引用图走正常发送");
 })().catch(e=>{console.error(e);process.exitCode=1;});
 '''
         result = subprocess.run(

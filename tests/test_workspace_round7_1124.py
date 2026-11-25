@@ -11,6 +11,7 @@ import io
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from app.features.gallery import gallery
 
@@ -154,6 +155,11 @@ class TestUnnamedSessionsDoNotShareOneSlot(unittest.TestCase):
     def setUp(self):
         from app.features.image import jobs as image_jobs
         self.jobs = image_jobs
+        # 上限按时段变；这两条用例写的是固定 1/5 的话术，钉在非高峰。
+        p = mock.patch.object(image_jobs, "inflight_limit",
+                              return_value=(image_jobs.MAX_INFLIGHT, "", ""))
+        p.start()
+        self.addCleanup(p.stop)
         self._saved = [(c, dict(c.per_session)) for c in
                        (image_jobs._COMFY, image_jobs._NAI)]
 
@@ -178,7 +184,9 @@ class TestUnnamedSessionsDoNotShareOneSlot(unittest.TestCase):
         qq_api.bind_context("group_9", "group", "9",
                             message_id="1", sender_uin=1001)
         self.addCleanup(qq_api.clear_context)
-        self.jobs.enqueue("group", "9", {"1": {}}, "hd_3_soft")
+        for _ in range(self.jobs.MAX_INFLIGHT):
+            job, why = self.jobs.enqueue("group", "9", {"1": {}}, "hd_3_soft")
+            self.assertIsNone(why)
         _, why = self.jobs.enqueue("group", "9", {"1": {}}, "hd_3_soft")
-        self.assertIn("你已经有一张在画了", why)
+        self.assertIn("排着", why)
 

@@ -88,6 +88,13 @@
   display: flex;
   flex-direction: column;
   gap: 5px;
+  /* 标题再长也不许把两列网格撑宽（用户 2026-11-25：「标题太长会横向延伸
+     出很长一截」）。button 默认会按内容撑宽，给它定宽 + 裁剪，里层
+     .gname 的 ellipsis 才有边界可截断。 */
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   padding: 0;
   border: 0;
   background: none;

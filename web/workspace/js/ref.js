@@ -160,15 +160,11 @@
   function describeInto(itemId, say) {
     if (!say) return Promise.resolve("");
     global.sessionStorage.setItem("ws_same_pending", JSON.stringify({ id: itemId }));
-    say.placeholder = "正在识图…，可以先写修改要求";
-    var tag = document.createElement("p");
-    tag.className = "ref-error";
-    tag.style.color = "var(--text)";
-    tag.setAttribute("role", "status");
-    tag.textContent = "正在识图…";
-    say.parentNode.appendChild(tag);
+    /* 「正在识图…」只放在输入框自己的 placeholder 里（用户 2026-11-25：
+       挂一行字在输入栏上面会把它压得又扁又窄）。placeholder 不新增节点、
+       不改宽度，输入栏跟平时一模一样，识图完恢复原提示。 */
+    say.placeholder = "正在识图中…";
     function finish() {
-      tag.remove();
       say.placeholder = "说说这张怎么改，照着它重画";
     }
     return global.WSApi.get(describeUrl(itemId))

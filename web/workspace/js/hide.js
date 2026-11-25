@@ -74,7 +74,6 @@
     var opt = o || {};
     var url = opt.url || "";
     var name = opt.name || "image.webp";
-    var done = typeof opt.onDone === "function" ? opt.onDone : function () {};
     var fail = typeof opt.onFail === "function" ? opt.onFail : function () {};
     if (!url) return;
 
@@ -86,8 +85,7 @@
       document.body.appendChild(a);
       a.click();
       a.remove();
-      savePanel(blob, u, name);
-      done();
+      global.setTimeout(function () { global.URL.revokeObjectURL(u); }, 4000);
     }
     function fromNet() {
       global.fetch(url, { credentials: "same-origin" }).then(function (r) {
@@ -96,11 +94,11 @@
       }).then(function (b) {
         if (!b || !b.size) throw new Error("empty");
         fire(b);
-        if (global.WSImg) global.WSImg.put(opt.key || url, b).catch(function () {});
+        if (global.WSImg) global.WSImg.put(url, b).catch(function () {});
       })["catch"](fail);
     }
     if (global.WSImg) {
-      global.WSImg.get(opt.key || url).then(function (b) {
+      global.WSImg.get(url).then(function (b) {
         if (b && b.size) { fire(b); return; }
         fromNet();
       })["catch"](fromNet);
@@ -109,76 +107,10 @@
     fromNet();
   }
 
-  // 自动下载可能被手机内置浏览器拦截，保留可直接操作的图片与保存入口。
-  function savePanel(blob, url, name) {
-    var panel = document.createElement("div");
-    panel.style.cssText = "position:fixed;inset:0;z-index:10000;background:var(--bg,#fff);color:var(--text,#222);padding:24px;overflow:auto;display:flex;flex-direction:column;align-items:center;gap:16px";
-    panel.setAttribute("role", "dialog");
-    panel.setAttribute("aria-label", "保存图片");
-    var tip = document.createElement("p");
-    tip.textContent = "若没有弹出下载，请点击保存图片；手机也可以长按下方图片保存。";
-    var image = document.createElement("img");
-    image.src = url;
-    image.alt = "长按保存图片";
-    image.style.cssText = "max-width:100%;max-height:65vh;object-fit:contain";
-    var link = document.createElement("a");
-    link.href = url;
-    link.download = name;
-    link.textContent = "保存图片";
-    var close = document.createElement("button");
-    close.type = "button";
-    close.textContent = "关闭";
-    close.onclick = function () {
-      panel.remove();
-      global.setTimeout(function () { global.URL.revokeObjectURL(url); }, 60000);
-    };
-    panel.appendChild(tip);
-    panel.appendChild(link);
-    panel.appendChild(image);
-    if (global.navigator && global.navigator.canShare && global.File) {
-      var file = new global.File([blob], name, { type: blob.type || "image/webp" });
-      if (global.navigator.canShare({ files: [file] })) {
-        var share = document.createElement("button");
-        share.type = "button";
-        share.textContent = "系统保存 / 分享";
-        share.onclick = function () {
-          global.navigator.share({ files: [file] }).catch(function (e) {
-            if (e.name !== "AbortError") tip.textContent = "系统保存未打开，请长按图片保存。";
-          });
-        };
-        panel.appendChild(share);
-      }
-    }
-    panel.appendChild(close);
-    document.body.appendChild(panel);
-  }
-
-  // 两个下载入口共用按钮反馈；浏览器接管后只能确认已发起下载。
-  function downloadButton(btn, options) {
-    if (!btn || btn.disabled) return;
-    var label = btn.innerHTML;
-    btn.disabled = true;
-    btn.setAttribute("aria-busy", "true");
-    btn.textContent = "下载中…";
-    function finish(text) {
-      btn.textContent = text;
-      btn.removeAttribute("aria-busy");
-      global.setTimeout(function () {
-        btn.innerHTML = label;
-        btn.disabled = false;
-      }, 1800);
-    }
-    save(Object.assign({}, options, {
-      onDone: function () { finish("已打开保存图片"); },
-      onFail: function () { finish("下载失败，请重试"); }
-    }));
-  }
-
   global.WSHide = {
     makeButton: makeButton,
     sync: sync,
     save: save,
-    downloadButton: downloadButton,
     icon: ICON_EYE,
     iconOff: ICON_EYE_OFF
   };

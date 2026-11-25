@@ -164,6 +164,7 @@ import json
 import logging
 import os
 import random
+from datetime import datetime
 import re
 import signal
 import subprocess
@@ -234,7 +235,38 @@ def _comic_release_enabled(job):
 #
 # 当初 2 → 5 的理由是「连点被静默吞掉，对方以为只能画 2 张」；现在拒收理由
 # 已经改成明说「你还有一张在画，画完再点」，用户看得见原因，不再是被吞。
-MAX_INFLIGHT = 1
+MAX_INFLIGHT = 5   # 2026-11-25 恢复：用户量小，一人一次最多 5 张（原为 1）
+
+# ── 分时段在途上限（2026-11-25 用户拍板）──────────────────────────
+# 依据 state/image_log.jsonl 过去 31 天（2026-10-26 ~ 11-25）共 8996 张：
+# 小时基准 12.1 张；10:00-12:00 日均 33.6 张（2.8×），22:00-24:00 日均 40 张
+# （3.3×）。40 张 × 每张约 1 分钟集中在两小时内，所以只把这两个窗收紧到
+# 每人 1 张，其余时间维持 5 张。不区分工作日/周末，按本机时间。
+#
+# 用 datetime 而不是本模块的 time：time 在测试里被 _FakeTime 替掉，那个替身
+# 没有 localtime，时段判定不能在它手上翻车。
+PEAK_WINDOWS = ((10, 12, "早高峰", "10点到12点"),
+                (22, 24, "晚高峰", "22点到24点"))
+PEAK_HINT = "早高峰 10点到12点，晚高峰 22点到24点"
+
+
+def inflight_limit(ts=None):
+    """返回 (每人在途上限, 高峰名, 时段文案)；ts=None 取本机现在。"""
+    hour = datetime.fromtimestamp(ts).hour if ts is not None else datetime.now().hour
+    for start, end, label, window in PEAK_WINDOWS:
+        if start <= hour < end:
+            return 1, label, window
+    return MAX_INFLIGHT, "", ""
+
+
+def inflight_busy_text(cur, label):
+    """每人在途已满时给用户看的那句话，不带喂给模型的指令。"""
+    if label:
+        return "你已经提交过一张了，等这张画完再画。" + PEAK_HINT + "，一次只能提交一张。"
+    if cur <= 1:
+        return "你已经有一张在画了，等它出来再画这一张。"
+    return "这个会话已经排着 %d 张了，画完这些再说。" % cur
+
 
 # 全局队列上限（含正在跑的那张）。十几个群同时刷图时，不能让队列无限长——
 # 排到一小时之后的图，对方早就不看了。超了就让模型回一句「排队的人太多」。
@@ -1388,19 +1420,18 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
             return None, ("现在排队的人太多了（前面还有 %d 张），这一张先不画。"
                           "别跟对方提这张图，当没画过，接着把话说完。" % depth)
         cur = chan.per_session.get(key, 0)
-        if cur >= chan.max_inflight and not priority:
+        limit, label, _window = inflight_limit()
+        if cur >= min(limit, chan.max_inflight) and not priority:
             # 优先票不受每会话在途上限（2026-11-11 独占通道）：独占的本意就是
             # 把一整批（最多 10 张）一次推进队列，卡上限等于没独占。
             # 全局 max_queue 仍然生效——这是真正防失控的那道闸。
             #
-            # 上限是 1（2026-11-24）时 90% 的情况就是「你上一张还在画」，所以
-            # 话术直接说这件事、并给出理由，模型才能对群友讲得像人话；张数
-            # 照样带上（上限将来调大也好用），措辞按单复数两种走。
-            if cur <= 1:
-                return None, ("你已经有一张在画了，等它出来再画这一张。"
-                              "不要跟对方提这张图，当没画过，接着把话说完。")
-            return None, ("这个会话已经排着 %d 张了，画完这些再说。"
-                          "不要跟对方提这张图，当没画过，接着把话说完。" % cur)
+            # 话术分两种：高峰期这句本来就是要说给对方听的（说明限流原因），
+            # 不再加「当没画过」；平时那两句是喂给模型的内部提示，保持原样。
+            reason = inflight_busy_text(cur, label if cur >= limit else "")
+            if not label:
+                reason += "不要跟对方提这张图，当没画过，接着把话说完。"
+            return None, reason
         if weight > 1 and _heavy_ahead(chan) >= chan.max_heavy:
             # 重渠道一张就把显卡占满好几分钟。排队太长不如让它说一句
             # 「我现在画不了」——总好过半小时后发一张对方早忘了的图。

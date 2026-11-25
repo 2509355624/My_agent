@@ -26,9 +26,11 @@
     var line = document.createElement("div");
     line.className = "card-line";
     var note = document.createElement("p");
-    note.className = "note" + (m.err ? " err" : "");
-    note.textContent = m.note || "";
-    note.hidden = !m.note;
+    /* 失败记录不在这里铺红字：下一轮 failCard 会把轻提示挂到用户消息下。
+       直接在壳里写 m.note + err class，刷新瞬间会闪一行红字（用户
+       2026-11-25：「红色的警告会刷屏」）。 */
+    note.className = "note";
+    note.hidden = true;
     var acts = document.createElement("div");
     acts.className = "acts";
     acts.hidden = true;
@@ -125,6 +127,7 @@
        ——同一条消息里挂着两三个参考图，重新挂一遍反而更乱。 */
     var lastRef = null;
     var lastRefAt = -1;
+    var lastUserNode = null;   // 最近一条用户气泡，失败提示挂在它下面
 
     var again = [];
     d.msgs.forEach(function (m, i) {
@@ -134,7 +137,7 @@
       if (m.k === "user") {
         // 发出去的那条可能带着参考图，重放时一起铺回来（用户 2026-11-23：
         // 「我那条消息应该包含参考图，因为我能够看到之前的参考图是什么」）
-        global.WSChat.paintUser(m.t, m.refs || []);
+        lastUserNode = global.WSChat.paintUser(m.t, m.refs || []);
       } else if (m.k === "note") {
         global.WSChat.paintNote(m.t);
       } else if (m.k === "ref") {
@@ -147,6 +150,7 @@
         lastRefAt = i;
       } else if (m.k === "img") {
         var c = restoreShell(m);
+        c.userNode = lastUserNode;
         if (global.WSChat.cards) global.WSChat.cards.set(m, c);
         if (m.file) {
           // 恢复历史也铺**1MB 那一档**（2026-11-24）：翻一次记录可能十几张，

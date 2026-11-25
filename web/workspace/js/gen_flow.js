@@ -32,7 +32,9 @@
     spawn: null,      // (card) → 挂 3:4 占位
     showImage: null,  // (card, job) → 出图
     fail: null,       // (card, msg, stuck) → 失败态
-    sysNote: null
+    sysNote: null,
+    busyTip: null,    // 限流这类一次性提示：闪一下就消失，不落存档
+    dropCard: null    // 撤掉一张没排上队的临时卡（连用户气泡一起）
   };
 
   function bind(hooks) {
@@ -120,6 +122,7 @@
       fresh.rec = rec;
       fresh.refs = rec.refs || [];
       fresh.described = !!rec.described;
+      fresh.userNode = card && card.userNode;
       fresh.since = Date.now();
       S().cards.set(rec, fresh);
       rec.note = "排队中…";
@@ -127,6 +130,7 @@
       fire(fresh, rec, rec.refs, rec.described);
       return;
     }
+    if (card.userNode) global.WSCard.clearFailLine(card.userNode);
     card.refs = rec.refs || [];
     card.described = !!rec.described;
     card.since = Date.now();
@@ -161,6 +165,13 @@
     global.WSGen.submit(body).then(function (d) {
       card.submitting = false;
       if (!d || !d.ok) {
+        /* 限流（还在画 / 人太多）：只是一次性提示，不落失败行、不留卡。
+           否则连点几下就挂一摞「上一张还在画」的红字，越积越多。 */
+        if (d && d.busy) {
+          if (H.dropCard) H.dropCard(card, rec);
+          if (H.busyTip) H.busyTip(d.error || "前面还有图在画，等一下再发");
+          return;
+        }
         H.fail(card, (d && d.error) || "没排上队");
         return;
       }

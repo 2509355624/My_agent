@@ -9,6 +9,7 @@ import os
 import tempfile
 import threading
 import unittest
+from datetime import datetime
 from unittest import mock
 
 import requests
@@ -121,6 +122,12 @@ class _Base(unittest.TestCase):
         # 全局累计重启的阈值也钉死为 0（.env 里配了 2）——和上面 _reset 一样
         # 是防 .env 漂进断言；要测它自己去 GlobalTotalReleaseTest 打开。
         p = mock.patch.object(image_jobs, "COMFY_RELEASE_AFTER_TOTAL", 0)
+        p.start()
+        self.addCleanup(p.stop)
+        # 在途上限按时段变（10-12 / 22-24 每人 1 张）。老用例是按固定的 5 张
+        # 写的，跑测时间不该改变它们的预期；高峰行为由 PeakInflightTest 单测。
+        p = mock.patch.object(image_jobs, "inflight_limit",
+                              return_value=(image_jobs.MAX_INFLIGHT, "", ""))
         p.start()
         self.addCleanup(p.stop)
         self.sent_images = []
@@ -471,23 +478,24 @@ class QueueTest(_Base):
         self.assertIsNone(job)
         self.assertIn("在画" if image_jobs.MAX_INFLIGHT <= 1 else "排着", reason)
 
-    def test_one_session_only_holds_one_slot(self):
-        """2026-11-24 用户拍板：一个人一次只能排一张图。
+    def test_one_session_can_hold_five_slots(self):
+        """2026-11-25 用户拍板：用户量小，一个人一次最多排 5 张（恢复旧值）。
 
-        串行队列下连排 5 张＝让后面四个人白等 5 张（moss 实测中位 72 秒一张）。
-        这条**故意写死 1**，不引用 `MAX_INFLIGHT`——常量被悄悄改回 5 时上面
-        那条符号化的用例照样绿，只有这条能抓住「又变成一人占满队列」。
-        改需求就一起改这里。"""
-        job, reason = self._enqueue(wf={"1": {"p": 1}})
-        self.assertIsNone(reason, "第一张不该被拒")
-        second, reason = self._enqueue(wf={"1": {"p": 2}})
-        self.assertIsNone(second, "第二张必须被拒：上一张还没跑完")
-        self.assertIn("在画", reason)
-        # 跑完一张，名额立刻还回来，能排第二张。
+        这条**故意写死 5**，不引用 `MAX_INFLIGHT`——常量被悄悄改成别的值时
+        上面那条符号化的用例照样绿，只有这条能抓住口径变化。改需求就改这里。"""
+        jobs = []
+        for i in range(5):
+            job, reason = self._enqueue(wf={"1": {"p": i + 1}})
+            self.assertIsNone(reason, "前 5 张不该被拒")
+            jobs.append(job)
+        sixth, reason = self._enqueue(wf={"1": {"p": 99}})
+        self.assertIsNone(sixth, "第 6 张必须被拒：一人最多 5 张")
+        self.assertIn("排着", reason)
+        # 跑完一张，名额立刻还回来，能再排一张。
         image_jobs._take_nowait()
-        image_jobs._finish(job)
-        again, reason = self._enqueue(wf={"1": {"p": 3}})
-        self.assertIsNone(reason, "上一张跑完就该能排下一张")
+        image_jobs._finish(jobs[0])
+        again, reason = self._enqueue(wf={"1": {"p": 100}})
+        self.assertIsNone(reason, "跑完一张就该空出一个名额")
         self.assertIsNotNone(again)
 
     def test_global_queue_has_room_for_several_sessions(self):
@@ -1424,6 +1432,12 @@ class GenerateImageSplitTest(unittest.TestCase):
 
     def setUp(self):
         image_jobs._reset()
+        # 排队上限随时段变；这类“拒收话术”用例钉在非高峰，免得白天跑和夜里跑
+        # 看到两句不同的话。
+        p = mock.patch.object(image_jobs, "inflight_limit",
+                              return_value=(image_jobs.MAX_INFLIGHT, "", ""))
+        p.start()
+        self.addCleanup(p.stop)
         for target, repl in (
             ("load_skill", mock.Mock(return_value={"workflow": {"1": {}}})),
             ("_qq_gate", mock.Mock(return_value=None)),
@@ -4619,13 +4633,19 @@ class GroupPerUserLimitTest(_Base):
         self.assertIsNotNone(a)
         self.assertIsNotNone(b)
 
-    def test_one_person_still_waits_for_his_own_picture(self):
-        """按人上锁 = 同一个人在群里也还是一次一张。"""
+    def test_one_person_can_queue_five_in_a_group(self):
+        """按人上锁 + 2026-11-25 恢复每人 5 张：同一个人在群里也能排 5 张。
+
+        与 test_one_session_can_hold_five_slots 同源：这里盯的是群聊绑定
+        （_bind）后锁认的是本人而不是群号，名额口径跟着 MAX_INFLIGHT 走。"""
         self._bind("group", "9", 1001)
-        image_jobs.enqueue("group", "9", {"1": {}}, "hd_3_soft")
+        for i in range(image_jobs.MAX_INFLIGHT):
+            job, why = image_jobs.enqueue("group", "9", {"1": {}}, "hd_3_soft")
+            self.assertIsNone(why, "前 %d 张不该被拒" % image_jobs.MAX_INFLIGHT)
+            self.assertIsNotNone(job)
         _, why = image_jobs.enqueue("group", "9", {"1": {}}, "hd_3_soft")
-        self.assertIsNotNone(why)
-        self.assertIn("你已经有一张在画了", why)
+        self.assertIsNotNone(why, "超出名额必须被拒")
+        self.assertTrue("排着" in why or "在画" in why)
 
     def test_private_is_unchanged(self):
         """私聊本来就是一人一把锁：不同的人各排各的，用同一个 target_id 也不会互相挡。"""
@@ -4768,6 +4788,54 @@ class ComfyRejectLogTest(unittest.TestCase):
                 mock.patch.object(image_jobs.comfy_progress, "client_id",
                                   lambda: "cid"):
             self.assertEqual(image_jobs._queue_prompt({"1": {}}), "pid-1")
+
+
+class PeakInflightTest(_Base):
+    """分时段限流：早 10-12 / 晚 22-24 每人 1 张，其余 5 张。
+
+    判定用真实时刻构造时间戳（不硬编码 Unix 秒），但**入队那一步仍钉住**，
+    免得跑测时间漂进别的用例——本类自己明确传高峰值进去。
+    """
+
+    REAL_LIMIT = staticmethod(image_jobs.inflight_limit)
+
+    @staticmethod
+    def _ts(hour, minute=30):
+        return datetime(2026, 11, 25, hour, minute).timestamp()
+
+    def test_peak_windows_are_one(self):
+        for hour in (10, 11, 22, 23):
+            limit, label, window = self.REAL_LIMIT(self._ts(hour))
+            self.assertEqual(1, limit, "%d 点应在高峰窗内" % hour)
+            self.assertTrue(label)
+            self.assertTrue(window)
+
+    def test_other_hours_keep_five(self):
+        for hour in (0, 1, 9, 12, 13, 20, 21):
+            limit, label, window = self.REAL_LIMIT(self._ts(hour))
+            self.assertEqual(image_jobs.MAX_INFLIGHT, limit,
+                             "%d 点不该被高峰限流" % hour)
+            self.assertEqual(("", ""), (label, window))
+
+    def test_peak_rejects_second_image_with_plain_text(self):
+        why_peak = (1, "晚高峰", "22点到24点")
+        p = mock.patch.object(image_jobs, "inflight_limit", return_value=why_peak)
+        p.start()
+        self.addCleanup(p.stop)
+        ctx = ("group", "9")
+        first, reason = self._enqueue(ctx)
+        self.assertIsNone(reason)
+        self.assertIsNotNone(first)
+        second, reason = self._enqueue(ctx)
+        self.assertIsNone(second)
+        self.assertIn("早高峰 10点到12点，晚高峰 22点到24点", reason)
+        self.assertNotIn("当没画过", reason,
+                         "高峰提示本来就说给用户听，不能又叫模型当没发生过")
+
+    def test_offpeak_reason_keeps_model_note(self):
+        for cur, word in ((1, "有一张在画"), (2, "排着")):
+            reason = image_jobs.inflight_busy_text(cur, "")
+            self.assertIn(word, reason)
 
 
 if __name__ == "__main__":
