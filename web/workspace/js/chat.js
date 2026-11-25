@@ -23,9 +23,11 @@
     return el.scroll;
   }
 
+  /* 滚动本身（落到底 / 进页面钉在底部）拆到 scroll.js 了：这块只跟一个
+     容器打交道，跟消息内容无关，放这边白白占行数。这里只留一个短名字，
+     免得每个调用点都写 `global.WSScroll.bottom()`。 */
   function scrollBottom() {
-    var b = box();
-    if (b) b.scrollTop = b.scrollHeight;
+    if (global.WSScroll) global.WSScroll.bottom();
   }
 
   function hideEmpty() {
@@ -95,13 +97,11 @@
     scrollBottom();
     return p;
   }
-
   function sysNote(text) {
     var p = paintNote(text);
     log({ k: "note", t: text });
     return p;
   }
-
   /* 一条会自己消失的提示（「正在传参考图…」「正在看图…」这类）。
      跟 sysNote 分开：sysNote 是对话记录的一部分，要进存档；这种过场提示
      不该进存档，刷新后也不该再出现一条「正在看图…」。返回的句柄用来提前
@@ -192,78 +192,15 @@
   function shotEl(file) { return global.WSShot.shotEl(file); }
   function downloadImage(card, button) { return global.WSShot.download(card, button); }
 
+  /* 出图 / 失败 / 失败提示这三块搬到 gen_flow.js 了（2026-11-25）：它们是
+     「一张卡走到终点」的收尾，跟轮询是同一件事。这边只留转发，存档怎么落
+     盘、气泡怎么找仍然由 bindFlow 里的钩子说了算。 */
   function showImage(card, job) {
-    var img = shotEl(job.file);
-    img.addEventListener("error", function () {
-      failUserLine(card, "图不在了，点重画再来一次");
-    });
-    if (card.ph) {
-      card.ph.parentNode.replaceChild(img, card.ph);
-    } else {
-      card.body.appendChild(img);
-    }
-    card.ph = null;
-    card.img = img;                 // 留个引用：下载/预览都靠它
-    if (card.fill) card.fill();     // 有图了：空壳变回真卡片
-    card.note.hidden = true;
-    card.stop && (card.stop.hidden = true);
-    if (card.userNode) global.WSCard.clearFailLine(card.userNode);
-    card.file = job.file || "";
-    card.since = 0;
-    card.noted = "";
-    buildActs(card);
-    if (card.rec) {
-      card.rec.file = job.file;
-      card.rec.note = "";
-      card.rec.err = false;
-      /* 先在服务端存档里把这条从「排队中」改成「已出图」，再清掉 job：
-         只清本地不写服务端的话，换设备登录读回来的还是「排队中…」
-         （用户 2026-11-24 看到的那张假卡就是这样留下的）。 */
-      global.WSStore.patch(card.rec, { file: job.file, note: "", err: false,
-                                       job: "" });
-      card.rec.job = "";
-      if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
-    }
-    scrollBottom();
+    return global.WSGenFlow.showImage(card, job);
   }
 
-  /* 失败 / 超时：卡住给重试，普通失败给重画。 */
   function fail(card, msg, stuck) {
-    disarmStop(card);
-    card.since = 0;
-    card.noted = "";
-    /* 失败提示只挂在用户那条消息下面、且只留一条（用户 2026-11-25：
-       「红色警告会刷屏……点重画按钮就消失」）。AI 卡片这边不再写红字、
-       不再放重试按钮——反复点重画时原来每次都会刷一行红字 + 一颗按钮。 */
-    card.note.hidden = true;
-    card.note.textContent = "";
-    if (card.acts) { card.acts.innerHTML = ""; card.acts.hidden = true; }
-    failUserLine(card, msg || "这张没画出来，点重画再来一次");
-    /* 没出图的卡退回空闲态，别留 3:4 的大空壳；出过图的留图不动。 */
-    if (card.ph) {
-      card.ph.remove();
-      card.ph = null;
-      if (card.node) card.node.classList.add("is-idle");
-    }
-    if (card.rec) {
-      card.rec.note = msg || "这张没画出来";
-      card.rec.err = true;
-      /* 先在服务端存档里把这条从「排队中」改成失败态，再清掉 job：
-         只清本地不写服务端的话，换设备登录读回来的还是「排队中…」。 */
-      global.WSStore.patch(card.rec, { job: card.rec.job || "",
-                                       note: card.rec.note, err: true });
-      card.rec.job = "";
-      if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
-    }
-    scrollBottom();
-  }
-
-  /* 把失败提示贴到这张卡对应的用户消息下。找不到（存档重放还没配对）
-     就不画——宁可少一条提示，也不刷屏。点重画时由重排流程撤掉它。 */
-  function failUserLine(card, msg) {
-    var host = card.userNode;
-    if (!host) return;
-    global.WSCard.failLine(host, msg, function () { redraw(card); });
+    return global.WSGenFlow.fail(card, msg, stuck);
   }
 
   // ── 生图 ──────────────────────────────────────────────
@@ -325,12 +262,14 @@
         return c;
       },
       spawn: spawn,
-      showImage: showImage,
-      fail: fail,
       sysNote: sysNote,
       newId: newId,
       busyTip: function (text) { busyNote(text, 3000); },
-      dropCard: function (card) { global.WSRedraw.drop(card); }
+      dropCard: function (card) { global.WSRedraw.drop(card); },
+      /* 出图 / 判失败之后滚到底，以及失败提示上那颗按钮点了往哪儿走
+         （出图/失败本身现在住在 gen_flow.js，见那边的 showImage / fail）。 */
+      scroll: scrollBottom,
+      redraw: redraw
     });
   }
 
@@ -541,6 +480,14 @@
 
     grow();
     syncSend();
+    /* 进来先落到底，而且**认账一段时间**：重放是异步的、图是懒加载的，
+       只滚一次等于没滚（用户 2026-11-25：「每次进入浏览器，默认就是来到
+       最底下」）。用户自己一滑就放手，见 scroll.js 的 attach。 */
+    if (global.WSScroll) {
+      global.WSScroll.attach(el.scroll);
+      global.WSScroll.pin();
+    }
+
     /* 先取图片签名再重放存档：`WSGen.img()` 拼出来的地址要带 `k=`，本地缓存
        那条路才走得通（拿不到也不拦，页面照旧按 URL 显示图）。 */
     global.WSGen.imgsign().then(function () {
@@ -578,6 +525,8 @@
     box: box,
     hideEmpty: hideEmpty,
     scrollBottom: scrollBottom,
+    /* 进页面 / 历史重放完之后用来钉在底部（见 scroll.js） */
+    pinBottom: function (ms) { if (global.WSScroll) global.WSScroll.pin(ms); },
     pending: S.pending,
     msgs: function () { return S.msgs; },
     startPoll: startPoll,

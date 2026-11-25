@@ -62,6 +62,10 @@
     var wrap = document.createElement("div");
     wrap.className = "refs";
     wrap.dataset.ref = item.id || "";
+    /* `data-draft`：这张是「还没发出去的草稿」，发送后由 commit() 删掉。
+       存档重放出来的参考卡（archive.js 的 restoreRef）不带这个标记——那是
+       历史里那一轮的图，不该被发送动作顺手删掉。 */
+    wrap.dataset.draft = "1";
 
     var img = document.createElement("img");
     img.alt = "参考图";
@@ -113,14 +117,32 @@
      顺手把存档里那几条 `k:"ref"` 记录删掉（2026-11-24 晚）：它们是「还没
      发出去的那张」的回执，发完了就没有意义。以前只从 S.refs 里摘掉、存档
      不动，于是每次刷新 restore 都会从存档尾巴把它们认回来——用户看到的
-     就是「我什么都没选，引用图栏自己冒出来了」。 */
+     就是「我什么都没选，引用图栏自己冒出来了」。
+
+     **还要把消息区那张大缩略图删掉**（2026-11-25 用户报的 bug：「发送之后
+     的图片还会留在我这个候选栏里面」）。`paintRef()` 把缩略图挂进了
+     `#chat-scroll`（`.refs`，带 `data-ref`），那是「还没发出去的草稿」的
+     样子；只清 `S.refs` 不清 DOM，气泡后面就永远杵着一张删不掉的图——
+     而它对应的引用图栏（`#ref-bar`）已经空了，看着就像没发出去。
+
+     已经拼进用户气泡的那份由 `addUser(text, refs)` 画的 `.bubble-refs`
+     负责，它没有 `data-ref`，不会误删。 */
   function commit() {
     global.sessionStorage.removeItem("ws_same_pending");
     global.sessionStorage.removeItem("ws_same_result");
     var ids = S.refs.map(function (r) { return r.id; });
     S.refs = [];
-    if (ids.length && global.WSChat) global.WSChat.dropRefRecords(ids);
-    syncHint();
+    /* 一次全查出来再按 id 挑：参考图通常只有一两张，但这里别为每张各扫一遍 DOM。 */
+    var want = {};
+    ids.forEach(function (id) { want[String(id)] = 1; });
+    if (ids.length) {
+      var host = box();
+      Array.prototype.forEach.call(
+        host ? host.querySelectorAll("[data-ref]") : [], function (n) {
+          if (n.dataset.draft && want[String(n.dataset.ref)]) n.remove();
+        });
+    }
+    if (ids.length && global.WSChat) global.WSChat.dropRefRecords(ids);    syncHint();
   }
 
   /* 「画同款」：把画廊这张读成一段描述再生成（用户 2026-11-23 定的口径——

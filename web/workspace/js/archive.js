@@ -239,7 +239,10 @@
        用户 2026-11-24 报的就是这一步：昨晚那张的服务重启过，存档里那条
        永远停在「排队中」，刷新几次都一样。 */
     if (!again.length) {
-      global.WSChat.scrollBottom();
+      /* 重放完落到最底并**钉一小会儿**（用户 2026-11-25：「每次进入浏览器，
+         默认就是来到最底下」）。图是懒加载的，落位之后高度还会变。 */
+      if (global.WSChat.pinBottom) global.WSChat.pinBottom();
+      else global.WSChat.scrollBottom();
       return;
     }
     global.WSGen.status().then(function (st) {
@@ -276,7 +279,8 @@
           global.WSCreate.resume(a.rec, a.card);
         }
       });
-      global.WSChat.scrollBottom();
+      if (global.WSChat.pinBottom) global.WSChat.pinBottom();
+      else global.WSChat.scrollBottom();
       if (Object.keys(global.WSChat.pending).length) global.WSChat.startPoll();
     }, function () {
       // 接口不通：不猜，卡面留在「正在跑…」，不接轮询（原因见上）

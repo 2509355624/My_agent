@@ -39,7 +39,9 @@
     sysNote: null,
     newId: null,      // (prefix) → 记录稳定 id（存档按它原位更新）
     busyTip: null,    // 限流这类一次性提示：闪一下就消失，不落存档
-    dropCard: null    // 撤掉一张没排上队的临时卡（连用户气泡一起）
+    dropCard: null,   // 撤掉一张没排上队的临时卡（连用户气泡一起）
+    scroll: null,     // () → 滚到底（出图 / 判失败之后）
+    redraw: null      // (card) → 重画（失败提示上那颗按钮）
   };
 
   function bind(hooks) {
@@ -64,6 +66,92 @@
       }
     }
     card.noted = text;
+  }
+
+  /* ── 卡片收尾：出图 / 失败（2026-11-25 从 chat.js 搬过来）
+
+     这两件事本来就是「一张卡走到终点」的收尾，跟轮询/判超时是同一条命；
+     放在 chat.js 那边只能靠 `H.showImage` / `H.fail` 两个钩子回跳，绕一圈
+     还让那边顶着 600 行上限。搬过来之后 `H` 上那两个位置只留「测试或别处
+     想改口径时覆盖」的作用，不注入就用这里默认的实现。 */
+
+  /* 出图：把占位块换成真图，记下 file，挂上三个按钮。 */
+  function showImage(card, job) {
+    var img = global.WSShot.shotEl(job.file);
+    img.addEventListener("error", function () {
+      failUserLine(card, "图不在了，点重画再来一次");
+    });
+    if (card.ph) card.ph.parentNode.replaceChild(img, card.ph);
+    else card.body.appendChild(img);
+    card.ph = null;
+    card.img = img;                 // 留个引用：下载/预览都靠它
+    if (card.fill) card.fill();     // 有图了：空壳变回真卡片
+    card.note.hidden = true;
+    if (card.stop) card.stop.hidden = true;
+    if (card.userNode && global.WSCard) {
+      global.WSCard.clearFailLine(card.userNode);
+    }
+    card.file = job.file || "";
+    card.since = 0;
+    card.noted = "";
+    buildActs(card);
+    if (card.rec) {
+      card.rec.file = job.file;
+      card.rec.note = "";
+      card.rec.err = false;
+      /* 先在服务端存档里把这条从「排队中」改成「已出图」，再清掉 job：
+         只清本地不写服务端的话，换设备登录读回来的还是「排队中…」
+         （用户 2026-11-24 看到的那张假卡就是这样留下的）。 */
+      if (H.patch) H.patch(card.rec, { file: job.file, note: "", err: false,
+                                       job: "" });
+      card.rec.job = "";
+      if (H.save) H.save(null);
+    }
+    if (H.scroll) H.scroll();
+  }
+
+  /* 失败 / 超时：卡住给重试，普通失败给重画。 */
+  function fail(card, msg, stuck) {
+    disarmStop(card);
+    card.since = 0;
+    card.noted = "";
+    /* 失败提示只挂在用户那条消息下面、且只留一条（用户 2026-11-25：
+       「红色警告会刷屏……点重画按钮就消失」）。AI 卡片这边不再写红字、
+       不再放重试按钮——反复点重画时原来每次都会刷一行红字 + 一颗按钮。 */
+    card.note.hidden = true;
+    card.note.textContent = "";
+    if (card.acts) { card.acts.innerHTML = ""; card.acts.hidden = true; }
+    failUserLine(card, msg || "这张没画出来，点重画再来一次");
+    /* 没出图的卡退回空闲态，别留 3:4 的大空壳；出过图的留图不动。 */
+    if (card.ph) {
+      card.ph.remove();
+      card.ph = null;
+      if (card.node) card.node.classList.add("is-idle");
+    }
+    if (card.rec) {
+      card.rec.note = msg || "这张没画出来";
+      card.rec.err = true;
+      if (H.patch) H.patch(card.rec, { job: card.rec.job || "",
+                                       note: card.rec.note, err: true });
+      card.rec.job = "";
+      if (H.save) H.save(null);
+    }
+    if (H.scroll) H.scroll();
+  }
+
+  /* 把失败提示贴到这张卡对应的用户消息下。找不到（存档重放还没配对）
+     就不画——宁可少一条提示，也不刷屏。点重画时由重排流程撤掉它。 */
+  function failUserLine(card, msg) {
+    var host = card.userNode;
+    if (!host || !global.WSCard) return;
+    global.WSCard.failLine(host, msg, function () {
+      if (card && H.redraw) H.redraw(card);
+    });
+  }
+
+  /* 出图后那三个按钮。chat.js 那边连好了「重画 / 下载」的落点，这里只转发。 */
+  function buildActs(card) {
+    if (global.WSChat && global.WSChat.buildActs) global.WSChat.buildActs(card);
   }
 
   // ── 提交 ──────────────────────────────────────────────
@@ -174,7 +262,7 @@
           if (H.busyTip) H.busyTip(d.error || "前面还有图在画，等一下再发");
           return;
         }
-        H.fail(card, (d && d.error) || "没排上队");
+        fail(card, (d && d.error) || "没排上队");
         return;
       }
       card.job = d.job.id;
@@ -197,7 +285,7 @@
       tick();
     })["catch"](function () {
       card.submitting = false;
-      H.fail(card, "提交失败，检查网络后点重试", true);
+      fail(card, "提交失败，检查网络后点重试", true);
     });
   }
 
@@ -271,7 +359,7 @@
     if (Date.now() - card.since < limit) return false;
     var mins = Math.round(limit / 60000);
     delete S().pending[card.job];
-    H.fail(card, (ph === "running")
+    fail(card, (ph === "running")
       ? "等了 " + mins + " 分钟还在画，可能卡住了。点重试重排一张"
       : "排队等了 " + mins + " 分钟还没轮到，卡住了。点重试重排一张", true);
     return true;
@@ -305,14 +393,14 @@
             return;
           }
           delete S0.pending[id];
-          H.fail(card, "服务重启过，这张没了，点重试再排一次", true);
+          fail(card, "服务重启过，这张没了，点重试再排一次", true);
           return;
         }
         card.graceUntil = 0;
         if (job.state === "done") {
           delete S0.pending[id];
           disarmStop(card);
-          H.showImage(card, job);
+          showImage(card, job);
         } else if (job.state === "error" || job.state === "cancelled") {
           delete S0.pending[id];
           disarmStop(card);
@@ -331,7 +419,7 @@
             return;
           }
           // stuck=true 是服务端判的「线程丢了，这张根本没跑」
-          H.fail(card, job.error || "这张没出来", !!job.stuck);
+          fail(card, job.error || "这张没出来", !!job.stuck);
         } else {
           // 带上参考图时把它读图的结果说清楚：读到了就说「照着参考图画」，
           // 没读到就说「按描述画」——用户不该猜这张图到底用没用上。
@@ -398,6 +486,9 @@
     startPoll: startPoll,
     stopPoll: stopPoll,
     tick: tick,
+    /* 出图 / 失败这两个收尾现在住在这儿（见上面注释），chat.js 转发即可 */
+    showImage: showImage,
+    fail: fail,
     SETTLE_MS: SETTLE_MS,
     PAINT_MS: PAINT_MS
   };

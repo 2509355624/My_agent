@@ -15,7 +15,8 @@ WS = os.path.join(ROOT, "web", "workspace")
 
 CHAT_FILES = ("chat.html", "css/chat.css", "css/sheet.css",
               "js/gen.js", "js/chat.js", "js/stack.js", "js/views.js",
-              "js/card.js", "js/gen_flow.js", "js/shot.js", "js/redraw.js")
+              "js/card.js", "js/gen_flow.js", "js/shot.js", "js/redraw.js",
+              "js/scroll.js")
 
 
 def _read(rel):
@@ -297,6 +298,150 @@ assert.equal(card4.redrawing, false,"跑完要复位，不然这张以后点不�
             capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_sent_reference_thumbnail_leaves_the_message_area(self):
+        """发出去了，输入栏上方那张参考图要一起消失（2026-11-25 用户报的 bug）。
+
+        用户原话：「我发送这个图片，发送之后它还会留在我这个候选栏里面」。
+        `paintRef()` 把缩略图挂进了消息区（`.refs` + `data-ref`），`commit()`
+        以前只清 `S.refs` 和存档、**不删这个 DOM**，于是气泡后面永远杵着一张
+        图，而 `#ref-bar` 已经空了——看着就像没发出去。
+        """
+        script = r'''
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+const root = process.argv[1];
+
+// 极简 DOM：只要 querySelectorAll("[data-ref]")、dataset、remove()、
+// appendChild 和 innerHTML="" 这几样，够 ref.js 用。
+class Node {
+  constructor(tag) {
+    this.tagName = (tag||"div").toUpperCase();
+    this.children = []; this.dataset = {}; this.className = "";
+    this.textContent = ""; this.alt = ""; this.src = "";
+    this.hidden = false; this.parentNode = null;
+    this._attrs = {};
+  }
+  appendChild(n) { n.parentNode = this; this.children.push(n); return n; }
+  setAttribute(k,v) { this._attrs[k] = v; }
+  addEventListener() {}
+  remove() {
+    if (!this.parentNode) return;
+    const i = this.parentNode.children.indexOf(this);
+    if (i >= 0) this.parentNode.children.splice(i, 1);
+    this.parentNode = null;
+  }
+  set innerHTML(v) { if (v === "") this.children.forEach(c => c.parentNode = null), this.children = []; }
+  get innerHTML() { return ""; }
+  querySelectorAll(sel) {
+    const want = sel.includes("data-ref");
+    const out = [];
+    (function walk(n) {
+      n.children.forEach(c => {
+        if (want && "ref" in c.dataset) out.push(c);
+        walk(c);
+      });
+    })(this);
+    return out;
+  }
+  querySelector() { return null; }
+}
+
+const scroll = new Node("div");
+const bar = new Node("div");
+const say = new Node("textarea");
+say.value = "";
+const dropRecords = [];
+const w = {
+  document: { getElementById: id => id === "chat-scroll" ? scroll
+                                     : id === "ref-bar" ? bar
+                                     : id === "say" ? say : null,
+              createElement: t => new Node(t) },
+  sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+  WSChat: {
+    hideEmpty() {}, scrollBottom() {},
+    log() {}, dropRef() {},
+    dropRefRecords(ids) { dropRecords.push(ids.slice()); },
+    box: () => scroll
+  }
+};
+const context = vm.createContext({window:w, document:w.document, Promise,
+  Map, Object, JSON, Date, Array, Event: function(){}, URL, Image: function(){}});
+vm.runInContext(fs.readFileSync(root+"/js/ref.js","utf8"), context);
+
+// 传进来两张：模拟「相册上传两张参考图，还没发」
+w.WSRef.init();
+w.WSRef.add({ id: "refA", ref_id: "refA", url: "/api/gal/ref/refA" });
+w.WSRef.add({ id: "refB", ref_id: "refB", url: "/api/gal/ref/refB" });
+const drafts = () => scroll.children.filter(c => c.dataset.draft);
+assert.equal(drafts().length, 2, "没发之前两张草稿缩略图都该在消息区里");
+
+// 历史重放出来的参考卡（archive.js 的 restoreRef）不带 draft 标记
+const hist = new Node("div");
+hist.dataset.ref = "refA";              // 同一个 id，但是历史里的那张
+scroll.appendChild(hist);
+
+w.WSRef.commit();
+
+assert.equal(drafts().length, 0, "发送后草稿缩略图必须从消息区消失");
+assert.equal(scroll.children.indexOf(hist) >= 0, true, "历史里那张不能被顺手删掉");
+assert.equal(bar.children.length, 0, "输入栏上方也要空掉");
+assert.equal(dropRecords.length, 1);
+assert.equal(dropRecords[0].length, 2, "存档里那两条 ref 回执一并删掉");
+'''
+        result = subprocess.run(
+            [shutil.which("node"), "-e", script, WS],
+            capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_enter_page_pins_to_bottom_then_lets_go_when_user_scrolls(self):
+        """进页面默认停在最底下，用户自己往上翻就立刻放手（2026-11-25）。
+
+        只滚一次没用：历史是异步重放的、图是懒加载的，落位之后高度又变。
+        但也不能一直钉着——用户要往上翻必须翻得动。
+        """
+        script = r'''
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+const root = process.argv[1];
+
+const el = {
+  scrollTop: 0, scrollHeight: 1000, clientHeight: 500,
+  _on: {},
+  addEventListener(t, fn) { (this._on[t] = this._on[t] || []).push(fn); },
+  fire(t, e) { (this._on[t] || []).forEach(fn => fn(e || {})); }
+};
+const w = { requestAnimationFrame: fn => fn() };
+const context = vm.createContext({window: w, Date, setTimeout});
+vm.runInContext(fs.readFileSync(root+"/js/scroll.js","utf8"), context);
+
+w.WSScroll.attach(el);
+w.WSScroll.pin();
+
+// 1) 一挂上就落到底（scrollTop 跟上 scrollHeight）
+assert.equal(el.scrollTop, 1000, "进页面要停在最底下");
+assert.equal(w.WSScroll.pinned(), true, "钉住的状态要能查到");
+
+// 2) 图解码完高度变大：load 会补一次滚底（否则被顶上去一截）
+el.scrollHeight = 1600;
+el.fire("load", { target: { tagName: "IMG" } });
+assert.equal(el.scrollTop, 1600, "图落位之后要重新贴到底");
+
+// 3) 用户往上翻超过一屏 → 立刻放手，之后不再跟他抢
+el.scrollTop = 200;
+el.fire("scroll");
+assert.equal(w.WSScroll.pinned(), false, "用户开始翻历史就要松手");
+
+el.scrollHeight = 2400;
+el.fire("load", { target: { tagName: "IMG" } });
+assert.equal(el.scrollTop, 200, "放手之后绝不能再把用户拽回去");
+'''
+        result = subprocess.run(
+            [shutil.which("node"), "-e", script, WS],
+            capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_redraw_flow_keeps_old_result_and_uses_final_prompt(self):
         redraw = _read("js/redraw.js")
         self.assertIn("WSRedraw", redraw)
@@ -561,8 +706,11 @@ assert.equal(again, 1, "同一颗重画按钮连点只收一次");
         card = _read("js/card.js")
         self.assertIn("function failLine", card)
         self.assertIn("function clearFailLine", card)
-        chat = _read("js/chat.js")
-        self.assertIn("failUserLine(card, msg", chat)
+        # 失败提示的落点 2026-11-25 从 chat.js 搬到了 gen_flow.js（那边才是
+        # 「一张卡走到终点」的收尾），chat.js 只转发出图 / 失败
+        flow = _read("js/gen_flow.js")
+        self.assertIn("failUserLine(card, msg", flow)
+        self.assertIn("global.WSGenFlow.fail(card, msg, stuck)", _read("js/chat.js"))
         gallery_css = _read("css/gallery.css")
         self.assertIn("overflow: hidden;", gallery_css)
 
