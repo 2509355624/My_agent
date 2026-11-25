@@ -20,7 +20,10 @@
   "use strict";
 
   var KEY = "ws_chat_v1";
-  var MAX = 120;          // 只留最近 120 条，再多的老消息不值得占空间
+  /* 本地缓存窗口（条）。**这不是「能看多少历史」**——总长度由服务端的 KEEP
+     决定（2000 条）前端按页往回要。120 是「首屏先铺什么」和「离线时还能看到
+     什么」的那一段。 */
+  var MAX = 120;
   var API = "/api/chat/archive";
 
   function alive() {
@@ -83,101 +86,189 @@
   var timer = 0;
 
   /* 写本地盘（节流）。生成中每 2 秒会改一次「正在生成…」，没必要每次都
-     序列化。返回真正落盘的那个数组，调用方据此算「服务端还缺哪几条」。 */
-  function saveLocal(msgs) {
+     序列化。返回真正落盘的那个数组。
+     `pendingIds`：还没成功推上服务端的记录 id，存进同一份 JSON 里。这样
+     页面被杀掉再回来，「哪几条欠着」还是知道的——以前只记在内存里，一刷新
+     就忘了，那几条永远补不上去（2026-11-25 用户报的跨浏览器不同步）。 */
+  function saveLocal(msgs, pendingIds) {
     if (!alive()) return [];
     var keep = (msgs || []).slice(-MAX);
+    var bag = pendingIds || readPending();
+    var box = { v: 2, msgs: keep, pending: bag };
     try {
-      global.localStorage.setItem(KEY, JSON.stringify({ v: 1, msgs: keep }));
+      global.localStorage.setItem(KEY, JSON.stringify(box));
     } catch (e) {
       /* 配额满了就丢掉更老的一半再试一次，还不行就放弃 */
       var half = keep.slice(-Math.floor(keep.length / 2));
       try {
-        global.localStorage.setItem(KEY, JSON.stringify({ v: 1, msgs: half }));
+        global.localStorage.setItem(KEY, JSON.stringify({ v: 2, msgs: half, pending: bag }));
       } catch (e2) { half = []; }
       return half;
     }
     return keep;
   }
 
-  function save(data) {
-    clearTimeout(timer);
-    timer = setTimeout(function () {
-      var keep = saveLocal((data && data.msgs) || []);
-      /* 推最后 SYNC_TAIL 条。有 `id` 的记录服务端按 id **原位更新**（卡片
-         状态变了也不会多出一条），没有 id 的老记录才按内容指纹去重。 */
-      if (keep.length) push(keep.slice(-SYNC_TAIL));
-    }, 300);
+  /* 还欠着服务端的记录 id（存本地，刷新后还在）。 */
+  function readPending() {
+    var d = read();
+    return (d && d.pending && typeof d.pending === "object") ? d.pending : {};
   }
 
-  /* 一次最多推这么多条。出图卡片改状态时 `keep` 里会带上已经推过的那些，
-     服务端按指纹去重，所以这里"多推几条"是安全的，只是多几 KB。 */
-  var SYNC_TAIL = 12;
+  function markPending(msgs) {
+    if (!msgs || !msgs.length) return;
+    var bag = readPending();
+    msgs.forEach(function (m) { var d = rid(m); if (d) bag[d] = 1; });
+    saveLocal((read() || {}).msgs || [], bag);
+  }
 
-  function fp(m) {
+  function markSynced(msgs) {
+    if (!msgs || !msgs.length) return;
+    var bag = readPending(), changed = false;
+    msgs.forEach(function (m) {
+      var d = rid(m);
+      if (d && bag[d]) { delete bag[d]; changed = true; }
+    });
+    if (changed) saveLocal((read() || {}).msgs || [], bag);
+  }
+
+  /* 这条记录上次推上去时的样子（没推过就是空串）。 */
+  var pushed = {};
+
+  function fpOf(m) {
     try { return JSON.stringify(m); } catch (e) { return ""; }
   }
 
-  /* ── 服务端 ─────────────────────────────────────────── */
-
-  /* 读服务端正本。→ Promise<{ok, msgs} | null>；5174 直连（站主本机）或
-     未登录时接口 404/401，返回 null，调用方继续用本地那份。 */
-  function pull() {
-    return fetch(API, { credentials: "same-origin" })
-      .then(function (r) {
-        if (!r.ok) return null;
-        return r.json().catch(function () { return null; });
-      })
-      .then(function (d) {
-        if (!d || !d.ok || !Array.isArray(d.msgs)) return null;
-        // 服务端那份是正本，但本地可能刚画完、还没推上去：两边按 id 并一次，
-        // 服务端缺的本地记录留在后面，别让它在刷新瞬间消失
-        var local = (read() || {}).msgs || [];
-        var merged = merge(local, d.msgs);
-        saveLocal(merged);
-        d.msgs = merged;
-        return d;
-      })
-      .catch(function () { return null; });
+  /* 落盘 + 同步。
+     口径（2026-11-25 用户实测后定的）：
+       · **记录一产生就整条推上去**，不等 300ms 节流、不攒批次——页面关了、
+         切后台、手机把标签页杀掉，那条已经在服务端了；
+       · 之后状态变了（排队中 → 已出图 → 失败），按 id 原位更新同一条；
+       · 每次只推「新增的 + 这次变了的」，靠 `pushed` 里的指纹判断，不再
+         傻推尾部固定条数（那既可能漏掉中间新加的，又会把老记录反复推）。 */
+  function save(data) {
+    clearTimeout(timer);
+    var msgs = (data && data.msgs) || [];
+    saveLocal(msgs);
+    var dirty = [];
+    var seen = {};
+    msgs.forEach(function (m) {
+      var d = rid(m);
+      if (!d) { dirty.push(m); return; }      // 老记录没有 id，只能按指纹认
+      var f = fpOf(m);
+      // 同一份数组里同 id 出现两次（比如迁移时补的 old_*）只推最后那版
+      if (seen[d] === f) return;
+      seen[d] = f;
+      if (f === clean[d]) return;             // 和服务端那份一字不差：不用动
+      if (f === pushed[d]) return;            // 这次会话里已经推成功过
+      dirty.push(m);
+    });
+    if (dirty.length) flush(dirty);
   }
 
-  var pushing = false, again = false;
+  /* 「拉下来的就不算脏」的记号：id → 指纹。和 `pushed` 分开记，因为
+     `pushed` 在请求成功返回时才写，中间那几百毫秒里第二次 save 会把整窗
+     历史又当成脏数据推一遍。 */
+  var clean = {};
 
-  /* 推增量上去。`msgs` 是本地最后若干条，服务端只收它没有的。 */
-  function push(msgs) {
-    if (!msgs || !msgs.length) return Promise.resolve(null);
-    if (pushing) { again = true; return Promise.resolve(null); }
-    pushing = true;
-    var body = { msgs: msgs.map(function (m) {
-      return { m: m, f: fp(m) };
+  /* 从服务端读到的那份，就是「已经在服务端了」——把它记成干净，否则下一次
+     save() 会把刚拉下来的整窗历史当成脏数据全推回去（白白上传、还会把
+     服务端顺序再排一遍）。 */
+  function forget(m) {
+    var d = rid(m);
+    if (!d) return;
+    var f = fpOf(m);
+    clean[d] = f;
+    pushed[d] = f;
+  }
+
+  var flushing = false, queue = [];
+
+  function flush(list) {
+    list.forEach(function (m) {
+      var d = rid(m);
+      var at = -1;
+      if (d) {
+        for (var i = 0; i < queue.length; i++) {
+          if (rid(queue[i]) === d) { at = i; break; }
+        }
+      }
+      if (at >= 0) queue[at] = m;              // 同一条只留最新那版
+      else queue.push(m);
+    });
+    markPending(queue);
+    if (!flushing) send();
+  }
+
+  function send() {
+    if (!queue.length) return Promise.resolve(null);
+    var batch = queue.slice(0, 40);
+    queue = queue.slice(batch.length);
+    // 发出去的那一刻就记成「已推」：不等响应。否则响应回来之前任何一次
+    // save() 都会把这些刚发出去的记录再判一遍脏，一次提交变成两次推送。
+    batch.forEach(function (m) {
+      var id = rid(m);
+      if (id) pushed[id] = fpOf(m);
+    });
+    flushing = true;
+    var body = { msgs: batch.map(function (m) {
+      return { m: m, f: fpOf(m) };
     }) };
-    return fetch(API, {
+    return global.fetch(API, {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      keepalive: true              // 页面正在关闭时也让它发完
     }).then(function (r) { return r.ok ? r.json() : null; })
       .catch(function () { return null; })
       .then(function (d) {
-        pushing = false;
-        if (again) { again = false; }
+        flushing = false;
+        if (d && d.ok) {
+          markSynced(batch);
+        } else {
+          /* 没推上去：这些 id 要放回 pending，等 resync 补。 */
+          markPending(batch);
+        }
+        if (queue.length) send();
         return d;
       });
   }
 
-  /* 改服务端存档里的某一条（按 `job` 认人）。失败不重试、不提示：它只影响
-     「下次换设备读回来时这条显示成什么」，改不动也不该拦用户出图。
+  /* 「哪几条欠着」→ 补推。进页面、切回前台时各调一次。
+     只补推还在本地窗口里的那些：更老的已经被覆盖掉了，按指纹补推会把
+     顺序打乱，不如不补。 */
+  function resync() {
+    var box = read() || {};
+    var msgs = box.msgs || [], bag = readPending(), ids = Object.keys(bag);
+    if (!ids.length) return Promise.resolve(null);
+    var lost = ids.filter(function (d) {
+      return !msgs.some(function (m) { return rid(m) === d; });
+    });
+    lost.forEach(function (d) { delete bag[d]; });
+    var back = msgs.filter(function (m) { return bag[rid(m)]; });
+    if (lost.length) saveLocal(msgs, bag);
+    if (!back.length) return Promise.resolve(null);
+    flush(back);
+    return Promise.resolve(true);
+  }
 
-     为什么需要它：push 只追加，一条记录写上去就不会再变。出图卡片从
-     「排队中…」变成「已出图 / 这张没了」时，服务端那份还停在旧状态，
-     换设备登录读回来又是一张假卡（2026-11-24 用户报的「假排队」）。 */
+  /**
+
+  /* 改服务端存档里的某一条（有 id 认 id，老记录按 `job`）。失败不重试、不提示：
+     它只影响「下次换设备读回来时这条显示成什么」，改不动也不该拦用户出图。
+
+     为什么还需要它：常态下靠 `save()` 整条重推就够了，但重推要等页面里那条
+     记录真的变了；轮询拿到结果的那一刻，用户可能马上关页面，这里先就地把
+     状态落一次，比等他下一次操作更稳。 */
   function patch(rec, fields) {
     var job = String((rec && rec.job) || "").trim();
-    if (!job) return Promise.resolve(null);
-    var body = { job: job };
+    var id = rid(rec);
+    if (!job && !id) return Promise.resolve(null);
+    var body = id ? { id: id } : { job: job };
+    if (job && id) body.job = job;
     var f = fields || {};
     Object.keys(f).forEach(function (k) { body[k] = f[k]; });
-    return fetch(API, {
+    return global.fetch(API, {
       method: "PATCH",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
@@ -186,11 +277,58 @@
       .catch(function () { return null; });
   }
 
+  /* ── 服务端 ─────────────────────────────────────────── */
+
+  /* 读服务端正本。→ Promise<{ok, msgs, total, more} | null>；5174 直连（站主
+     本机）或未登录时接口 404/401，返回 null，调用方继续用本地那份。
+
+     **拿到的就是全部该显示的**（服务端已经按「尾部一页」截过），不再往里
+     掺本地记录。这一条是 2026-11-25 那几个「点重画却画出另一张图」「明明出图
+     了却说没跑完」的直接来源：以前服务端缺记录就把本地整段补进来，补进来的
+     是无 id 的旧版记录，按内容认人一错位，图和提示行就串了。
+     本机刚产生还没推上去的，靠 `pending` 补推，不靠「并进历史」。 */
+  function pull(limit) {
+    var url = API + (limit ? "?limit=" + limit : "");
+    return global.fetch(url, { credentials: "same-origin" })
+      .then(function (r) {
+        if (!r.ok) return null;
+        return r.json().catch(function () { return null; });
+      })
+      .then(function (d) {
+        if (!d || !d.ok || !Array.isArray(d.msgs)) return null;
+        // 服务端这份落本地当缓存；还没推上去的那几条不在里面，但它们已经
+        // 记在 `pending` 里，resync 会补推，不会丢。
+        d.msgs.forEach(forget);
+        saveLocal(d.msgs);
+        return d;
+      })
+      .catch(function () { return null; });
+  }
+
+  /* 往回翻更早的历史（「加载更早」）。→ Promise<数组 | null>
+
+     服务端一次默认只给尾部 TAIL 条，要更早的整段就带上更大的 limit（服务端
+     封顶 KEEP）。这里不负责拼进页面，由 archive.js 按 id 去重后接在顶上。 */
+  function earlier(limit) {
+    var n = Math.max(MAX, limit || 0) + MAX;
+    return global.fetch(API + "?limit=" + n, { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d || !d.ok || !Array.isArray(d.msgs)) return null;
+        d.msgs.forEach(forget);      // 拉回来的就是服务端已有的，别再当脏数据推回去
+        return d.msgs;
+      })
+      .catch(function () { return null; });
+  }
+
   /* 退出登录：本地清掉。服务端那份**不删**——它属于这个 QQ 号，换台设备
      登录还得能看见（用户 2026-11-24 的要求）。共享设备上的隔离由服务端
      按登录态分档保证，不靠清本地。 */
   function clear() {
     clearTimeout(timer);
+    queue = [];
+    pushed = {};
+    clean = {};
     try { global.localStorage.removeItem(KEY); } catch (e) { /* 忽略 */ }
   }
 
@@ -199,8 +337,10 @@
     save: save,
     clear: clear,
     pull: pull,
-    push: push,
+    earlier: earlier,
+    resync: resync,
     patch: patch,
+    merge: merge,
     KEY: KEY
   };
 })(window);

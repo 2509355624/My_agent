@@ -84,9 +84,12 @@
      消息按顺序重放：气泡、参考卡、结果卡（带图）、漫画格。
      没出图的那条在重放完统一接回轮询（生图走 status，漫画走自己的轮询）。
 
-     数据来源（2026-11-24）：先读服务端 `/api/chat/archive`（按登录的 QQ 号
-     存，换浏览器/换手机也是同一份），拿不到再退回本地那份。服务端那份是
-     正本——以前只认 localStorage，换设备就是一片空白。 */
+     数据来源（2026-11-24，2026-11-25 收紧）：先读服务端 `/api/chat/archive`
+     （按登录的 QQ 号存，换浏览器/换手机也是同一份）。**拉到什么就显示什么，
+     不再往里面掺本地记录**——那是「点重画却画出另一张图」「明明出图了却说
+     没跑完」的根源：补进来的无 id 旧记录按内容认人，一错位图和提示就串了。
+     本机还有没推上去的，走 `WSStore.resync()` 补推，不靠掺进历史。
+     服务端连不上（断网 / 5174 没起）才退回本地那份。 */
   var restoring = false;
   var restored = false;
 
@@ -109,19 +112,7 @@
         restoring = false;
         return;
       }
-      /* 服务端有：以它为准。本地多出来的那几条（比服务端新）也接着放，
-         不然「另一台刚画完、后台还没推上去」的那张会在这台上凭空消失。 */
-      var extra = [];
-      if (local && local.msgs && local.msgs.length) {
-        var known = {};
-        use.forEach(function (m) { known[JSON.stringify(m)] = 1; });
-        extra = local.msgs.filter(function (m) {
-          return !known[JSON.stringify(m)];
-        });
-        // 只有本地最后几条算「新的」，老的那些多半是本地还没被服务端覆盖
-        if (extra.length > 20) extra = [];
-      }
-      replay(use.concat(extra));
+      replay(use);
       restored = true;
       restoring = false;
     }).catch(function () {
@@ -131,13 +122,16 @@
 
   function replay(list) {
     if (!list || !list.length) return;
-    var seenMsgs = {};
+    /* 去重按**内容 + 顺序**：老记录没有 id，同一句话可能真的画过好几次，
+       按内容去重会把「你第二次画的同一句话」吞掉。只有相邻重复（同步时
+       重复推上去的同一版）才算同一条。 */
+    var prevKey = "";
     list = list.filter(function (m) {
       if (!m || !m.k) return false;
       var key;
       try { key = JSON.stringify(m); } catch (e) { return true; }
-      if (seenMsgs[key]) return false;
-      seenMsgs[key] = true;
+      if (key === prevKey) return false;
+      prevKey = key;
       return true;
     });
     var d = { msgs: list };
@@ -294,5 +288,34 @@
   }
 
 
-  global.WSArchive = { restore: restore };
+  /* 往回翻更早的历史（「加载更早」按钮）。服务端一次只给尾部一页，这里要
+     一整段回来，扣掉页面上已有的（按内容比），剩下的接在**最上面**，并且
+     只把新来的这批交给 replay（它会把参考图、轮询都接回去，顺序按传入的
+     先后走）。→ Promise<条数> */
+  function older() {
+    if (!global.WSStore || !global.WSStore.earlier) {
+      return Promise.resolve(0);
+    }
+    var have = {};
+    global.WSChat.msgs().forEach(function (m) {
+      var k = keyOf(m);
+      if (k) have[k] = 1;
+    });
+    return global.WSStore.earlier().then(function (all) {
+      if (!all || !all.length) return 0;
+      var add = all.filter(function (m) {
+        var k = keyOf(m);
+        return k && !have[k];
+      });
+      if (!add.length) return 0;
+      replay(add);
+      return add.length;
+    });
+  }
+
+  function keyOf(m) {
+    try { return m ? JSON.stringify(m) : ""; } catch (e) { return ""; }
+  }
+
+  global.WSArchive = { restore: restore, replay: replay, older: older };
 })(window);

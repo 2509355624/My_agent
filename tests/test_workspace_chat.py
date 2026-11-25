@@ -165,7 +165,13 @@ class TestWorkspaceChatStack(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("node"), "需要 Node 执行前端行为回归")
 class TestWorkspaceFeedback(unittest.TestCase):
-    def test_archive_restore_is_idempotent_and_deduplicates_merged_messages(self):
+    def test_archive_restore_is_idempotent_and_server_wins(self):
+        """服务端说有什么就是什么——不再把本地那份掺进历史。
+
+        2026-11-25 用户实测：掺进来的无 id 旧记录按内容认人一错位，图和提示
+        行就串了（点重画画出另一张图、明明出图却说没跑完）。本机没推上去的
+        由 WSStore.resync() 补推，不靠「并进历史」。
+        """
         script = r'''
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -176,22 +182,23 @@ const server = {k:"note",t:"来自服务端"};
 const local = {k:"note",t:"本地新增"};
 const w = {
   WSShot:{FIT:"fit"},
-  WSStore:{load:()=>({msgs:[server,local]}),pull:()=>new Promise(r=>{resolvePull=r;})},
+  WSStore:{load:()=>({msgs:[local]}),pull:()=>new Promise(r=>{resolvePull=r;})},
   WSChat:{msgs:()=>entries,paintNote(){paints++;},scrollBottom(){},box(){return {appendChild(){}}},
     hideEmpty(){},paintUser(){},restoreRef(){},cards:new Map(),failCard(){},buildActs(){},shotEl(){},
     pending:{},startPoll(){}}
 };
 const context = vm.createContext({window:w, document:{createElement:()=>({className:"",appendChild(){},classList:{remove(){}},dataset:{}})},
-  Promise, Map, Date, Object});
+  Promise, Map, Date, Object, JSON});
 vm.runInContext(fs.readFileSync(root+"/js/archive.js","utf8"),context);
 w.WSArchive.restore();
 w.WSArchive.restore();
 resolvePull({ok:true,msgs:[server]});
 Promise.resolve().then(()=>Promise.resolve()).then(()=>{
-  assert.equal(entries.length,2,"本地与服务端合并只保留唯一记录");
-  assert.equal(paints,2,"合并后的历史只渲染一次");
+  assert.equal(entries.length,1,"以服务端为准，不掺本地记录");
+  assert.equal(entries[0].t,"来自服务端");
+  assert.equal(paints,1,"合并后的历史只渲染一次");
   w.WSArchive.restore();
-  assert.equal(entries.length,2,"重复调用恢复不能再次追加历史");
+  assert.equal(entries.length,1,"重复调用恢复不能再次追加历史");
 }).catch(e=>{console.error(e);process.exitCode=1;});
 '''
         result = subprocess.run(
@@ -237,6 +244,101 @@ Promise.resolve().then(()=>Promise.resolve()).then(()=>{
         chat_routes = _read_app("features/chat/routes.py")
         self.assertIn("def _rec_id(", chat_routes)
         self.assertIn("msgs[by_id[rid]] = m", chat_routes)
+
+    def test_store_pushes_records_immediately_and_keeps_history_window(self):
+        """记录一产生就推，状态变了按 id 重推同一条；不再「攒 300ms 推尾部」。
+
+        2026-11-25 用户实测：页面一关、一切后台，最后那 12 条就没推上去；
+        换台浏览器看不到对方刚画的图。这里守住三条：
+          · 新记录立刻发出去（不依赖定时器）；
+          · 同一条改了状态，只重发那一条，不新增；
+          · 拉回来的服务端记录不会被当成脏数据整窗推回去。
+        """
+        script = r'''
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+const root = process.argv[1];
+const jar = {};
+const store = {getItem:k=>(k in jar?jar[k]:null), setItem:(k,v)=>{jar[k]=String(v);},
+  removeItem:k=>{delete jar[k];}};
+const posts = [];
+let failNext = false;
+const w = {
+  localStorage: store,
+  fetch: (url, opt) => {
+    if (!opt || opt.method !== "POST") {
+      const body = {ok:true, msgs:[]};
+      return { then: (f) => Promise.resolve({ok:true, json:async()=>body}).then(f) };
+    }
+    if (failNext) {
+      failNext = false;
+      return { then: () => Promise.reject(new Error("offline")).catch(()=>({ok:false})) };
+    }
+    const body = JSON.parse(opt.body);
+    posts.push(body.msgs.map(x=>x.m.id));
+    const res = {ok:true, json:async()=>({ok:true, added:body.msgs.length})};
+    return { then: (f) => Promise.resolve(res).then(f) };
+  }
+};
+const context = vm.createContext({window:w, Promise, Map, Object, JSON, Date,
+  setTimeout:()=>0, clearTimeout:()=>{},
+  // 不要用 unhandledRejection 兜底：老记录那条断言会看起来像网络错误
+  queueMicrotask});
+vm.runInContext(fs.readFileSync(root+"/js/store.js","utf8"),context);
+
+const msgs = [{k:"user", id:"u1", t:"画猫"},
+              {k:"img", id:"img1", ask:"画猫", file:"", note:"排队中…"}];
+w.WSStore.save({msgs});
+// 不等任何定时器：返回时请求已经在路上（微任务里就发）
+Promise.resolve().then(()=>{
+  assert.equal(posts.length,1,"记录一产生就推，不等节流");
+  assert.deepEqual(posts[0],["u1","img1"]);
+  msgs[1].file = "cat.webp";
+  msgs[1].note = "已出图";
+  w.WSStore.save({msgs});
+  return Promise.resolve();                   // 让第一次上传的 .then 跑完
+}).then(()=>Promise.resolve()).then(()=>{
+  assert.equal(posts.length,2,"状态变了重推一次");
+  assert.deepEqual(posts[1],["img1"],"只重推变了的那一条");
+  // 没变就不推
+  w.WSStore.save({msgs});
+  return Promise.resolve();
+}).then(()=>Promise.resolve()).then(()=>{
+  assert.equal(posts.length,2,"没变化不再重复上传");
+  // 服务端拉回来的那份不算脏
+  return w.WSStore.pull().then(()=>{
+    w.WSStore.save({msgs});
+    return Promise.resolve();
+  });
+}).then(()=>Promise.resolve()).then(()=>{
+  assert.equal(posts.length,2,"刚拉下来的历史不会被整窗推回去");
+  // 任务还在跑时页面被杀：只记在 queue 里的那条要能补推
+  failNext = true;
+  const m2 = msgs.concat([{k:"user", id:"u2", t:"画狗"}]);
+  w.WSStore.save({msgs:m2});
+  return Promise.resolve();
+}).then(()=>Promise.resolve()).then(()=>{
+  const box = JSON.parse(jar.ws_chat_v1);
+  assert.ok(box.pending && box.pending.u2, "推失败的那条记在本地 pending 里");
+  w.WSStore.resync();
+  return Promise.resolve();
+}).then(()=>Promise.resolve()).then(()=>{
+  assert.ok(posts.some(b=>b.indexOf("u2")>=0),"回前台后把欠着的补推上去");
+}).catch(e=>{console.error(e);process.exitCode=1;});
+'''
+        result = subprocess.run(
+            [shutil.which("node"), "-e", script, WS],
+            capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_archive_api_serves_tail_window(self):
+        """GET 默认只给尾部一页，并告诉前端「还有更早的」。"""
+        routes = _read_app("features/chat/routes.py")
+        self.assertIn("TAIL = ", routes)
+        self.assertIn("KEEP = 2000", routes, "历史总长度不应该是几百条")
+        self.assertIn('"total": total, "more": total > len(msgs)', routes)
+        self.assertIn("msgs = msgs[-limit:]", routes)
 
     def test_redraw_accepts_only_one_click(self):
         script = r'''

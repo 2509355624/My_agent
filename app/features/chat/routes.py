@@ -55,12 +55,16 @@ bp = Blueprint("chat_archive", __name__, url_prefix="/api/chat")
 
 DIR = state_path("chat_archive")
 
-# 一个档位最多留多少条。前端的窗口是 120（store.js 的 MAX），这里留点余量：
-# 多设备同时在线时，两台各自推的段能拼起来，不会互相截断。
-KEEP = 240
-# 一次推送最多收几条：前端正常只推 12 条，给到 200 是防一个改坏了的客户端
-# 一把塞几兆进来。
+# 一个档位最多留多少条。**这是用户能看到多长的历史**，别和「一次推几条」混起来。
+# 早期是 240：一天正常画几十张，两条记录一张卡，两三天就滚掉了——用户体验上
+# 等于「以前的图没了」。2026-11-25 提到 2000（约一千张图的量级）。一条记录
+# 通常 200~600 字节，2000 条约 1MB，前端只拉尾部一页，不整份下发。
+KEEP = 2000
+# 一次推送最多收几条：前端现在**一产生就推**（单条 / 刚变化的几条），给到
+# PUSH_MAX 是防一个改坏了的客户端一把塞几兆进来。
 PUSH_MAX = 200
+# GET 默认下发多少条（尾部）。前端要更早的再带 `?limit=` 要，最多给到 KEEP。
+TAIL = 120
 BODY_MAX = 4 << 20          # 单次请求体上限 4MB
 
 _QQ_RE = re.compile(r"^\d{4,12}$")
@@ -72,9 +76,19 @@ def _file(qq):
 
 
 def _load(qq):
+    return _load_box(qq)[0]
+
+
+def _load_box(qq):
+    """→ (msgs, 旧记录补 id 后有没有变)。
+
+    老存档里的记录没有 id（升级前的前端写的），按内容认人一错位，图和提示
+    行就会串。这里按固定顺序补一个 `old_<序号>`：同样的输入永远算出同样的
+    id，多台设备、多次读取都一样，相当于给它们一个稳定身份。
+    """
     p = _file(qq)
     if not os.path.isfile(p):
-        return []
+        return [], False
     try:
         with io.open(p, "r", encoding="utf-8") as f:
             d = json.load(f)
@@ -86,11 +100,18 @@ def _load(qq):
             os.replace(p, p + ".broken-%d" % int(time.time()))
         except OSError:
             pass
-        return []
+        return [], False
     if not isinstance(d, dict):
-        return []
+        return [], False
     msgs = d.get("msgs")
-    return msgs if isinstance(msgs, list) else []
+    if not isinstance(msgs, list):
+        return [], False
+    changed = False
+    for i, m in enumerate(msgs):
+        if isinstance(m, dict) and not _rec_id(m):
+            m["id"] = "old_%d" % i
+            changed = True
+    return msgs, changed
 
 
 def _save(qq, msgs):
@@ -148,12 +169,23 @@ def _who():
 
 @bp.route("/archive", methods=["GET"])
 def api_archive_get():
-    """取这一档的聊天记录。→ {ok, msgs, n}"""
+    """取这一档的聊天记录。→ {ok, msgs, n, total, more}
+
+    `total` 是这一档一共存了多少条，`more` 表示还有更早的没下发（前端据此
+    决定「加载更早」要不要显示）。一次默认只给尾部 TAIL 条：手机端第一次
+    进页面拉十兆 JSON 会白屏几秒，那是真实的体验问题。
+    """
     qq = _who()
     if not qq:
         return jsonify({"ok": False, "error": "没登录"}), 401
     msgs = _load(qq)
-    return jsonify({"ok": True, "msgs": msgs, "n": len(msgs), "qq": qq})
+    total = len(msgs)
+    limit = request.args.get("limit", type=int) or TAIL
+    limit = max(1, min(limit, KEEP))
+    if total > limit:
+        msgs = msgs[-limit:]
+    return jsonify({"ok": True, "msgs": msgs, "n": len(msgs),
+                    "total": total, "more": total > len(msgs), "qq": qq})
 
 
 @bp.route("/archive", methods=["POST"])
@@ -194,7 +226,7 @@ def api_archive_post():
         return jsonify({"ok": True, "n": len(_load(qq)), "added": 0})
 
     with _LOCK:
-        msgs = _load(qq)
+        msgs, migrated = _load_box(qq)
         # 去重分两层：
         #   ① 有 id 的记录按 id **原位替换**（卡片状态更新，不追加）；
         #   ② 没有 id 的老记录按内容指纹比，且只比最近这一段。
@@ -219,7 +251,8 @@ def api_archive_post():
             if rid:
                 by_id[rid] = len(msgs) - 1
             added += 1
-        if added or updated:
+        # 老记录补了 id 也算「该落盘」：迁移一次之后就稳定了，不会再变。
+        if added or updated or migrated:
             if added:
                 msgs = msgs[-KEEP:]
             try:
@@ -233,7 +266,7 @@ def api_archive_post():
 
 @bp.route("/archive", methods=["PATCH"])
 def api_archive_patch():
-    """就地改一条已有记录（按 `job` 认人）。→ {ok, hit}
+    """就地改一条已有记录（按 `id` 认人，老记录按 `job`）。→ {ok, hit}
 
     前端推的是「追加」，改不了已经存下来的那条：出图卡片从「排队中…」
     变成「这张没了 / 已出图」时，服务端那份还停在旧状态，下次换设备登录
@@ -241,10 +274,10 @@ def api_archive_patch():
     排队中，我知道是假的」）。
 
     body: `{"job": "GP-...", "m": {...}}` 或带上裸字段：
-    `{"job": "...", "note": "…", "err": true}`。
+    `{"job": "...", "note": "…", "err": true}`。带 `id` 时以 id 为准。
 
-    只改 `k:"img"` 且 `job` 相同的那一条；找不到就 hit=0，不报错——卡片
-    可能已经被截断掉了，不值得为它拦一次请求。
+    只改 `k:"img"` 的那一条；找不到就 hit=0，不报错——卡片可能已经被
+    截断掉了，不值得为它拦一次请求。
     """
     qq = _who()
     if not qq:
@@ -253,11 +286,12 @@ def api_archive_patch():
     if not isinstance(body, dict):
         return jsonify({"ok": False, "error": "参数不对"}), 400
     job = str(body.get("job") or "").strip()
-    if not job:
-        return jsonify({"ok": False, "error": "没给 job"}), 400
+    rid = str(body.get("id") or "").strip()
+    if not job and not rid:
+        return jsonify({"ok": False, "error": "没给 job 或 id"}), 400
     patch = body.get("m")
     if not isinstance(patch, dict):
-        patch = {k: v for k, v in body.items() if k != "job"}
+        patch = {k: v for k, v in body.items() if k not in ("job", "id")}
 
     with _LOCK:
         msgs = _load(qq)
@@ -265,7 +299,11 @@ def api_archive_patch():
         for m in reversed(msgs):
             if not isinstance(m, dict) or m.get("k") != "img":
                 continue
-            if str(m.get("job") or "") != job:
+            # 有 id 就认 id（id 是同一条记录的凭据）；老记录没有 id，退回按 job 认。
+            if rid:
+                if _rec_id(m) != rid:
+                    continue
+            elif str(m.get("job") or "") != job:
                 continue
             m.update(patch)
             hit += 1

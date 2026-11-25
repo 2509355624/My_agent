@@ -348,11 +348,16 @@
 
   global.addEventListener("pageshow", function () {
     if (H.state && Object.keys(S().pending).length) { startPoll(); tick(); }
+    // 手机把标签页挂起过：这期间产生的记录可能没推上去，回来先补一次。
+    if (global.WSStore && global.WSStore.resync) global.WSStore.resync();
   });
   document.addEventListener("visibilitychange", function () {
     if (!document.hidden && H.state && Object.keys(S().pending).length) {
       startPoll();
       tick();
+    }
+    if (!document.hidden && global.WSStore && global.WSStore.resync) {
+      global.WSStore.resync();
     }
   });
 
