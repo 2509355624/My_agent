@@ -180,7 +180,7 @@ class TestWorkspaceFeedback(unittest.TestCase):
         self.assertIn("submitted.say(\"正在看图…\")", chat)
         flow = _read("js/gen_flow.js")
         self.assertIn("if (userNode) card.userNode = userNode;", flow)
-        self.assertIn("if (defer) return card;", flow)
+        self.assertIn("if (defer) { card.submitting = true; return card; }", flow)
         self.assertIn("function continueSubmit(card, refs, described)", flow)
         self.assertIn("again: function (c) { redraw(c); }", chat)
         self.assertIn("busyTip: function (text) { busyNote(text, 3000); }", chat)
