@@ -3556,6 +3556,52 @@ class ReviseChannelListTest(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertFalse(hasattr(direct_gen, name))
 
+    def test_quoted_image_keeps_its_own_channel(self):
+        """2026-11-25 用户拍板：引用图 + 没点名渠道 = 用那张图自己的渠道。
+
+        旧文案「没点名就别填 skill，系统自己挑默认」会让模型一律留空，
+        代码随即回落到 silver（_FALLBACK_SKILL）——引用 anima 线条的图改
+        衣服也跑成 silver。这条铁律把口径翻过来。
+        """
+        t = direct_gen._REVISE_TEMPLATE
+        for word in ("引用图 = 用那张图自己的渠道",
+                     "不许因为没点名就留空",
+                     "用户没点名渠道 + 有引用图 → skill 填原渠道",
+                     "只有用户真的点名了别家"):
+            with self.subTest(word=word):
+                self.assertIn(word, t)
+        self.assertNotIn("用户没点名渠道时就别填 skill", t)
+
+    def test_single_image_edit_is_not_comic(self):
+        """「继续出图 / 换衣服」只改一张，绝不落 silver 漫画。
+
+        漫画分支原先只写「要漫画 / 多图 / N 张才走」，模型看到「出图」
+        就往那条路上跑，`_comic_style` 没点名 anima多图就落 silver 漫画。
+        """
+        t = direct_gen._REVISE_TEMPLATE
+        for word in ("只有用户明确说了要「漫画 / 连环画 / 多格 / 条漫 / 多图」",
+                     "「继续出图 / 再出一张 / 接着画 / 换成白色毛衣 / 改个衣服」都不是漫画指令",
+                     "没明说多图漫画就绝不走 generate_comic"):
+            with self.subTest(word=word):
+                self.assertIn(word, t)
+
+    def test_no_i2i_skeleton_keeps_original_channel(self):
+        """原渠道没有 i2i 骨架时不垫图、按原渠道改词重画，不换 qwen。
+
+        2026-10-17 定的「图生图就走 qwen」被 2026-11-25 的「原渠道优先」
+        取代：用户引用 anima 线条的图说「换白色毛衣」， expects anima-line
+        改词重画，而不是 qwen 垫图。
+        """
+        t = direct_gen._REVISE_TEMPLATE
+        for word in ("原渠道有图生图骨架就用原渠道",
+                     "不换 qwen",
+                     "原渠道没有 i2i 骨架（jank / nffa / cunny / miao / sd / moss",
+                     "绝不换成 qwen_image_v1",
+                     "skill 一律沿用原渠道、别换"):
+            with self.subTest(word=word):
+                self.assertIn(word, t)
+        self.assertNotIn("原渠道没有 i2i 骨架或查不到原渠道时填", t)
+
 
 class Qwen30ChannelTest(unittest.TestCase):
     """`qwen30` 已于 2026-11-18 对外下架（能力并进默认 qwen_image_v1）。
