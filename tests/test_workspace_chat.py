@@ -23,6 +23,11 @@ def _read(rel):
         return f.read()
 
 
+def _read_app(rel):
+    with open(os.path.join(ROOT, "app", rel), encoding="utf-8") as f:
+        return f.read()
+
+
 class _Balance(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -160,6 +165,40 @@ class TestWorkspaceChatStack(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("node"), "需要 Node 执行前端行为回归")
 class TestWorkspaceFeedback(unittest.TestCase):
+    def test_archive_restore_is_idempotent_and_deduplicates_merged_messages(self):
+        script = r'''
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+const root = process.argv[1];
+let resolvePull, paints = 0, entries = [];
+const server = {k:"note",t:"来自服务端"};
+const local = {k:"note",t:"本地新增"};
+const w = {
+  WSShot:{FIT:"fit"},
+  WSStore:{load:()=>({msgs:[server,local]}),pull:()=>new Promise(r=>{resolvePull=r;})},
+  WSChat:{msgs:()=>entries,paintNote(){paints++;},scrollBottom(){},box(){return {appendChild(){}}},
+    hideEmpty(){},paintUser(){},restoreRef(){},cards:new Map(),failCard(){},buildActs(){},shotEl(){},
+    pending:{},startPoll(){}}
+};
+const context = vm.createContext({window:w, document:{createElement:()=>({className:"",appendChild(){},classList:{remove(){}},dataset:{}})},
+  Promise, Map, Date, Object});
+vm.runInContext(fs.readFileSync(root+"/js/archive.js","utf8"),context);
+w.WSArchive.restore();
+w.WSArchive.restore();
+resolvePull({ok:true,msgs:[server]});
+Promise.resolve().then(()=>Promise.resolve()).then(()=>{
+  assert.equal(entries.length,2,"本地与服务端合并只保留唯一记录");
+  assert.equal(paints,2,"合并后的历史只渲染一次");
+  w.WSArchive.restore();
+  assert.equal(entries.length,2,"重复调用恢复不能再次追加历史");
+}).catch(e=>{console.error(e);process.exitCode=1;});
+'''
+        result = subprocess.run(
+            [shutil.which("node"), "-e", script, WS],
+            capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_return_restores_done_image_and_reference_reading(self):
         archive = _read("js/archive.js")
         self.assertIn('job.state === "done" && job.file', archive)
@@ -171,32 +210,33 @@ class TestWorkspaceFeedback(unittest.TestCase):
         self.assertIn('if (pending && pending.id) useSame(null, pending.id)', ref)
         self.assertIn('ws_same_result', ref)
 
-    def test_redraw_resends_and_busy_is_transient(self):
+    def test_redraw_flow_keeps_old_result_and_uses_final_prompt(self):
         redraw = _read("js/redraw.js")
         self.assertIn("WSRedraw", redraw)
-        self.assertIn("H.send(text, refs, described, skill)", redraw)
+        # 出过图 → 用实际英文 tags，且不再传气泡（null = 底部新建一条）
+        self.assertIn("H.submit(text, skill, done ? [] : refs, done ? true : described,", redraw)
+        self.assertIn("null, false, done)", redraw)
+        self.assertNotIn("H.retry(", redraw, "重画不再原地重试，一律底部新开")
+        self.assertNotIn("afterCancel", redraw)
         chat = _read("js/chat.js")
-        self.assertIn("submitJob(prompt, skill, refs, described, userNode, defer)", chat)
-        self.assertIn("submitted.say(\"正在看图…\")", chat)
-        flow = _read("js/gen_flow.js")
-        self.assertIn("if (userNode) card.userNode = userNode;", flow)
-        self.assertIn("if (defer) { card.submitting = true; return card; }", flow)
-        self.assertIn("function continueSubmit(card, refs, described)", flow)
-        self.assertIn("again: function (c) { redraw(c); }", chat)
+        self.assertIn("submitJob(prompt, skill, refs, described, userNode, defer, finalPrompt)", chat)
+        self.assertIn("user = user || addUser(text, refs);", chat)
+        self.assertIn("prompt_is_final", _read("js/gen_flow.js"))
         self.assertIn("busyTip: function (text) { busyNote(text, 3000); }", chat)
         self.assertIn("dropCard: function (card) { global.WSRedraw.drop(card); }", chat)
-        self.assertIn("if (!card || card.redrawing) return;", redraw)
-        self.assertIn("H.removeUser(card.userNode", redraw)
-        card = _read("js/card.js")
-        self.assertIn("if (again.disabled) return;", card)
         flow = _read("js/gen_flow.js")
-        self.assertIn("if (d && d.busy)", flow)
-        self.assertIn("这张已经在画了，等它出来再说", flow)
-        self.assertIn("return card;     // 只有真新建了卡片", flow)
-        api = os.path.join(ROOT, "app", "features", "qq", "friend_api.py")
-        with open(api, encoding="utf-8") as f:
-            py = f.read()
-        self.assertIn('"busy": True', py)
+        self.assertNotIn("findTwin", flow)
+        self.assertIn('job.state === "cancelled"', flow)
+        self.assertIn('card.note.textContent = "已终止"', flow)
+        routes = _read_app("features/image/routes.py")
+        self.assertIn('"owner": owner', routes)
+        self.assertIn("image_jobs.inflight_limit()", routes)
+        # 5174 管理页不许再有一张的独立闸：上限只认 jobs 那一套口径
+        self.assertNotIn("_MAX_ACTIVE", routes)
+        # 存档接口按记录 id 原位更新，不再按整条 JSON 追加
+        chat_routes = _read_app("features/chat/routes.py")
+        self.assertIn("def _rec_id(", chat_routes)
+        self.assertIn("msgs[by_id[rid]] = m", chat_routes)
 
     def test_redraw_accepts_only_one_click(self):
         script = r'''
@@ -227,12 +267,20 @@ w.WSCard.buildActs(card, "", {again(){again++;}, download(){}});
 const button = card.acts.children[2];   // 复制 / 下载 / 重画
 button.click(); button.click();
 assert.equal(again, 1, "同一颗重画按钮连点只收一次");
-let sends = 0;
-w.WSRedraw.bind({pending:()=>({}), clearFail(){}, removeCard(){}, removeUser(){},
-  msgs:()=>[], removeRec(){}, save(){}, defaultSkill:()=>"s", send(){sends++;}});
-const old = {rec:{ask:"画猫"}, refs:[], skill:"s", node:new El()};
-w.WSRedraw.run(old); w.WSRedraw.run(old);
-assert.equal(sends, 1, "同一条旧消息重复重画只送一次");
+  let retries = 0, submits = 0, dropped = 0;
+  w.WSRedraw.bind({msgs:()=>[],save(){},clearFail(){},retry(){retries++;},
+    discard(){dropped++;}, submit(){submits++;}});
+  const old = {rec:{ask:"画猫"}, refs:[], skill:"s", node:new El(),
+               userNode:new El(), redrawing:false};
+  w.WSRedraw.run(old);
+  assert.equal(submits, 1, "失败重画也在底部新开一张");
+  assert.equal(retries, 0, "失败重画不再原地重试");
+  assert.equal(dropped, 0, "没出过图的旧记录不该被摘掉");
+  const done = {rec:{file:"cat.webp",prompt:"cat tags"},file:"cat.webp",
+    prompt:"cat tags",refs:[],skill:"s",node:new El(),userNode:new El(),redrawing:false};
+  w.WSRedraw.run(done);
+  assert.equal(submits, 2, "成功卡片重画在底部新增卡片");
+  assert.equal(dropped, 1, "出过图的旧记录要让位给新卡的状态");
 '''
         result = subprocess.run(
             [shutil.which("node"), "-e", script, WS],
@@ -297,8 +345,8 @@ async function flush() { for(let i=0;i<12;i++) await Promise.resolve(); }
   assert.equal(mounted.length,1,"生成卡必须挂入消息区");
   load("gen_flow.js");
   const state={pending:{}, cards:new Map(), msgs:[], timer:null};
-  let calls=0, resolve;
-  w.WSGen={submit(){calls++; return new Promise(r=>resolve=r);}, status:async()=>({ok:false})};
+  let calls=0, resolvers=[];
+  w.WSGen={submit(){calls++; return new Promise(r=>resolvers.push(r));}, status:async()=>({ok:false})};
   w.WSGenFlow.bind({state:()=>state, save:r=>{if(r&&!state.msgs.includes(r))state.msgs.push(r);},
     patch(){}, newCard(prompt,skill,rec){return Object.assign(w.WSCard.shell(),{prompt,skill,rec});},
     fail(c,msg){c.say(msg);}, sysNote(){}});
@@ -306,47 +354,49 @@ async function flush() { for(let i=0;i<12;i++) await Promise.resolve(); }
   const rec=state.msgs[0], card=state.cards.get(rec);
   assert.equal(card.note.textContent,"正在提交…");
   w.WSGenFlow.submit("画猫","s");
-  assert.equal(calls,1,"请求尚未返回时连点不能重复提交");
-  resolve({ok:true,job:{id:"j1",prompt:"cat tags"}}); await flush();
+  assert.equal(calls,2,"相同提示词的独立消息分别提交");
+  resolvers[0]({ok:true,job:{id:"j1",prompt:"cat tags"}}); await flush();
   assert.equal(card.note.textContent,"排队中…");
-  w.WSGenFlow.submit("画猫","s"); assert.equal(calls,1);
-  delete state.pending.j1; rec.file="cat.webp";
-  w.WSGenFlow.submit("画猫","s");
-  assert.equal(calls,2,"成功图片重画应新建请求");
-  assert.equal(state.msgs.length,2);
-  resolve({ok:false,error:"没排上"}); await flush();
-  const retryRec=state.msgs[1];
-  w.WSGenFlow.submit("画猫","s");
-  assert.equal(state.msgs.length,2,"失败重试复用记录");
-  assert.equal(state.cards.get(retryRec).note.textContent,"正在提交…");
-  resolve({ok:false,error:"offline"}); await flush();
+  assert.equal(state.msgs.length,2,"相同文本的两条请求各有独立记录");
+  resolvers[1]({ok:true,job:{id:"j2",prompt:"second tags"}}); await flush();
+  assert.equal(Object.keys(state.pending).length,2,"两条任务分别进入轮询");
+  delete state.pending.j2; state.msgs[1].file="second.webp";
+  const before=state.msgs.length;
+  const redrawCard={rec:state.msgs[1],file:"second.webp",prompt:"second tags",skill:"s",
+    userNode:null,refs:[],node:new Element(),redrawing:false};
+  load("redraw.js");
+  w.WSRedraw.bind({msgs:()=>state.msgs,save(){},submit:(p,s,r,d,u,defer,final)=>
+    w.WSGenFlow.submit(p,s,r,d,u,defer,final),retry(){}});
+  w.WSRedraw.run(redrawCard);
+  assert.equal(state.msgs.length,before+1,"成功重画只新增一条图片记录");
+  assert.equal(state.msgs[1].file,"second.webp","旧成功结果仍保留");
+  assert.equal(state.msgs.at(-1).prompt,"second tags","新卡复用实际英文 tags");
+  assert.equal(state.msgs.at(-1).finalPrompt,true,"新卡标记为最终提示词");
+  resolvers[2]({ok:false,error:"offline"}); await flush();
   load("hide.js");
   assert.equal(typeof w.WSHide.save,"function");
   assert.equal(w.WSHide.downloadButton,undefined,"下载不应再新增面板/分享入口");
   const panel=context.document.body.children.find(n=>n.children.some(c=>c.textContent==="保存图片"));
   assert.equal(panel,undefined,"下载不应弹出保存面板");
-  // 重画：清掉旧卡/旧记录，再走一次正常发送
+  // 重画：出过图的旧记录让位，新卡在底部新建（含新的用户气泡）
   load("redraw.js");
-  const msgs=[{k:"user",t:"画狗"},{k:"img",ask:"画狗"}];
+  const msgs=[{k:"user",t:"画狗"},{k:"img",ask:"画狗",file:"old.webp",prompt:"cat tags"}];
   const oldRec=msgs[1];
   const oldUser=new Element(), oldNode=new Element();
-  w.WSCard.clearFailLine=()=>{};
-  let sent=null, removedRec=null, saved=0, removedNodes=0;
-  w.WSRedraw.bind({
-    pending:()=>({}), cancel(){}, afterCancel(){}, clearFail(){},
-    removeUser(){}, removeCard(){removedNodes++;},
-    msgs:()=>msgs, removeRec:(rec)=>{removedRec=rec; msgs.splice(msgs.indexOf(rec),1);},
-    save:()=>{saved++;}, defaultSkill:()=>"s",
-    send:(text,refs,described,skill)=>{sent={text,refs,described,skill};}
-  });
-  w.WSRedraw.run({rec:oldRec, refs:[{id:"ref1"}], skill:"s",
-                  userNode:oldUser, node:oldNode, prompt:"cat tags"});
-  assert.equal(removedRec,oldRec,"旧存档记录被摘掉");
-  assert.equal(msgs.length,1,"旧用户消息被摘掉");
-  assert.equal(removedNodes,1,"旧卡节点被摘掉");
-  assert.equal(saved,1,"存档落盘一次");
-  assert.deepEqual(sent,{text:"画狗",refs:[{id:"ref1"}],described:false,skill:"s"},
-                   "同一句话+引用图走正常发送");
+  let sent=null;
+  w.WSRedraw.bind({msgs:()=>msgs,save(){},clearFail(){},retry(){},
+    discard(rec){const at=msgs.indexOf(rec); if(at>=0) msgs.splice(at,1);},
+    submit:(text,skill,refs,described,user,defer,finalPrompt)=>{
+      sent={text,skill,refs,described,user,defer,finalPrompt};
+    }});
+  w.WSRedraw.run({rec:oldRec,refs:[],skill:"s",userNode:oldUser,node:oldNode,
+                  prompt:"cat tags",file:"old.webp"});
+  assert.equal(msgs.length,1,"旧图记录让位给新卡，旧用户消息仍保留");
+  assert.equal(msgs[0].t,"画狗");
+  assert.equal(sent.text,"cat tags");
+  assert.equal(sent.finalPrompt,true,"重画直接使用最终英文 tags");
+  assert.equal(sent.user,null,"气泡不重画：交给上层在底部新建");
+  assert.equal(sent.refs.length,0,"出过图的重画不再带参考图");
 })().catch(e=>{console.error(e);process.exitCode=1;});
 '''
         result = subprocess.run(

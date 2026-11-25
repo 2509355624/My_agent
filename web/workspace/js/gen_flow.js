@@ -33,6 +33,7 @@
     showImage: null,  // (card, job) → 出图
     fail: null,       // (card, msg, stuck) → 失败态
     sysNote: null,
+    newId: null,      // (prefix) → 记录稳定 id（存档按它原位更新）
     busyTip: null,    // 限流这类一次性提示：闪一下就消失，不落存档
     dropCard: null    // 撤掉一张没排上队的临时卡（连用户气泡一起）
   };
@@ -52,33 +53,18 @@
      `described`（2026-11-24）：这些参考图**已经读成描述写进 prompt 了**
      （「画同款」就是这种）。带上它，后端就不再识一次图——用户确认过的
      口径是「不再识，用输入栏那段」。 */
-  function submit(prompt, skill, refs, described, userNode, defer) {
+  function submit(prompt, skill, refs, described, userNode, defer, finalPrompt) {
     if (!skill) {
       H.sysNote("还没拿到渠道列表，去跑图台看一眼再回来");
       return null;
     }
-    /* 用户连着点「重画」不要一堆卡（2026-11-24）：
-       · 同一份提示词 + 同一个渠道，上一条还在排队 / 在画 → 不再新开一张，
-         只把那一行字闪一下。生产队里本来也只允许一张在途，新开那张必然被
-         服务端拒掉再变成一张「大卡片」——这正是用户看到的「一大堆大卡片」。
-       · 上一条已经判失败（它只是一行字 + 重试）→ 直接复用它，重新排一次，
-         不留上一张失败的空壳。 */
-    var twin = findTwin(prompt, skill);
-    if (twin) {
-      if (twin.card && (twin.card.submitting ||
-          (twin.card.job && S().pending[twin.card.job]))) {
-        global.WSCard.flash(twin.card);
-        // 重复重画只闪卡片太容易被当成没提交（用户 2026-11-25 实测）：
-        // 同一句请求给一条一次性提示，并让调用方撤掉刚冒出来的蓝气泡。
-        if (H.busyTip) H.busyTip("这张已经在画了，等它出来再说");
-        return null;
-      }
-      restart(twin.card, twin.rec, refs, described);
-      return null;   // 复用旧卡和旧气泡，不该再多一条蓝色消息
-    }
+    /* 每条消息独立提交，数量限制由后端按用户执行。 */
     var rec = { k: "img", cls: "", prompt: prompt, ask: prompt, skill: skill,
+                id: H.newId ? H.newId("img") : "",
                 refs: (refs || []).slice(),
                 described: !!described,
+                userId: userNode ? (userNode._wsUserId || "") : "",
+                userText: userNode ? (userNode._wsUserText || "") : "",
                 job: "", file: "", note: "排队中…", err: false };
     var card = H.newCard(prompt, skill, rec);
     card.rec = rec;
@@ -87,8 +73,12 @@
     card.refs = rec.refs;
     card.described = !!described;
     if (userNode) card.userNode = userNode;
+    rec.userNode = userNode || null;
     card.since = Date.now();       // 超时从这里起算，见 tick()
     card.noted = "排队中…";
+    rec.userText = userNode ? (userNode._wsUserText || "") : "";
+    rec.userId = userNode ? (userNode._wsUserId || "") : "";
+    rec.finalPrompt = !!finalPrompt;
     H.save(rec);
     if (defer) { card.submitting = true; return card; }
     fire(card, rec, refs, described);
@@ -101,29 +91,9 @@
     return card;
   }
 
-  /* 找「同一次请求」的上一张卡：同渠道 + **用户当初那句话**一样。
-
-     ⚠️ 认的是 `ask` 不是 `prompt`（2026-11-24 实测踩到的）：提交成功后
-     `rec.prompt` 会被换成服务端翻完 / 拼完的最终 tags（复制要拿那串），
-     跟用户再点重画时传进来的原话已经不是一个字符串了——按 `prompt` 比，
-     连点三次就会叠出三张卡，正是用户报的「一大堆大卡片」。
-     `ask` 只在建记录时写一次，之后谁都不改，等于「这一次请求的指纹」。
-     老记录没有 `ask`（升级前存的），退回用 `prompt` 兜一下。 */
-  function findTwin(prompt, skill) {
-    var msgs = S().msgs, cards = S().cards;
-    for (var i = msgs.length - 1; i >= 0; i--) {
-      var m = msgs[i];
-      if (!m || m.k !== "img" || m.skill !== skill) continue;
-      if ((m.ask || m.prompt) === prompt) {
-        if (m.file && !m.err) return null;
-        return { rec: m, card: cards.get(m) || null };
-      }
-    }
-    return null;
-  }
-
-  /* 把一张**已经失败**的卡重新排一次：复用原来那个节点和存档记录。
-     失败态那张本来就只剩一行字，复用比新建更符合用户要的「别越叠越多」。 */
+  /* 复用一张已有的卡再排一次（restore 与「失效了就重排」还留着）。
+     注意：用户点「重画」不走这里——那条路径一律在列表底部新开一张，
+     见 redraw.js 头注释（2026-11-25 用户实测的 bug）。 */
   function restart(card, rec, refs, described) {
     if (refs && refs.length) {
       rec.refs = refs.slice();
@@ -134,9 +104,11 @@
       fresh.rec = rec;
       fresh.refs = rec.refs || [];
       fresh.described = !!rec.described;
-      fresh.userNode = card && card.userNode;
+      fresh.userNode = rec.userNode || null;
       fresh.since = Date.now();
       S().cards.set(rec, fresh);
+      rec.job = "";
+      rec.file = "";
       rec.note = "排队中…";
       rec.err = false;
       fire(fresh, rec, rec.refs, rec.described);
@@ -151,10 +123,7 @@
     rec.file = "";
     rec.note = "排队中…";
     rec.err = false;
-    if (card.img) {                     // 真出过图的旧卡：先撤掉旧图再排队
-      card.img.remove();
-      card.img = null;
-    }
+    if (card.img) { card.img.remove(); card.img = null; }
     card.acts.innerHTML = "";
     card.acts.hidden = true;
     card.say("正在提交…");
@@ -174,6 +143,7 @@
       // 读过了就别让后端再读一遍，也别把同一段描述拼第二遍
       if (described) body.ref_described = true;
     }
+    if (rec.finalPrompt) body.prompt_is_final = true;
     global.WSGen.submit(body).then(function (d) {
       card.submitting = false;
       if (!d || !d.ok) {
@@ -318,6 +288,22 @@
         } else if (job.state === "error" || job.state === "cancelled") {
           delete S0.pending[id];
           disarmStop(card);
+          if (job.state === "cancelled") {
+            card.since = 0;
+            card.note.hidden = false;
+            card.note.className = "note";
+            card.note.textContent = "已终止";
+            card.noted = "已终止";
+            if (card.rec) {
+              card.job = "";
+              card.rec.job = "";
+              card.rec.note = "已终止";
+              card.rec.err = false;
+              H.patch(card.rec, { job: "", note: "已终止", err: false });
+              H.save(null);
+            }
+            return;
+          }
           // stuck=true 是服务端判的「线程丢了，这张根本没跑」
           H.fail(card, job.error || "这张没出来", !!job.stuck);
         } else {

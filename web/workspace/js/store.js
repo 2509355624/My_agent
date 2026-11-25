@@ -46,6 +46,35 @@
     }
   }
 
+  /* 记录 id。带 id 的记录是「同一条」——卡片从排队中走到已出图，id 不变。 */
+  function rid(m) {
+    return (m && m.id) ? String(m.id) : "";
+  }
+
+  /* 把本地那份并进服务端：按 id 认人。服务端有的按服务端顺序排，
+     **本地版本覆盖服务端版本**（本地正握着这次会话里最新的状态），本地独有的
+     追加在后面。
+     以前是把服务端整份直接写回去，本地刚画完、还没推上去的那条会当场消失；
+     更糟的是同一张卡在本地与服务端各存一份不同状态，刷新时又两边都渲染。 */
+  function merge(local, server) {
+    var out = [], at = {};
+    (server || []).forEach(function (m) {
+      var d = rid(m);
+      if (d) at[d] = out.length;
+      out.push(m);
+    });
+    (local || []).forEach(function (m) {
+      var d = rid(m);
+      if (d && d in at) {
+        out[at[d]] = m;          // 本地比服务端新（正在进行中的状态）
+        return;
+      }
+      if (d) at[d] = out.length;
+      out.push(m);
+    });
+    return out.slice(-MAX);
+  }
+
   /* 本地那份（同步返回）。页面首屏先拿它铺，避免等服务端回来白屏一下。 */
   function load() {
     return read();
@@ -75,9 +104,8 @@
     clearTimeout(timer);
     timer = setTimeout(function () {
       var keep = saveLocal((data && data.msgs) || []);
-      /* 只推「本地还留着、服务端该有的最后一段」：从尾部往前找到第一条
-         和上次同名的记录，往后就是新增。简单粗暴：推最后 SYNC_TAIL 条，
-         服务端按内容指纹去重，重复的丢掉。 */
+      /* 推最后 SYNC_TAIL 条。有 `id` 的记录服务端按 id **原位更新**（卡片
+         状态变了也不会多出一条），没有 id 的老记录才按内容指纹去重。 */
       if (keep.length) push(keep.slice(-SYNC_TAIL));
     }, 300);
   }
@@ -102,8 +130,12 @@
       })
       .then(function (d) {
         if (!d || !d.ok || !Array.isArray(d.msgs)) return null;
-        // 服务端那份就是正本：顺手写回本地，下次首屏更快
-        saveLocal(d.msgs);
+        // 服务端那份是正本，但本地可能刚画完、还没推上去：两边按 id 并一次，
+        // 服务端缺的本地记录留在后面，别让它在刷新瞬间消失
+        var local = (read() || {}).msgs || [];
+        var merged = merge(local, d.msgs);
+        saveLocal(merged);
+        d.msgs = merged;
         return d;
       })
       .catch(function () { return null; });

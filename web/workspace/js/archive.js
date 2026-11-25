@@ -87,7 +87,12 @@
      数据来源（2026-11-24）：先读服务端 `/api/chat/archive`（按登录的 QQ 号
      存，换浏览器/换手机也是同一份），拿不到再退回本地那份。服务端那份是
      正本——以前只认 localStorage，换设备就是一片空白。 */
+  var restoring = false;
+  var restored = false;
+
   function restore() {
+    if (restoring || restored) return;
+    restoring = true;
     var local = global.WSStore && global.WSStore.load();
 
     var ready = (global.WSStore && global.WSStore.pull)
@@ -100,6 +105,8 @@
       // 生成完的那批）。照常重放本地那份，下一次 save 会把它补推上去。
       if (!use) {
         if (local && local.msgs && local.msgs.length) replay(local.msgs);
+        restored = true;
+        restoring = false;
         return;
       }
       /* 服务端有：以它为准。本地多出来的那几条（比服务端新）也接着放，
@@ -115,11 +122,24 @@
         if (extra.length > 20) extra = [];
       }
       replay(use.concat(extra));
+      restored = true;
+      restoring = false;
+    }).catch(function () {
+      restoring = false;
     });
   }
 
   function replay(list) {
     if (!list || !list.length) return;
+    var seenMsgs = {};
+    list = list.filter(function (m) {
+      if (!m || !m.k) return false;
+      var key;
+      try { key = JSON.stringify(m); } catch (e) { return true; }
+      if (seenMsgs[key]) return false;
+      seenMsgs[key] = true;
+      return true;
+    });
     var d = { msgs: list };
 
     /* 重放消息里的参考卡时顺手把「待发送」那张也认回来：用户没发的那张
@@ -127,7 +147,7 @@
        ——同一条消息里挂着两三个参考图，重新挂一遍反而更乱。 */
     var lastRef = null;
     var lastRefAt = -1;
-    var lastUserNode = null;   // 最近一条用户气泡，失败提示挂在它下面
+    var userNodesByText = {};  // 并行生图按记录中的用户原文找回所属气泡
 
     var again = [];
     d.msgs.forEach(function (m, i) {
@@ -137,7 +157,11 @@
       if (m.k === "user") {
         // 发出去的那条可能带着参考图，重放时一起铺回来（用户 2026-11-23：
         // 「我那条消息应该包含参考图，因为我能够看到之前的参考图是什么」）
-        lastUserNode = global.WSChat.paintUser(m.t, m.refs || []);
+        var userNode = global.WSChat.paintUser(m.t, m.refs || []);
+        userNode._wsUserText = m.t;
+        userNode._wsUserId = m.id || "";
+        if (!userNodesByText[m.t]) userNodesByText[m.t] = [];
+        userNodesByText[m.t].push(userNode);
       } else if (m.k === "note") {
         global.WSChat.paintNote(m.t);
       } else if (m.k === "ref") {
@@ -150,7 +174,25 @@
         lastRefAt = i;
       } else if (m.k === "img") {
         var c = restoreShell(m);
-        c.userNode = lastUserNode;
+        var userMatches = userNodesByText[m.userText || m.ask || ""] || [];
+        c.userNode = userMatches.length ? userMatches[userMatches.length - 1] : null;
+        if (!c.userNode && i > 0) {
+          for (var ui = i - 1; ui >= 0; ui--) {
+            if (d.msgs[ui].k === "user") {
+              var fallback = userNodesByText[d.msgs[ui].t] || [];
+              c.userNode = fallback[fallback.length - 1] || null;
+              break;
+            }
+          }
+        }
+        if (m.userId) {
+          Object.keys(userNodesByText).some(function (key) {
+            var nodes = userNodesByText[key] || [];
+            var found = nodes.filter(function (n) { return n._wsUserId === m.userId; })[0];
+            if (found) c.userNode = found;
+            return !!found;
+          });
+        }
         if (global.WSChat.cards) global.WSChat.cards.set(m, c);
         if (m.file) {
           // 恢复历史也铺**1MB 那一档**（2026-11-24）：翻一次记录可能十几张，

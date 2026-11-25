@@ -65,10 +65,7 @@ _session.trust_env = False
 # 刷新页面丢掉进行中任务是可接受的（图还在队列里跑，账本里会出现）。
 _JOBS = {}
 _JOBS_LOCK = threading.Lock()
-# 本台同时在跑/排队的上限（2026-11-24 起跟 `image_jobs.MAX_INFLIGHT` 同值）：
-# 这里是**更早**的那道闸（前端点下去就拒，不让它进队列再被拒），所以两边
-# 不同值会出现「本台说排上了、队列说你还有一张在画」的矛盾提示。改动时一起改。
-_MAX_ACTIVE = 1
+# 跑图台按用户限流，限额复用 image_jobs.inflight_limit()。
 _JOB_KEEP = 40           # 内存里最多留几个任务记录
 _LORA_SAVE_LOCK = threading.Lock()   # 「存为默认」是改模板文件，串行化
 # 提示词长度上限（2026-10-30 由 4000 提到 10 万）：这个台是给长稿用的——
@@ -408,9 +405,10 @@ def _run(job):
     try:
         if job["skill"] in image_jobs.NAI_SKILLS:
             queued, reason = image_jobs.enqueue(
-                None, None, job["prompt"], skill=job["skill"],
-                prompt=job["prompt"], seed=None,
-                landscape=(job["skill"] == "nai_wide"))
+                "web", job.get("owner") or "anonymous", job["prompt"],
+                skill=job["skill"], prompt=job["prompt"], seed=None,
+                landscape=(job["skill"] == "nai_wide"),
+                out_dir="web_" + str(job.get("owner") or "anonymous"))
             if queued is None:
                 raise RuntimeError(reason or "NAI 队列拒绝了这张图")
             queued.cancel = job["abort"]
@@ -647,7 +645,9 @@ def api_submit():
         return jsonify({"ok": False, "error": "提示词是空的"}), 400
     # 中文原样进 CLIP = 等于没给提示词（见 `_translate_prompt` 那段注释）。
     # 放进长度校验之前：翻完可能变长，得按最终串判上限。
-    if _needs_translate(skill, prompt):
+    if data.get("prompt_is_final"):
+        data["prompt_translated"] = False
+    elif _needs_translate(skill, prompt):
         en = _translate_prompt(skill, prompt)
         if en:
             prompt = en
@@ -733,17 +733,26 @@ def api_submit():
         return jsonify({"ok": False,
                         "error": "提示词太长了（%d 字，上限 %d）"
                                  % (len(prompt), _MAX_PROMPT)}), 400
+    # 5175 网关在 query/body 注入 qq；5174 本机管理页则由 chat routes
+    # 使用同一套站主身份判定。无身份时退化为单一匿名档，避免绕过限流。
+    # 这里不能 `from ...chat.routes import _who`：image 包比 chat 包先加载，
+    # 那样会变成循环导入（只判"有没有拿到档位"，判断权仍归 chat 那套）。
+    from app.features.chat import routes as chat_routes
+    owner = chat_routes._who() or "__anonymous__"
+    limit, peak_label, _window = image_jobs.inflight_limit()
     with _JOBS_LOCK:
-        active = sum(1 for j in _JOBS.values() if j["state"] == "queued")
-        if active >= _MAX_ACTIVE:
-            # 上限是 1 时这句话就是「你上一张还在画」，直接这么说，别让它
-            # 读成「还有 1 张」（那个「1」会让人以为还能再塞）。
-            return jsonify({"ok": False,
-                            "error": ("上一张还在画，等它出来再发"
-                                      if active <= 1 else
-                                      "已经在跑/排队的还有 %d 张，等一张再发"
-                                      % active)}), 400
-        job = {"id": _new_job_id(), "skill": skill, "prompt": prompt,
+        # 本台独立 worker 线程与公共 NAI 队列分别计数，避免重复计同一任务。
+        active = sum(1 for j in _JOBS.values()
+                     if j.get("owner") == owner
+                     and j["state"] in ("queued", "running"))
+        if active >= limit:
+            # 界面上一句话就够（前端只闪这一行），不带喂给模型的指令。
+            text = ("高峰期一次只能画一张，等这张出来再画。"
+                    if peak_label else
+                    "同时最多画 %d 张，等一张出来再画。" % limit)
+            return jsonify({"ok": False, "busy": True, "error": text}), 429
+        job = {"id": _new_job_id(), "owner": owner,
+               "skill": skill, "prompt": prompt,
                "seed": (None if skill in image_jobs.NAI_SKILLS
                         else random.randint(0, 2 ** 31 - 1)),
                "loras": slots,

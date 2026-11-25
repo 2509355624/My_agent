@@ -113,6 +113,19 @@ def _fingerprint(m):
         return ""
 
 
+def _rec_id(m):
+    """记录自己的稳定 id（前端建的）。没有 id 的老记录返回 ""。
+
+    为什么按 id 而不是按整条 JSON 去重（2026-11-25 实测）：一张生图卡从
+    「排队中」走到「已出图」时整条 JSON 全变了，按内容去重就成了**同一张卡
+    追加好几遍**——240 条里 165 条是卡，记录顺序变成「用户、结果、结果…」。
+    id 不变，它才是「同一张卡」的凭据。
+    """
+    if not isinstance(m, dict):
+        return ""
+    return str(m.get("id") or "").strip()
+
+
 def _who():
     """当前请求属于哪个档位。→ qq 或 ""。"""
     qq = str(request.args.get("qq") or "").strip()
@@ -182,24 +195,40 @@ def api_archive_post():
 
     with _LOCK:
         msgs = _load(qq)
-        # 去重只看最后 KEEP 条：老消息已经被截掉了，再去比它没意义，
-        # 而且前端重复推的就是最近这十几条。
+        # 去重分两层：
+        #   ① 有 id 的记录按 id **原位替换**（卡片状态更新，不追加）；
+        #   ② 没有 id 的老记录按内容指纹比，且只比最近这一段。
+        by_id = {}
+        for i, m in enumerate(msgs):
+            rid = _rec_id(m)
+            if rid:
+                by_id[rid] = i
         seen = {_fingerprint(m) for m in msgs[-PUSH_MAX * 2:]}
         added = 0
+        updated = 0
         for f, m in incoming:
+            rid = _rec_id(m)
+            if rid and rid in by_id:
+                msgs[by_id[rid]] = m        # 同一条记录的新状态：原地更新
+                updated += 1
+                continue
             if f in seen:
                 continue
             seen.add(f)
             msgs.append(m)
+            if rid:
+                by_id[rid] = len(msgs) - 1
             added += 1
-        if added:
-            msgs = msgs[-KEEP:]
+        if added or updated:
+            if added:
+                msgs = msgs[-KEEP:]
             try:
                 _save(qq, msgs)
             except OSError:
                 log.warning("聊天存档写盘失败 qq=%s", qq, exc_info=True)
                 return jsonify({"ok": False, "error": "存不下"}), 500
-    return jsonify({"ok": True, "n": len(msgs), "added": added})
+    return jsonify({"ok": True, "n": len(msgs), "added": added,
+                    "updated": updated})
 
 
 @bp.route("/archive", methods=["PATCH"])

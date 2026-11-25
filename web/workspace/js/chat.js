@@ -35,7 +35,17 @@
   // ── 存档 ──────────────────────────────────────────────
   // 形状由 archive.js 重放时按原样读回来，所以这里只负责「加一条、存一次」。
 
+  /* 记录 id：一张卡从「排队中」走到「已出图」还是同一条记录，靠它认人。
+     以前服务端按整条 JSON 去重，状态一变就被当成新记录再追加一遍——240 条
+     里 165 条是卡，顺序全乱了（2026-11-25 用户实测）。 */
+  var seq = 0;
+  function newId(prefix) {
+    seq += 1;
+    return (prefix || "m") + Date.now().toString(36) + "_" + seq;
+  }
+
   function log(m) {
+    if (m && !m.id) m.id = newId(m.k === "img" ? "img" : "m");
     S.msgs.push(m);
     if (S.msgs.length > 200) S.msgs = S.msgs.slice(-160);
     if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
@@ -129,10 +139,13 @@
 
   function addUser(text, refs) {
     var node = paintUser(text, refs);
+    node._wsUserId = newId("u");
+    node._wsUserText = text;
     userNodes.push(node);
-    log({ k: "user", t: text, refs: briefRefs(refs) });
+    log({ k: "user", id: node._wsUserId, t: text, refs: briefRefs(refs) });
     return node;
   }
+
 
   function dropUser(node, text) {
     if (node && node.parentNode) node.parentNode.removeChild(node);
@@ -258,8 +271,9 @@
   /* 提交 / 轮询 / 判超时 / 终止全在 gen_flow.js（2026-11-24 拆的）：
      那边只做「发请求、看状态」，画卡片的活儿由 card.js 干，这里只负责
      把三样东西交给它——存档数组、落盘函数、和上面那几个渲染函数。 */
-  function submitJob(prompt, skill, refs, described, userNode, defer) {
-    return global.WSGenFlow.submit(prompt, skill, refs, described, userNode, defer);
+  function submitJob(prompt, skill, refs, described, userNode, defer, finalPrompt) {
+    return global.WSGenFlow.submit(prompt, skill, refs, described, userNode,
+                                   defer, finalPrompt);
   }
   function armStop(card) { return global.WSGenFlow.armStop(card); }
   function disarmStop(card) { return global.WSGenFlow.disarmStop(card); }
@@ -268,52 +282,26 @@
      识图 → 提交，和手动点发送完全同一套。 */
   function bindRedraw() {
     global.WSRedraw.bind({
-      pending: function () { return S.pending; },
-      cancel: function (job) {
-        if (global.WSGen && global.WSGen.cancel) {
-          global.WSGen.cancel(job)["catch"](function () {});
-        }
-      },
-      afterCancel: startPoll,
       clearFail: function (node) { global.WSCard.clearFailLine(node); },
-      removeUser: function (node, text) { dropUser(node, text); },
-      removeCard: function (node) {
-        if (node && node.parentNode) node.parentNode.removeChild(node);
-      },
       msgs: function () { return S.msgs; },
-      removeRec: function (rec, text) {
-        if (rec && S.msgs.indexOf(rec) >= 0) S.msgs.splice(S.msgs.indexOf(rec), 1);
-        if (text) {
-          for (var i = S.msgs.length - 1; i >= 0; i--) {
-            if (S.msgs[i].k === "user" && S.msgs[i].t === text) {
-              S.msgs.splice(i, 1);
-              break;
-            }
-          }
-        }
-        S.cards.delete(rec);
-      },
       save: function () {
         if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
       },
-      defaultSkill: function () { return S.skill; },
-      send: function (text, refs, described, skill, user) {
+      /* 旧的那张图记录从存档里摘掉：新卡要自己记状态，留着就是两条。 */
+      discard: function (rec) {
+        var at = S.msgs.indexOf(rec);
+        if (at >= 0) S.msgs.splice(at, 1);
+        S.cards.delete(rec);
+      },
+      /* `user` 恒为 null（重画不重画气泡）：新卡贴在列表最底下，
+         跟新发一条一样显眼。旧卡和旧气泡都留在原位不动。 */
+      submit: function (text, skill, refs, described, user, _defer, finalPrompt) {
         user = user || addUser(text, refs);
         var ids = refs.map(function (r) { return r.id || r; });
         var submitted = submitJob(text, skill, ids, !!described, user,
-                                  !described && refs.length > 0);
-        if (!submitted) { dropUser(user, text); return; }
-        if (described || !refs.length) return;
-        submitted.say("正在看图…");
-        submitted.rec.note = "正在看图…";
-        global.WSStore.patch(submitted.rec,
-                             { note: submitted.rec.note, err: false });
-        global.WSRef.ensureDescribed(refs).then(function (read) {
-          if (S.cards.get(submitted.rec) !== submitted) return;
-          var ok = global.WSGenFlow.continueSubmit(
-            submitted, read.map(function (r) { return r.id || r; }), false);
-          if (!ok) dropUser(user, text);
-        });
+                                  false, !!finalPrompt);
+        if (!submitted) { dropUser(user, text); return null; }
+        return submitted;
       }
     });
   }
@@ -337,6 +325,7 @@
       showImage: showImage,
       fail: fail,
       sysNote: sysNote,
+      newId: newId,
       busyTip: function (text) { busyNote(text, 3000); },
       dropCard: function (card) { global.WSRedraw.drop(card); }
     });

@@ -1,25 +1,23 @@
-/* 「重画」= 把这条消息当作一条新消息重新发送（2026-11-25 用户对齐豆包）。
-   不是原地复用旧卡：旧的用户气泡、卡片、存档记录全清掉，再用同一句话、
-   同一批引用图走一遍正常发送。这样列表里只留最新的一次请求，不会堆卡，
-   也没有「上一张还在画」那种连点限流留下的残影。
+/* 重画 = 在列表最底部新开一张卡（2026-11-25 用户实测的口径）。
+   两张情况同一个落点：
+     · 已经出过图的卡 → 用**实际跑这张用的英文 tags** 换种子再来一张，
+       旧气泡、旧卡、旧图都留着不动；
+     · 失败 / 已终止的卡 → 用当初那句话重新提交，并把旧卡上的失败提示收掉。
 
-   这里只做编排，不碰具体状态：需要什么全由 chat.js 通过 bind 注入，
-   `run(card)` 是唯一入口。 */
+   为什么不再原地重试（2026-11-25 用户报的 bug）：原地重试时新卡建在旧卡的
+   位置上，用户看到的是「需求在上、准备中在中间、图在最下面」，会以为这张
+   图根本没开始画。重画就该出现在最底下，跟新发一条一样显眼。
+
+   这里只做编排，不碰具体状态：需要什么全由 chat.js 通过 bind 注入。 */
 (function (global) {
   "use strict";
 
   var H = {
-    pending: null,     // () → 在途任务表
-    cancel: null,      // (job) → 终止一张
-    afterCancel: null, // () → 在途变化后刷新轮询
-    clearFail: null,   // (userNode) → 撤掉用户气泡下的失败行
-    removeUser: null,  // (userNode) → 从列表与索引里摘掉用户气泡
-    removeCard: null,  // (cardNode) → 摘掉卡片 DOM
+    clearFail: null,   // (userNode) → 撤掉用户气泡下那行失败提示
     msgs: null,        // () → 存档数组
-    removeRec: null,   // (rec, text) → 摘掉这条卡与其用户消息的存档记录
-    save: null,        // () → 落盘存档
-    defaultSkill: null,// () → 当前渠道
-    send: null         // (text, refs, described, skill) → 走正常发送路径
+    save: null,        // () → 落盘
+    discard: null,     // (rec) → 把旧的那张图记录从存档里摘掉（它要重画了）
+    submit: null       // (text, skill, refs, described, user, defer, final)
   };
 
   function bind(hooks) {
@@ -29,47 +27,55 @@
   }
 
   function run(card) {
-    if (!card || card.redrawing) return;   // 同一次重画只走一遍
+    if (!card || card.redrawing) return;   // 一次重画只走一遍
     card.redrawing = true;
     var rec = card.rec || {};
-    var text = rec.ask || rec.prompt || card.prompt || "";
-    /* rec.refs 存的是 id 数组，统一成 {id}：识图和缩略图都认对象。 */
+    var done = !!(rec.file || card.file);
+    /* 出过图 → 用真正跑出这张的 tags；没出过图 → 用用户当初那句话。
+       `ask` 只在建记录时写一次，是不变的「这一次请求」。 */
+    var text = done ? (card.prompt || rec.prompt || "")
+                    : (rec.ask || card.prompt || rec.prompt || "");
     var refs = (card.refs || rec.refs || []).map(function (r) {
       return (typeof r === "object" && r) ? r : { id: r };
     });
     var described = !!(card.described || rec.described);
-    var skill = card.skill || rec.skill || H.defaultSkill();
+    var skill = card.skill || rec.skill || "";
 
-    // 还挂着的旧任务先掐掉，免得它出完图又冒一张
-    var pending = H.pending();
-    if (card.job && pending[card.job]) {
-      if (H.cancel) H.cancel(card.job);
-      delete pending[card.job];
-      if (H.afterCancel) H.afterCancel();
-    }
-    // 清 DOM：失败行 → 用户气泡 → 卡片
+    if (!text || !H.submit) { card.redrawing = false; return; }
+
     if (card.userNode) H.clearFail(card.userNode);
-    if (H.removeCard) H.removeCard(card.node);
-    if (card.userNode && H.removeUser) H.removeUser(card.userNode);
-    // 清存档
-    H.removeRec(rec, text);
-    H.save();
-
-    if (!text || !H.send) { card.redrawing = false; return; }
-    H.send(text, refs, described, skill);
+    /* 旧记录从存档里摘掉：新卡自己的状态要独立落盘，不然刷新后同一张图
+       会出现两条（一条旧状态、一条新状态）。旧卡节点留在页面上不动。 */
+    if (done && H.discard && card.rec) H.discard(card.rec);
+    card.redrawing = false;
+    /* 气泡不重画（传 null）：新卡占一条新的用户消息挂在最底部，跟新发一条
+       完全一样——用户不会以为它还在上面那格旧的里面。 */
+    H.submit(text, skill, done ? [] : refs, done ? true : described,
+             null, false, done);
   }
 
-  /* 限流（还在画 / 人太多）那张没排上队的卡：整张撤掉，提示只闪一次不刷屏。 */
+  /* 没排上队（限流）那张：整张撤掉，连用户气泡一起，提示由调用方闪一次。 */
   function drop(card) {
     if (!card) return;
-    if (H.removeCard) H.removeCard(card.node);
-    if (card.userNode && H.clearFail) H.clearFail(card.userNode);
-    /* 没排上队的那张连用户气泡一起撤：蓝气泡留着、卡片没了，用户看到的就是
-       「发了消息，看图之后没下文」。记录也一起摘，刷新后不会再冒孤儿气泡。 */
-    if (card.userNode && H.removeUser) {
-      H.removeUser(card.userNode, (card.rec && (card.rec.ask || card.rec.prompt)) || "");
+    if (card.node && card.node.parentNode) card.node.parentNode.removeChild(card.node);
+    if (card.userNode && card.userNode.parentNode) {
+      card.userNode.parentNode.removeChild(card.userNode);
     }
-    if (card.rec) H.removeRec(card.rec, "");
+    var msgs = H.msgs();
+    if (card.userNode) {
+      var text = card.userNode._wsUserText;
+      for (var i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].k === "user" &&
+            (msgs[i].id === card.userNode._wsUserId || msgs[i].t === text)) {
+          msgs.splice(i, 1);
+          break;
+        }
+      }
+    }
+    if (card.rec) {
+      var at = msgs.indexOf(card.rec);
+      if (at >= 0) msgs.splice(at, 1);
+    }
     H.save();
   }
 
