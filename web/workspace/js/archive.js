@@ -134,6 +134,13 @@
       prevKey = key;
       return true;
     });
+    /* 清掉存档里的 `userNode`（2026-11-25）：早期提交时把**气泡 DOM 节点**
+       挂进了记录，JSON.stringify 把它摊成
+       `{"_wsUserId":…,"_wsUserText":…,"_failLine":null}` 一起推到了服务端。
+       那串 `_wsUserText` 就是整段提示词——同一段 tags 因此在同一条记录里
+       存两份，每条消息多挂几百字。
+       这里就地摘掉：历史不会再被撑大，下一次 save 会把干净的那版推上去。 */
+    list.forEach(function (m) { if (m) delete m.userNode; });
     var d = { msgs: list };
 
     /* 重放消息里的参考卡时顺手把「待发送」那张也认回来：用户没发的那张
@@ -168,8 +175,14 @@
         lastRefAt = i;
       } else if (m.k === "img") {
         var c = restoreShell(m);
+        /* 配气泡（2026-11-24 那套按原话找，这里保留并加了 userId 优先）：
+           记录里存着 `userId` / `userText`，先按它们认人；认不到才退回
+           「紧挨着的上一条 user」。 */
         var userMatches = userNodesByText[m.userText || m.ask || ""] || [];
-        c.userNode = userMatches.length ? userMatches[userMatches.length - 1] : null;
+        c.userNode = m.userId ? byId(userNodesByText, m.userId) : null;
+        if (!c.userNode) {
+          c.userNode = userMatches.length ? userMatches[userMatches.length - 1] : null;
+        }
         if (!c.userNode && i > 0) {
           for (var ui = i - 1; ui >= 0; ui--) {
             if (d.msgs[ui].k === "user") {
@@ -178,14 +191,6 @@
               break;
             }
           }
-        }
-        if (m.userId) {
-          Object.keys(userNodesByText).some(function (key) {
-            var nodes = userNodesByText[key] || [];
-            var found = nodes.filter(function (n) { return n._wsUserId === m.userId; })[0];
-            if (found) c.userNode = found;
-            return !!found;
-          });
         }
         if (global.WSChat.cards) global.WSChat.cards.set(m, c);
         if (m.file) {
@@ -330,6 +335,20 @@
 
   function keyOf(m) {
     try { return m ? JSON.stringify(m) : ""; } catch (e) { return ""; }
+  }
+
+  /* 按 userId 在「原话 → 气泡」那张表里找人。表是按内容分桶的，这里全扫
+     一遍：一条消息的气泡只可能有一个，量级是几十个，不值得再建索引。 */
+  function byId(table, uid) {
+    var hit = null;
+    Object.keys(table).some(function (k) {
+      var found = (table[k] || []).filter(function (n) {
+        return n._wsUserId === uid;
+      })[0];
+      if (found) hit = found;
+      return !!found;
+    });
+    return hit;
   }
 
   global.WSArchive = { restore: restore, replay: replay, older: older };

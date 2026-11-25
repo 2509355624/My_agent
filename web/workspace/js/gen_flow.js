@@ -181,7 +181,11 @@
     card.refs = rec.refs;
     card.described = !!described;
     if (userNode) card.userNode = userNode;
-    rec.userNode = userNode || null;
+    /* 气泡节点只挂在卡片上，**不进记录**（2026-11-25 修）：记录会被
+       JSON.stringify 推到服务端存档，DOM 节点一旦挂进去，存档里就多出一份
+       `{"_wsUserId":…,"_wsUserText":…,"_failLine":null}`——那串 `_wsUserText`
+       正是整段提示词，用户随手一问「反推」就能把 500 字的 tags 存两遍。
+       存档里只有 userId / userText 这两个字符串，见下面几行。 */
     card.since = Date.now();       // 超时从这里起算，见 tick()
     card.noted = "正在提交…";
     rec.userText = userNode ? (userNode._wsUserText || "") : "";
@@ -212,7 +216,9 @@
       fresh.rec = rec;
       fresh.refs = rec.refs || [];
       fresh.described = !!rec.described;
-      fresh.userNode = rec.userNode || null;
+      /* `rec.userNode` 是**存档里的旧版**（早期代码把 DOM 节点写进了记录，
+         见 submit 里的注释），不认它；气泡由调用方按 userId 重新配。 */
+      fresh.userNode = null;
       fresh.since = Date.now();
       S().cards.set(rec, fresh);
       rec.job = "";
