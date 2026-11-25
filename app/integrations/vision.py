@@ -55,7 +55,13 @@ log = logging.getLogger("vision")
 # （同一张 320×200 PNG，mimo 准确描述出蓝底白框黄圆）。现在主选已从 HF 中转
 # 换成 deepseek 官方，链里只剩一家等于没有兜底——deepseek 那边一欠费/限流，
 # 群友引用图就整条读不出来。
-VISION_FALLBACK_CHAIN = ("deepseek", "mimo")
+#
+# 2026-11-25 把 HF 中转（cx_a1b2c3d4）加回、排在官方之前：用户拍板「优先中转站，
+# 然后才是官方」。11-15 判它纯文本的依据已过期——当日实测 `deepseek-v4.1-flash-1017`
+# 读 320×200 蓝底黄圆测试图，准确回「蓝色长方形背景，中间一个黄色圆形」。
+# 这里写「provider:model」两条，是因为 _chain_candidates 对纯 provider 名传空
+# model，会回落到**该家中转站的默认模型 grok-4.5**——那不是识图模型，试了必错。
+VISION_FALLBACK_CHAIN = ("cx_a1b2c3d4:deepseek-v4.1-flash-1017", "deepseek", "mimo")
 
 
 # ─── 「上游拒答 / 报错被当成识图结果」的判据（2026-10-07）──────────────
@@ -175,17 +181,24 @@ def _chain_candidates(primary_pid, primary_model):
     VISION_FALLBACK_CHAIN 里去掉重复的云端家。model 传空串 = 用那家的默认
     模型（describe 会自己回落 cfg["model"]）。
 
+    链项允许写成 `provider` 或 `provider:model`（2026-11-25）。带 model 的写法
+    是给「这家有用多个模型、只有其中一个能读图」准备的——中间站记得默认是
+    grok-4.5（纯文本），留空回落到它等于白试一次。
+
     为什么允许「本地失败 → 掉云端」：本地模型跑内存、速度慢且可能没 pull，
     失败就整轮看不到图；掉云端至少能把图读出来。用户要的是「降级链」，不是
     「本地专用锁」。
     """
     out = [(primary_pid, primary_model)]
-    for pid in VISION_FALLBACK_CHAIN:
-        if pid == primary_pid:
+    for item in VISION_FALLBACK_CHAIN:
+        pid, _, model = str(item or "").partition(":")
+        pid = pid.strip()
+        model = model.strip()
+        if not pid or pid == primary_pid:
             continue                     # 选中的那家已经在第一项，别重复试
         if pid not in PROVIDERS:
             continue                     # 配置里没这家（被删了）就跳过
-        out.append((pid, ""))
+        out.append((pid, model))
     return out
 
 
@@ -223,13 +236,19 @@ def audit_candidates():
     审核不使用管理页里的普通识图选择，但不能因为首选中转站临时故障就
     直接让所有图片进入 fail-closed。候选链只包含明确配置过的 provider，
     且不重复首选；所有候选都失败时仍由 image_audit 统一 fail-closed。
+
+    链项支持 `provider:model`（2026-11-25）——拆分逻辑与 `_chain_candidates`
+    同一套。不拆的话带冒号的项会被当成 provider id，`not in PROVIDERS` 判掉，
+    中转站那一条等于没加。
     """
     primary_pid, primary_model = audit_choice()
     candidates = [(primary_pid, primary_model)]
-    for pid in VISION_FALLBACK_CHAIN:
-        if pid == primary_pid or pid not in PROVIDERS:
+    for item in VISION_FALLBACK_CHAIN:
+        pid, _, model = str(item or "").partition(":")
+        pid, model = pid.strip(), model.strip()
+        if not pid or pid == primary_pid or pid not in PROVIDERS:
             continue
-        candidates.append((pid, ""))
+        candidates.append((pid, model))
     return candidates
 
 # 下载图片与调识图接口都不走本机系统代理：本机常驻 Clash 类工具会把代理写进

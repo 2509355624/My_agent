@@ -66,8 +66,14 @@ MIMO_MODEL = os.getenv("MIMO_MODEL", "mimo-v2.6-flash")
 # 2026-10-14 排序理由（火山/超算额度集体耗尽，用户：「火山不关、只降温」）：
 #   deepseek 官方活着 → 打头；mimo 活着 → 第二；火山只剩 glm-5.2 还有额度
 #   → 第三；欠费的火山三项留着垫底等充值（_DEAD 拉黑期内自动跳过）。
+#
+# 2026-11-25：链头改成 HF 中转（cx_a1b2c3d4）——用户拍板「优先中转站，官方当保底」。
+#   中转站不走付费余额，官方 key 只在中转站真的挂掉时才轮到。模型名必须带
+#   `-1017` 后缀：中转站上 `deepseek-v4.1-flash` 这个名字不存在，会 404，
+#   当日白打了 90 次官方（见 .env 同名注释）。
 LLM_FALLBACK_CHAIN = os.getenv(
     "LLM_FALLBACK_CHAIN",
+    "cx_a1b2c3d4:deepseek-v4.1-flash-1017,"
     "deepseek:deepseek-flash,"
     "mimo:mimo-v2.6-flash,"
     "volc:glm-5-2-260617,"

@@ -317,7 +317,7 @@ class DescribeTest(unittest.TestCase):
 
 
 class VisionFallbackChainTest(unittest.TestCase):
-    """识图**专用**降级链（deepseek → mimo，2026-11-15 定）。
+    """识图**专用**降级链（中转站 → deepseek → mimo，2026-11-25 定）。
 
     关键不变式：
     1. 走管理页/.env 那条路（不显式传 provider）时，首选失败要**依次降级**，
@@ -326,16 +326,39 @@ class VisionFallbackChainTest(unittest.TestCase):
        被降级链悄悄换家会破坏「固定用 .env 那份」的约定；
     3. 首选那家排第一，链里不重复试它；
     4. 全链都挂才抛出异常。
+
+    2026-11-25：链头加了 HF 中转，且该项写成 `provider:model`。用户拍板
+    「优先中转站，然后才是官方」；模型名必须带 `-1017`，中转站的默认模型
+    是 grok-4.5（纯文本），留空回落等于白试一次。
     """
 
-    def test_chain_order_is_deepseek_then_mimo(self):
+    def test_chain_order_is_relay_then_deepseek_then_mimo(self):
         cands = vision._chain_candidates("doubao", "")
         self.assertEqual([p for p, _ in cands],
-                         ["doubao", "deepseek", "mimo"])
+                         ["doubao", "cx_a1b2c3d4", "deepseek", "mimo"])
+
+    def test_relay_entry_keeps_its_model(self):
+        # 链项写成 provider:model 时，model 必须被拆出来带下去，
+        # 不能因为带冒号就把整项当成 provider id 判掉。
+        cands = vision._chain_candidates("doubao", "")
+        relay = [c for c in cands if c[0] == "cx_a1b2c3d4"]
+        self.assertEqual(relay, [("cx_a1b2c3d4", "deepseek-v4.1-flash-1017")])
 
     def test_primary_is_tried_first_and_not_duplicated(self):
         cands = vision._chain_candidates("mimo", "")
-        self.assertEqual([p for p, _ in cands], ["mimo", "deepseek"])
+        self.assertEqual([p for p, _ in cands],
+                         ["mimo", "cx_a1b2c3d4", "deepseek"])
+
+    def test_relay_primary_not_duplicated_in_chain(self):
+        # 主选已经是中转站时，链里那条同 provider 的项要去掉。
+        cands = vision._chain_candidates("cx_a1b2c3d4", "deepseek-v4.1-flash-1017")
+        self.assertEqual([p for p, _ in cands], ["cx_a1b2c3d4", "deepseek", "mimo"])
+
+    def test_audit_chain_parses_provider_model(self):
+        # 审核链走另一套拆分逻辑，同一个坑要一起防。
+        cands = vision.audit_candidates()
+        self.assertEqual(cands[0][0], vision.VISION_PROVIDER)
+        self.assertIn(("cx_a1b2c3d4", "deepseek-v4.1-flash-1017"), cands)
 
     def test_primary_model_is_preserved(self):
         cands = vision._chain_candidates("deepseek", "deepseek-flash")
@@ -361,17 +384,21 @@ class VisionFallbackChainTest(unittest.TestCase):
         with mock.patch.object(vision, "active_choice", return_value=("doubao", "")), \
                 mock.patch("app.integrations.vision._session.post", side_effect=fake):
             self.assertEqual(vision.describe("data:image/jpeg;base64,AAA"), "一只猫")
-        # 两次调用：第一次 doubao 挂、第二次链头 deepseek 成功
+        # 两次调用：第一次 doubao 挂、第二次链头（中转站）成功。
+        # 2026-11-25 起链头是 HF 中转，不再直接掉付费官方。
         self.assertEqual(len(seen), 2)
-        self.assertIn("api.deepseek.com", seen[1])
+        self.assertIn("hfapi.cloud", seen[1])
 
     def test_all_fail_raises_last_error(self):
-        fake, seen = self._mock_post([(500, "a"), (500, "b"), (429, "c")])
+        # 四家各一条结果：doubao(主选) + 中转站 + deepseek + mimo。
+        # 最后一家回 429，断言抛的是「最后那条」，不是中间某家的 500。
+        fake, seen = self._mock_post(
+            [(500, "a"), (500, "b"), (500, "c"), (429, "d")])
         with mock.patch.object(vision, "active_choice", return_value=("doubao", "")), \
                 mock.patch("app.integrations.vision._session.post", side_effect=fake):
             with self.assertRaises(RuntimeError) as ctx:
                 vision.describe("data:image/jpeg;base64,AAA")
-        self.assertEqual(len(seen), 3)          # 三家都试过
+        self.assertEqual(len(seen), 4)          # doubao + 中转站 + 官方 + mimo
         self.assertIn("429", str(ctx.exception))  # 抛的是最后那条
 
     def test_explicit_provider_does_not_fall_back(self):
@@ -892,7 +919,7 @@ class NoImageDetectorTest(unittest.TestCase):
             out = vision.describe("data:image/jpeg;base64,AAA")
         self.assertEqual(out, "一只橘猫趴在窗台上")
         self.assertEqual(len(seen), 2)          # 第一家的「没图」被弃掉，换了一家
-        self.assertIn("api.deepseek.com", seen[1])
+        self.assertIn("hfapi.cloud", seen[1])   # 2026-11-25：换到的是中转站
 
 
 if __name__ == "__main__":
