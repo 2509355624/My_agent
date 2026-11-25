@@ -8,7 +8,21 @@
   var EDGE = 24;              // 触屏：手指起点离左边缘多少像素内才算「边缘右滑」
 
   var el = {};
-  var S = { top: null, allStyles: false, depth: 0 };
+  var S = { top: null, allStyles: false, depth: 0, views: [], restoring: false };
+  var VIEW_KEY = "ws_view_v1";
+
+  function saveView(name, opts) {
+    try {
+      if (!S.views.length || !name) {
+        S.views = [];
+        global.sessionStorage.removeItem(VIEW_KEY);
+      } else {
+        global.sessionStorage.setItem(VIEW_KEY, JSON.stringify({
+          views: S.views
+        }));
+      }
+    } catch (e) { /* session storage may be unavailable */ }
+  }
 
   function $(id) { return document.getElementById(id); }
 
@@ -32,6 +46,8 @@
     global.requestAnimationFrame(function () { view.classList.add("in"); });
     S.top = view;
     S.depth += 1;
+    S.views.push({ name: name, opts: opts || {} });
+    if (!S.restoring) saveView(name, opts);
     bindView(view);
     /* 一条子页 = 一条历史记录，state.ws 必须等于它当时的层数。
        以前这里有登录页残留的历史（登录后前端 pushState 跳过来），层数从 1 起算，
@@ -52,6 +68,9 @@
       global.WSViews.undock();
     }
     S.top = next;
+    if (S.views.length) S.views[S.views.length - 1] = { name: name, opts: opts || {} };
+    else S.views.push({ name: name, opts: opts || {} });
+    saveView(name, opts);
     bindView(next);
     return next;
   }
@@ -71,6 +90,8 @@
     if (!view) return;
     S.top = underOf(view);
     S.depth = Math.max(0, S.depth - 1);
+    S.views.pop();
+    saveView(S.top && S.top.dataset.view, {});
     view.classList.remove("in");
 
     // 子页把输入栏借走了（AI 创作页要接着出图），退回时先还回聊天页
@@ -294,6 +315,22 @@
     });
 
     global.history.replaceState({ ws: 0 }, "");
+    /* 刷新后恢复子页栈和必要参数，不恢复查看器、抽屉等瞬时状态。 */
+    try {
+      var saved = JSON.parse(global.sessionStorage.getItem(VIEW_KEY) || "null");
+      var views = saved && Array.isArray(saved.views) ? saved.views : [];
+      S.restoring = true;
+      views.forEach(function (v) {
+        if (v && v.name && global.WSViews.titles.hasOwnProperty(v.name)) {
+          push(v.name, v.opts || {});
+        }
+      });
+      S.restoring = false;
+      if (!S.views.length) saveView(null);
+    } catch (e) {
+      S.restoring = false;
+      saveView(null);
+    }
     /* 打底这条是「聊天页」。登录页是前端自己 pushState 跳过来的，历史里可能还压着
        更早的记录，state 里没有 ws——那种情况也要认成层数 0，否则层数永远比实际多。 */
     global.addEventListener("popstate", function () {

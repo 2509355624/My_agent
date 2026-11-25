@@ -127,6 +127,7 @@
     node.appendChild(body);
     node.appendChild(line);
     node.appendChild(acts);
+    mount(node);
 
     function fill() { node.classList.remove("is-idle"); }
 
@@ -211,8 +212,23 @@
      按钮长得一样但点了不能炸。 */
   function buildActs(card, retryLabel, hooks) {
     hooks = hooks || {};
-    if (card.acts.childElementCount && !retryLabel) return;
-    if (retryLabel) card.acts.innerHTML = "";
+    if (retryLabel) {
+      card.acts.innerHTML = "";
+      card.acts.hidden = false;
+      var retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "act act-text";
+      retry.title = "重新排一次";
+      retry.setAttribute("aria-label", "重新排一次");
+      retry.innerHTML = ICON_AGAIN + "<span>" + retryLabel + "</span>";
+      retry.addEventListener("click", function () {
+        retry.blur();
+        if (hooks.again) hooks.again(card);
+      });
+      card.acts.appendChild(retry);
+      return;
+    }
+    if (card.acts.childElementCount) return;
     card.acts.hidden = false;
 
     var copy = document.createElement("button");
@@ -237,7 +253,7 @@
     save.setAttribute("aria-label", "下载到本机");
     save.innerHTML = ICON_DOWN + "<span>下载</span>";
     save.addEventListener("click", function () {
-      if (hooks.download) hooks.download(card);
+      if (hooks.download) hooks.download(card, save);
     });
 
     /* 「重画」= 换种子再来一张；卡住的那张换成「重试」，同一个意思但

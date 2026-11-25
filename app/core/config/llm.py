@@ -12,7 +12,8 @@ import os
 from app.core.config.paths import DATA_DIR
 from app.core.config.persona import (
     PERSONA_MODEL, PERSONA_MODEL_DEFAULT, PERSONA_MODELS,
-    PERSONA_PROVIDER, persona_model_ids, persona_model_of,
+    PERSONA_PROVIDER, PERSONA_PUBLIC_LABEL,
+    persona_model_ids, persona_model_of,
 )
 
 # ─── LLM Provider ────────────────────────────────────

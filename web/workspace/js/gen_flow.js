@@ -63,7 +63,8 @@
          不留上一张失败的空壳。 */
     var twin = findTwin(prompt, skill);
     if (twin) {
-      if (twin.card && twin.card.job && S().pending[twin.card.job]) {
+      if (twin.card && (twin.card.submitting ||
+          (twin.card.job && S().pending[twin.card.job]))) {
         global.WSCard.flash(twin.card);
         return;
       }
@@ -76,7 +77,7 @@
                 job: "", file: "", note: "排队中…", err: false };
     var card = H.newCard(prompt, skill, rec);
     card.rec = rec;
-    S().cards[rec] = card;
+    S().cards.set(rec, card);
     // 卡片自己记住参考图：点「重画」要按同一份角色重来，不能悄悄丢图
     card.refs = rec.refs;
     card.described = !!described;
@@ -100,7 +101,8 @@
       var m = msgs[i];
       if (!m || m.k !== "img" || m.skill !== skill) continue;
       if ((m.ask || m.prompt) === prompt) {
-        return { rec: m, card: cards[m] || null };
+        if (m.file && !m.err) return null;
+        return { rec: m, card: cards.get(m) || null };
       }
     }
     return null;
@@ -116,7 +118,10 @@
     if (!card) {
       var fresh = H.newCard(rec.prompt, rec.skill, rec);
       fresh.rec = rec;
-      S().cards[rec] = fresh;
+      fresh.refs = rec.refs || [];
+      fresh.described = !!rec.described;
+      fresh.since = Date.now();
+      S().cards.set(rec, fresh);
       rec.note = "排队中…";
       rec.err = false;
       fire(fresh, rec, rec.refs, rec.described);
@@ -134,14 +139,19 @@
       card.img.remove();
       card.img = null;
     }
-    card.say("排队中…");
+    card.acts.innerHTML = "";
+    card.acts.hidden = true;
+    card.say("正在提交…");
     global.WSCard.flash(card);
     H.save(rec);
+    H.patch(rec, { job: "", file: "", note: "正在提交…", err: false });
     fire(card, rec, rec.refs, rec.described);
   }
 
   /* 真正把请求发出去（submit / restart 共用）。 */
   function fire(card, rec, refs, described) {
+    card.submitting = true;
+    card.say("正在提交…");
     var body = { skill: card.skill, prompt: card.prompt };
     if (refs && refs.length) {
       body.refs = refs;
@@ -149,6 +159,7 @@
       if (described) body.ref_described = true;
     }
     global.WSGen.submit(body).then(function (d) {
+      card.submitting = false;
       if (!d || !d.ok) {
         H.fail(card, (d && d.error) || "没排上队");
         return;
@@ -166,7 +177,14 @@
       }
       armStop(card);
       S().pending[card.job] = card;
+      card.say("排队中…");
+      rec.note = "排队中…";
+      H.patch(rec, { job: rec.job, prompt: rec.prompt, note: rec.note, err: false });
       startPoll();
+      tick();
+    })["catch"](function () {
+      card.submitting = false;
+      H.fail(card, "提交失败，检查网络后点重试", true);
     });
   }
 
@@ -318,6 +336,16 @@
       }
     });
   }
+
+  global.addEventListener("pageshow", function () {
+    if (H.state && Object.keys(S().pending).length) { startPoll(); tick(); }
+  });
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden && H.state && Object.keys(S().pending).length) {
+      startPoll();
+      tick();
+    }
+  });
 
   global.WSGenFlow = {
     bind: bind,

@@ -21,6 +21,7 @@ from PIL import Image
 
 from app.gateways import friend_auth
 from app.features.gallery import gallery
+from app.features.gallery import references
 from app.features.gallery import routes as gallery_api
 
 # 预热线程在 _Base 里默认被关掉（它会往缓存目录写文件，干扰数目录的用例），
@@ -671,6 +672,16 @@ class UploadTest(_Base):
         self.app.register_blueprint(gallery_api.bp)
         self.c = self.app.test_client()
         self.h = {"X-Friend-Token": "tok"}
+        self.ref_root = tempfile.mkdtemp(prefix="gal_ref_test_")
+        self.addCleanup(shutil.rmtree, self.ref_root, True)
+        self.ref_db_patch = mock.patch.object(
+            references, "REF_DB", os.path.join(self.ref_root, "refs.db"))
+        self.ref_dir_patch = mock.patch.object(
+            references, "REF_DIR", os.path.join(self.ref_root, "files"))
+        self.ref_db_patch.start()
+        self.ref_dir_patch.start()
+        self.addCleanup(self.ref_db_patch.stop)
+        self.addCleanup(self.ref_dir_patch.stop)
         for target, attr, val in ((friend_auth, "secret", lambda: "tok"),
                                   (gallery_api, "GALLERY_OWNER_QQ", "10001")):
             p = mock.patch.object(target, attr, val)
@@ -682,6 +693,47 @@ class UploadTest(_Base):
         return self.c.post("/api/gal/upload?qq=" + qq,
                            data={"title": title, "files": files},
                            headers=self.h, content_type="multipart/form-data")
+
+    def test_old_temp_upload_is_rejected_without_gallery_rows(self):
+        r = self.c.post("/api/gal/upload/one?qq=20002",
+                        data={"use": "temp", "file": (io.BytesIO(_png()), "ref.png")},
+                        headers=self.h, content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self.works(), [])
+
+    def test_private_ref_upload_and_owner_read(self):
+        r = self.c.post("/api/gal/ref?qq=20002&__jf=1",
+                        data={"file": (io.BytesIO(_png()), "ref.png")},
+                        headers=self.h, content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(self.works(), [])
+        own = self.c.get(d["url"] + "?qq=20002&__jf=1", headers=self.h)
+        other = self.c.get(d["url"] + "?qq=30003&__jf=1", headers=self.h)
+        no_proxy = self.c.get(d["url"] + "?qq=20002", headers=self.h)
+        self.assertEqual(own.status_code, 200)
+        self.assertEqual(own.mimetype, "image/webp")
+        self.assertEqual(other.status_code, 404)
+        self.assertEqual(no_proxy.status_code, 403)
+
+    def test_private_ref_describe_requires_workspace_and_owner(self):
+        uploaded = self.c.post("/api/gal/ref?qq=20002&__jf=1",
+                               data={"file": (io.BytesIO(_png()), "ref.png")},
+                               headers=self.h, content_type="multipart/form-data")
+        ref_id = uploaded.get_json()["ref_id"]
+        url = "/api/gal/ref/describe?ref_id=" + ref_id
+        no_proxy = self.c.get(url + "&qq=20002", headers=self.h)
+        other = self.c.get(url + "&qq=30003&__jf=1", headers=self.h)
+        self.assertEqual(no_proxy.status_code, 403)
+        self.assertEqual(other.status_code, 404)
+
+    def test_private_ref_upload_requires_workspace_proxy(self):
+        r = self.c.post("/api/gal/ref?qq=20002",
+                        data={"file": (io.BytesIO(_png()), "ref.png")},
+                        headers=self.h, content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(self.works(), [])
 
     def test_upload_creates_private_work(self):
         d = self.upload("20002").get_json()

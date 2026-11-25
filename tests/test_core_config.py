@@ -28,7 +28,10 @@ class CoreConfigCompatTest(unittest.TestCase):
 
     def test_persona_model_helpers_match(self):
         self.assertEqual(core.persona_model_ids(), legacy.persona_model_ids())
-        self.assertIsNotNone(core.persona_model_of("deepseek-v4.1-flash"))
+        # 取白名单第一条，别写死型号：默认模型会随中转站换名（2026-11-24）
+        self.assertTrue(core.persona_model_ids())
+        first = sorted(core.persona_model_ids())[0]
+        self.assertIsNotNone(core.persona_model_of(first))
 
     def test_public_names_are_reachable(self):
         for name in ("LLM_PROVIDER", "LLM_FALLBACK_CHAIN", "AGENTS_DIR"):

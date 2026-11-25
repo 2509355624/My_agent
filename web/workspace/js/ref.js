@@ -18,6 +18,24 @@
 
   function $(id) { return document.getElementById(id); }
 
+  function isPrivateRef(id) {
+    return typeof id === "string" && /^[A-Za-z0-9_-]{24,128}$/.test(id);
+  }
+
+  function imageUrl(item) {
+    if (item.url) return item.url;
+    return isPrivateRef(item.ref_id || item.id)
+      ? "/api/gal/ref/" + encodeURIComponent(item.ref_id || item.id)
+      : "/api/gal/img/" + item.id + "?s=t";
+  }
+
+  function describeUrl(id) {
+    if (isPrivateRef(id)) {
+      return "/api/gal/ref/describe?ref_id=" + encodeURIComponent(id);
+    }
+    return "/api/gal/describe?id=" + encodeURIComponent(id);
+  }
+
   /* 参考卡一律挂在根消息区（跟 chat.js 的 box() 同一条规矩，理由见那边的
      注释：挂在子页里会被退页动画一起回收） */
   function box() {
@@ -28,6 +46,17 @@
 
   /* 参考图挂在用户气泡后面，形状跟豆包一样：一条缩略图带，右上角能删。
      它只是「这一轮要带着的图」，真正发送时把 id 一起交给后端。 */
+  function localError(anchor, text) {
+    var host = anchor && anchor.parentNode;
+    if (!host) return;
+    var old = host.querySelector(".ref-error");
+    if (old) old.remove();
+    var msg = document.createElement("p");
+    msg.className = "ref-error";
+    msg.textContent = text;
+    host.appendChild(msg);
+  }
+
   function paintRef(item) {
     global.WSChat.hideEmpty();
     var wrap = document.createElement("div");
@@ -36,8 +65,9 @@
 
     var img = document.createElement("img");
     img.alt = "参考图";
-    img.src = item.url || ("/api/gal/img/" + item.id + "?s=t");
+    img.src = imageUrl(item);
     img.addEventListener("click", function () {
+      if (isPrivateRef(item.ref_id || item.id)) return;
       if (global.WSGallery) global.WSGallery.open({ id: item.wid }, item.id);
     });
     wrap.appendChild(img);
@@ -85,6 +115,8 @@
      不动，于是每次刷新 restore 都会从存档尾巴把它们认回来——用户看到的
      就是「我什么都没选，引用图栏自己冒出来了」。 */
   function commit() {
+    global.sessionStorage.removeItem("ws_same_pending");
+    global.sessionStorage.removeItem("ws_same_result");
     var ids = S.refs.map(function (r) { return r.id; });
     S.refs = [];
     if (ids.length && global.WSChat) global.WSChat.dropRefRecords(ids);
@@ -95,6 +127,7 @@
      这里没有图生图）。调用方已经退回了聊天页，这里只负责挂参考图、
      切回图片生成、把光标放进输入框，等用户再补一句要求。 */
   function useSame(work, itemId) {
+    global.sessionStorage.removeItem("ws_same_result");
     if (global.WSCreate) global.WSCreate.setMode("img", true);
     addRef({ wid: (work && work.id) || 0, id: itemId || 0,
              url: itemId ? ("/api/gal/img/" + itemId + "?s=t") : "" });
@@ -126,14 +159,27 @@
      相册上传不走这里（见文件头的识图时机说明）。 */
   function describeInto(itemId, say) {
     if (!say) return Promise.resolve("");
-    var tag = global.WSChat.busyNote("正在看图…");
-    return global.WSApi.get("/api/gal/describe?id=" + encodeURIComponent(itemId))
+    global.sessionStorage.setItem("ws_same_pending", JSON.stringify({ id: itemId }));
+    say.placeholder = "正在识图…，可以先写修改要求";
+    var tag = document.createElement("p");
+    tag.className = "ref-error";
+    tag.style.color = "var(--text)";
+    tag.setAttribute("role", "status");
+    tag.textContent = "正在识图…";
+    say.parentNode.appendChild(tag);
+    function finish() {
+      tag.remove();
+      say.placeholder = "说说这张怎么改，照着它重画";
+    }
+    return global.WSApi.get(describeUrl(itemId))
       .then(function (d) {
-        if (tag) tag.remove();
+        finish();
+        global.sessionStorage.removeItem("ws_same_pending");
         if (!d || !d.ok) {
-          global.WSChat.sysNote((d && d.error) || "这张没读出来，自己写一句就行");
+          localError(say.parentNode, (d && d.error) || "这张没读出来，自己写一句就行");
           return "";
         }
+        global.sessionStorage.setItem("ws_same_result", JSON.stringify({ id: itemId, text: d.text || "" }));
         if (say.value.trim()) return d.text || "";   // 用户已经在写了，别顶掉
         say.value = d.text || "";
         say.dispatchEvent(new Event("input"));
@@ -141,8 +187,8 @@
         return d.text || "";
       })
       .catch(function () {
-        if (tag) tag.remove();
-        global.WSChat.sysNote("读图没连上，自己写一句就行");
+        finish();
+        localError(say.parentNode, "读图没连上，回来后会重新识图，也可以自己写一句");
         return "";
       });
   }
@@ -150,7 +196,7 @@
   /* 只读、不填输入框：发送那一刻用。成功才记进 item.text，失败的返回空串
      （后端也没有描述时由 submit 那边说「没读到，按描述画」）。 */
   function describeOnly(item) {
-    return global.WSApi.get("/api/gal/describe?id=" + encodeURIComponent(item.id))
+    return global.WSApi.get(describeUrl(item.id))
       .then(function (d) {
         if (d && d.ok && d.text) { item.text = d.text; return d.text; }
         return "";
@@ -175,6 +221,8 @@
 
   /* 撤掉一张：输入栏的缩略图、消息里那张参考卡、存档里那条记录一起删 */
   function drop(id) {
+    global.sessionStorage.removeItem("ws_same_pending");
+    global.sessionStorage.removeItem("ws_same_result");
     S.refs = S.refs.filter(function (o) { return o.id !== id; });
     global.WSChat.dropRef(id);
     syncHint();
@@ -210,7 +258,7 @@
       wrap.className = "refs mini";
       var img = document.createElement("img");
       img.alt = "参考图";
-      img.src = r.url || ("/api/gal/img/" + r.id + "?s=t");
+      img.src = imageUrl(r);
       wrap.appendChild(img);
       var x = document.createElement("button");
       x.type = "button";
@@ -269,6 +317,7 @@
   function upload(file) {
     if (!file) return;
     var tip = global.WSChat.busyNote("正在传参考图…");
+    var errorHost = el.bar && el.bar.parentNode;
     shrink(file).then(function (blob) {
       var fd = new FormData();
       fd.append("file", blob, (file.name || "ref").replace(/\.[^.]+$/, "") + ".webp");
@@ -278,43 +327,25 @@
          以前不传这个字段，于是手机相册里的照片全被当成作品集攒在「我的」
          里——用户看到的是「我的作品里全是我拍的照片」。 */
       fd.append("use", "temp");
-      return fetch("/api/gal/upload/one", {
+      return fetch("/api/gal/ref", {
         method: "POST", body: fd, credentials: "same-origin"
       }).then(function (r) { return r.json().catch(function () { return {}; }); });
     }).then(function (d) {
       if (tip) tip.remove();
       if (!d || !d.ok) {
-        global.WSChat.sysNote("参考图没传上去：" + ((d && d.error) || "网络断了"));
+        localError(errorHost, "参考图没传上去：" + ((d && d.error) || "网络断了"));
         return;
       }
-      // 服务端现在直接给 item_id，不再靠序号去猜；老服务端没有这个字段时
-      // 退回去按序号找（那时也是 0 基：返回的 idx 是第几张，减一正好对上）。
-      // 注意这里**不读图**：挂上缩略图就完了，等用户点发送（见文件头）。
-      if (d.item_id) {
-        addRef({ wid: d.work_id, id: d.item_id,
-                 url: "/api/gal/img/" + d.item_id + "?s=t" });
+      // 私有 reference 不创建 work/item，前端只保存 ref_id 和私有 URL。
+      if (d.ref_id) {
+        addRef({ id: d.ref_id, ref_id: d.ref_id, url: d.url || imageUrl(d) });
         syncHint();
         return;
       }
-      return global.WSApi.get("/api/gal/work/" + d.work_id).then(function (w) {
-        if (!w || !w.ok) {
-          global.WSChat.sysNote("参考图传上去了，但没读到作品集：" +
-                                ((w && w.error) || "重试一次"));
-          return;
-        }
-        var items = w.items || [];
-        var hit = items.filter(function (it) { return it.idx === d.idx - 1; })[0];
-        if (!hit) {
-          global.WSChat.sysNote("参考图传上去了，但没找到它，再传一次试试");
-          return;
-        }
-        addRef({ wid: d.work_id, id: hit.id,
-                 url: "/api/gal/img/" + hit.id + "?s=t" });
-        syncHint();
-      });
+      localError(errorHost, "参考图传上去了，但服务端没有返回 ref_id");
     }).catch(function () {
       if (tip) tip.remove();
-      global.WSChat.sysNote("参考图没传上去，网络断了一下");
+      localError(errorHost, "参考图没传上去，网络断了一下");
     });
   }
 
@@ -322,6 +353,20 @@
   function init() {
     el.bar = $("ref-bar");
     syncHint();
+    try {
+      var pending = JSON.parse(global.sessionStorage.getItem("ws_same_pending") || "null");
+      var result = JSON.parse(global.sessionStorage.getItem("ws_same_result") || "null");
+      if (pending && pending.id) useSame(null, pending.id);
+      else if (result && result.text && !$("say").value.trim()) {
+        addRef({ id: result.id, pre: true, text: result.text });
+        $("say").value = result.text;
+        $("say").dispatchEvent(new Event("input"));
+        syncHint();
+      }
+    } catch (e) {
+      global.sessionStorage.removeItem("ws_same_pending");
+      global.sessionStorage.removeItem("ws_same_result");
+    }
   }
 
   global.WSRef = {

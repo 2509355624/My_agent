@@ -87,7 +87,7 @@
           里（显示时顺手存过），点下去是零网络。
 
      顺序：本地缓存 → fetch（HTTP 缓存 / 服务端）→ 老办法兜底。 */
-  function download(card) {
+  function download(card, button) {
     var file = card.file || (card.rec && card.rec.file) || "";
     if (!file) {
       if (global.WSChat) global.WSChat.sysNote("这张还没出来，等它画完再点下载");
@@ -97,37 +97,7 @@
     var src = global.WSGen.img(file, FIT);
     var key = global.WSGen.imgKey(file, FIT);   // 缓存认这个（不带签名）
 
-    function fromNet() {
-      if (typeof global.fetch !== "function") { fallback(); return; }
-      global.fetch(src, { credentials: "same-origin", cache: "default" })
-        .then(function (r) {
-          if (!r.ok) throw new Error("HTTP " + r.status);
-          return r.blob();
-        })
-        .then(function (b) {
-          if (!b || !b.size) throw new Error("空文件");
-          saveBlob(b, name);
-          if (global.WSImg) global.WSImg.put(key, b);
-        })
-        ["catch"](fallback);
-    }
-
-    function fallback() {
-      // 最后一道：直接让浏览器去下。慢，但点了总有反应。
-      var a = document.createElement("a");
-      a.href = src;
-      a.download = name;
-      a.rel = "noopener";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    }
-
-    if (!global.WSImg) { fromNet(); return; }
-    global.WSImg.get(key).then(function (b) {
-      if (b && b.size) saveBlob(b, name);
-      else fromNet();
-    })["catch"](fromNet);
+    global.WSHide.downloadButton(button, { url: src, key: key, name: name });
   }
 
   /* 聊天区里铺的是 **1MB 那一档**（2026-11-24 用户：「直接压到 1m 即可，

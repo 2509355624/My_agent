@@ -218,6 +218,15 @@
 
 .refs.mini .ref-x { width: 16px; height: 16px; }
 
+/* 参考图上传或识图失败时就地提示，不写进全局聊天流 */
+.ref-error {
+  flex: 0 0 100%;
+  margin: 2px 0;
+  color: var(--danger);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
 /* 漫画卡里「带着 N 张参考图」那行小字 */
 .ref-note {
   margin: 8px 0 0;

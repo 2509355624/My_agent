@@ -349,13 +349,9 @@
     v.node = { box: box, count: count, track: track, fav: fav, hide: hide };
   }
 
-  /* 查看器里的大图。2026-11-24 用户：「点击图片不需要重新传 10m 的原图，
-     我们默认就只给 1m 即可，下载也是下载 1m 的」——所以查看器、下载、网格
-     **用的是同一档**（`fit=1m`），看到哪张就存哪张，不再有「点开等十几秒
-     才变清晰」这一步。
-
-     `s=v` 留着：服务端缩不出来时会退到 1600px 预览，总比 404 好。 */
-  function imgUrl(it) { return "/api/gal/img/" + it.id + "?s=v&fit=1m"; }
+  /* 画廊查看器和下载沿用画廊自己的预览档；聊天页面的 `fit=1m` 只属于
+     chat/shot.js，不能串到这里。网格仍使用上面的 `s=t` 缩略图。 */
+  function imgUrl(it) { return "/api/gal/img/" + it.id + "?s=v"; }
 
   /* 给查看器压一条历史记录。已经压过（还开着）就不再压——连点两本不同的
      作品集会走两次 open，第二次再压一条，关的时候要多按一次返回键。 */
@@ -546,16 +542,14 @@
     });
   }
 
-  function download() {
+  function download(event) {
     var it = current();
     if (!it) return;
     /* 具体的取字节 + 存盘规矩在 `hide.js`（`WSHide.save`）。挪出去是因为
        `gallery.js` 有 600 行硬线——那边本来就是「查看器底部按钮」的模块，
        下载按钮是底栏四个按钮里的一个。 */
-    global.WSHide.save({
-      url: imgUrl(it),
-      name: "gal-" + it.id + ".webp",
-      onFail: function () { note("这张没下下来，检查一下网络再试", false); }
+    global.WSHide.downloadButton(event.currentTarget, {
+      url: imgUrl(it), name: "gal-" + it.id + ".webp"
     });
   }
 

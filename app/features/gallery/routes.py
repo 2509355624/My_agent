@@ -31,7 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 from flask import Blueprint, jsonify, request, send_file
 
 from app.gateways import friend_auth
-from app.features.gallery import folder_picker, gallery, pin
+from app.features.gallery import folder_picker, gallery, pin, references
 from app.core.admin_access import LOCAL_ADDRS, is_lan_addr
 from app.config import GALLERY_OWNER_QQ, AGENT_PORT
 
@@ -91,13 +91,22 @@ _NOT_TEMP_RAW = "COALESCE(use,'keep') <> 'temp'"
 # 拿到没藏的那批。只写一次，免得七八条 SQL 各拼一遍、改一处漏三处。
 _VISIBLE = "COALESCE(i.hidden,0)=0"
 
-# `?fit=` 认哪些写法。`512k` 是老前端发出来的，按同一个上限发（1MB），
-# 免得存着的旧链接一下碎掉。
-_FIT_KEYS = ("1m", "1024k", "1024", "512k", "512")
-
 # 前端一次最多能让我预生成几张预览图。多了就是在替「全库预热」开门，
 # 一万三千张 × 0.4 秒没人等得起。
 WARM_MAX = 24
+
+
+def _ref_row(ref_id, qq):
+    references.init()
+    references.purge()
+    return references.get(ref_id, qq)
+
+
+def _read_private_image(ref_id, qq):
+    row = _ref_row(ref_id, qq)
+    if not row:
+        return None
+    return row["path"]
 
 
 def _img(path):
@@ -448,14 +457,15 @@ def api_work(wid):
     qq = _qq()
 
     with gallery.connect() as con:
-        row = con.execute(_SELECT_WORK + " WHERE w.id=?", (wid,)).fetchone()
+        row = con.execute(_SELECT_WORK + " WHERE w.id=? AND " + _NOT_TEMP,
+                          (wid,)).fetchone()
         if not row:
             return jsonify({"ok": False, "error": "没有这个作品集"}), 404
         mine = row["src"] == "user" and row["owner"] == str(qq or "")
         # 临时参考图只有"上传它的那个人自己拿着 id"才打得开（前端刚传完
         # 立刻要显示缩略图），别人、以及列表里都碰不到它。
         is_temp = str(row["use"] or "keep") == "temp"
-        if is_temp and not mine and not _seer(qq):
+        if is_temp:
             return jsonify({"ok": False, "error": "没有这个作品集"}), 404
         if row["hidden"] and not mine and not _seer(qq):
             return jsonify({"ok": False, "error": "没有这个作品集"}), 404
@@ -520,10 +530,7 @@ def api_img(iid):
             "SELECT i.path, i.hidden AS ihidden, w.hidden, w.src, w.owner, w.use"
             " FROM items i JOIN works w ON w.id=i.work_id WHERE i.id=?",
             (iid,)).fetchone()
-    if not row:
-        return jsonify({"ok": False, "error": "没这张图"}), 404
-    if str(row["use"] or "keep") == "temp" and row["owner"] != str(qq or "") \
-            and not _seer(qq):
+    if not row or str(row["use"] or "keep") == "temp":
         return jsonify({"ok": False, "error": "没这张图"}), 404
     if row["hidden"] and row["owner"] != str(qq or "") and not _seer(qq):
         return jsonify({"ok": False, "error": "没这张图"}), 404
@@ -535,27 +542,6 @@ def api_img(iid):
     src = row["path"]
     if not os.path.isfile(src):
         return jsonify({"ok": False, "error": "文件不在了"}), 404
-
-    # `fit=1m`（2026-11-24）：和跑图台那条同一个口径——长边从大往小试，取
-    # 第一张不超过 1MB 的 WebP。画廊网格 / 查看器 / 下载都用它，所以「看到的
-    # 那一份」和「存下来的那一份」是同一张图，点开不会再换一次。
-    # 复用 `_img_fit_file`（同一套缩略图缓存），不在这儿重写一份。
-    if str(request.args.get("fit") or "").strip().lower() in _FIT_KEYS:
-        from app.features.image.routes import _IMG_FIT_CAP, _img_fit_file
-        # 源文件本来就不超上限时，直接发它——再压一遍只掉画质：
-        #   · 群友上传的落盘就是 1600px WebP（75~260KB），`reuse_direct` 认这种；
-        #   · 站主自己跑出来存进图库的原图，大的有几十 MB，走下面的压缩档。
-        # 以前没这一条时，一张 75KB 的 1600px 预览会被缩到 1536 再压一次，
-        # 白丢一点清晰度，还多占一份缓存。
-        try:
-            if gallery.reuse_direct(src) or os.path.getsize(src) <= _IMG_FIT_CAP:
-                return _img(src)
-        except OSError:
-            pass
-        got = _img_fit_file(src, _IMG_FIT_CAP)
-        if got:
-            return _img(got)
-        # 缩不出来就退回下面的常规档（不报错：压缩只是优化）
 
     # 画廊只发压缩图。原图中位 5MB、库里最大一张 149MB，一个作品集被完整
     # 拖一遍就是几个 GB 的上行；站主要原图直接开磁盘，不必过网页。
@@ -613,7 +599,7 @@ def api_thumbs():
         rows = con.execute(
             "SELECT i.id, i.path, i.hidden AS ihidden, w.hidden, w.owner, w.use"
             " FROM items i JOIN works w ON w.id=i.work_id"
-            " WHERE i.id IN (%s)" % marks,
+            " WHERE i.id IN (%s) AND " % marks + _NOT_TEMP,
             ids).fetchall()
 
     mine_ok = _seer(qq)
@@ -623,9 +609,8 @@ def api_thumbs():
             continue                       # 别人下架的图，一张都不给
         if r["ihidden"] and not mine_ok:
             continue                       # 单张隐藏的，只有站主看得到
-        if str(r["use"] or "keep") == "temp" and r["owner"] != str(qq or "") \
-                and not mine_ok:
-            continue                       # 别人的临时参考图也不给
+        if str(r["use"] or "keep") == "temp":
+            continue                       # 旧临时图不属于公共图库
         if not r["path"] or not os.path.isfile(r["path"]):
             continue
         todo.append((r["id"], r["path"]))
@@ -692,7 +677,7 @@ def api_warm():
         rows = con.execute(
             "SELECT i.id, i.path, i.hidden AS ihidden, w.hidden, w.owner, w.use"
             " FROM items i JOIN works w ON w.id=i.work_id"
-            " WHERE i.id IN (%s)" % marks,
+            " WHERE i.id IN (%s) AND " % marks + _NOT_TEMP,
             ids).fetchall()
 
     mine_ok = _seer(qq)
@@ -702,8 +687,7 @@ def api_warm():
             continue
         if r["ihidden"] and not mine_ok:
             continue
-        if str(r["use"] or "keep") == "temp" and r["owner"] != str(qq or "") \
-                and not mine_ok:
+        if str(r["use"] or "keep") == "temp":
             continue
         if not r["path"] or not os.path.isfile(r["path"]):
             continue
@@ -736,7 +720,9 @@ def api_mark():
     on = bool(body.get("on"))
 
     with gallery.connect() as con:
-        if not con.execute("SELECT 1 FROM items WHERE id=?", (iid,)).fetchone():
+        if not con.execute(
+                "SELECT 1 FROM items i JOIN works w ON w.id=i.work_id"
+                " WHERE i.id=? AND COALESCE(w.use,'keep')<>'temp'", (iid,)).fetchone():
             return jsonify({"ok": False, "error": "没这张图"}), 404
         if on:
             con.execute("INSERT OR IGNORE INTO marks(qq, item_id, kind, ts)"
@@ -1136,18 +1122,8 @@ def api_upload_one():
     这样第一张几秒内就能落地，不用等十张全压完；某一张失败也只影响它
     自己，不连累已经传上去的。
 
-    ## `use=temp`（2026-11-24 用户明确要求）
-
-    「上传的图片是不可以我服务器进行存储的，只是作为临时传到我的服务器
-    作为识图反推的图片」——工作台输入栏上传的参考图**只是垫给识图看**的，
-    不该进「我的作品」。所以前端传 `use=temp`，落库时 `use='temp'`：
-
-    · 所有列表接口（/list、/mine、分类条、/favs、/likes）都按
-      `use <> 'temp'` 过滤，用户在自己的作品里永远看不到它们；
-    · 24 小时后由 `purge_temp` 连文件带缓存一起清掉（不常驻线程，
-      下一次传图时顺手扫一遍）。
-
-    不传 `use` 的老调用方（站主自己的批量上传、别的页面）行为不变。
+    临时引用图不得进入作品表；旧客户端传 `use=temp` 时直接拒绝，要求改用
+    `/ref` 独立私有存储接口。
     """
     bad = _guard()
     if bad:
@@ -1156,9 +1132,10 @@ def api_upload_one():
     if not qq:
         return jsonify({"ok": False, "error": "参数不对"}), 400
 
-    use = (gallery.USE_TEMP
-           if str(request.form.get("use") or "").strip().lower() == "temp"
-           else gallery.USE_KEEP)
+    if str(request.form.get("use") or "").strip().lower() == "temp":
+        return jsonify({"ok": False,
+                        "error": "临时参考图请使用独立引用接口"}), 400
+    use = gallery.USE_KEEP
 
     title = str(request.form.get("title") or "").strip()[:40]
     f = (request.files.getlist("file") or [None])[0]
@@ -1234,6 +1211,87 @@ def api_upload_one():
                     "title": (trow["title"] or "") if trow else ""})
 
 
+@bp.route("/ref", methods=["POST"])
+def api_ref_upload():
+    """上传工作台私有参考图；只写 references 存储，不创建 works/items。"""
+    bad = _guard()
+    if bad:
+        return bad
+    if _local_trusted() or not _jf():
+        return jsonify({"ok": False, "error": "请从工作台上传参考图"}), 403
+    qq = _qq()
+    if not qq:
+        return jsonify({"ok": False, "error": "参数不对"}), 400
+    f = (request.files.getlist("file") or [None])[0]
+    if not f or not f.filename:
+        return jsonify({"ok": False, "error": "没收到图片"}), 400
+    raw = f.read()
+    if not raw:
+        return jsonify({"ok": False, "error": "空文件"}), 400
+    if len(raw) > UPLOAD_BYTES:
+        return jsonify({"ok": False, "error": "「%s」超过 25MB" % f.filename}), 400
+    if not gallery.load_upload_image(raw):
+        return jsonify({"ok": False, "error": "「%s」不是能读的图片" % f.filename}), 400
+    try:
+        references.init()
+        references.purge()
+        row = references.create(qq, f.filename, raw)
+    except Exception:
+        log.warning("私有参考图保存失败：%s", f.filename, exc_info=True)
+        return jsonify({"ok": False, "error": "这张图保存失败，换一张试试"}), 500
+    return jsonify({"ok": True, "ref_id": row["ref_id"],
+                    "url": "/api/gal/ref/%s" % row["ref_id"],
+                    "expires": row["expires"]})
+
+
+@bp.route("/ref/<ref_id>")
+def api_ref_read(ref_id):
+    """只允许工作台代理中的引用所有者读取仍有效的私有参考图。"""
+    bad = _guard()
+    if bad:
+        return bad
+    if _local_trusted() or not _jf():
+        return jsonify({"ok": False, "error": "请从工作台读取参考图"}), 403
+    qq = _qq()
+    if not qq:
+        return jsonify({"ok": False, "error": "参数不对"}), 400
+    path = _read_private_image(ref_id, qq)
+    if not path:
+        return jsonify({"ok": False, "error": "参考图不存在或已过期"}), 404
+    return _img(path)
+
+
+@bp.route("/ref/describe", methods=["GET", "POST"])
+def api_ref_describe():
+    """从工作台代理读取所有者的私有参考图并返回反推提示词。"""
+    bad = _guard()
+    if bad:
+        return bad
+    if _local_trusted() or not _jf():
+        return jsonify({"ok": False, "error": "请从工作台识别参考图"}), 403
+    qq = _qq()
+    if not qq:
+        return jsonify({"ok": False, "error": "参数不对"}), 400
+    data = request.get_json(silent=True) or {}
+    ref_id = request.args.get("ref_id") or data.get("ref_id")
+    if not references.valid_ref_id(ref_id):
+        return jsonify({"ok": False, "error": "没指定参考图"}), 400
+    path = _read_private_image(ref_id, qq)
+    if not path:
+        return jsonify({"ok": False, "error": "参考图不存在或已过期"}), 404
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+        from app.integrations import vision as vision_mod
+        text = vision_mod.describe(vision_mod.to_data_url(raw), prompt=DESCRIBE_PROMPT)
+    except Exception as exc:
+        log.warning("读私有参考图失败（ref_id=%s）：%s", ref_id, exc)
+        text = ""
+    if not text:
+        return jsonify({"ok": False, "error": "这张没读出来，换个说法描述一下"}), 502
+    return jsonify({"ok": True, "ref_id": ref_id, "text": str(text).strip()})
+
+
 @bp.route("/upload/abort", methods=["POST"])
 def api_upload_abort():
     """一组图一张都没传成：把空壳作品集收回去，别留在墙上。"""
@@ -1264,6 +1322,23 @@ def api_me():
                     "alias": "站长" if _is_owner(qq) else gallery.alias(qq)})
 
 
+def _read_private_image_text(ref_id, prompt):
+    """将所有者的有效私有参考图读成绘图描述；无权或过期返回空串。"""
+    qq = _qq()
+    path = _read_private_image(ref_id, qq) if qq else None
+    if not path:
+        return ""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+        from app.integrations import vision as vision_mod
+        text = vision_mod.describe(vision_mod.to_data_url(raw), prompt=prompt)
+    except Exception as exc:
+        log.warning("读私有参考图失败（ref_id=%s）：%s", ref_id, exc)
+        return ""
+    return (text or "").strip()
+
+
 def _read_image_text(iid, prompt):
     """图 id → 用识图模型读出来的一段文字；读不出来返回 ""。
 
@@ -1285,8 +1360,7 @@ def _read_image_text(iid, prompt):
         return ""
     if row["ihidden"] and not _seer(qq):
         return ""
-    if str(row["use"] or "keep") == "temp" and row["owner"] != str(qq or "") \
-            and not _is_owner(qq):
+    if str(row["use"] or "keep") == "temp":
         return ""
     src = row["path"]
     if not src or not os.path.isfile(src):

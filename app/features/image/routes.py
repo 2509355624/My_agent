@@ -772,15 +772,19 @@ def api_submit():
 
 
 def _ref_ids(raw):
-    """前端传来的参考图 id 列表 → 干净的整数列表。返回 (ids, 空串)。
-
-    只做**格式**校验：非整数、超出上限一律丢掉。是不是自己的图，交给读图
-    那一步按 /img 同一套权限判（别人私有的图读不出来，就按没参考出图）。
-    """
+    """保留有效的私有 ref_id 和旧正整数 item_id。返回 (ids, 空串)。"""
     if not isinstance(raw, (list, tuple)):
         return [], ""
+    from app.features.gallery import references
+
     ids = []
     for x in raw[:MAX_REFS]:
+        if isinstance(x, str) and references.valid_ref_id(x):
+            if x not in ids:
+                ids.append(x)
+            continue
+        if isinstance(x, bool) or not isinstance(x, (int, str)):
+            continue
         try:
             i = int(x)
         except (TypeError, ValueError):
@@ -791,16 +795,16 @@ def _ref_ids(raw):
 
 
 def _describe_refs(ids):
-    """把几张参考图读成描述，拼成一段。读不出来的跳过（不回退、不拦提交）。
-
-    复用画廊那边的读图口径（同一套权限、同一段反推提示词），所以画同款和
-    聊天里挂参考图得到的是同一种文字，用户看到的效果一致。
-    """
-    from app.features.gallery.routes import DESCRIBE_PROMPT, _read_image_text
+    """读取私有 ref_id 或旧图库 item_id 的描述，跳过失效引用。"""
+    from app.features.gallery.routes import (
+        DESCRIBE_PROMPT, _read_image_text, _read_private_image_text)
 
     texts = []
-    for i in ids:
-        t = _read_image_text(i, DESCRIBE_PROMPT)
+    for ref in ids:
+        if isinstance(ref, str):
+            t = _read_private_image_text(ref, DESCRIBE_PROMPT)
+        else:
+            t = _read_image_text(ref, DESCRIBE_PROMPT)
         if t:
             texts.append(t)
     if not texts:

@@ -246,7 +246,8 @@ class PersonaChainTest(unittest.TestCase):
         self.assertEqual(out, "ok")
         used = llm.persona_last_model()
         self.assertEqual(used["kind"], "public")
-        self.assertEqual(used["name"], "公用 V4 Pro")
+        # 展示名跟着默认模型走（2026-11-24 起是 V4.1 Flash），不再写死
+        self.assertEqual(used["name"], config.PERSONA_PUBLIC_LABEL)
 
     def test_custom_success_is_reported_with_its_own_name(self):
         llm.set_custom_override([_CFG])

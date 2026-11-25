@@ -51,7 +51,14 @@
     /* 登记「记录 → 卡片」：用户在这条上再点重画时，chat.js 才认得出
        上一条是同一份请求（见 findTwin），不会越点越多。 */
     return { node: node, body: body, line: line, note: note, stop: stop,
-             acts: acts, fill: fill, rec: m };
+             acts: acts, fill: fill, rec: m,
+             prompt: m.prompt || "", skill: m.skill || "", job: m.job || "",
+             refs: m.refs || [], described: !!m.described,
+             say: function (text) {
+               note.hidden = false;
+               note.className = "note";
+               note.textContent = text;
+             } };
   }
 
   function restoreRef(m) {
@@ -140,7 +147,7 @@
         lastRefAt = i;
       } else if (m.k === "img") {
         var c = restoreShell(m);
-        if (global.WSChat.cards) global.WSChat.cards[m] = c;
+        if (global.WSChat.cards) global.WSChat.cards.set(m, c);
         if (m.file) {
           // 恢复历史也铺**1MB 那一档**（2026-11-24）：翻一次记录可能十几张，
           // 每张原图 2~8MB，全从家用上行出就是「打开页面等半天」的由来。
@@ -150,10 +157,11 @@
           c.fill();                    // 有图：idle 态变回真卡片
           // 重放时把 prompt / skill 一起交给 buildActs：不带的话「复制」
           // 复制的是空串、「重画」也排不上队（新版多了下载，同样要 file）
-          global.WSChat.buildActs({
-            acts: c.acts, prompt: m.prompt || "", skill: m.skill || "",
-            refs: m.refs || [], file: m.file, rec: m
-          });
+          c.img = img;
+          c.file = m.file;
+          global.WSChat.buildActs(c);
+        } else if (m.job && !m.err) {
+          again.push({ rec: m, card: c });
         } else {
           /* 没有 file 也没有 job 的 `img` 记录 = 提交过、但没等到结果就
              没了（服务重启 / 页面关太早）。存下来的 note 十有八九是
@@ -163,14 +171,8 @@
              改成一行明确的「这条没跑完」+ 重试，别再骗人——而且不再铺
              那块 3:4 的灰底（用户 2026-11-24：「每次滑动都是一大堆的
              大卡片，影响观看」）。 */
-          global.WSChat.failCard({
-            node: c.node, body: c.body, ph: null, note: c.note,
-            stop: c.stop, acts: c.acts, fill: c.fill,
-            /* 点重画时 chat.js 认人是靠 rec 反查 S.cards，所以 card.rec 必须挂上 */
-            rec: m,
-            prompt: m.prompt || "", skill: m.skill || "", job: "",
-            refs: m.refs || [], described: !!m.described
-          }, "这条没跑完就断了（服务重启 / 页面关太早），点重试再排一次",
+          global.WSChat.failCard(c,
+             m.err ? m.note : "这条没跑完就断了（服务重启 / 页面关太早），点重试再排一次",
              true);
         }
       } else if (m.k === "comic") {
@@ -204,9 +206,14 @@
       again.forEach(function (a) {
         if (a.comic) return;                       // 漫画走自己的轮询
         var job = seen[a.rec.job];
-        if (job && job.state === "queued") {
+        if (job && job.state === "done" && job.file) {
+          global.WSChat.showImage(a.card, job);
+          return;
+        }
+        if (!st || !st.ok || (job &&
+            job.state !== "error" && job.state !== "cancelled")) {
           // 计时起点用服务端的提交时间：昨天提交的那张一接回来就算超时
-          a.card.since = (job.ts ? job.ts * 1000 : 0) || Date.now();
+          a.card.since = (job && job.ts ? job.ts * 1000 : 0) || Date.now();
           global.WSChat.pending[a.rec.job] = a.card;
           global.WSChat.armStop(a.card);
           return;

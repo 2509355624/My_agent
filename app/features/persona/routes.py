@@ -99,7 +99,7 @@ def _persona_chain_down(e):
     return jsonify({
         "ok": False,
         "code": "relay_down",
-        "error": "公用免费的 V4 Pro 暂时连不上",
+        "error": "公共免费的 %s 暂时连不上" % config.PERSONA_PUBLIC_LABEL,
         "has_custom": bool(getattr(e, "has_custom", False)),
         "detail": str(e)[:160],
     }), 503
@@ -150,6 +150,9 @@ def persona_models_api():
                     "note": m.get("note") or ""} for m in config.PERSONA_MODELS],
         "default": config.PERSONA_MODEL_DEFAULT,
         "current": cur.get("id") or "",
+        # 公共免费那一行的显示名（2026-11-24）：前端别再写死「V4 Pro」，
+        # 模型换了名字没换，玩家会一直看到一个已经不能用的模型名。
+        "public_label": config.PERSONA_PUBLIC_LABEL,
     })
 
 

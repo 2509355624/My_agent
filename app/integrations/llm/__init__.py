@@ -11,6 +11,7 @@ import requests
 from app.core.cancel import is_cancelled
 from app.core.config.llm import (API_URL, API_KEY, MODEL, LLM_PROVIDER,
                                  PERSONA_PROVIDER, PERSONA_MODEL,
+                                 PERSONA_PUBLIC_LABEL,
                                  PROVIDERS, OLLAMA_BASE_URL,
                                  LLM_FALLBACK_CHAIN, LLM_REQUEST_TIMEOUT,
                                  LLM_JUDGE_TIMEOUT,
@@ -22,6 +23,10 @@ from app.core.config.llm import (API_URL, API_KEY, MODEL, LLM_PROVIDER,
 # 诊断行一律走 logging，不走 print——原因见 app/logsetup.py 的模块说明：
 # print 落 stdout，被重定向/管道接管后是块缓冲，日志会「看起来丢了」。
 log = logging.getLogger("llm")
+
+# 页面/日志上「公共免费那家」显示成什么。只有展示用途：模型换了、名字没跟着
+# 换，玩家看到的就还是旧模型名（2026-11-24 用户：「v4p 现在用不了」）。
+PUBLIC_LABEL = PERSONA_PUBLIC_LABEL or "公用中转站"
 
 # 跨调用状态（缓存优化用）：记录最近一次请求的 token 用量与命中率。
 #
@@ -238,6 +243,10 @@ def _resolve_force_candidate():
     if not f:
         return None
     if f[0] == "public":
+        # 公用模型就是「链头」，直接用配置里的 provider/model（2026-11-24）。
+        # 以前这里拼的是 PERSONA_MODEL，模型名一换、玩家本地还存着旧名字时，
+        # 点「本轮用公用」会拿一个服务端不认的模型名去请求——症状是「公用/
+        # 这个按钮点了就报错」。链头值只有一处真源，不该再从这里拼。
         if PERSONA_PROVIDER:
             return (PERSONA_PROVIDER, PERSONA_MODEL or "")
         return None
@@ -312,8 +321,8 @@ def _note_persona_used(pid, eff):
             return
     except Exception:                # 展示标记坏了不该影响回包
         pass
-    _custom_ctx.used = {"kind": "public", "name": "公用 V4 Pro",
-                        "label": "公用 V4 Pro（免费）"}
+    _custom_ctx.used = {"kind": "public", "name": PUBLIC_LABEL,
+                        "label": PUBLIC_LABEL + "（免费）"}
 
 
 def describe_effective(provider=None, model=None):

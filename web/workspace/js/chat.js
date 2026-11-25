@@ -18,7 +18,7 @@
     msgs: [],      // 存档：每条消息一条记录，见 archive.js
     /* 存档记录 → 它的卡片 DOM（2026-11-24）。用户连点「重画」时要认出
        「上一条还是同一份请求」，没有这张表就只能靠提示词去 DOM 里翻。 */
-    cards: {}
+    cards: new Map()
   };
 
   function $(id) { return document.getElementById(id); }
@@ -151,8 +151,14 @@
   function flash(card) { return global.WSCard.flash(card); }
   function buildActs(card, retryLabel) {
     return global.WSCard.buildActs(card, retryLabel, {
-      again: function (c) { submitJob(c.prompt, c.skill, c.refs || []); },
-      download: function (c) { downloadImage(c); }
+      again: function (c) {
+        if (c.rec && c.rec.err) {
+          global.WSGenFlow.restart(c, c.rec, c.refs || [], c.described);
+          return;
+        }
+        submitJob((c.rec && c.rec.ask) || c.prompt, c.skill, c.refs || [], c.described);
+      },
+      download: function (c, button) { downloadImage(c, button); }
     });
   }
 
@@ -173,7 +179,7 @@
      FIT 还是那个 1MB 档，值只在 shot.js 里写一次，这里转发一下给老调用点。 */
   var FIT = global.WSShot.FIT;
   function shotEl(file) { return global.WSShot.shotEl(file); }
-  function downloadImage(card) { return global.WSShot.download(card); }
+  function downloadImage(card, button) { return global.WSShot.download(card, button); }
 
   function showImage(card, job) {
     var img = shotEl(job.file);
@@ -229,7 +235,7 @@
       card.ph = null;
       if (card.node) card.node.classList.add("is-idle");
     }
-    buildActs(card, stuck ? "重试" : "");
+    buildActs(card, stuck ? "重试" : "重画");
     if (card.rec) {
       card.rec.note = card.note.textContent;
       card.rec.err = true;
@@ -259,7 +265,7 @@
     global.WSGenFlow.bind({
       state: function () { return S; },
       save: function (rec) {
-        if (rec) log(rec);
+        if (rec && S.msgs.indexOf(rec) < 0) log(rec);
         else if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
       },
       patch: function (rec, fields) {
@@ -267,7 +273,7 @@
       },
       newCard: function (prompt, skill, rec) {
         var c = newCard(prompt, skill, rec);
-        S.cards[rec] = c;
+        S.cards.set(rec, c);
         return c;
       },
       spawn: spawn,
@@ -518,6 +524,7 @@
     /* 重放存档时用（见 archive.js）：把一条「其实已经没在跑」的卡片就地
        判成失败并给「重试」，以及给还活着的那条挂上终止/计时。 */
     failCard: fail,
+    showImage: showImage,
     armStop: armStop
   };
 })(window);

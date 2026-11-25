@@ -1566,7 +1566,7 @@
 <div class="toast" id="toast"></div>
 
 <!-- 自定义模型（2026-11-09 改成「多条有序降级链」）。
-     公用 V4 Pro 永远是链头；这里的列表只在中转站连续三次失败之后才依次上场。
+     公共免费那家永远是链头；这里的列表只在中转站连续三次失败之后才依次上场。
      配置只存浏览器 localStorage，每轮聊天随请求发给后端临时用一次、不落盘。
      「测试连接」走后端转发 ping 一条（浏览器直连各家接口会被 CORS 拦）。 -->
 <div class="cmMask" id="cmMask">
@@ -1577,7 +1577,7 @@
               title="怎么拿到 API Key？" aria-label="怎么拿到 API Key？">?</button>
     </div>
     <div class="cmt">
-      列表里三类模型一行一个：<b>公用 V4 Pro（免费）</b>永远排第一、不花你钱；
+      列表里三类模型一行一个：<b id="cmpPub">公共免费（免费）</b>永远排第一、不花你钱；
       <b>自己付费的 DeepSeek（代充余额）</b>余额 &gt; 0 才亮、为 0 自动变灰跳过；
       <b>你自己的模型</b>（grok 等）可以加多条。点一行展开填 Key，
       <b>↑↓</b> 调整顺序。想单独试某个模型，用聊天区底部「本轮用 X」即可。
@@ -1623,7 +1623,7 @@
      以及怎么接自己的模型；不写任何关于降级去向、费用归属的负面字眼。 -->
 <div class="cmMask" id="relayMask">
   <div class="relayBox">
-    <h3>公用的免费 V4 Pro 暂时连不上</h3>
+    <h3 id="relayPubTitle">公共免费的模型暂时连不上</h3>
     <p>站主承担不起自掏腰包去给你们付费的这一个代价，但是中转站是有
       <b>12 亿的免费 token</b> 给你用的。现在它连不上，<b>连续三次请求都失败</b>，
       所以这一轮没跑出来。</p>
@@ -5704,7 +5704,7 @@ $("btnBurger").onclick = openDrawer;
 $("btnChat").onclick = function () { closeDrawer(); closeStats(); syncDrawerTab(); };
 
 // ── 自定义模型（2026-11-09 改成「多条有序降级链」）──────
-// 公用 V4 Pro 永远是链头；连续三次连不上，才按这里的顺序依次上场。
+// 公共免费那家永远是链头；连续三次连不上，才按这里的顺序依次上场。
 // 每条 {label, site, base_url, model, api_key} 只存在当前浏览器的
 // localStorage，每轮聊天随请求带给后端临时用一次，后端不落盘。
 // 面板里的草稿直接读 #cmRows 的 DOM，不另存一份状态——改哪一格，
@@ -5732,6 +5732,22 @@ let FORCE_MODEL = "";       // 本轮强制模型令牌；只作用下一轮，�
 const MODEL_PICK_KEY = "persona_model_pick";
 let MODEL_PICK = (localStorage.getItem(MODEL_PICK_KEY) || "").trim();
 let MODEL_LIST = [];
+// 公共免费那一家在页面上叫什么（2026-11-24）。后端 `/api/persona/models`
+// 下发，前端不再写死具体型号——默认模型换成 v4.1-flash 之后，写死的名字会让
+// 玩家一直去找一个已经不能用的模型。拉不到就留个中性默认，不显示具体型号。
+let PUBLIC_LABEL = "公共免费";
+
+function paintPublicLabel() {
+  const txt = PUBLIC_LABEL || "公共免费";
+  ["cmpPub", "relayPubTitle"].forEach(function (id) {
+    const el = $(id);
+    if (!el) return;
+    el.textContent = id === "relayPubTitle" ? (txt + " 暂时连不上") : (txt + "（免费）");
+  });
+  // 「本轮用 X」和自定义列表里那两行是现拼的 HTML，重画一次即可。
+  if ($("cmRows")) cmRenderRows(cmDraft());
+  renderForceOptions();
+}
 
 async function loadModelList() {
   try {
@@ -5739,6 +5755,8 @@ async function loadModelList() {
     const d = await r.json();
     if (!d || !d.ok) return;
     MODEL_LIST = d.models || [];
+    if (d.public_label) PUBLIC_LABEL = d.public_label;
+    paintPublicLabel();
     const sel = $("modelPick");
     if (!sel) return;
     sel.innerHTML = MODEL_LIST.map(m =>
@@ -5807,7 +5825,7 @@ function renderForceOptions() {
   if (!sel) return;
   const keep = FORCE_MODEL || sel.value;
   let html = '<option value="">默认（走降级链）</option>' +
-    '<option value="public">公用 V4 Pro（免费）</option>';
+    '<option value="public">' + cmEsc(PUBLIC_LABEL + '（免费）') + '</option>';
   if (BALANCE > 0)
     html += '<option value="paid">官方 DeepSeek（代充余额）</option>';
   else
@@ -5878,7 +5896,7 @@ function cmRowFixedHtml() {
   return '<div class="cmRow fixed" data-t="public">' +
     '<div class="cmRowHead">' +
       '<span class="tag pub">免费</span>' +
-      '<span class="nm">公用 V4 Pro</span>' +
+      '<span class="nm">' + cmEsc(PUBLIC_LABEL) + '</span>' +
       '<span class="fix">永远排第一 · 不花你钱</span>' +
     '</div></div>';
 }

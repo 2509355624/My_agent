@@ -4217,36 +4217,56 @@ class ModelChooseTest(unittest.TestCase):
       v4.1-flash 5.1 秒写完 730 字，内容连贯；
       v4-pro    11.4 秒写到 697 字，吐出「Sorry, I can't respond」然后停住。
     所以默认换成 v4.1f，v4p 降为可选。
+
+    2026-11-24 用户：「角色扮演的 v4p 现在用不了，默认换成 z 中转站的这个」，
+    截图里是 HF 中转的 `deepseek-v4.1-flash-1017`。所以默认模型带上了中转站
+    的日期后缀，v4p 从白名单里撤掉——同一家中转站不认那个名字，留着它就是一
+    个点下去必然报错的按钮。
     """
 
-    def test_default_is_flash(self):
+    def test_default_is_flash_with_relay_suffix(self):
         from app import config
-        self.assertEqual(config.PERSONA_MODEL_DEFAULT, "deepseek-v4.1-flash")
-        self.assertEqual(config.PERSONA_MODEL, "deepseek-v4.1-flash")
+        self.assertEqual(config.PERSONA_MODEL_DEFAULT,
+                         "deepseek-v4.1-flash-1017")
+        self.assertEqual(config.PERSONA_MODEL, "deepseek-v4.1-flash-1017")
 
-    def test_whitelist_has_both(self):
+    def test_relay_provider_is_hf(self):
+        """默认那一家必须是中转站本身，不能落到付费官方。"""
+        from app import config
+        self.assertEqual(config.PERSONA_PROVIDER, "cx_a1b2c3d4")
+
+    def test_whitelist_drops_retired_v4_pro(self):
         from app import config
         ids = config.persona_model_ids()
-        self.assertIn("deepseek-v4.1-flash", ids)
-        self.assertIn("deepseek-v4-pro", ids)
+        self.assertIn("deepseek-v4.1-flash-1017", ids)
+        self.assertNotIn("deepseek-v4-pro", ids)
+
+    def test_public_label_follows_the_model(self):
+        """页面上那行免费模型的显示名不能再写死 V4 Pro。"""
+        from app import config
+        self.assertTrue(config.PERSONA_PUBLIC_LABEL)
+        self.assertNotIn("V4 Pro", config.PERSONA_PUBLIC_LABEL)
 
     def test_unknown_model_rejected(self):
         """玩家传什么都不能进——否则能指到付费官方那家。"""
         from app import config
-        for bad in ("gpt-4", "deepseek-chat", "", "  ", "../../etc"):
+        for bad in ("gpt-4", "deepseek-chat", "deepseek-v4-pro", "", "  ",
+                    "../../etc"):
             self.assertIsNone(config.persona_model_of(bad), bad)
 
     def test_override_switches_and_falls_back(self):
         from app.features.persona import service as persona
         try:
-            persona.set_model_override("deepseek-v4-pro")
-            self.assertEqual(persona.current_model()["id"], "deepseek-v4-pro")
-            persona.set_model_override("gpt-4-evil")
+            persona.set_model_override("deepseek-v4.1-flash-1017")
             self.assertEqual(persona.current_model()["id"],
-                             "deepseek-v4.1-flash", "乱传要回落默认")
+                             "deepseek-v4.1-flash-1017")
+            # 玩家浏览器里可能还存着已经下线的 v4p，必须静默回落默认
+            persona.set_model_override("deepseek-v4-pro")
+            self.assertEqual(persona.current_model()["id"],
+                             "deepseek-v4.1-flash-1017", "退役模型要回落默认")
             persona.set_model_override("")
             self.assertEqual(persona.current_model()["id"],
-                             "deepseek-v4.1-flash")
+                             "deepseek-v4.1-flash-1017")
         finally:
             persona.set_model_override("")
 
@@ -4308,6 +4328,27 @@ class ModelChooseTest(unittest.TestCase):
         self.assertIn("body.model = MODEL_PICK", h)
         self.assertIn("persona_model_pick", h)
         self.assertIn("loadModelList", h)
+
+    def test_frontend_does_not_hardcode_retired_model(self):
+        """页面里不许再写死「公用 V4 Pro」（2026-11-24）。
+
+        写死的名字换不掉：默认模型改成 v4.1-flash-1017 之后，玩家看到的还是
+        v4p，点「本轮用公用」就是拿一个中转站不认的名字去请求。名称必须由
+        `/api/persona/models` 的 `public_label` 下发，页面只负责填字。
+        """
+        import io
+        import os
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for rel in ("web/persona.html", "web/novel.html"):
+            with io.open(os.path.join(root, rel), encoding="utf-8") as fh:
+                h = fh.read()
+            self.assertNotIn("公用 V4 Pro", h, rel)
+            self.assertNotIn("V4 Pro", h, rel)
+        with io.open(os.path.join(root, "web", "persona.html"),
+                     encoding="utf-8") as fh:
+            h = fh.read()
+        self.assertIn("d.public_label", h)
+        self.assertIn("PUBLIC_LABEL", h)
 
 
 

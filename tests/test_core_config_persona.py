@@ -26,6 +26,12 @@ class PersonaConfigTest(unittest.TestCase):
         self.assertIn("persona_model_of", llm.__all__)
         self.assertFalse([name for name in persona.__all__ if name.startswith("_")])
 
+    def test_public_label_is_exported(self):
+        """展示名也要能经 app.config 读到：接口与前端都从它取字。"""
+        self.assertEqual(config.PERSONA_PUBLIC_LABEL,
+                         persona.PERSONA_PUBLIC_LABEL)
+        self.assertIn("PERSONA_PUBLIC_LABEL", llm.__all__)
+
 
 if __name__ == "__main__":
     unittest.main()

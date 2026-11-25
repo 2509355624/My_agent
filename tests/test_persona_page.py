@@ -303,7 +303,8 @@ class RoleplayFallbackUiTest(unittest.TestCase):
             self.assertIn(needle, self.html, "少了 %s" % needle)
 
     def test_relay_popup_uses_the_agreed_wording(self):
-        for needle in ("公用的免费 V4 Pro 暂时连不上", "站主承担不起自掏腰包",
+        # 标题里的模型名由后端下发（2026-11-24），这里只钉结构与口碑那几句
+        for needle in ('id="relayPubTitle"', "站主承担不起自掏腰包",
                        "12 亿的免费 token", "连续三次", "模型选择（自定义）</button>"):
             self.assertIn(needle, self.html, "少了 %s" % needle)
         for banned in ("不再回退官方", "赞助", "站主不再承担费用"):
@@ -375,7 +376,8 @@ class ModelSelectionPanelTest(unittest.TestCase):
         self.assertIn('$("forceModel").onchange', self.html)
         # 选项文案：默认 / 公用 / 付费 / 自定义
         self.assertIn('默认（走降级链）', self.html)
-        self.assertIn('公用 V4 Pro（免费）', self.html)
+        # 公用那行取后端下发的名字（2026-11-24），页面里不许再写死型号
+        self.assertIn('PUBLIC_LABEL', self.html)
         self.assertIn('官方 DeepSeek（代充余额）', self.html)
 
     def test_balance_gates_paid_option(self):

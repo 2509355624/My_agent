@@ -719,7 +719,9 @@ function nvModelUsed(d){
   if(d && d.restart_confirm) nvConfirm = d.restart_confirm;
   if(d && d.delete_confirm) nvDelConfirm = d.delete_confirm;
   if(!u || !nvEl('nvModelNow')) return;
-  var name = u.kind === 'public' ? '公用 V4 Pro（免费）'
+  // 名称全部取后端回包（2026-11-24）：模型换了以后，前端写死的具体型号
+  // 会指向一个已经不能用的名字，玩家会以为还能切回去。
+  var name = u.kind === 'public' ? ((u.label || u.name || '公共免费'))
     : u.kind === 'paid' ? '官方 DeepSeek（代充余额）'
     : u.kind === 'custom' ? ('自定义模型 · ' + (u.name || '未命名'))
     : (u.name || '默认链头');
