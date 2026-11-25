@@ -382,9 +382,21 @@ def logout():
 
 @app.route("/me")
 def me():
+    """我是谁：已登录给 qq，其余一律算游客。
+
+    ⚠️ 2026-11-25 修 bug：原来 `guest` 是「没登录 **且** 带 fr_guest cookie」，
+    而 fr_guest 只有点 `/guest` 那个入口才会发。QQ 群友点「/画廊」拿到的链接
+    是 `/gallery?from=qq`，服务端只清 solo 标记、**不发 fr_guest**，于是这里
+    回 `guest: false` → `gallery.html` 的 `applyGuest()` 不执行 → 登录按钮
+    一直是 `display:none`。用户看到的就是「有登录墙，但找不到登录按钮」。
+
+    现在口径改成「没登录就等于游客」：画廊本身对未登录者就是只读的
+    （写接口在 5174 一律要 qq），登录与否只决定**前端收不收「我的」「自定义
+    预设」、露不露登录入口**。`fr_guest` 那个 cookie 仍然保留——它管的是
+    「走 /guest 进来的只读会话」，和这里的身份判定是两件事。
+    """
     qq = friend_auth.check_cookie(request.cookies.get(friend_auth.COOKIE_NAME))
-    return jsonify({"ok": True, "qq": qq,
-                    "guest": bool(not qq and _guest_in())})
+    return jsonify({"ok": True, "qq": qq, "guest": bool(not qq)})
 
 
 # ─── 页面 ────────────────────────────────────────────────
