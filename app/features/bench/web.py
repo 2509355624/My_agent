@@ -332,8 +332,10 @@ def _parse_batch(body):
     if len(prompt) > _PROMPT_MAX_BATCH:
         return None, ("提示词太长（%d 字，最多 %d）"
                       % (len(prompt), _PROMPT_MAX_BATCH)), 400
-    if mode == "same" and not prompt:
-        return None, "写一句想画的内容再开跑", 400
+    # 需求框**可以留空**（2026-11-25 用户拍板：「它是可以留空的呀……留空的时候
+    # 点击一键开跑，就是默认反推提示词，然后按照这些渠道去跑图」）。留空 = 只靠
+    # 参考图反推出来的英文提示词出图，所以下面不再要求 same 模式必须有 prompt。
+    # 判「没东西可画」放到最后统一判：图也没有、话也没有，才是真没法画。
 
     known = {c["id"] for c in _channel_rows()}
     rows, seen = [], set()
@@ -365,8 +367,11 @@ def _parse_batch(body):
                 return None, "第 %d 格的图片格式不对，重新传" % i, 400
             if len(image) > _IMAGE_MAX:
                 return None, "第 %d 格的图片太大了" % i, 400
-        if not image and not prompt:
-            return None, "第 %d 格没有图，也没有写需求" % i, 400
+        # 「图也没有、话也没有」不用在这儿判：一图多风会在下面把参考图摊给
+        # 所有格（只挂第一项、其余项天生是空串，在这儿判会把第 2 格误拒——
+        # 用户看到的报错是「第 2 格没有图，也没有写需求」，可他明明传了图）；
+        # 五图各画则在上面 348 行已经把没图的格子 continue 掉了。真正「什么
+        # 都没有」的整单，由下面按模式各自的「先传一张参考图 / 先上传图片」兜住。
         rows.append({"image": image, "prompt": prompt, "skill": skill})
 
     if len(rows) > _BATCH_MAX:

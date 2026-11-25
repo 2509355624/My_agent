@@ -117,15 +117,37 @@ class ParseBatchTest(unittest.TestCase):
         self.assertNotEqual(err, "")
         self.assertEqual(code, 400)
 
-    def test_same_mode_needs_image_and_prompt(self):
-        body = {"mode": "same", "prompt": "x",
+    def test_same_mode_needs_image_not_prompt(self):
+        # 2026-11-25 用户拍板：需求框**可以留空**——「它是可以留空的呀……留空
+        # 的时候点击一键开跑，就是默认反推提示词，然后按照这些渠道去跑图」。
+        # 所以 now 只要求有参考图，不再要求有 prompt。
+        body = {"mode": "same", "prompt": "",
+                "items": [{"skill": self.ids[0], "image": IMG}]}
+        r, err, _ = rb._parse_batch(body)
+        self.assertEqual(err, "", "留空需求应当放行（靠参考图反推）")
+        self.assertEqual(r[0], "same")
+        self.assertEqual(len(r[1]), 1)
+        self.assertEqual(r[1][0]["image"], IMG)
+
+        # 图也没有 → 仍然要拒，且拒的是「参考图」不是「需求」
+        body = {"mode": "same", "prompt": "",
                 "items": [{"skill": self.ids[0], "image": ""}]}
         _, err, _ = rb._parse_batch(body)
         self.assertIn("参考图", err)
+
+    def test_same_mode_reference_only_on_first_item(self):
+        # 前端把参考图**只挂在第一项**（省请求体积），其余项 image 是空串。
+        # 以前「没图也没需求」那条检查对它们也生效 → 第 2 格被误拒，用户看到
+        # 「第 2 格没有图，也没有写需求」，可他明明传了图。这条锁住不许复发。
         body = {"mode": "same", "prompt": "",
-                "items": [{"skill": self.ids[0], "image": IMG}]}
-        _, err, _ = rb._parse_batch(body)
-        self.assertIn("想画", err)
+                "items": [{"skill": self.ids[0], "image": IMG},
+                          {"skill": self.ids[1], "image": ""},
+                          {"skill": self.ids[2], "image": ""}]}
+        r, err, _ = rb._parse_batch(body)
+        self.assertEqual(err, "", "只挂第一项的参考图应当摊给所有格")
+        self.assertEqual(len(r[1]), 3)
+        for row in r[1]:
+            self.assertEqual(row["image"], IMG, "每一格都要拿到参考图")
 
     def test_prompt_cap_is_20000(self):
         # 用户：「我最长是允许 2 万字的」
@@ -363,6 +385,24 @@ class PageGuardTest(unittest.TestCase):
         i_btn = self.html.index('id="btnSame"')
         i_slots = self.html.index('id="slots"')
         self.assertLess(i_btn, i_slots, "「全部同第一款」必须排在格子容器前面")
+
+    def test_same_all_never_returns_silently(self):
+        # 2026-11-25 bug：「5 格都传了图之后点全部同第一款，一点反应都没有，
+        # 也没有提示」。根因是开头那句 `if(bBusy || bMode !== "each") return;`
+        # 把两种「没铺成」都吞掉了。现在每种情况都要说话。
+        i = self.html.index('$("btnSame").addEventListener("click"')
+        j = self.html.index("\n  });", i)
+        body = self.html[i:j]
+        self.assertNotIn('if(bBusy || bMode !== "each") return;', body,
+                         "不许再静默 return")
+        self.assertIn("这批还在跑", body)      # bBusy 要说
+        self.assertIn("先切过去", body)        # 模式不对要说
+        self.assertIn("铺到全部", body)        # 成功要说
+
+    def test_same_all_pins_select_value_to_data(self):
+        # 光改 bSlots 不够：界面上的 <select> 还得跟着变，否则用户看到的是
+        # 「值改了但四栏没动」。renderSlots 结尾必须按数据显式对齐 value。
+        self.assertIn("sel.value = mine;", self.html)
 
 
 if __name__ == "__main__":

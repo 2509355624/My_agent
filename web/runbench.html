@@ -247,7 +247,7 @@
          提示词框的，本质上就是上传图片去跑，相当于走识图反推」） -->
     <div id="promptWrap">
       <div class="pbar"><button type="button" id="btnPasteB">粘贴</button></div>
-      <textarea id="bPrompt" placeholder="写一句你想画的内容，几个渠道画同一个需求…"
+      <textarea id="bPrompt" placeholder="写一句你想画的内容，几个渠道画同一个需求…&#10;不写也行，直接一键开跑 = 按参考图反推的提示词画"
         style="width:100%;min-height:88px;resize:vertical;background:var(--input);
         border:1px solid var(--border);border-radius:11px;color:var(--text);
         padding:12px;font-size:15px;font-family:inherit;line-height:1.6;outline:none;"></textarea>
@@ -486,6 +486,18 @@
           o.disabled = true;
         }
       });
+      // 兜底：把 select 的当前值**显式对齐**到 bSlots。原来只靠 HTML 里的
+      // `selected` 属性让浏览器自己选，一旦浏览器那边没认（option 被置灰、
+      // 值不在列表里、或者整片重建时机不对），界面停在一个和 bSlots 不一样
+      // 的值上——用户看到的就是「点了全部同第一款，一栏都没变」。
+      // 这里直接按数据赋值，改了什么就一定显示什么。
+      if(mine){
+        var opts = sel.querySelectorAll("option"), has = false;
+        for(var j=0;j<opts.length;j++){
+          if(opts[j].value === mine){ has = true; break; }
+        }
+        if(has) sel.value = mine;
+      }
     });
   }
 
@@ -527,7 +539,7 @@
     // 铺成同一个会立刻被服务端整单拒掉，按钮摆在那儿只会误导。
     $("btnSame").classList.toggle("hidden", same);
     $("bHelp").innerHTML = same
-      ? "<b>一张参考图 + 几个渠道</b>：传一张图、写一句需求，选几个渠道就出几张，图只反推一次。每个格子不能用同一个渠道。"
+      ? "<b>一张参考图 + 几个渠道</b>：传一张图、写一句需求，选几个渠道就出几张，图只反推一次。<b>需求可以不写</b>——不写就按参考图反推出来的提示词画。每个格子不能用同一个渠道。"
       : "<b>上传几张图就跑几张</b>：每格单独选渠道，不用写需求——直接识图反推出提示词再画。同一个渠道可以画多张。";
   }
 
@@ -713,8 +725,20 @@
   // 全部同第一款：把第一格的渠道铺到其余所有格子。
   // 只在「五图各画」里出现（一图多风那边整条按钮是隐藏的），那边重复渠道
   // 合法，所以就是一路铺满，没有「只能用一次」的限制。
+  //
+  // 2026-11-25 修：原来开头一句 `if(bBusy || bMode !== "each") return;` 是**静默
+  // 返回**——条件不成立就什么都不做、也不吭声，用户在界面上看到的就是「点了
+  // 没反应，也没有提示」。现在每种没铺成的情况都说话：
+  //   · 正在跑：说「这一批还在跑，跑完再铺」
+  //   · 不在五图各画：说「先切到五图各画」
+  //   · 第一格没选：说「先选第一格」（这条原来就有）
+  // 铺成功也带上具体格数，别只丢一句冷冰冰的「已铺」。
   $("btnSame").addEventListener("click", function(){
-    if(bBusy || bMode !== "each") return;
+    if(bBusy){ setBStatus("这批还在跑，等它跑完再铺", true); return; }
+    if(bMode !== "each"){
+      setBStatus("「全部同第一款」只在「五图各画」里用，先切过去", true);
+      return;
+    }
     var first = bSlots[0].skill;
     if(!first){ setBStatus("先把第一格的渠道选了，再铺", true); return; }
     var n = 0;
@@ -724,8 +748,8 @@
       n++;
     }
     setBStatus(n
-      ? "已把「" + first + "」铺到全部 " + bSlots.length + " 格"
-      : "5 格已经都是「" + first + "」了");
+      ? "✅ 已把「" + first + "」铺到全部 " + bSlots.length + " 格（改了 " + n + " 格）"
+      : bSlots.length + " 格已经都是「" + first + "」了，不用再铺");
     savePref();
     renderSlots();
   });
@@ -764,7 +788,9 @@
     var items = [];
     if(bMode === "same"){
       if(!bSlots[0].img){ setBStatus("先传一张参考图", true); return; }
-      if(!prompt){ setBStatus("写一句想画的内容", true); return; }
+      // 需求框**可以留空**（用户拍板）：留空 = 只靠这张参考图反推提示词，
+      // 按选中的渠道各出一张。原来这里硬拦「写一句想画的内容」，把用户
+      // 上传好图、选好渠道之后的一键开跑直接挡住，报的错还看不懂。
       // 一图多风：参考图**只发一份**（挂在第一项上），服务端负责铺给所有渠道。
       // 发 5 份同样的 data URL 会让请求体白白翻 5 倍，手机上更明显。
       var ref = bSlots[0].img;
