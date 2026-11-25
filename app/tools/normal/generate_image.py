@@ -518,7 +518,10 @@ def _receipt_links(target, target_id):
     if k:      # 认不出会话（target_id 不是 QQ 号）时只给另外两个，不瞎签
         lines.append("跑图台 %s/runbench?k=%s" % (url, k))
     lines.append("角色扮演 %s/persona?from=qq" % url)
-    lines.append("画廊 %s/workspace/?from=qq" % url)
+    # 2026-11-25 指向纠正：这行标着「画廊」就必须真的是画廊（作品墙）。
+    # 工作台是另一个入口，单独给一行——以前这行发的是 /workspace/，名不副实。
+    lines.append("画廊 %s/gallery?from=qq" % url)
+    lines.append("工作台 %s/workspace/?from=qq" % url)
     return "\n".join(lines)
 
 

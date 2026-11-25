@@ -234,21 +234,20 @@ def _gate():
     # 2026-11-13 /persona 同理：任务回执尾巴现在带「角色扮演」入口，被 fr_solo
     # 挡回 /play 就会变成「点了没反应」。
     # 2026-11-23 /workspace 同理：新界面是 5175 群友页的正牌落地页，QQ
-    # 「/画廊」「/漫画台」现在直接发 `/workspace/`；`/gallery`、`/comic` 只是
-    # 留给旧收藏的 302 跳板，也一并解页面锁（重定向时 query 原样带走）。
+    # 「/工作台」直接发 `/workspace/`。
+    # **2026-11-25 指向纠正后**：`/gallery`、`/comic` 不再 302 到工作台，各自
+    # 直接发作品墙 / 群友版漫画台，所以它们也进了下面那段「绕一趟清标记」——
+    # 原来那三行 `return None` 是靠「这两个视图自己 302」才成立的，现在它们
+    # 直接出页面，再 return None 就等于标记没清、cookie 还挂着 fr_solo。
     # 注意这里的 p 已经 rstrip("/")，所以只能写不带斜杠的形式。
     if (p in ("/gallery", "/gallery.html", "/comic", "/comic.html",
               "/novel", "/novel.html", "/runbench", "/runbench.html",
               "/workspace", "/persona", "/persona.html")
             and request.args.get("from") == "qq" and _solo_in()):
         g.clear_solo = True
-        # clear_solo 靠**回写 cookie** 生效，只在重定向上有效。`/gallery` 与
-        # `/comic` 自己就在 302，直接放行即可；`/workspace/` 是直接出页面的，
-        # 这里再 return None 就等于标记没清、cookie 还挂着 fr_solo。
-        # 所以凡是不打算重定向的路径，先绕一趟去掉 from=qq 的同一个地址，
-        # 让浏览器把 Set-Cookie 收下再回来（第二趟 _solo_in() 已为假）。
-        if p in ("/gallery", "/gallery.html", "/comic", "/comic.html"):
-            return None            # 这两个视图自己 302 到 /workspace/
+        # clear_solo 靠**回写 cookie** 生效，只在重定向上有效。凡是不打算
+        # 重定向的路径，先绕一趟去掉 from=qq 的同一个地址，让浏览器把
+        # Set-Cookie 收下再回来（第二趟 _solo_in() 已为假）。
         clean = {k: v for k, v in request.args.items() if k != "from"}
         qs = urlencode(clean)
         return redirect((request.path or "/") + ("?" + qs if qs else ""))
@@ -490,14 +489,17 @@ def workspace_asset(sub):
 @app.route("/gallery")
 @app.route("/gallery.html")
 def gallery_page():
-    """老地址 → 新界面（2026-11-23 定稿口径）。
+    """画廊 = 真正的作品墙（2026-11-25 用户纠正指向）。
 
-    分工是硬边界：**5174 本机 = 站主自用、发原始页；5175 隧道 = 群友页、
-    发新界面**。群友以前收藏的 `/gallery`、QQ 里早先发出的链接都还指着
-    这里，所以保留地址、302 到 `/workspace/`，不在这儿出旧作品墙。
-    旧作品墙 `gallery.html` 仍由 5174 的 `/gallery` 提供，群友想看就回本机。
+    以前这里 302 到 `/workspace/`，理由是「5175 只发新界面」。但用户把三个
+    入口的定位理清了：**画廊是画廊、漫画台是漫画台、工作台才是新界面**。
+    画廊那一侧才是自定义预设 / 提示词工坊 / 角色扮演 / 漫画台 / 小说模式的
+    集合地，工作台是另一件事。所以 `/gallery` 必须真的发作品墙。
+
+    `gallery.html` 只用 `/api/gal/*`，5175 已经在反代那一套，页面直接能跑；
+    不用登录也能看（和 5174 本机同口径，登录与否由前端自己按 `/me` 判断）。
     """
-    return redirect("/workspace/")
+    return send_from_directory(WEB_DIR, "gallery.html")
 
 
 # ─── 提示词工坊 ──────────────────────────────────────────
@@ -965,16 +967,61 @@ def persona_page():
 @app.route("/comic")
 @app.route("/comic.html")
 def comic_page():
-    """老地址 → 新界面（2026-11-23 定稿口径，同 `/gallery`）。
+    """漫画台 = 群友版漫画台（2026-11-25 用户纠正指向）。
 
-    5175 是群友页，一律发新界面；原始漫画台 `comic_studio_friend.html`
-    只留在 5174 本机给站主自己用。QQ 里早先发过的 `/comic` 链接还能用，
-    只是因为这里还认这个地址、302 过去而已。
+    以前这里 302 到 `/workspace/`，等于把「漫画台」和「工作台」混成一个
+    页面。用户把定位理清了：漫画台就是漫画台，工作台是新界面。
 
-    接口经 `/api/comic/<path>` 反代到 5174，`_forward` 会把登录 Cookie 解出的
-    QQ 写死塞进请求；页面自己不需要也不能传 qq。
+    发的是 `comic_studio_friend.html`（由 `tools/comic_friend_patch.py` 从
+    `comic_studio.html` 生成的群友版）——这文件一直在仓库里，但此前**没有
+    任何路由发它**，所以群友其实从没见过真正的群友版漫画台。
+
+    它除了 `/api/comic/*` 还要 `/api/providers`、`/api/models` 拉模型下拉，
+    这两条 5175 原来没反代（见下面两条只读代理）。页面本身不需要也不能传
+    qq：`_forward` 会把登录 Cookie 解出的 QQ 写死塞进请求。
     """
-    return redirect("/workspace/")
+    return send_from_directory(WEB_DIR, "comic_studio_friend.html")
+
+
+@app.route("/api/providers")
+def comic_providers():
+    """漫画台的模型渠道下拉——**只给安全的三个字段**。
+
+    不能直接转发 5174 的 `/api/providers`：那边会带上 `base_url` 和自定义
+    渠道密钥的尾 4 位（`provider_store.public_view`），那是站主的私货。
+    群友只需要知道「有哪些渠道、叫什么、默认哪个」。
+
+    `scope=comic` 照原样透传，否则漫画台专用的那几个中转站不会出现。
+    """
+    try:
+        r = requests.get(BACKEND + "/api/providers",
+                         params={"scope": "comic"}, timeout=10)
+        d = r.json()
+    except Exception:                                    # noqa: BLE001
+        return jsonify({"providers": [], "default": ""}), 502
+    items = [{"id": p.get("id", ""), "label": p.get("label", ""),
+              "model": p.get("model", "")}
+             for p in (d.get("providers") or [])]
+    return jsonify({"providers": items, "default": d.get("default", "")})
+
+
+@app.route("/api/models")
+def comic_models():
+    """`/api/models?provider=xxx` 的只读代理。
+
+    只放行带 `provider` 的那种（返回该渠道当前可用的对话模型）。不带
+    provider 的用法是「代理本机 Ollama 的 /api/tags」，那个会按请求里的
+    `baseUrl` 去连任意地址，不能开给公网。
+    """
+    pid = (request.args.get("provider") or "").strip()
+    if not pid:
+        return jsonify({"ok": False, "error": "缺少 provider"}), 400
+    try:
+        r = requests.get(BACKEND + "/api/models",
+                         params={"provider": pid}, timeout=15)
+        return jsonify(r.json())
+    except Exception as e:                               # noqa: BLE001
+        return jsonify({"ok": False, "error": str(e)}), 502
 
 
 @app.route("/api/comic/<path:sub>", methods=["GET", "POST", "DELETE"])

@@ -93,38 +93,40 @@ class SoloGatewayTest(unittest.TestCase):
         2026-11-06 回归：站主点过一次 /play 后，浏览器带着 7 天 fr_solo，
         再点 QQ 给的 /gallery 会被挡回游客页，看起来像「链接发错了」。
 
-        2026-11-23 定稿：5175 的 /gallery 是 302 跳板，落地是 /workspace/。
-        所以这里断言「跳 /workspace/、且这一趟把 fr_solo 清掉」——不再要求
-        它自己出页面；旧作品墙只在 5174 本机。
+        **2026-11-25 指向纠正**：`/gallery` 不再 302 到工作台，直接发作品墙。
+        解页面锁的办法随之改成「绕一趟去掉 from=qq 的同一地址」——302 回
+        `/gallery`（无参数），这一趟把 Set-Cookie 带下去，第二趟就是正常页面。
         """
         r = self._solo("/gallery?from=qq")
         self.assertEqual(r.status_code, 302)
-        self.assertEqual(r.headers["Location"], "/workspace/")
+        self.assertEqual(r.headers["Location"], "/gallery",
+                         "要绕回自身（去掉 from=qq），不能跳去工作台")
         cookies = " ".join(r.headers.getlist("Set-Cookie"))
         self.assertIn("fr_solo=", cookies)
         r.close()
-        # 标记清掉后，跟着跳到的新界面不该再被挡回 /play
-        r2 = self.client.get("/workspace/")
+        # 标记清掉后，这把锁不该再挡住画廊页
+        r2 = self.client.get("/gallery")
         self.assertEqual(r2.status_code, 200)
         r2.close()
 
     def test_qq_gallery_html_alias_also_unlocks(self):
         r = self._solo("/gallery.html?from=qq")
         self.assertEqual(r.status_code, 302)
-        self.assertEqual(r.headers["Location"], "/workspace/")
+        self.assertEqual(r.headers["Location"], "/gallery.html")
         r.close()
 
     def test_qq_comic_link_unlocks_solo_and_clears_marker(self):
         """QQ /漫画台 发来的 /comic?from=qq 同样要解开 /play 页面锁（2026-11-11）。
 
         与 /画廊 同一个坑：带 fr_solo 的浏览器点 QQ 给的 /comic，不该被挡回
-        /play；落地同样是新界面（2026-11-23 定稿）。
+        /play。2026-11-25 起 /comic 直接发群友版漫画台（不再跳工作台），
+        解页面锁的办法和画廊一样是「绕回自身、去掉 from=qq」。
         """
         r = self._solo("/comic?from=qq")
         self.assertEqual(r.status_code, 302)
-        self.assertEqual(r.headers["Location"], "/workspace/")
+        self.assertEqual(r.headers["Location"], "/comic")
         r.close()
-        r2 = self.client.get("/workspace/")
+        r2 = self.client.get("/comic")
         self.assertEqual(r2.status_code, 200)
         r2.close()
 

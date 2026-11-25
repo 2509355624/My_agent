@@ -479,6 +479,10 @@ _OUTFIT_RE = re.compile(r"^\s*[\/／]\s*换装")
 # 「/漫画台」= 群友漫画工作台地址（2026-11-11），同 /画廊：斜杠即命令、群里
 # 免 @。正则与 `app/direct_gen.py` 那份保持一字不差。正文在 _comic_studio_text。
 _COMIC_STUDIO_RE = re.compile(r"^\s*[\/／]\s*漫画台")
+# 「/工作台」= 新界面聊天页地址（2026-11-25），同 /画廊：斜杠即命令、群里
+# 免 @。正则与 `app/direct_gen.py` 那份保持一字不差。
+# 三个入口各指各的：画廊→作品墙、漫画台→群友版漫画台、工作台→/workspace/。
+_WORKBENCH_RE = re.compile(r"^\s*[\/／]\s*工作台")
 
 # 「/管理页」= 5174 管理后台的公网地址（2026-11-16），**站主私聊专属**。
 # 和上面几条链接指令不同：这条不进 direct_gen.decide()（那边没有发送者 QQ
@@ -634,6 +638,9 @@ def _should_reply(ev, target, target_id, text, at_me, has_image=False,
     # 「/漫画台」同理：斜杠即漫画台地址命令，免 @（与 /画廊 同口径）。
     if _COMIC_STUDIO_RE.match(text):
         return True, "漫画台指令（带斜杠）"
+    # 「/工作台」同理：斜杠即工作台地址命令，免 @（与 /画廊 同口径）。
+    if _WORKBENCH_RE.match(text):
+        return True, "工作台指令（带斜杠）"
     # 「#游客模式」（2026-11-06）：独立游客页地址。群里同样不用 @；谁发都给
     # ——链接本来就是拿去分享的（用户拍板）。判据见 app/solo_bot.py。
     if solo_bot.SOLO_RE.search(text):

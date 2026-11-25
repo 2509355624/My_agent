@@ -28,7 +28,7 @@ class HeadTextTest(unittest.TestCase):
         with mock.patch("app.features.qq.friend_site.url", return_value=URL):
             head = play_bot.head_text()
         self.assertTrue(head.startswith("🎮 玩法"))
-        self.assertIn(URL + "/workspace/?from=qq", head)
+        self.assertIn(URL + "/gallery?from=qq", head)
         # 画廊链接出现在「不提渠道就跑默认」之前
         self.assertLess(head.index(URL), head.index("不提渠道"))
 
@@ -68,7 +68,7 @@ class PlainTextTest(unittest.TestCase):
         """纯文本兜底的分组必须和卡片一致。"""
         with mock.patch("app.features.qq.friend_site.url", return_value=URL):
             plain = play_bot.plain_text()
-        self.assertIn(URL + "/workspace/?from=qq", plain)
+        self.assertIn(URL + "/gallery?from=qq", plain)
         for title, _ in play_bot._FAMILIES:
             self.assertIn("【%s】" % title, plain)
 
@@ -91,7 +91,7 @@ class SendTest(unittest.TestCase):
             ok = play_bot.send("private", "456")
         self.assertTrue(ok)
         sp.assert_called_once()
-        self.assertIn(URL + "/workspace/?from=qq", sp.call_args[0][1])
+        self.assertIn(URL + "/gallery?from=qq", sp.call_args[0][1])
 
     def test_both_fail_returns_false(self):
         with mock.patch("app.features.qq.friend_site.url", return_value=URL), \

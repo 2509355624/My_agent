@@ -4324,9 +4324,10 @@ class GalleryCmdTest(unittest.TestCase):
 
     def test_private_chat_gets_the_gallery_url(self):
         text = self._text("private")
-        # 5175 群友页的落地是新界面（2026-11-23 定稿），不绕 /gallery
-        # 带解锁参数：这个浏览器可能刚玩过 /play，带着 fr_solo 页面锁
-        self.assertIn(self.URL + "/workspace/?from=qq", text)
+        # 2026-11-25 用户纠正指向：/画廊 发给**画廊**，不是新界面工作台。
+        # 画廊那一侧才是预设 / 工坊 / 扮演 / 漫画台 / 小说的集合地。
+        self.assertIn(self.URL + "/gallery?from=qq", text)
+        self.assertNotIn("/workspace/", text, "画廊不该再指到工作台")
         self.assertIn("验证码", text)
 
     def test_group_chat_withholds_the_url(self):
@@ -4412,7 +4413,9 @@ class ComicStudioCmdTest(unittest.TestCase):
 
     def test_private_chat_gets_the_comic_url(self):
         text = self._text("private")
-        self.assertIn(self.URL + "/workspace/?from=qq", text)
+        # 2026-11-25 用户纠正指向：/漫画台 发给群友版漫画台，不是工作台。
+        self.assertIn(self.URL + "/comic?from=qq", text)
+        self.assertNotIn("/workspace/", text, "漫画台不该再指到工作台")
         self.assertIn("验证码", text)
 
     def test_group_chat_withholds_the_url(self):
@@ -4452,6 +4455,98 @@ class ComicStudioCmdTest(unittest.TestCase):
         ok, why = qq_bot._should_reply(ev, "group", "9", "/漫画台", False)
         self.assertTrue(ok)
         self.assertIn("漫画台", why)
+
+
+class WorkbenchCmdTest(unittest.TestCase):
+    """`/工作台`（2026-11-25 用户要求）：三个入口各指各的。
+
+    来历：用户发现 `/画廊` 和 `/漫画台` 都被甩到 `/workspace/`（新界面），
+    于是三个不同的东西指向了同一个页面。他的原话：「画廊它依旧是画廊，然后
+    我们这应该是叫做斜杠工作台」——画廊是作品墙 + 各功能集合地，漫画台是
+    群友版漫画台，工作台才是新界面聊天。
+    """
+
+    URL = "https://calm-otter-1234.trycloudflare.com"
+
+    def _text(self, where="private"):
+        from unittest import mock
+        from app.features.qq import friend_site
+        with mock.patch.object(friend_site, "url", return_value=self.URL), \
+                mock.patch.object(direct_gen.qq_api, "current_context",
+                                  return_value=(where, "2509355624")):
+            return direct_gen._workbench_text()
+
+    def test_slash_forms_hit(self):
+        for t in ("/工作台", "／工作台", "/ 工作台", "/工作台 怎么进", "  /工作台"):
+            self.assertTrue(direct_gen._WORKBENCH_RE.match(t), t)
+
+    def test_does_not_collide_with_gallery_or_comic(self):
+        """三条指令互不串台——这是本次修改的核心。"""
+        for t in ("/画廊", "/漫画台"):
+            self.assertIsNone(direct_gen._WORKBENCH_RE.match(t), t)
+        for t in ("/工作台",):
+            self.assertIsNone(direct_gen._GALLERY_RE.match(t), t)
+            self.assertIsNone(direct_gen._COMIC_STUDIO_RE.match(t), t)
+
+    def test_bare_word_does_not_fire_in_group(self):
+        """群聊里「工作台」可能出现在闲话里，纯正则不认。"""
+        for t in ("工作台", "这个工作台不错", "工作台在哪"):
+            self.assertIsNone(direct_gen._WORKBENCH_RE.match(t), t)
+
+    def test_private_chat_gets_the_workspace_url(self):
+        text = self._text("private")
+        self.assertIn(self.URL + "/workspace/?from=qq", text)
+        self.assertIn("验证码", text)
+
+    def test_group_chat_withholds_the_url(self):
+        text = self._text("group")
+        self.assertNotIn(self.URL, text)
+        self.assertIn("私聊", text)
+
+    def test_tunnel_down_says_so(self):
+        from unittest import mock
+        from app.features.qq import friend_site
+        with mock.patch.object(friend_site, "url", return_value=""):
+            text = direct_gen._workbench_text()
+        self.assertIn("没开", text)
+        self.assertNotIn("https://", text)
+
+    def test_private_bare_word_triggers(self):
+        """私聊直接说「工作台」也认（用户 2026-11-25 明确要求）。"""
+        from unittest import mock
+        with mock.patch.object(direct_gen.qq_api, "current_context",
+                               return_value=("private", "2509355624")):
+            self.assertEqual(direct_gen._private_entry_kw("工作台"), "workbench")
+            self.assertEqual(direct_gen._private_entry_kw("发工作台"), "workbench")
+            # 群聊仍旧不认裸词
+        with mock.patch.object(direct_gen.qq_api, "current_context",
+                               return_value=("group", "1103174141")):
+            self.assertIsNone(direct_gen._private_entry_kw("工作台"))
+
+    def test_three_entries_point_elsewhere(self):
+        """端到端：同一句话分别进 decide，拿到的是三个不同地址。"""
+        from unittest import mock
+        from app.features.qq import friend_site
+        with mock.patch.object(friend_site, "url", return_value=self.URL), \
+                mock.patch.object(direct_gen.qq_api, "current_context",
+                                  return_value=("private", "2509355624")):
+            gal = direct_gen.decide("/画廊", [], False)
+            com = direct_gen.decide("/漫画台", [], False)
+            wrk = direct_gen.decide("/工作台", [], False)
+        self.assertIn(self.URL + "/gallery?from=qq", gal)
+        self.assertIn(self.URL + "/comic?from=qq", com)
+        self.assertIn(self.URL + "/workspace/?from=qq", wrk)
+
+    def test_both_menus_mention_it(self):
+        self.assertIn("/工作台", direct_gen.MENU_TEXT)
+        self.assertIn("/工作台", direct_gen.GUIDE_TEXT)
+
+    def test_qq_bot_gate_lets_slash_through(self):
+        from app import qq_bot
+        ev = {"user_id": "1"}
+        ok, why = qq_bot._should_reply(ev, "group", "9", "/工作台", False)
+        self.assertTrue(ok)
+        self.assertIn("工作台", why)
 
 
 class QuotedPresetTest(unittest.TestCase):
@@ -4628,7 +4723,8 @@ class PrivateKeywordEntryTest(unittest.TestCase):
 
     def test_decide_returns_the_gallery_url(self):
         out = self._decide("画廊")
-        self.assertIn(self.URL + "/workspace/?from=qq", out)
+        # 2026-11-25 起「画廊」发画廊页，不再发工作台（见 WorkbenchCmdTest）
+        self.assertIn(self.URL + "/gallery?from=qq", out)
 
     def test_decide_returns_the_outfit_url(self):
         out = self._decide("换装")
@@ -4638,7 +4734,12 @@ class PrivateKeywordEntryTest(unittest.TestCase):
         out = self._decide("跑图台")
         self.assertIn("/runbench?k=", out)
 
+    def test_decide_returns_the_workbench_url(self):
+        """私聊直接说「工作台」也认（2026-11-25 用户要求）。"""
+        out = self._decide("工作台")
+        self.assertIn(self.URL + "/workspace/?from=qq", out)
+
     def test_slash_forms_still_work(self):
         """斜杠没废：老用户和群聊照旧。"""
         for t in ("/画廊", "／画廊", "/ 画廊"):
-            self.assertIn(self.URL + "/workspace/", self._decide(t))
+            self.assertIn(self.URL + "/gallery?from=qq", self._decide(t))

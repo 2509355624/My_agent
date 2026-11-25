@@ -229,12 +229,20 @@ _PRESET_WEB_RE = re.compile(
 # 链接就是把群友页根地址拼上 `/gallery`——画廊和预设页同一个站点、同一套
 # 登录态，不另起服务。
 _GALLERY_RE = re.compile(r"^\s*[\/／]\s*画廊")
+# 「/工作台」= 新界面（聊天优先的 workspace，2026-11-25 用户加的）。
+# **必须和 /画廊 分开**：三个入口各有各的落地页——
+#   画廊   → 作品墙（自定义预设 / 提示词工坊 / 角色扮演 / 漫画台 / 小说模式 都在那边）
+#   漫画台 → 群友版漫画台
+#   工作台 → 新界面 chat
+# 以前 /画廊 和 /漫画台 都甩到 /workspace/，等于三个入口指一个地方，用户
+# 2026-11-25 纠正过。这条与它们同口径：斜杠即命令、不过 addressed 闸。
+_WORKBENCH_RE = re.compile(r"^\s*[\/／]\s*工作台")
 # 「/换装」= 双图换衣服/换姿势网页（2026-11-11）。同样斜杠即命令、不用 @；
 # 回的是带 HMAC 令牌的 /outfit 链接（令牌含来源会话 + 过期，免登录）。
 # 与 `_GALLERY_RE` 一字不差地挂在 decide 的零成本直回段，正则两份要同步。
 _OUTFIT_RE = re.compile(r"^\s*[\/／]\s*换装")
 # 「/漫画台」= 群友漫画工作台地址（2026-11-11）。同样斜杠即命令、不用 @、
-# 零 LLM 直回隧道地址；正文与门控解锁（/workspace/?from=qq）跟 /画廊 一字不差
+# 零 LLM 直回隧道地址；门控解锁（?from=qq）跟 /画廊 同一套（见 friend_app._gate）
 # 地同口径，正则三份要同步。
 _COMIC_STUDIO_RE = re.compile(r"^\s*[\/／]\s*漫画台")
 # 「/存预设」= 把最近一次随心配配方存成命名预设（2026-11-13）。斜杠即命令、
@@ -266,6 +274,7 @@ _RUNBENCH_RE = re.compile(r"^\s*[\/／]\s*跑图台")
 #      第 6 个字之后，不劫。
 _PRIVATE_ENTRY_KW = (
     ("runbench", "跑图台"),
+    ("workbench", "工作台"),
     ("outfit", "换装"),
     ("gallery", "画廊"),
 )
@@ -1106,7 +1115,8 @@ MENU_TEXT = (
     "「silver-hd」= 3x 超清出图\n"
     "「/更多渠道」= 档位/画风/其他AI ｜ 「使用指南」= 详细玩法\n"
     "「/画廊」= 看大家出过的图（私聊发你网址，私聊直接说「画廊」也行）\n"
-    "「/漫画台」= 写剧本 + 跑漫画的工作台（私聊发你网址）"
+    "「/漫画台」= 写剧本 + 跑漫画的工作台（私聊发你网址）\n"
+    "「/工作台」= 一句话直接要图的聊天界面（私聊发你网址，说「工作台」也行）"
 )
 
 GUIDE_TEXT = (
@@ -1193,6 +1203,9 @@ GUIDE_TEXT = (
     "　（私聊里不打斜杠也认：「画廊」「发画廊」「画廊链接」都行）\n"
     "　要填 QQ 号 + 私聊验证码才能进 · 能点赞/收藏/下载\n"
     "　群里发只回一句「私聊我发你」，不发链接\n"
+    "\n"
+    "【工作台】私聊说「工作台」或发「/工作台」→ 一句话直接要图的聊天界面\n"
+    "　（和画廊不是同一个地方：画廊是作品墙，工作台是聊天里出图）\n"
     "\n"
     "【跑图台】私聊说「跑图台」→ 给带令牌的网址，挑一套随心配预设直接出图\n"
     "【换装】私聊说「换装」→ 给双图换装/换姿势网页（带图片就不认，照旧改图）\n"
@@ -1383,12 +1396,13 @@ def _preset_web_text():
 def _gallery_text():
     """`/画廊` 的正文。零 LLM：只读一个文件，拼上 `/gallery`。
 
-    画廊在群友页里；5175 群友页的入口统一是新界面 `/workspace/`。
-    地址 = `state/friend_url.txt` 里的隧道地址 + `/workspace/`。
+    地址 = `state/friend_url.txt` 里的隧道地址 + `/gallery`。
     隧道没开就照实说，不猜旧地址（旧域名早就 1033 了）。
 
-    2026-11-23 定稿：**5174 本机跑原始页给站主，5175 隧道跑新界面给群友**。
-    `/gallery` 在 5175 只是留给旧收藏的 302 跳板，不该再往群里发它。
+    **2026-11-25 用户纠正**：以前这里发的是 `/workspace/`（新界面），那是
+    「工作台」，不是画廊。画廊那一侧才是自定义预设 / 提示词工坊 / 角色扮演
+    / 漫画台 / 小说模式的集合地，所以现在发 `/gallery`，由 5175 出真正的
+    作品墙（见 friend_app.py 的 gallery_page）。
     """
     from app.features.qq import friend_site
     url = friend_site.url()
@@ -1402,23 +1416,46 @@ def _gallery_text():
         # 入口也没必要挂在群里。
         return "画廊在群友页里，网址我私聊发你——先加我好友，私聊发「画廊」就行（不用加斜杠）。"
     # `?from=qq` 是给 5175 的解锁标记：/play 会在浏览器里种 7 天的 fr_solo，
-    # 之后访问 /workspace/ 会被 _gate 挡回游客页。带这个参数的只可能是刚从
-    # QQ 指令拿到的链接，网关会先清标记再按正常鉴权走（未登录 → 登录页）。
-    return ("画廊：%s/workspace/?from=qq\n"
+    # 之后访问画廊页会被 _gate 挡回游客页。带这个参数的只可能是刚从 QQ 指令
+    # 拿到的链接，网关会先清标记再按正常鉴权走（未登录 → 登录页）。
+    return ("画廊：%s/gallery?from=qq\n"
             "打开后填你的 QQ 号，点「获取验证码」，验证码会发到这个私聊里。\n"
-            "进去是作品墙，点开一张能收藏、下载；右上角能切文件夹。" % url)
+            "进去是作品墙，点开一张能收藏、下载；右上角是各功能入口"
+            "（预设 / 工坊 / 扮演 / 漫画台 / 小说）。" % url)
+
+
+def _workbench_text():
+    """`/工作台` 的正文。零 LLM：只读一个文件，拼上 `/workspace/`。
+
+    工作台 = 聊天优先的新界面（`/workspace/`）。它和「画廊」不是一回事
+    （2026-11-25 用户澄清）：那边是作品墙 + 各种功能入口，这边是一句话直接
+    开口要图。
+    """
+    from app.features.qq import friend_site
+    url = friend_site.url()
+    if not url:
+        return ("工作台在群友页里，隧道现在没开，所以没有地址可发"
+                "（Quick Tunnel 每次重启都会换域名，旧的发过去也是打不开的）。\n"
+                "让群主双击「启动群友隧道.bat」，起来之后这里就有了。")
+    tgt, _tid = qq_api.current_context()
+    if tgt == "group":
+        return "工作台在群友页里，网址我私聊发你——先加我好友，私聊发「工作台」就行（不用加斜杠）。"
+    return ("工作台：%s/workspace/?from=qq\n"
+            "打开后填你的 QQ 号，点「获取验证码」，验证码会发到这个私聊里。\n"
+            "在里面直接说想要什么就能出图，画好会自动弹出来；出过的图往下翻都在。"
+            % url)
 
 
 def _comic_studio_text():
     """`/漫画台` 的正文。零 LLM：只读一个文件，拼上 `/comic`。
 
-    群友漫画台在 5175 就是新界面 `/workspace/`，地址 = 隧道地址 + `/workspace/`；
-    隧道没开照实说，不猜旧地址。
+    地址 = 隧道地址 + `/comic`，5175 出群友版漫画台
+    （`comic_studio_friend.html`）。隧道没开照实说，不猜旧地址。
     `?from=qq` 与 /画廊 同一个作用：5175 的 _gate 会先解开 /play 的页面锁
     再按正常鉴权走（未登录 → 登录页）。
 
-    2026-11-23 定稿：**5174 本机跑原始页给站主，5175 隧道跑新界面给群友**。
-    `/comic` 在 5175 只是留给旧收藏的 302 跳板，不该再往群里发它。
+    **2026-11-25 用户纠正**：以前这里也发 `/workspace/`，和画廊、工作台
+    撞成同一个落地页，用户点「漫画台」进的是聊天界面。
     """
     from app.features.qq import friend_site
     url = friend_site.url()
@@ -1431,7 +1468,7 @@ def _comic_studio_text():
         # 群里只给一句（和「/画廊」同口径）：进页面本来就要 QQ 号 + 私聊
         # 验证码，入口也没必要挂在群里。
         return "漫画台在群友页里，网址我私聊发你——先加我好友，私聊发「/漫画台」就行。"
-    return ("漫画台：%s/workspace/?from=qq\n"
+    return ("漫画台：%s/comic?from=qq\n"
             "打开后填你的 QQ 号，点「获取验证码」，验证码会发到这个私聊里。\n"
             "写一句话剧情就能成书，出完的漫画在这台的「我的漫画作品」里逐页重画。"
             % url)
@@ -3317,6 +3354,10 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True,
     # 斜杠即命令、不过 addressed 闸、零 LLM 直回隧道地址。
     if _COMIC_STUDIO_RE.match(text):
         return _comic_studio_text()
+    # 「/工作台」= 新界面聊天页（2026-11-25）。和 /画廊、/漫画台 三个入口
+    # 各有各的落地页，不再三个都甩到 /workspace/。
+    if _WORKBENCH_RE.match(text):
+        return _workbench_text()
     # 「/存预设」= 存最近一次随心配配方（2026-11-13）。斜杠即命令、不用 @。
     m = _SAVE_PRESET_RE.match(text)
     if m:
@@ -3339,6 +3380,8 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True,
         return _outfit_text()
     if _kw == "runbench":
         return _runbench_text()
+    if _kw == "workbench":
+        return _workbench_text()
     addressed = trigger.called(own_text, at_me)
     # 「预设网页」= 群友页地址（2026-10-30）。零 LLM，只读一个文件；
     # 放在这里而不是模板里——地址每次重启都变，模型记不住也不该记。

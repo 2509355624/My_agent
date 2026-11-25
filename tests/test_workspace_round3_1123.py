@@ -31,19 +31,26 @@ def _read(rel, base=ROOT):
 class TestSiteSplit(unittest.TestCase):
     """5174 发原始页；5175 的 /gallery、/comic 只是 302 到新界面。"""
 
-    def test_5175_gallery_redirects_to_workspace(self):
+    def test_5175_gallery_serves_the_wall(self):
+        """5175 的 /gallery 发作品墙（2026-11-25 用户纠正指向）。
+
+        上一版钉的是「gallery_page 里必须是 redirect('/workspace/')」——
+        那是把画廊和工作台混成一个页面。现在反过来：必须真的发 gallery.html，
+        不许再 302 到工作台。
+        """
         src = _read("friend_app.py")
         i = src.index("def gallery_page():")
         seg = src[i:src.index("@app.route(\"/comic\")", i)]
-        self.assertIn('return redirect("/workspace/")', seg)
-        self.assertNotIn('send_from_directory(WEB_DIR, "gallery.html")', seg)
+        self.assertIn('send_from_directory(WEB_DIR, "gallery.html")', seg)
+        self.assertNotIn('redirect("/workspace/', seg)
 
-    def test_5175_comic_redirects_to_workspace(self):
+    def test_5175_comic_serves_the_friend_studio(self):
+        """5175 的 /comic 发群友版漫画台，不再跳工作台。"""
         src = _read("friend_app.py")
         i = src.index("def comic_page():")
-        seg = src[i:src.index("@app.route(\"/api/comic/", i)]
-        self.assertIn('return redirect("/workspace/")', seg)
-        self.assertNotIn('send_from_directory(WEB_DIR, "comic_studio_friend.html")', seg)
+        seg = src[i:src.index("@app.route(\"/api/providers\")", i)]
+        self.assertIn('send_from_directory(WEB_DIR, "comic_studio_friend.html")', seg)
+        self.assertNotIn('redirect("/workspace/', seg)
 
     def test_5174_gallery_sends_original(self):
         src = _read("app/web/pages.py")
@@ -65,18 +72,27 @@ class TestSiteSplit(unittest.TestCase):
         self.assertIn('send_from_directory(WEB_DIR, "gen_pad.html")', seg)
         self.assertNotIn('redirect("/workspace', seg)
 
-    def test_qq_links_point_at_workspace(self):
-        """QQ 发出去的是群友页地址，就该是 /workspace/，不再走旧地址绕一圈。"""
-        for rel in ("app/features/image/direct_gen.py",
-                    "app/features/qq/play_bot.py",
-                    "app/tools/normal/generate_image.py"):
-            src = _read(rel)
-            for line in src.splitlines():
-                if "gallery?from=qq" in line or "comic?from=qq" in line:
-                    self.fail("%s 里还发着旧地址：%s" % (rel, line.strip()))
+    def test_qq_links_each_point_at_their_own_page(self):
+        """三个入口各指各的（2026-11-25 用户纠正）。
 
-    def test_qq_gallery_and_comic_texts(self):
-        """真调一次正文生成，确认拼出来的地址。"""
+        上一版这里断言「不许出现 gallery?from=qq / comic?from=qq」，因为
+        当时三个入口都统一发 `/workspace/`。用户之后把定位理清了：画廊就
+        是画廊、漫画台就是漫画台、工作台才是 `/workspace/`。现在反过来钉：
+        谁都不能再拿 `/workspace/` 冒充画廊或漫画台。
+        """
+        bad = {
+            "app/features/image/direct_gen.py": (
+                'return ("画廊：%s/workspace/', 'return ("漫画台：%s/workspace/'),
+            "app/features/qq/play_bot.py": ('"画廊：%s/workspace/',),
+            "app/tools/normal/generate_image.py": ('"画廊 %s/workspace/',),
+        }
+        for rel, needles in bad.items():
+            src = _read(rel)
+            for n in needles:
+                self.assertNotIn(n, src, "%s 里画廊/漫画台还指着工作台" % rel)
+
+    def test_qq_three_entry_texts(self):
+        """真调一次正文生成，确认三个入口拿到三个不同地址。"""
         from app.features.image import direct_gen
         from app.features.qq import friend_site
 
@@ -85,10 +101,12 @@ class TestSiteSplit(unittest.TestCase):
         try:
             g = direct_gen._gallery_text()
             c = direct_gen._comic_studio_text()
+            w = direct_gen._workbench_text()
         finally:
             friend_site.url = old
-        self.assertIn("https://x.example/workspace/?from=qq", g)
-        self.assertIn("https://x.example/workspace/?from=qq", c)
+        self.assertIn("https://x.example/gallery?from=qq", g)
+        self.assertIn("https://x.example/comic?from=qq", c)
+        self.assertIn("https://x.example/workspace/?from=qq", w)
 
 
 # ─── 2. 参考图上传 ─────────────────────────────────────────

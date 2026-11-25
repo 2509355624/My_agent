@@ -302,16 +302,18 @@ class PageRoutingTest(unittest.TestCase):
                 self.assertIn(self.PRESET, html)
 
     def test_old_gallery_url_still_works(self):
-        """QQ 里已经发出去的链接不能碎：`/gallery` 302 到新界面，不 404。
+        """QQ 里已经发出去的链接不能碎：`/gallery` 发作品墙，不 404。
 
-        2026-11-23 定稿：5175 是群友页，落地换成新界面，旧地址只做跳板。
-        所以这里断言的是「302 且指向 /workspace/」，不是「还在发旧作品墙」。
+        **2026-11-25 用户纠正指向**：以前这里 302 到 `/workspace/`（工作台），
+        等于「画廊」和「工作台」是同一个页面。现在三个入口各指各的——
+        画廊→作品墙、漫画台→群友版漫画台、工作台→`/workspace/`。
+        所以这里断言的是「200 且真是画廊页」，不再有 302。
         """
         for logged in (True, False):
             with self.subTest(logged=logged):
                 r = self._client(logged).get("/gallery")
-                self.assertEqual(r.status_code, 302, "/gallery")
-                self.assertEqual(r.headers["Location"], "/workspace/")
+                self.assertEqual(r.status_code, 200, "/gallery")
+                self.assertIn("画廊", r.get_data(as_text=True)[:4000])
 
     def test_gallery_links_to_the_preset_page(self):
         """右上角那个入口得指对地方，否则点一下 404。"""
