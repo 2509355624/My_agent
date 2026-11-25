@@ -12,16 +12,13 @@
   var S = {
     skill: "", channels: [], pending: {}, timer: null, fails: 0,
     msgs: [],      // 存档：每条消息一条记录，见 archive.js
-    /* 存档记录 → 它的卡片 DOM（2026-11-24）。用户连点「重画」时要认出
-       「上一条还是同一份请求」，没有这张表就只能靠提示词去 DOM 里翻。 */
+    /* 存档记录 → 卡片节点，用于识别重复请求。 */
     cards: new Map()
   };
 
   function $(id) { return document.getElementById(id); }
 
-  /* 消息区一律是根那个 #chat-scroll：创作回聊天页做，子页只浏览。
-     ⚠️ 别用「哪个 .view-push 带 data-chat-scroll」去挑——退页动画播完前
-     那一页还在 DOM 里，写进去的消息会跟着节点被回收（2026-11-23 实测）。 */
+  /* 消息统一写到根 #chat-scroll。退页动画期间不要往子页写消息。 */
   function box() {
     return el.scroll;
   }
@@ -127,7 +124,7 @@
     });
   }
 
-  /* 用户气泡 → 卡片。失败提示挂在用户那条消息下面，靠这张表找到它。 */
+  /* 失败行按气泡配对。 */
   var userNodes = [];
 
   function addUser(text, refs) {
@@ -137,8 +134,6 @@
     return node;
   }
 
-  /* 撤掉一条没有对应卡片的蓝色消息（重复重画被吞 / 限流没排上）。
-     只按文字找最后一条，避免误删同一句话的更早那次请求。 */
   function dropUser(node, text) {
     if (node && node.parentNode) node.parentNode.removeChild(node);
     userNodes = userNodes.filter(function (n) { return n !== node; });
@@ -168,7 +163,7 @@
   function newCard(prompt, skill, rec) {
     var c = shell();
     c.say("排队中…");
-    var user = userNodes.length ? userNodes[userNodes.length - 1] : null;
+    var user = null;
     return { node: c.node, body: c.body, line: c.line, ph: null,
              note: c.note, stop: c.stop, acts: c.acts, fill: c.fill,
              /* 失败后重排要复用它：restart() 会把这一行字改回「排队中…」 */
@@ -219,8 +214,7 @@
     scrollBottom();
   }
 
-  /* 失败 / 超时。`stuck` 决定给什么按钮口径：卡住的那张给「重试」
-     （按同一份提示词重排），普通失败给「重画」（换种子）。 */
+  /* 失败 / 超时：卡住给重试，普通失败给重画。 */
   function fail(card, msg, stuck) {
     disarmStop(card);
     card.since = 0;
@@ -264,8 +258,8 @@
   /* 提交 / 轮询 / 判超时 / 终止全在 gen_flow.js（2026-11-24 拆的）：
      那边只做「发请求、看状态」，画卡片的活儿由 card.js 干，这里只负责
      把三样东西交给它——存档数组、落盘函数、和上面那几个渲染函数。 */
-  function submitJob(prompt, skill, refs, described) {
-    return global.WSGenFlow.submit(prompt, skill, refs, described);
+  function submitJob(prompt, skill, refs, described, userNode, defer) {
+    return global.WSGenFlow.submit(prompt, skill, refs, described, userNode, defer);
   }
   function armStop(card) { return global.WSGenFlow.armStop(card); }
   function disarmStop(card) { return global.WSGenFlow.disarmStop(card); }
@@ -303,20 +297,22 @@
         if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
       },
       defaultSkill: function () { return S.skill; },
-      send: function (text, refs, described, skill) {
-        var user = addUser(text, refs);
-        if (described) {
-          if (!submitJob(text, skill,
-                         refs.map(function (r) { return r.id || r; }), true)) {
-            dropUser(user, text);
-          }
-          return;
-        }
+      send: function (text, refs, described, skill, user) {
+        user = user || addUser(text, refs);
+        var ids = refs.map(function (r) { return r.id || r; });
+        var submitted = submitJob(text, skill, ids, !!described, user,
+                                  !described && refs.length > 0);
+        if (!submitted) { dropUser(user, text); return; }
+        if (described || !refs.length) return;
+        submitted.say("正在看图…");
+        submitted.rec.note = "正在看图…";
+        global.WSStore.patch(submitted.rec,
+                             { note: submitted.rec.note, err: false });
         global.WSRef.ensureDescribed(refs).then(function (read) {
-          if (!submitJob(text, skill,
-                         read.map(function (r) { return r.id || r; }))) {
-            dropUser(user, text);   // 重复请求被吞 / 没排上：不留孤儿蓝气泡
-          }
+          if (S.cards.get(submitted.rec) !== submitted) return;
+          var ok = global.WSGenFlow.continueSubmit(
+            submitted, read.map(function (r) { return r.id || r; }), false);
+          if (!ok) dropUser(user, text);
         });
       }
     });
@@ -388,7 +384,7 @@
     var text = el.say.value.trim();
     if (!text) return;
     var refs = global.WSRef.list();
-    addUser(text, refs);
+    var user = addUser(text, refs);
     el.say.value = "";
     grow();
     syncSend();
@@ -422,13 +418,17 @@
     var pre = refs.filter(function (r) { return r && r.pre && r.id; });
     if (pre.length) {
       global.WSRef.commit();
-      submitJob(text, S.skill, pre.map(function (r) { return r.id; }), true);
+      var preCard = submitJob(text, S.skill,
+                              pre.map(function (r) { return r.id; }), true, user);
+      if (!preCard) dropUser(user, text);
       return;
     }
 
     global.WSRef.ensureDescribed(refs).then(function (read) {
       global.WSRef.commit();
-      submitJob(text, S.skill, read.map(function (r) { return r.id; }));
+      var newCard = submitJob(text, S.skill,
+                              read.map(function (r) { return r.id; }), false, user);
+      if (!newCard) dropUser(user, text);
     });
   }
 
@@ -436,7 +436,7 @@
      bindRedraw() 在 init 里接上，这边只留一个转发。 */
   function redraw(card) { return global.WSRedraw.run(card); }
 
-  /* 复制走 card.js 那一份（按钮就在那边，两边共用同一段剪贴板逻辑） */
+  /* 复制走 card.js 的实现。 */
   function copyText(text) { return global.WSCard.copyText(text); }
 
   // ── 画风 ──────────────────────────────────────────────

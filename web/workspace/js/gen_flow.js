@@ -52,7 +52,7 @@
      `described`（2026-11-24）：这些参考图**已经读成描述写进 prompt 了**
      （「画同款」就是这种）。带上它，后端就不再识一次图——用户确认过的
      口径是「不再识，用输入栏那段」。 */
-  function submit(prompt, skill, refs, described) {
+  function submit(prompt, skill, refs, described, userNode, defer) {
     if (!skill) {
       H.sysNote("还没拿到渠道列表，去跑图台看一眼再回来");
       return null;
@@ -86,11 +86,19 @@
     // 卡片自己记住参考图：点「重画」要按同一份角色重来，不能悄悄丢图
     card.refs = rec.refs;
     card.described = !!described;
+    if (userNode) card.userNode = userNode;
     card.since = Date.now();       // 超时从这里起算，见 tick()
     card.noted = "排队中…";
     H.save(rec);
+    if (defer) { card.submitting = true; return card; }
     fire(card, rec, refs, described);
     return card;     // 只有真新建了卡片，调用方才该留下那条蓝色消息
+  }
+
+  function continueSubmit(card, refs, described) {
+    if (!card || !card.rec || S().cards.get(card.rec) !== card) return null;
+    fire(card, card.rec, refs || card.rec.refs, described);
+    return card;
   }
 
   /* 找「同一次请求」的上一张卡：同渠道 + **用户当初那句话**一样。
@@ -365,6 +373,7 @@
   global.WSGenFlow = {
     bind: bind,
     submit: submit,
+    continueSubmit: continueSubmit,
     restart: restart,
     armStop: armStop,
     disarmStop: disarmStop,
