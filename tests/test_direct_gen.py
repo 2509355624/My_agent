@@ -2783,6 +2783,21 @@ class ReverseTriggerTest(unittest.TestCase):
         self.assertEqual(sent, direct_gen._TAGS_PROMPT)
         self.assertNotIn("reverse 字段", sent)
 
+    def test_tags_prompt_asks_for_layering_and_exact_colors(self):
+        """反推提示词必须包含层叠关系与颜色精度两条（2026-11-25 用户拍板）。
+
+        生图管道走 `_TAGS_PROMPT`（代码内置），读不到 `agents/qq/settings.json`
+        里的 `vision_prompt`。两边口径不同，群友看到的反推就会「怪」：
+        衣层被摊平、深紫黑被判成 dark brown。这里锁住两条口径同步。
+        """
+        t = direct_gen._TAGS_PROMPT
+        for word in ("服装**必须写出层叠关系**", "worn over",
+                     "颜色要**精确到能对上原图**", "不要用 brown 代紫",
+                     "dark purple ribbon bow at the collar",
+                     "落不了地的修饰"):
+            with self.subTest(word=word):
+                self.assertIn(word, t)
+
     def test_keyword_round_reverse_is_sent(self):
         # 关键词轮（at_me=False）**照样**把反推发出去——这正是 bug ② 的修复点。
         out, _, _, _ = self._decide("大大怪 ，反推提示词", at_me=False)
