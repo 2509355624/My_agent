@@ -139,6 +139,18 @@
   .bhelp{font-size:12.5px;color:var(--dim);line-height:1.7;margin:0 0 12px;}
   .bhelp b{color:var(--text);}
 
+  /* 全部同第一款：横跨整条的高亮大按钮，压在 5 宫格正上方。
+     手机端要够大够好点（用户要求「大大的高亮的」），所以上下 padding 给足，
+     副标题一行小字解释点了会发生什么。 */
+  .sameall{display:block;width:100%;margin:0 0 12px;padding:14px 16px;
+    border-radius:12px;font-size:15px;font-weight:700;line-height:1.45;
+    border:1px solid var(--accent);color:#fff;
+    background:linear-gradient(135deg,rgba(255,107,169,.95),rgba(255,107,169,.62));
+    box-shadow:0 4px 16px rgba(255,107,169,.28);}
+  .sameall:active{transform:translateY(1px);box-shadow:0 2px 8px rgba(255,107,169,.24);}
+  .sameall .sub{display:block;font-size:12px;font-weight:400;
+    color:rgba(255,255,255,.82);margin-top:3px;}
+
   /* 五个格子：桌面两列（第一个跨两列当参考图），手机单列 */
   .slots{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;
     margin-bottom:14px;}
@@ -221,6 +233,14 @@
     </div>
     <p class="bhelp" id="bHelp"></p>
 
+    <!-- 全部同第一款：**只在五图各画里出现**，位置在图片格正上方、做成醒目的
+         高亮整条按钮。用户原话：「放在五图各画的那个开头上面，第一个图头顶
+         那边，一个大大的那个标记的一个大大的高亮的按钮」。一图多风里没有这个
+         按钮——那个玩法本来就要求 5 个不同渠道，铺成同一个毫无意义。 -->
+    <button class="btn sameall hidden" id="btnSame">
+      全部同第一款 <span class="sub">点一下，5 格都用第一张的渠道</span>
+    </button>
+
     <div class="slots" id="slots"></div>
 
     <!-- 一图多风才有需求框；五图各画没有（用户：「五图各画不需要有这个
@@ -231,12 +251,6 @@
         style="width:100%;min-height:88px;resize:vertical;background:var(--input);
         border:1px solid var(--border);border-radius:11px;color:var(--text);
         padding:12px;font-size:15px;font-family:inherit;line-height:1.6;outline:none;"></textarea>
-    </div>
-
-    <div class="brow">
-      <button class="btn ghost" id="btnSame" style="flex:0 0 auto;padding:12px 14px;">
-        全部同第一款
-      </button>
     </div>
 
     <div class="bbar">
@@ -509,10 +523,12 @@
   function syncModeUI(){
     var same = bMode === "same";
     $("promptWrap").classList.toggle("hidden", !same);
-    $("btnSame").classList.toggle("hidden", !same);
+    // 「全部同第一款」只在五图各画出现：一图多风本来就要求 5 格不同渠道，
+    // 铺成同一个会立刻被服务端整单拒掉，按钮摆在那儿只会误导。
+    $("btnSame").classList.toggle("hidden", same);
     $("bHelp").innerHTML = same
       ? "<b>一张参考图 + 几个渠道</b>：传一张图、写一句需求，选几个渠道就出几张，图只反推一次。每个格子不能用同一个渠道。"
-      : "<b>上传几张图就跑几张</b>：每格单独选渠道，不用写需求——直接识图反推出提示词再画。";
+      : "<b>上传几张图就跑几张</b>：每格单独选渠道，不用写需求——直接识图反推出提示词再画。同一个渠道可以画多张。";
   }
 
   // ── 弹框 ──────────────────────────────
@@ -694,35 +710,22 @@
     img.src = url;
   });
 
-  // 全部同第一款：把第一格选的渠道铺到其它格子。
-  // 两种模式行为不同（2026-11-25 用户拍板）：
-  //   五图各画 —— 全部铺满，重复渠道合法，这就是按钮的本意；
-  //   一图多风 —— 必须不重复，所以只在**下一个空位**填一次，铺满会造出一批
-  //               必然被服务端整单拒掉的请求。
+  // 全部同第一款：把第一格的渠道铺到其余所有格子。
+  // 只在「五图各画」里出现（一图多风那边整条按钮是隐藏的），那边重复渠道
+  // 合法，所以就是一路铺满，没有「只能用一次」的限制。
   $("btnSame").addEventListener("click", function(){
-    if(bBusy) return;
+    if(bBusy || bMode !== "each") return;
     var first = bSlots[0].skill;
-    if(!first){ setBStatus("先把第一格的渠道选了", true); return; }
+    if(!first){ setBStatus("先把第一格的渠道选了，再铺", true); return; }
     var n = 0;
-    if(bMode === "each"){
-      for(var i=1;i<bSlots.length;i++){
-        bSlots[i].skill = first;
-        n++;
-      }
-      setBStatus("已把「" + first + "」铺到全部 " + (n + 1) + " 格");
-    } else {
-      for(var j=1;j<bSlots.length;j++){
-        if(usedBy(first, j)) continue;
-        bSlots[j].skill = first;
-        n++;
-        break;               // 一图多风：同一渠道只能用一次
-      }
-      if(!n){
-        setBStatus("「" + first + "」别的格子已经用着了，一图多风每个格子得换不同的渠道", true);
-      } else {
-        setBStatus("已把第一格铺到下一个格子（一图多风同一渠道只能用一次）");
-      }
+    for(var i=1;i<bSlots.length;i++){
+      if(bSlots[i].skill === first) continue;   // 已经是这个渠道就不算改动
+      bSlots[i].skill = first;
+      n++;
     }
+    setBStatus(n
+      ? "已把「" + first + "」铺到全部 " + bSlots.length + " 格"
+      : "5 格已经都是「" + first + "」了");
     savePref();
     renderSlots();
   });

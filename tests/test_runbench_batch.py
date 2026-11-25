@@ -354,6 +354,16 @@ class PageGuardTest(unittest.TestCase):
         # 必须清掉重复的，否则整单必然被服务端拒，且用户看不出来。
         self.assertIn("var keep = {};", self.html)
 
+    def test_same_all_button_only_in_each_mode(self):
+        # 2026-11-25 用户拍板：「全部同第一款」只属于五图各画，而且要在
+        # 图片格**上方**（「第一个图头顶那边，一个大大的高亮按钮」）。
+        # 一图多风里这个按钮必须隐藏——那边 5 格本来就要求不同渠道。
+        self.assertIn('$("btnSame").classList.toggle("hidden", same);', self.html)
+        # 按钮在 #slots 之前
+        i_btn = self.html.index('id="btnSame"')
+        i_slots = self.html.index('id="slots"')
+        self.assertLess(i_btn, i_slots, "「全部同第一款」必须排在格子容器前面")
+
 
 if __name__ == "__main__":
     unittest.main()
