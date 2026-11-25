@@ -92,19 +92,44 @@
         if (!r.ok) throw new Error("HTTP " + r.status);
         return r.blob();
       }).then(function (b) {
-        if (!b || !b.size) throw new Error("empty");
-        fire(b);
-        if (global.WSImg) global.WSImg.put(url, b).catch(function () {});
+        /* 2026-11-25：拿回来的必须真的是图。签名过期 / 换域名时服务端回的是
+           401/404 的 JSON，存成 .webp 就是一个 48 字节的坏文件——聊天页那边
+           用户已经踩到了（小米浏览器点下载存下 48B）。 */
+        return looksLikeImage(b).then(function (ok) {
+          if (!ok) throw new Error("不是图片");
+          fire(b);
+          if (global.WSImg) global.WSImg.put(url, b).catch(function () {});
+        });
       })["catch"](fail);
     }
     if (global.WSImg) {
       global.WSImg.get(url).then(function (b) {
-        if (b && b.size) { fire(b); return; }
-        fromNet();
+        return looksLikeImage(b).then(function (ok) {
+          if (ok) { fire(b); return; }
+          fromNet();
+        });
       })["catch"](fromNet);
       return;
     }
     fromNet();
+  }
+
+  /* 文件头认图：WebP / PNG / JPEG / GIF。类型明确是 image/* 就直接过。
+     读不出前 12 字节（opaque 响应）时按「不是图」处理——宁可重下一次，
+     也不要把一个坏文件存进相册。 */
+  function looksLikeImage(blob) {
+    if (!blob || !blob.size) return Promise.resolve(false);
+    if (blob.size < 200) return Promise.resolve(false);   // 48B 那种 JSON 错误体
+    if (blob.type && blob.type.indexOf("image/") === 0) return Promise.resolve(true);
+    return blob.slice(0, 12).arrayBuffer().then(function (buf) {
+      var b = new Uint8Array(buf);
+      if (b.length < 4) return false;
+      if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46) return true;
+      if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return true;
+      if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return true;
+      if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return true;
+      return false;
+    })["catch"](function () { return false; });
   }
 
   global.WSHide = {

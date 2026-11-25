@@ -201,6 +201,10 @@
           c.file = m.file;
           global.WSChat.buildActs(c);
         } else if (m.job && !m.err) {
+          /* 有 job 号、没图、没判错：**它可能还在跑**（另一台设备上刚发出
+             去的那张，推上来时还没出图）。先别判死，收进 again 里问一次
+             服务端，见下面那段——以前这里直接落到 else 判「没跑完就断了」，
+             于是两台同时开着时，另一台一刷新就看到「这张断了，点重排」。 */
           again.push({ rec: m, card: c });
         } else {
           /* 没有 file 也没有 job 的 `img` 记录 = 提交过、但没等到结果就
@@ -262,6 +266,11 @@
           (job && job.error) ||
           "这一条已经没在跑了（服务重启过 / 早结束了），点重试再排一次", true);
       });
+      /* 服务端说不了话（5174 刚起 / 网络抖）时，上面那段按「不猜」先接回
+         轮询；但轮询的第一步就是「任务不在列表里 → 判它没了」，刚接回来的
+         那一下必然判死。所以状态接口告假的时候，先别接轮询，也别判死：
+         留着「准备中…」等下一次刷新或下一次提交把它接上——这比给用户一句
+         假的「服务重启过，这张没了」诚实得多。 */
       again.forEach(function (a) {
         if (a.comic && global.WSCreate && global.WSCreate.resume) {
           global.WSCreate.resume(a.rec, a.card);
@@ -270,7 +279,7 @@
       global.WSChat.scrollBottom();
       if (Object.keys(global.WSChat.pending).length) global.WSChat.startPoll();
     }, function () {
-      // 接口不通：不猜，接回轮询交给它自己的超时去判
+      // 接口不通：不猜，卡面留在「准备中…」，不接轮询（原因见上）
       again.forEach(function (a) {
         if (a.comic) {
           if (global.WSCreate && global.WSCreate.resume) {
@@ -278,9 +287,11 @@
           }
           return;
         }
-        a.card.since = Date.now();
-        global.WSChat.pending[a.rec.job] = a.card;
-        global.WSChat.armStop(a.card);
+        a.card.since = 0;
+        a.card.note.hidden = false;
+        a.card.note.className = "note";
+        a.card.note.textContent = "准备中，等显卡空出来";
+        a.card.noted = "准备中，等显卡空出来";
       });
       if (Object.keys(global.WSChat.pending).length) global.WSChat.startPoll();
     });

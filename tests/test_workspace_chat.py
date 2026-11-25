@@ -340,6 +340,75 @@ Promise.resolve().then(()=>{
         self.assertIn('"total": total, "more": total > len(msgs)', routes)
         self.assertIn("msgs = msgs[-limit:]", routes)
 
+    def test_download_rejects_non_image_bytes(self):
+        """下载只认真图：缓存里那段 48B 的 JSON 错误体不许存盘，也不许退回
+        `<a download href>` 那种导航式下载（2026-11-25 小米浏览器实测：点下载
+        存下来 48B，长按保存却正常）。"""
+        script = r'''
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+const root = process.argv[1];
+const saved = [], notes = [], links = [];
+function blob(bytes, type) {
+  return { size: bytes.length, type: type || "", bytes: bytes,
+    slice(a, b) { const self = this;
+      return { arrayBuffer: async () => new Uint8Array(self.bytes.slice(a, b)).buffer }; } };
+}
+const WEBP = blob([0x52,0x49,0x46,0x46,0x20,0x00,0x00,0x00,0x57,0x45,0x42,0x50]
+  .concat(new Array(400).fill(1)));
+const BAD = blob(new TextEncoder().encode("{\"ok\":false,\"error\":\"no\"}"));
+const cache = { key: BAD };                      // 缓存里躺着的是错误体
+const w = {
+  setTimeout: (f) => 1, clearTimeout(){},
+  URL: { createObjectURL: () => "blob:x", revokeObjectURL(){} },
+  fetch: async () => ({ ok: false, status: 404, blob: async () => BAD }),
+  WSImg: { get: async () => cache.key, put: async () => true, has: async () => false },
+  WSChat: { sysNote: (t) => notes.push(t) },
+  WSGen: { img: (f) => "/api/gen/img?f=" + f + "&fit=1m",
+           imgKey: (f) => "/api/gen/img?f=" + f + "&fit=1m" }
+};
+const doc = { createElement: () => ({ click() { links.push(this.href); }, remove(){}, }),
+  body: { appendChild(){} } };
+const context = vm.createContext({window:w, document:doc, console, Promise, Map,
+  Date, TextEncoder, Uint8Array, Array, JSON});
+vm.runInContext(fs.readFileSync(root+"/js/shot.js","utf8"),context);
+(async () => {
+  assert.equal(await w.WSShot.usable(BAD), false, "48B JSON 不是图");
+  assert.equal(await w.WSShot.usable(WEBP), true, "WebP 文件头要认出来");
+
+  const card = { file: "a.webp" };                // 缓存坏 + 网络 404
+  w.WSShot.download(card, null);
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  assert.equal(links.length, 0, "取不到真图就不许存盘（更不能退回 <a download>）");
+  assert.ok(notes.length, "失败要说一句，不能静默");
+
+  cache.key = WEBP;                               // 缓存里是真图
+  w.WSShot.download(card, null);
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  assert.ok(links.length >= 1, "命中真图才存");
+})().catch(e=>{console.error(e);process.exitCode=1;});
+'''
+        result = subprocess.run(
+            [shutil.which("node"), "-e", script, WS],
+            capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_missing_job_is_not_declared_dead_at_once(self):
+        """状态接口里查不到这张时先给宽容期，别一刷新就说「服务重启过，没了」。
+
+        2026-11-25 两台设备同时开着时，另一台刷新后立刻看到「这条断了 /
+        服务重启过」。服务重启后 /api/gen/status 本来就是空的，而图可能还
+        在队列里。
+        """
+        flow = _read("js/gen_flow.js")
+        self.assertIn("GHOST_MS", flow)
+        self.assertIn("graceUntil", flow)
+        self.assertIn('"准备中，等显卡空出来"', flow)
+        archive = _read("js/archive.js")
+        # 状态接口告假时不许把卡接回轮询（第一步就是判「任务不在列表里」）
+        self.assertIn("a.card.since = 0;", archive)
+
     def test_redraw_accepts_only_one_click(self):
         script = r'''
 const assert = require("node:assert/strict");

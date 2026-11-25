@@ -21,6 +21,10 @@
      判超时不是「报错完事」：卡片上给一个「重试」，用户点了就按同一份提示词
      重排一张。 */
   var SETTLE_MS = 8 * 60 * 1000;
+  /* /api/gen/status 里查不到这张时的宽容期（2026-11-25：两台设备同时开着时，
+     另一台一刷新就判「服务重启过，这张没了」）。服务重启后状态接口先空、
+     账本后接回来，这段时间里它是真的还在排。 */
+  var GHOST_MS = 15 * 1000;
   var PAINT_MS = 25 * 60 * 1000;
 
   /* 由 chat.js 注入的回调（都是必需的，少一个这里就该报错而不是静默死循环） */
@@ -275,12 +279,23 @@
         var card = S0.pending[id];
         var job = byId[id];
         // 任务不在列表里 = 进程重启过，这张再也回不来，别让它一直转。
-        // （服务端也会把「线程没了」的收成 error，这里只是兜住更早的那一下）
+        // 但状态接口刚恢复的第一次不能这么说：进程重启后 /api/gen/status
+        // 本来就是空的，而那张图可能还躺在队列里（服务端重启会从账本里
+        // 把它接回来）。先给它一个宽容期，过了还没出现才判死。
         if (!job) {
+          if (!card.graceUntil) card.graceUntil = Date.now() + GHOST_MS;
+          if (Date.now() < card.graceUntil) {
+            card.note.hidden = false;
+            card.note.className = "note";
+            card.note.textContent = "准备中，等显卡空出来";
+            card.noted = "准备中，等显卡空出来";
+            return;
+          }
           delete S0.pending[id];
           H.fail(card, "服务重启过，这张没了，点重试再排一次", true);
           return;
         }
+        card.graceUntil = 0;
         if (job.state === "done") {
           delete S0.pending[id];
           disarmStop(card);
