@@ -61,6 +61,28 @@ _PROMPT_MAX = 10000              # 提示词长度上限（2026-11-13 用户要 
                                  # 有人会把整套 tag 串/分镜脚本直接贴进来，
                                  # 400 字连一段 danbooru 串都放不下）
 
+# ── 「连续多图」批量（2026-11-25 用户拍板）──────────────────────────
+#
+# 两种玩法，共用同一个批量接口：
+#   - `same`（一图多风）：**一张参考图 + 一份需求 + 最多 5 个渠道**，参考图只
+#     反推一次拿英文 tags，5 个渠道共用（反推是整条链里最贵的一步，一张反推
+#     一次等于白烧 4 次）。
+#   - `each`（五图各画）：**最多 5 张图，每张自己选渠道**，没有提示词框——
+#     走的就是「上传图 → 识图反推 → 出图」，需求为空。
+#
+# 三条硬约束（都是用户原话）：
+#   1. **同一批里不允两个格子选同一个渠道**（「不允许选同一个渠道」）——
+#      选重了整单拒，不是默默去重（去重会让人以为 5 张都在跑）。
+#   2. **高峰禁止批量**（10–12 / 22–24）：高峰每会话只让挂 1 张，一批 5 张
+#      会把整条队列堵死 5 分钟，其它人一张都排不进。
+#   3. **回执合并成一条**，且在**最后一张也入队之后**才发——每张发一条就是
+#      刷屏；发早了会让人以为「后面几张也画好了」。
+_BATCH_MAX = 5                   # 一批最多几张（UI 也是 5 格）
+_PROMPT_MAX_BATCH = 20000        # 批量模式的提示词上限（用户：「我最长是允许
+                                 # 2 万字的」）。单张那条 1 万的限制不动。
+_IMAGE_MAX = 6 << 20             # 单张缩略图 data URL 上限（与单张一致）
+_BATCH_MAX_BYTES = 40 << 20      # 整单请求体上限：5 张缩略图 + 2 万字提示词
+
 # 封面缩略图浏览器缓存时长（秒）。封面很少变，immutable + 长 max-age 让浏览器
 # 刷新不重下；改名覆盖时文件 mtime 变 → ETag 变 → 自动重新拉，不会吃旧图。
 COVER_MAX_AGE = 86400            # 1 天
@@ -77,15 +99,36 @@ def _cached_json(payload, max_age=RUNBENCH_LIST_MAX_AGE):
     resp.headers["Cache-Control"] = "private, max-age=%d" % int(max_age)
     return resp
 
-# 进程内任务表：tag -> {token, kind, name, prompt, state, error, ts}
+# 进程内任务表：tag -> {token, kind, name, prompt, state, error, ts, batch}
 # kind = "channel"（官方渠道）| "preset"（我的预设）
+# batch 非空 = 这一格属于某个「连续多图」批次，值是批次号。计数时**同一批次
+# 只算 1**（见 `_inflight` / `_token_inflight` 的 `_weigh`），否则一个人开一批
+# 就把全局 4 个名额全占了。
 _JOBS = {}
 _JOBS_LOCK = threading.Lock()
 _IP_SUBMITS = {}                 # ip -> [timestamps]（每小时滑窗）
 _IP_LOCK = threading.Lock()
+_BATCHES = {}                    # 批次号 -> {state, total, queued, fail, ts}
+_BATCH_LOCK = threading.Lock()
 
 
-# ─── 小工具 ──────────────────────────────────────────────
+def _weigh(rows):
+    """把任务行折算成「占几个名额」：普通任务 1 个，同一批次整体按 1 个算。
+
+    用户拍板：「一次占 5 个名额，其实就对」是指**占队列名额**（ComfyUI 那边
+    该排 5 张就排 5 张）；而网页端的在途限制是**防一个人把入口堵死**的，一组
+    五连是用户一次有意的点击，按 5 个单位算会直接把人挡在门外。
+    """
+    total = 0
+    batches = set()
+    for r in rows:
+        b = r.get("batch")
+        if b:
+            batches.add(b)
+        else:
+            total += 1
+    return total + len(batches)
+
 
 def _check_token():
     """从请求里取令牌并验签。→ (k, (target, target_id)) 成功；(None, resp) 失败。"""
@@ -100,25 +143,33 @@ def _check_token():
 
 def _inflight():
     with _JOBS_LOCK:
-        return sum(1 for r in _JOBS.values()
-                   if r.get("state") in ("queued", "running"))
+        rows = [r for r in _JOBS.values()
+                if r.get("state") in ("queued", "running")]
+    return _weigh(rows)
 
 
 def _token_inflight(k):
     with _JOBS_LOCK:
-        return sum(1 for r in _JOBS.values()
+        rows = [r for r in _JOBS.values()
+                if r.get("token") == k
+                and r.get("state") in ("queued", "running")
+                and not r.get("batch")]     # 批量整组算一个单位，在下面单独判
+        batches = {r.get("batch") for r in _JOBS.values()
                    if r.get("token") == k
-                   and r.get("state") in ("queued", "running"))
+                   and r.get("state") in ("queued", "running")
+                   and r.get("batch")}
+    return len(rows) + len(batches)
 
 
-def _ip_ok(ip):
+def _ip_ok(ip, cost=1):
+    """记一次提交并判额度。cost = 这一单算几张（批量按真实张数算）。"""
     now = time.time()
     with _IP_LOCK:
         hits = [t for t in _IP_SUBMITS.get(ip, []) if now - t < 3600]
-        if len(hits) >= _SUBMIT_PER_IP_HOUR:
+        if len(hits) + cost > _SUBMIT_PER_IP_HOUR:
             _IP_SUBMITS[ip] = hits
             return False
-        hits.append(now)
+        hits.extend([now] * max(1, int(cost)))
         _IP_SUBMITS[ip] = hits
         if len(_IP_SUBMITS) > 5000:
             for key in [k for k, v in _IP_SUBMITS.items()
@@ -249,6 +300,176 @@ def api_gen():
     return jsonify({"ok": True, "tag": tag, "kind": kind, "name": name})
 
 
+def _batch_peak_blocked():
+    """高峰档禁止批量。返回 (是否拦下, 给的提示话术)。
+
+    判据现读 `image_jobs.PEAK_WINDOWS`（真实事实源），不另抄一份时段表——
+    以后调时段只改那一处，这里跟着变。
+    """
+    from datetime import datetime as _dt
+    from app.features.image import jobs as image_jobs
+    hour = _dt.now().hour
+    for start, end, label, window in image_jobs.PEAK_WINDOWS:
+        if start <= hour < end:
+            return True, ("%s（%s）排队最挤，一次只能跑一张。"
+                          "过了这段时间再来批量。" % (label, window))
+    return False, ""
+
+
+def _parse_batch(body):
+    """校验整单。→ (rows, err_msg, http_code)。
+
+    rows 每项 {image, prompt, skill}。**整单先验完再动手**：半路才拒的话，
+    前面几张已经入队了，用户看到的是「报了错，图却跑出来了」。
+    """
+    mode = str(body.get("mode") or "").strip()
+    if mode not in ("same", "each"):
+        return None, "出图方式不对", 400
+    items = body.get("items")
+    if not isinstance(items, list) or not items:
+        return None, "没有要跑的图", 400
+    prompt = str(body.get("prompt") or "").strip()
+    if len(prompt) > _PROMPT_MAX_BATCH:
+        return None, ("提示词太长（%d 字，最多 %d）"
+                      % (len(prompt), _PROMPT_MAX_BATCH)), 400
+    if mode == "same" and not prompt:
+        return None, "写一句想画的内容再开跑", 400
+
+    known = {c["id"] for c in _channel_rows()}
+    rows, seen = [], set()
+    for i, it in enumerate(items[: _BATCH_MAX + 1], 1):
+        it = it if isinstance(it, dict) else {}
+        skill = str(it.get("skill") or "").strip()
+        image = str(it.get("image") or "").strip()
+        # 五图各画里「没传图的格子」= 用户还没填，**跳过**而不是报错（传几张
+        # 就跑几张）。渠道没选也算没填——这一格里反正什么都没有可画。
+        if mode == "each" and not image:
+            continue
+        if not skill:
+            return None, "第 %d 格没选渠道" % i, 400
+        if skill not in known:
+            return None, "没有「%s」这个渠道" % skill, 404
+        # 重复渠道**只在一图多风里禁**（2026-11-25 用户拍板，两种模式两套规则）：
+        # 一图多风的卖点是「同一张图看不同渠道的差异」，5 个格子撞同一个渠道等于
+        # 白跑；五图各画是 5 张不同的图，用同一个渠道才是常态（「全部同第一款」
+        # 按钮干的就是这事），这里必须放行。
+        # 拒就**整单拒，不偷偷去重**——去重后用户以为 5 张都在跑，实际只跑 3 张，
+        # 还查不出为什么。
+        if mode == "same":
+            if skill in seen:
+                return None, ("「%s」选了两遍。一图多风每个格子要用不同渠道，"
+                              "想看同一渠道的多张请用「五图各画」" % skill), 400
+            seen.add(skill)
+        if image:
+            if not image.startswith("data:image/"):
+                return None, "第 %d 格的图片格式不对，重新传" % i, 400
+            if len(image) > _IMAGE_MAX:
+                return None, "第 %d 格的图片太大了" % i, 400
+        if not image and not prompt:
+            return None, "第 %d 格没有图，也没有写需求" % i, 400
+        rows.append({"image": image, "prompt": prompt, "skill": skill})
+
+    if len(rows) > _BATCH_MAX:
+        return None, "一次最多跑 %d 张" % _BATCH_MAX, 400
+    if mode == "same":
+        # 一图多风：一张参考图，多个渠道共用。有几个渠道就出几张。
+        # 参考图**只发一份**（前端挂在第一项上，省请求体积），所以这里取
+        # 「第一个带了图的项」，而不是死盯 rows[0]——第一格没选渠道时，图会在
+        # 别的位置上。
+        img = ""
+        for r in rows:
+            if r["image"]:
+                img = r["image"]
+                break
+        if not img:
+            return None, "先传一张参考图", 400
+        rows = [{"image": img, "prompt": prompt, "skill": r["skill"]}
+                for r in rows]
+    else:
+        # 五图各画：一格一张图，**不要求每格都传**（传几张跑几张），但每张
+        # 都得有图——这个模式下没有别的信息可画。
+        rows = [r for r in rows if r["image"]]
+        if not rows:
+            return None, "先上传图片", 400
+    if not rows:
+        return None, "没有要跑的图", 400
+    return (mode, rows), "", 0
+
+
+@bp.route("/api/runbench/gen-many", methods=["POST"])
+def api_gen_many():
+    """「连续多图」批量下单：**一个接口收整单**，服务端串行逐张入队。
+
+    用户拍板（不要前端 for 循环发 5 次）：「一个接口收整单、服务端批量排队」。
+
+    流程：验令牌 → 整单校验（渠道/图片/重复渠道）→ 配额 → 起一个后台线程 →
+    线程里**串行**逐张识图、**识完一张立刻入队一张**（不等后面几张）→ 全部
+    入队后**发一条合并回执**（每张发一条会刷屏）。
+
+    返回里带批次号，前端轮询 `/api/runbench/batch` 看进度打绿勾。绿勾是**进度
+    提示、不是准入门槛**：本接口一返回，前端就可以退出页面，剩下的都在服务端跑。
+    """
+    k, parsed = _check_token()
+    if k is None:
+        return parsed
+    target, target_id = parsed
+    body = request.get_json(silent=True) or {}
+
+    parsed_batch, err, code = _parse_batch(body)
+    if err:
+        return jsonify({"ok": False, "error": err}), code
+    mode, rows = parsed_batch
+
+    blocked, why = _batch_peak_blocked()
+    if blocked:
+        return jsonify({"ok": False, "error": why}), 429
+
+    # 配额：按**真实张数**记账（这一单就是 5 张，不该只算 1 次）；而在途名额
+    # 按「一整组」算（见 `_weigh`）——一个人开一批不该把全局 4 个名额吃光。
+    ip = (request.headers.get("CF-Connecting-IP")
+          or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+          or request.remote_addr or "?")
+    if not _ip_ok(ip, cost=len(rows)):
+        return jsonify({"ok": False, "error": "这一小时发太多次了，歇会儿"}), 429
+    if _token_inflight(k) >= _PER_TOKEN_INFLIGHT:
+        return jsonify({"ok": False,
+                        "error": "你还有一批在跑，等它跑完再开下一批"}), 429
+    if _inflight() >= _ALL_INFLIGHT:
+        return jsonify({"ok": False, "error": "前面排队的人有点多，稍等再试"}), 429
+
+    bid = "B-" + time.strftime("%Y%m%d-%H%M%S") + "-" + os.urandom(2).hex()
+    with _BATCH_LOCK:
+        _BATCHES[bid] = {"token": k, "state": "queued", "total": len(rows),
+                         "queued": 0, "error": "", "ts": time.time(),
+                         "mode": mode, "tags": []}
+    threading.Thread(target=_run_batch,
+                     args=(bid, k, parsed, mode, rows),
+                     daemon=True).start()
+    return jsonify({"ok": True, "bid": bid, "count": len(rows), "mode": mode})
+
+
+@bp.route("/api/runbench/batch", methods=["GET"])
+def api_batch_status():
+    """前端轮询批量进度。`queued` = 已入队的张数（前端据此逐格打绿勾）。
+
+    只报「推进了几张 / 有没有失败」，不报每张排到第几位——那个数一直在动，
+    报出来只会让人反复刷新。
+    """
+    k, parsed = _check_token()
+    if k is None:
+        return parsed
+    bid = (request.args.get("bid") or "").strip()
+    with _BATCH_LOCK:
+        row = dict(_BATCHES.get(bid) or {})
+    if not row or row.get("token") != k:
+        return jsonify({"ok": False, "error": "找不到这一批"}), 404
+    return jsonify({"ok": True, "state": row.get("state"),
+                    "total": row.get("total", 0),
+                    "queued": row.get("queued", 0),
+                    "error": row.get("error") or "",
+                    "tags": row.get("tags") or []})
+
+
 @bp.route("/api/runbench/status", methods=["GET"])
 def api_status():
     """网页轮询出图状态（提交是否成功 / 出错）。"""
@@ -325,6 +546,158 @@ def _run(tag, k, parsed, kind, name, prompt, image=""):
             pass
 
 
+def _batch_add_job(bid, tag, k, item):
+    """把批量里的一张登记进 `_JOBS`（带上批次号，计数时整组算一个）。"""
+    with _JOBS_LOCK:
+        _JOBS[tag] = {"token": k, "kind": "channel", "name": item["skill"],
+                      "prompt": item["prompt"], "image": item["image"],
+                      "state": "queued", "error": "", "ts": time.time(),
+                      "batch": bid}
+
+
+def _batch_advance(bid, tag="", err=""):
+    """记一张入队成功（打绿勾）或记一条失败原因。"""
+    with _BATCH_LOCK:
+        row = _BATCHES.get(bid)
+        if not row:
+            return
+        if tag:
+            row.setdefault("tags", []).append(tag)
+            row["queued"] = len(row["tags"])
+        if err:
+            fails = row.setdefault("fails", [])
+            fails.append(err)
+
+
+def _run_batch(bid, k, parsed, mode, rows):
+    """串行逐张识图 → 识完一张**立刻**入队一张 → 全部入队后发**一条**回执。
+
+    为什么串行、且不能并发识图：识图走的是同一个上游模型，并发 5 路除了把
+    配额一下打满没有别的收益；而「识完一张立刻入队」是用户明确要的——第一张
+    早排队一分钟，就早出一分钟。
+
+    为什么批量期间要把单张回执吞掉：`_generate_image` 每入队一张就会直发一条
+    回执（「任务已提交，前面还有 N 张」），5 张就是 5 条，用户原话「不要每张
+    都发，不然会刷屏」。这里在进程内把直发通道临时调成「只存不发」，本批结束
+    再恢复，最后自己拼一条合并回执发出去。**只影响本批**：别的会话、别的单张
+    提交照旧直发（锁只在这一个线程的识别窗口内持有，见下面的 try/finally）。
+    """
+    target, target_id = parsed
+    sent, fails = 0, []
+    swallow = _SwallowReceipts()
+    try:
+        tags = ""
+        if mode == "same" and rows[0]["image"]:
+            # 一图多风：参考图**只反推一次**，下游 5 个渠道共用这段英文 tags。
+            tags = _recall_once(rows[0]["image"])
+        qq_api.bind_context(
+            "%s_%s" % (target, target_id), target, target_id,
+            user_text=rows[0]["prompt"])
+        with swallow:
+            for item in rows:
+                text = ""
+                try:
+                    per_tags = tags
+                    if mode == "each":
+                        per_tags = _recall_once(item["image"])
+                    text = _run_channel(item["prompt"], item["skill"],
+                                        image=item["image"], tags=per_tags)
+                except Exception as e:      # 单张炸了不掐整批
+                    log.warning("跑图台批量 %s：%s 那张失败", bid, item["skill"],
+                                exc_info=True)
+                    text = "错误：" + (str(e) or e.__class__.__name__)
+                if text and text.startswith("错误"):
+                    fails.append("%s：%s" % (item["skill"], text))
+                    _batch_advance(bid, err="%s：%s" % (item["skill"], text))
+                    continue
+                tag = "RB-" + time.strftime("%Y%m%d-%H%M%S") + "-" + os.urandom(2).hex()
+                _batch_add_job(bid, tag, k, item)
+                _batch_advance(bid, tag=tag)
+                threading.Thread(target=_run, args=(
+                    tag, k, parsed, "channel", item["skill"],
+                    item["prompt"], item["image"]), daemon=True).start()
+                sent += 1
+    except Exception as e:
+        err = str(e) or e.__class__.__name__
+        log.warning("跑图台批量 %s 中断：%s", bid, err)
+        fails.append(err)
+    finally:
+        try:
+            qq_api.clear_context()
+        except Exception:
+            pass
+        with _BATCH_LOCK:
+            row = _BATCHES.get(bid)
+            if row:
+                row["state"] = "done" if sent else "error"
+                if not sent:
+                    row["error"] = "；".join(fails) or "一张都没排上"
+        _send_batch_receipt(target, target_id, rows, sent, fails, bid)
+
+
+class _SwallowReceipts(object):
+    """上下文管理器：批量期间把「回执直发」临时改成「只收集、不发送」。
+
+    实现方式是替换 `image_jobs._send_text`（回执直发的**唯一出口**，见
+    `generate_image._send_receipt`）。换来的是：不改 generate_image、不加新参数，
+    也不会让别的地方跟着变——退出时原样装回去。
+
+    `seam` = 被替换的函数本身，测试可以拿它断言「确实接管过」。
+    """
+
+    def __init__(self):
+        self.seam = None
+
+    def __enter__(self):
+        from app.features.image import jobs as image_jobs
+        self.seam = image_jobs._send_text
+        image_jobs._send_text = lambda target, target_id, text: None
+        return self
+
+    def __exit__(self, *exc):
+        from app.features.image import jobs as image_jobs
+        if self.seam is not None:
+            image_jobs._send_text = self.seam
+        return False
+
+
+def _recall_once(image):
+    """一张图反推出英文 tags；失败返回 ""（不掐整单，退回纯文生图）。"""
+    from app.features.image import direct_gen as dg
+    if not image:
+        return ""
+    try:
+        return (dg._recall_tags([image], numbered=False) or "").strip()
+    except Exception:
+        log.warning("跑图台批量：反推失败，退回纯文生图", exc_info=True)
+        return ""
+
+
+def _send_batch_receipt(target, target_id, rows, sent, fails, bid):
+    """一批跑完（全部入队）后发的**那一条**回执。
+
+    用户原话：「回执发送回执的时候要等那五个全部都推完之后一起发个回执」
+    「不要每张都发，不然会刷屏」。
+    """
+    from app.features.image import jobs as image_jobs
+    lines = []
+    if sent:
+        lines.append("这 %d 张都排上队了，画好一张发一张。" % sent)
+    if fails:
+        lines.append("%d 张没排上：" % len(fails))
+        lines.extend("· " + f for f in fails[:5])
+    if sent:
+        names = "、".join(r["skill"] for r in rows)
+        lines.append("渠道：%s" % names)
+    if not sent and not fails:
+        lines.append("这批一张都没跑成，回跑图台再点一次。")
+    body = "\n".join(lines)
+    try:
+        image_jobs._send_text(target, target_id, body)
+    except Exception:
+        log.warning("跑图台批量回执没发出去 %s", bid, exc_info=True)
+
+
 def _run_preset(prompt, preset):
     """预设出图：复用 generate_image 的 _anima_random 分支读 recipe。"""
     from app.tools.normal import generate_image
@@ -333,7 +706,7 @@ def _run_preset(prompt, preset):
     return str(result or "").strip()
 
 
-def _run_channel(prompt, skill, image=""):
+def _run_channel(prompt, skill, image="", tags=None):
     """官方渠道出图：走 direct_gen 的「中文需求 → prompt → 入队」闭环。
 
     和 QQ 里发「渠道名 + 需求」完全等价：`_translate` 用 LLM 把中文需求转成
@@ -342,25 +715,33 @@ def _run_channel(prompt, skill, image=""):
 
     image 非空（用户上传了图）= 先 `_recall_tags` 反推出英文提示词，跟用户写的
     需求拼一起再转译。这是「看图说话」，**不是图生图垫图**（用户拍板）。
+
+    tags 非 None（批量「一图多风」）= 反推**已经做过了**，直接用这段英文，
+    不再对同一个 image 再反推一遍（反推是整条链里最贵的一步，5 个渠道共用
+    一张参考图时重复反推等于白烧 4 次）。
     """
     from app.features.image import direct_gen as dg
-    if image:
+    if tags is not None:
+        # 反推结果由调用方给（批量共用一张参考图时只推一次）。
+        _tags = tags
+    elif image:
         try:
             # 反推：图 → 英文混合式提示词（标签打底 + 短语补关系）。失败不
             # 阻断——图反推不出还能靠用户写的需求文生图，别让一张读不出的图
             # 把整单掐死。
-            tags = dg._recall_tags([image], numbered=False)
+            _tags = dg._recall_tags([image], numbered=False)
         except Exception:
             log.warning("跑图台反推失败，退回纯文生图", exc_info=True)
-            tags = ""
-        # 反推出的英文提示词是「画面事实」，用户需求是「想要的效果」，两句都
-        # 交给 _translate 一起转译（引用图 + 需求 在 QQ 里也是这么合并的）。
-        text = (prompt or "")
-        if tags:
-            text = (tags + ("。" if not tags.endswith((".", "，", ",")) else "")
-                    + (("\n用户想要：" + prompt) if text else ""))
+            _tags = ""
     else:
-        text = prompt
+        _tags = ""
+    # 反推出的英文提示词是「画面事实」，用户需求是「想要的效果」，两句都交给
+    # _translate 一起转译（引用图 + 需求 在 QQ 里也是这么合并的）。
+    text = (prompt or "")
+    if _tags:
+        _tags = str(_tags).strip()
+        text = (_tags + ("。" if not _tags.endswith((".", "，", ",")) else "")
+                + (("\n用户想要：" + prompt) if text else ""))
     trans = dg._translate(text, history=[], skill=skill)
     if not trans:
         return "错误: 提示词转译没成功，再试一次。"

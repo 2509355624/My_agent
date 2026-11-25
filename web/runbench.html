@@ -124,6 +124,68 @@
     .wrap { padding: 14px 12px 30px; }
   }
 
+  /* ── 连续多图（2026-11-25 用户拍板）─────────────────────
+     两级结构：顶部 Tab「官方渠道 / 连续多图」，进多图后再一行小切换
+     「一图多风 / 五图各画」。手机端一律单列，格子靠 aspect-ratio 撑高度，
+     不用写死像素——写死在不同 DPR 上会歪。 */
+  .seg{display:flex;gap:8px;margin:0 0 14px;}
+  .seg button{flex:1;padding:10px 6px;border:1px solid var(--border);
+    background:var(--elev);color:var(--dim);border-radius:11px;font-size:13.5px;
+    font-weight:600;cursor:pointer;font-family:inherit;transition:.15s;
+    white-space:nowrap;}
+  .seg button.on{border-color:var(--accent);color:var(--text);
+    background:rgba(255,107,169,.12);}
+
+  .bhelp{font-size:12.5px;color:var(--dim);line-height:1.7;margin:0 0 12px;}
+  .bhelp b{color:var(--text);}
+
+  /* 五个格子：桌面两列（第一个跨两列当参考图），手机单列 */
+  .slots{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;
+    margin-bottom:14px;}
+  .slots .slot.full{grid-column:1 / -1;}
+  @media(max-width:640px){ .slots{grid-template-columns:1fr;} }
+
+  .slot{position:relative;border:1px solid var(--border);border-radius:13px;
+    background:var(--elev);overflow:hidden;display:flex;flex-direction:column;}
+  .slot .pic{position:relative;width:100%;aspect-ratio:4/3;background:var(--input);
+    display:flex;align-items:center;justify-content:center;cursor:pointer;
+    overflow:hidden;}
+  .slot.full .pic{aspect-ratio:16/10;}
+  .slot .pic img{width:100%;height:100%;object-fit:cover;display:block;}
+  .slot .pic .hint{text-align:center;color:var(--mute);font-size:12.5px;
+    line-height:1.6;padding:8px;}
+  .slot .pic .hint b{display:block;font-size:22px;color:var(--dim);
+    font-weight:400;margin-bottom:2px;}
+  .slot .no{position:absolute;top:8px;left:8px;width:22px;height:22px;
+    border-radius:50%;background:#000a;color:#fff;font-size:12px;
+    display:flex;align-items:center;justify-content:center;font-weight:700;}
+  /* 右上角小叉：只有传了图才出现，点它才删（用户明确：点小叉才删） */
+  .slot .x{position:absolute;top:6px;right:6px;width:26px;height:26px;
+    border-radius:50%;border:0;background:#000a;color:#fff;font-size:15px;
+    line-height:1;cursor:pointer;display:none;align-items:center;
+    justify-content:center;font-family:inherit;}
+  .slot.has .x{display:flex;}
+  .slot .x:active{background:var(--error);}
+  /* 绿勾：进度提示，不是准入门槛 */
+  .slot .ok{position:absolute;inset:0;background:rgba(74,222,128,.16);
+    display:none;align-items:center;justify-content:center;font-size:34px;
+    color:var(--success);pointer-events:none;}
+  .slot.done .ok{display:flex;}
+  .slot .sel{padding:8px 9px;border-top:1px solid var(--border);}
+  .slot .sel select{width:100%;background:var(--input);border:1px solid var(--border);
+    border-radius:9px;color:var(--text);padding:9px 8px;font-size:13px;
+    font-family:inherit;outline:none;appearance:none;
+    -webkit-appearance:none;}
+  .slot .sel select:focus{border-color:var(--accent);}
+  .slot .sel select:disabled{opacity:.5;}
+
+  .brow{display:flex;gap:10px;margin-bottom:12px;}
+  .brow .btn{padding:12px;font-size:14px;}
+  .bbar{display:flex;gap:10px;}
+  .bstatus{margin-top:12px;text-align:center;font-size:14px;color:var(--dim);
+    min-height:22px;line-height:1.7;}
+  .bstatus.ok{color:var(--success);} .bstatus.err{color:var(--error);}
+
 </style>
 </head>
 <body>
@@ -135,13 +197,53 @@
   </header>
   <p class="sub">点卡片，写一句需求，出图发回 QQ。</p>
 
+  <!-- 顶部只有两个选项（2026-11-25 用户拍板：把「我的预设」整个删掉，
+       「之前随心配其实没人用……自定义预设根本没人存」） -->
   <div class="tabs">
     <button class="tab on" data-tab="channel">官方渠道 <span class="cnt" id="cntChannel"></span></button>
-    <button class="tab" data-tab="preset">我的预设 <span class="cnt" id="cntPreset"></span></button>
+    <button class="tab" data-tab="batch">连续多图</button>
   </div>
 
   <div class="grid" id="channelGrid"></div>
+
+  <!-- 我的预设：入口已下线，整块注释（对应的渲染与 Tab 判定也一并注释）。
+       代码留着，要恢复就把这里和 app/features/bench/web.py 里预设那条判定
+       一起放开。 -->
+  <!--
   <div class="grid hidden" id="presetGrid"></div>
+  -->
+
+  <!-- ── 连续多图面板 ───────────────────────────────── -->
+  <div class="hidden" id="batchPanel">
+    <div class="seg" id="modeSeg">
+      <button class="on" data-mode="same">一图多风</button>
+      <button data-mode="each">五图各画</button>
+    </div>
+    <p class="bhelp" id="bHelp"></p>
+
+    <div class="slots" id="slots"></div>
+
+    <!-- 一图多风才有需求框；五图各画没有（用户：「五图各画不需要有这个
+         提示词框的，本质上就是上传图片去跑，相当于走识图反推」） -->
+    <div id="promptWrap">
+      <div class="pbar"><button type="button" id="btnPasteB">粘贴</button></div>
+      <textarea id="bPrompt" placeholder="写一句你想画的内容，几个渠道画同一个需求…"
+        style="width:100%;min-height:88px;resize:vertical;background:var(--input);
+        border:1px solid var(--border);border-radius:11px;color:var(--text);
+        padding:12px;font-size:15px;font-family:inherit;line-height:1.6;outline:none;"></textarea>
+    </div>
+
+    <div class="brow">
+      <button class="btn ghost" id="btnSame" style="flex:0 0 auto;padding:12px 14px;">
+        全部同第一款
+      </button>
+    </div>
+
+    <div class="bbar">
+      <button class="btn" id="btnBatchGo">一键开跑</button>
+    </div>
+    <div class="bstatus" id="bStatus"></div>
+  </div>
 
   <div class="status" id="status"></div>
 </div>
@@ -166,6 +268,7 @@
   </div>
 </div>
 <input type="file" id="upFile" accept="image/*" style="display:none">
+<input type="file" id="bFile" accept="image/*" style="display:none">
 
 <script>
 (function(){
@@ -174,6 +277,7 @@
   var curTab = "channel";
   var curPick = null;    // {kind, name, label}
   var curImage = "";     // 上传图的 data URL（缩略图，已压缩）
+  var allChannels = [];  // /api/runbench/check 回来的渠道列表（批量格子用）
   var busy = false;
 
   var $ = function(id){ return document.getElementById(id); };
@@ -225,6 +329,9 @@
     });
   }
 
+  // 我的预设（已下线，2026-11-25）：整块注释。渲染逻辑留着是为了将来要恢复
+  // 时不用重写——它依赖的 j.presets 后端还在返回。
+  /*
   function renderPresets(list){
     var g = $("presetGrid"); g.innerHTML = "";
     if(!list || !list.length){
@@ -247,6 +354,7 @@
       g.appendChild(el);
     });
   }
+  */
 
   // ── Tab 切换 ──────────────────────────────
   document.querySelectorAll(".tab").forEach(function(b){
@@ -255,9 +363,157 @@
       b.classList.add("on");
       curTab = b.getAttribute("data-tab");
       $("channelGrid").classList.toggle("hidden", curTab !== "channel");
-      $("presetGrid").classList.toggle("hidden", curTab !== "preset");
+      // 我的预设那格已注释掉，这里不再 toggle presetGrid。
+      $("batchPanel").classList.toggle("hidden", curTab !== "batch");
+      if(curTab === "batch") buildSlots();
     });
   });
+
+  // ─── 连续多图 ────────────────────────────────
+  // 两个玩法：
+  //   same（一图多风）：一张参考图 + 一份需求 + 最多 5 个渠道，参考图只反推一次
+  //   each（五图各画）：最多 5 张图，每张自己选渠道，没有提示词框
+  // 渠道选择存 localStorage（用户要求），键里带令牌前缀——换个令牌（换个会话）
+  // 就是另一套选择，不会把 A 会话的偏好带进 B 会话。
+  var bMode = "same";
+  var bSlots = [];       // [{img:"", skill:"", done:false}]
+  var bBusy = false;
+  var bBid = "";
+  var bTimer = null;
+  var LSKEY = "runbench.batch.v1:" + (K ? K.slice(-12) : "anon");
+
+  function loadPref(){
+    try{ var o = JSON.parse(localStorage.getItem(LSKEY) || "{}"); return (o && typeof o === "object") ? o : {}; }
+    catch(_){ return {}; }
+  }
+  function savePref(){
+    try{
+      localStorage.setItem(LSKEY, JSON.stringify({
+        mode: bMode,
+        skills: bSlots.map(function(s){ return s.skill || ""; })
+      }));
+    }catch(_){ /* 隐私模式下 localStorage 会抛，忽略即可 */ }
+  }
+
+  function chanOptions(cur){
+    var opts = ['<option value="">选渠道</option>'];
+    (allChannels || []).forEach(function(c){
+      opts.push('<option value="'+esc(c.id)+'"'+(c.id===cur?' selected':'')+'>'
+        + esc(c.label) + '</option>');
+    });
+    return opts.join("");
+  }
+
+  // 某个渠道已经被别的格子占着了吗。
+  // 只有「一图多风」才禁重复（同一张图跑不同渠道才有意义）；「五图各画」是
+  // 5 张不同的图，同一个渠道随便用，所以那边一律返回 false，不置灰、不拦。
+  function usedBy(skill, idx){
+    if(bMode !== "same") return false;
+    for(var i=0;i<bSlots.length;i++){
+      if(i!==idx && bSlots[i].skill === skill) return true;
+    }
+    return false;
+  }
+
+  function slotCount(){ return 5; }
+
+  function buildSlots(){
+    var pref = loadPref();
+    if(!bSlots.length){
+      for(var i=0;i<slotCount();i++){
+        bSlots.push({ img:"", skill:"", done:false });
+      }
+      // 一图多风的第一个格子默认 silver（用户要求），其余留空
+      if(bMode === "same") bSlots[0].skill = "silver";
+      // 五图各画：格子各自的渠道从 localStorage 恢复
+      var saved = pref.skills || [];
+      if(bMode === "each"){
+        for(var j=0;j<bSlots.length;j++){
+          if(saved[j]) bSlots[j].skill = saved[j];
+        }
+      }
+    }
+    renderSlots();
+  }
+
+  function renderSlots(){
+    var host = $("slots");
+    // 一图多风只有一个参考图位置：把图片格收敛成一个，其余格子只留渠道。
+    var showPic = (bMode === "each");
+    host.innerHTML = "";
+    bSlots.forEach(function(s, i){
+      var el = document.createElement("div");
+      el.className = "slot" + (showPic ? "" : " full") + (s.img ? " has" : "")
+                   + (s.done ? " done" : "");
+      var pic = "";
+      if(showPic || i === 0){
+        pic = '<div class="pic" data-i="'+i+'">'
+          + '<span class="no">'+(i+1)+'</span>'
+          + (s.img ? '<img src="'+s.img+'" alt="">'
+                   : '<div class="hint"><b>＋</b>点这里传图</div>')
+          + '<button class="x" data-x="'+i+'" title="删掉这张">✕</button>'
+          + '<div class="ok">✓</div>'
+          + '</div>';
+      }
+      // 一图多风里第一格（参考图）的渠道也单独选
+      el.innerHTML = pic
+        + '<div class="sel"><select data-s="'+i+'">'+chanOptions(s.skill)+'</select></div>';
+      host.appendChild(el);
+    });
+    // 选过的渠道在别处置灰（选了也不生效，不如直接禁掉）。
+    // ⚠️ 必须跳过**本格自己当前选中的那个值**：禁用一个 select 的当前选中项，
+    // 浏览器会直接把 value 清成空——用户看到的是「我刚选的渠道自己变没了」。
+    // 本格自己的值由 `bSlots[idx].skill` 决定，不靠 option 的 disabled 表达。
+    host.querySelectorAll("select").forEach(function(sel){
+      var idx = parseInt(sel.getAttribute("data-s"), 10);
+      var mine = bSlots[idx] ? bSlots[idx].skill : "";
+      sel.querySelectorAll("option").forEach(function(o){
+        if(o.value && o.value !== mine && usedBy(o.value, idx)){
+          o.disabled = true;
+        }
+      });
+    });
+  }
+
+  $("modeSeg").addEventListener("click", function(e){
+    var b = e.target.closest("button[data-mode]");
+    if(!b || bBusy) return;
+    var m = b.getAttribute("data-mode");
+    if(m === bMode) return;
+    bMode = m;
+    $("modeSeg").querySelectorAll("button").forEach(function(x){
+      x.classList.toggle("on", x.getAttribute("data-mode") === m);
+    });
+    // 切玩法时清掉「已完成」状态和多余的图（一图多风只留第一张）
+    bSlots.forEach(function(s){ s.done = false; });
+    if(m === "same"){
+      for(var i=1;i<bSlots.length;i++) bSlots[i].img = "";
+      // 一图多风不允许重复渠道。刚从「五图各画」过来时可能 5 格全是同一个
+      // 渠道（那边合法），留在这儿会让整单必然被服务端拒掉，而且置灰逻辑
+      // 会跳过「本格自己的当前值」，用户看不出哪里错了。这里直接按先到先得
+      // 留下，重复的清空，让用户重选。
+      var keep = {};
+      bSlots.forEach(function(s){
+        var v = s.skill;
+        if(!v) return;
+        if(keep[v]) s.skill = "";
+        else keep[v] = 1;
+      });
+      if(!bSlots[0].skill) bSlots[0].skill = "silver";
+    }
+    syncModeUI();
+    renderSlots();
+    savePref();
+  });
+
+  function syncModeUI(){
+    var same = bMode === "same";
+    $("promptWrap").classList.toggle("hidden", !same);
+    $("btnSame").classList.toggle("hidden", !same);
+    $("bHelp").innerHTML = same
+      ? "<b>一张参考图 + 几个渠道</b>：传一张图、写一句需求，选几个渠道就出几张，图只反推一次。每个格子不能用同一个渠道。"
+      : "<b>上传几张图就跑几张</b>：每格单独选渠道，不用写需求——直接识图反推出提示词再画。";
+  }
 
   // ── 弹框 ──────────────────────────────
   function openDlg(kind, name, label, sub){
@@ -374,15 +630,257 @@
       });
   });
 
+  // ── 批量：格子交互 ─────────────────────────
+  // 用事件委托挂在容器上：格子会被 renderSlots 整片重建，逐个绑会漏。
+  var bPickIdx = -1;
+  $("slots").addEventListener("click", function(e){
+    var x = e.target.closest("[data-x]");
+    if(x){                       // 右上角小叉：点它才删（用户明确要求）
+      e.stopPropagation();
+      var xi = parseInt(x.getAttribute("data-x"), 10);
+      bSlots[xi].img = ""; bSlots[xi].done = false;
+      renderSlots();
+      return;
+    }
+    var p = e.target.closest(".pic");
+    if(p && !bBusy){
+      bPickIdx = parseInt(p.getAttribute("data-i"), 10);
+      $("bFile").click();
+    }
+  });
+  $("slots").addEventListener("change", function(e){
+    var sel = e.target.closest("select[data-s]");
+    if(!sel) return;
+    var idx = parseInt(sel.getAttribute("data-s"), 10);
+    var v = sel.value;
+    if(v && usedBy(v, idx)){
+      // 理论上选不到（已置灰），兜底再挡一次
+      setBStatus("「" + v + "」已经被别的格子用过了，换一个", true);
+      renderSlots();
+      return;
+    }
+    bSlots[idx].skill = v;
+    savePref();
+    renderSlots();      // 重画一遍：把新占用的渠道在别处置灰
+  });
+
+  // 传图：压成缩略图（长边 960），原图不出本机
+  var bImgCache = [];   // 复用一个 Image 对象，避免连传 5 张时堆积
+  $("bFile").addEventListener("change", function(){
+    var f = this.files && this.files[0];
+    this.value = "";
+    if(!f || bPickIdx < 0) return;
+    var idx = bPickIdx;
+    var img = new Image();
+    var url = URL.createObjectURL(f);
+    img.onload = function(){
+      var w = img.naturalWidth, h = img.naturalHeight;
+      var scale = Math.min(1, UP_LONG / Math.max(w, h));
+      var nw = Math.max(1, Math.round(w * scale));
+      var nh = Math.max(1, Math.round(h * scale));
+      var cv = document.createElement("canvas");
+      cv.width = nw; cv.height = nh;
+      cv.getContext("2d").drawImage(img, 0, 0, nw, nh);
+      URL.revokeObjectURL(url);
+      bSlots[idx].img = cv.toDataURL("image/jpeg", 0.85);
+      bSlots[idx].done = false;
+      renderSlots();
+      setBStatus("");
+    };
+    img.onerror = function(){
+      URL.revokeObjectURL(url);
+      setBStatus("这张图读不出来，换一张", true);
+    };
+    img.src = url;
+  });
+
+  // 全部同第一款：把第一格选的渠道铺到其它格子。
+  // 两种模式行为不同（2026-11-25 用户拍板）：
+  //   五图各画 —— 全部铺满，重复渠道合法，这就是按钮的本意；
+  //   一图多风 —— 必须不重复，所以只在**下一个空位**填一次，铺满会造出一批
+  //               必然被服务端整单拒掉的请求。
+  $("btnSame").addEventListener("click", function(){
+    if(bBusy) return;
+    var first = bSlots[0].skill;
+    if(!first){ setBStatus("先把第一格的渠道选了", true); return; }
+    var n = 0;
+    if(bMode === "each"){
+      for(var i=1;i<bSlots.length;i++){
+        bSlots[i].skill = first;
+        n++;
+      }
+      setBStatus("已把「" + first + "」铺到全部 " + (n + 1) + " 格");
+    } else {
+      for(var j=1;j<bSlots.length;j++){
+        if(usedBy(first, j)) continue;
+        bSlots[j].skill = first;
+        n++;
+        break;               // 一图多风：同一渠道只能用一次
+      }
+      if(!n){
+        setBStatus("「" + first + "」别的格子已经用着了，一图多风每个格子得换不同的渠道", true);
+      } else {
+        setBStatus("已把第一格铺到下一个格子（一图多风同一渠道只能用一次）");
+      }
+    }
+    savePref();
+    renderSlots();
+  });
+
+  function setBStatus(msg, isErr){
+    var el = $("bStatus");
+    el.className = "bstatus" + (isErr ? " err" : "");
+    el.innerHTML = msg || "";
+  }
+
+  // 一图多风的粘贴按钮（跟单图那个同口径，手机上长按选粘贴太费劲）
+  $("btnPasteB").addEventListener("click", function(){
+    var ta = $("bPrompt");
+    function fill(t){
+      t = (t || "").replace(/^\s+|\s+$/g, "");
+      if(!t){ setBStatus("剪贴板里没有文字", true); return; }
+      ta.value = ta.value ? (ta.value.trim() + " " + t) : t;
+      setBStatus("");
+    }
+    if(navigator.clipboard && navigator.clipboard.readText){
+      navigator.clipboard.readText().then(fill).catch(function(){
+        ta.focus(); setBStatus("浏览器没给剪贴板权限，长按输入框选「粘贴」就行", true);
+      });
+    } else {
+      ta.focus(); setBStatus("这个浏览器不支持一键粘贴，长按输入框选「粘贴」就行", true);
+    }
+  });
+
+  // ── 一键开跑 ───────────────────────────────
+  // **一个接口收整单**（不让前端 for 循环发 5 次）：服务端串行识图、识完一张
+  // 立刻入队一张，全部入队后发一条合并回执。这里拿到批次号就能退出——
+  // 绿勾只是进度提示，不是「必须留在这儿」的门槛。
+  $("btnBatchGo").addEventListener("click", function(){
+    if(bBusy) return;
+    var prompt = $("bPrompt").value.trim();
+    var items = [];
+    if(bMode === "same"){
+      if(!bSlots[0].img){ setBStatus("先传一张参考图", true); return; }
+      if(!prompt){ setBStatus("写一句想画的内容", true); return; }
+      // 一图多风：参考图**只发一份**（挂在第一项上），服务端负责铺给所有渠道。
+      // 发 5 份同样的 data URL 会让请求体白白翻 5 倍，手机上更明显。
+      var ref = bSlots[0].img;
+      bSlots.forEach(function(s, i){
+        if(s.skill) items.push({ skill:s.skill, image: i === 0 ? ref : "" });
+      });
+      if(!items.length){ setBStatus("至少选一个渠道", true); return; }
+      if(!items[0].image){        // 第一格没选渠道时，把参考图挪到第一个有效项
+        items[0].image = ref;
+      }
+    } else {
+      bSlots.forEach(function(s){
+        if(s.img) items.push({ skill:s.skill, image:s.img });
+      });
+      if(!items.length){ setBStatus("先上传图片", true); return; }
+      var noSkill = items.filter(function(x){ return !x.skill; });
+      if(noSkill.length){ setBStatus("还有格子没选渠道", true); return; }
+    }
+    // 开跑前先在本地挡一遍重复渠道（服务端还会再挡一次，这里只为早报错）。
+    // 只有一图多风禁重复；五图各画本来就是「同一个渠道画 5 张」。
+    if(bMode === "same"){
+      var seen = {}, dup = "";
+      items.forEach(function(x){
+        if(seen[x.skill]) dup = x.skill;
+        seen[x.skill] = 1;
+      });
+      if(dup){
+        setBStatus("「" + dup + "」选了两遍，一图多风每个格子要换不同的渠道", true);
+        return;
+      }
+    }
+
+    bBusy = true;
+    $("btnBatchGo").disabled = true;
+    $("btnBatchGo").textContent = "提交中…";
+    bSlots.forEach(function(s){ s.done = false; });
+    renderSlots();
+
+    fetch("/api/runbench/gen-many", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({ k:K, mode:bMode, prompt:prompt, items:items })
+    })
+      .then(function(r){ return asJson(r, "提交没成功，请重试"); })
+      .then(function(j){
+        if(!j.ok) throw new Error(j.error || "提交失败");
+        bBid = j.bid;
+        setBStatus("已提交 " + j.count + " 张，正在一张张排队，<b>可以退出这个页面</b>。");
+        startBatchPoll();
+      })
+      .catch(function(e){
+        setBStatus("提交失败：" + e.message, true);
+        bBusy = false; restoreGo();
+      });
+  });
+
+  function restoreGo(){
+    $("btnBatchGo").disabled = false;
+    $("btnBatchGo").textContent = "一键开跑";
+  }
+
+  // 轮询批次进度：拿到 queued 就照着打绿勾。**这张表只用来显示进度**，
+  // 服务端该推的任务在提交那一刻就已经开始推了，关掉页面不影响。
+  function startBatchPoll(){
+    stopBatchPoll();
+    var tries = 0;
+    bTimer = setInterval(function(){
+      tries++;
+      fetch("/api/runbench/batch?k=" + encodeURIComponent(K)
+            + "&bid=" + encodeURIComponent(bBid))
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if(!j.ok) throw new Error(j.error || "查不到进度");
+          var q = j.queued || 0;
+          for(var i=0;i<bSlots.length;i++){
+            if(i < q) bSlots[i].done = true;
+          }
+          renderSlots();
+          if(j.state === "done"){
+            stopBatchPoll();
+            setBStatus("✅ " + j.total + " 张都进队列了，画好一张发一张，可以退出。");
+            bBusy = false; restoreGo();
+          } else if(j.state === "error"){
+            stopBatchPoll();
+            setBStatus("没跑成：" + (j.error || "再试一次"), true);
+            bBusy = false; restoreGo();
+          } else if(tries > 120){    // 4 分钟还没完 → 别再轮了
+            stopBatchPoll();
+            bBusy = false; restoreGo();
+          } else {
+            setBStatus("已经排上 " + q + " / " + j.total + " 张…可以退出，后台接着跑。");
+          }
+        })
+        .catch(function(){
+          if(tries > 8){ stopBatchPoll(); bBusy = false; restoreGo(); }
+        });
+    }, 2000);
+  }
+  function stopBatchPoll(){
+    if(bTimer){ clearInterval(bTimer); bTimer = null; }
+  }
+
   // ── 初始化 ──────────────────────────────
   fetch("/api/runbench/check?k=" + encodeURIComponent(K))
     .then(function(r){ return r.json(); })
     .then(function(j){
       if(!j.ok){ say(j.error || "链接无效，回 QQ 再发一次 /跑图台", "err"); return; }
+      allChannels = j.channels || [];
       renderChannels(j.channels);
-      renderPresets(j.presets);
+      // renderPresets(j.presets);   // 我的预设已下线（2026-11-25）
       $("cntChannel").textContent = (j.channels||[]).length;
-      $("cntPreset").textContent = (j.presets||[]).length;
+      // $("cntPreset").textContent = (j.presets||[]).length;
+      // 连续多图的格子依赖渠道列表，等列表回来再建
+      var pref = loadPref();
+      if(pref.mode === "each" || pref.mode === "same") bMode = pref.mode;
+      $("modeSeg").querySelectorAll("button").forEach(function(x){
+        x.classList.toggle("on", x.getAttribute("data-mode") === bMode);
+      });
+      syncModeUI();
+      if(curTab === "batch") buildSlots();
       say("");
     })
     .catch(function(){ say("连不上服务器，检查网络后刷新", "err"); });

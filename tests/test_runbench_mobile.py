@@ -28,10 +28,14 @@ class RunbenchSimpleTest(unittest.TestCase):
 
     def test_ids_are_kept(self):
         html = _html()
-        for element_id in ("cntChannel", "cntPreset", "channelGrid", "presetGrid",
+        # cntPreset / presetGrid 已随「我的预设」一起下线（2026-11-25），
+        # 不再要求存在；批量面板的 id 补进来。
+        for element_id in ("cntChannel", "channelGrid",
                             "status", "mask", "dTitle", "dSub", "upBox",
                             "upPreview", "upTxt", "upRm", "btnPaste", "dPrompt",
-                            "okBar", "dCancel", "dGo", "upFile"):
+                            "okBar", "dCancel", "dGo", "upFile",
+                            "batchPanel", "modeSeg", "slots", "bPrompt",
+                            "btnSame", "btnBatchGo", "bStatus", "bFile"):
             self.assertIn('id="%s"' % element_id, html)
 
 

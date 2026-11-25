@@ -245,11 +245,13 @@ _OUTFIT_RE = re.compile(r"^\s*[\/／]\s*换装")
 # 零 LLM 直回隧道地址；门控解锁（?from=qq）跟 /画廊 同一套（见 friend_app._gate）
 # 地同口径，正则三份要同步。
 _COMIC_STUDIO_RE = re.compile(r"^\s*[\/／]\s*漫画台")
-# 「/存预设」= 把最近一次随心配配方存成命名预设（2026-11-13）。斜杠即命令、
-# 不用 @。后面跟预设名：`/存预设 可爱画风`。
-_SAVE_PRESET_RE = re.compile(r"^\s*[\/／]\s*存预设\s*([^\s]+)")
-# 「/预设列表」= 列出所有已存的随心配预设名（2026-11-13）。斜杠即命令。
-_LIST_PRESET_RE = re.compile(r"^\s*[\/／]\s*预设列表")
+# 「/存预设」「/预设列表」**已下线**（2026-11-25 用户拍板：「入口提示注释掉，
+# 指令也一起注释掉」「就发斜杠纯预设也没有反应」）。正则一并注释，和下面入口
+# 判定那四行对应——只注释一半会留下一个没人用的正则，下次改的人还得猜它到底
+# 还生效不生效。用户：「之前随心配其实没人用……现在自定义预设其实根本就没有人
+# 存，大家伙都是在用那几个常用的」。
+# _SAVE_PRESET_RE = re.compile(r"^\s*[\/／]\s*存预设\s*([^\s]+)")
+# _LIST_PRESET_RE = re.compile(r"^\s*[\/／]\s*预设列表")
 # 「/跑图台」= 随心配预设面板网页（2026-11-13）。斜杠即命令、不用 @、
 # 零 LLM 直回带令牌的链接（与 /换装 同口径：令牌含来源会话 + 过期，免登录）。
 _RUNBENCH_RE = re.compile(r"^\s*[\/／]\s*跑图台")
@@ -3358,13 +3360,19 @@ def decide(own_text, history, voluntary, data_urls=None, at_me=True,
     # 各有各的落地页，不再三个都甩到 /workspace/。
     if _WORKBENCH_RE.match(text):
         return _workbench_text()
-    # 「/存预设」= 存最近一次随心配配方（2026-11-13）。斜杠即命令、不用 @。
-    m = _SAVE_PRESET_RE.match(text)
-    if m:
-        return _save_preset_text(m.group(1))
-    # 「/预设列表」= 列出已存预设（2026-11-13）。斜杠即命令、不用 @。
-    if _LIST_PRESET_RE.match(text):
-        return _list_preset_text()
+    # 「/存预设」「/预设列表」**已下线**（2026-11-25 用户拍板）。
+    # 用户原话：「之前随心配其实没人用……现在自定义预设其实根本就没有人存。
+    # 大家伙都是在用那几个常用的」，要求「入口提示注释掉，指令也一起注释掉，
+    # 就发斜杠纯预设也没有反应」。所以这两条判定连同提示一起注释掉——发了
+    # 不该有反应的命令，最好的回答就是当没看见（它会掉进后面的正常对话，
+    # 而不是回一句「这个功能没了」，那种回复同样是「有反应」）。
+    # 存储层（app/features/bench/api.py）和群友页的存预设按钮都还在，只是
+    # QQ 里的斜杠入口不再接。要恢复就把下面四行取消注释。
+    # m = _SAVE_PRESET_RE.match(text)
+    # if m:
+    #     return _save_preset_text(m.group(1))
+    # if _LIST_PRESET_RE.match(text):
+    #     return _list_preset_text()
     # 「/跑图台」= 随心配预设面板网页（2026-11-13）。斜杠即命令、不用 @、
     # 零 LLM 直回带令牌的链接。
     if _RUNBENCH_RE.match(text):
