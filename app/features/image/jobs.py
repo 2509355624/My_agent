@@ -1254,21 +1254,33 @@ def find_pending_duplicate(target, target_id, intent, who=""):
 
 
 def ahead_of(job):
-    """这个任务前面还有几张（含正在跑的那张）。已经开跑就返回 0。
+    """这个任务前面还有几张（含正在跑的）。已经开跑就返回 0 附近。
 
     按**出队顺序**数，不是按入队顺序：后入队的普通任务会插到先入队的 qwen
     前面，模型报给对方的「前面还有 N 张」得跟它实际要等的一致。
 
-    只数**自己那条通道**的（2026-10-03 拆通道后）：NAI 不会再排在本地图后面，
-    这里要是把两条加在一起，模型就会对一张其实立刻开画的 NAI 图说「前面还有
-    十几张」——比不报还糟。
+    2026-11-25 改成**跨进程**（方案 A，用户报「我网页端排了 5 张，QQ 那边
+    说已经在画了」）：原来的数字只数自己这条队列，别的进程排着几张完全是
+    黑的。现在 = 本进程队列里排在我前面的 + **别的进程**待跑的那几张。
+
+    为什么加起来是对的：两个进程都在抢同一把 ComfyUI 锁，谁先抢到谁先跑，
+    所以「我要等几张」就是「全机器上还压着几张」。用户原话：「我不在乎前面
+    那 3 张是网页端的还是 QQ 端的，我只需要知道一个准确的数。」
+
+    两条通道仍然分开算：NAI 走云端不抢锁，把本地那几张加进它的队首数字，
+    会让模型对一张立刻能开画的图说「前面还有十几张」，比不报还糟。
     """
     chan = _channel_of_job(job)
     with _lock:
         if job not in chan.queue:
             return 0
         order = sorted(chan.queue, key=_order)
-        return order.index(job) + len(chan.running)
+        mine = order.index(job) + len(chan.running)
+    if chan.local:
+        # 别的进程压着的张数。自己那部分已经由 `mine` 数过了，这里只取别人的
+        # （`pending_others` 会跳过本进程的计数文件），不会重复。
+        return mine + comfy_gate.pending_others()
+    return mine
 
 
 def _src_label(job):
@@ -1351,6 +1363,12 @@ def snapshot():
             "queued": comfy["queued"],
             "depth": _COMFY.depth() + _NAI.depth(),
             "nai": _view(_NAI, single=False),
+            # 跨进程待跑（2026-11-25 方案 A）：本进程队列上面的 `depth` 只有自己
+            # 那一条，别的进程（QQ 机器人 / 漫画台）压着的张数它看不见。
+            # 这两个字段是**新增**的，老字段一个没动——管理页拿不拿都行，
+            # 但排查「到底谁在排队」时它是唯一的信息来源。
+            "pending_global": comfy_gate.pending_total(),
+            "pending_by_pid": comfy_gate.pending_breakdown(),
         }
     return out
 
@@ -1458,6 +1476,13 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
         job.audit_silent = bool(resample_fn)
         chan.queue.append(job)
         chan.per_session[key] = cur + 1
+    # 跨进程待跑计数 +1（2026-11-25 方案 A，见 comfy_gate 末尾那一节）。
+    # **放在 `_lock` 外面**：这是磁盘 IO，占着队列锁做它会让出队线程白等。
+    # 只算本地通道：NAI 走云端，压根不抢 ComfyUI，把它算进去会让 QQ 端对着
+    # 一张立刻就能开画的图说「前面还有 3 张」——比不报还糟。
+    # 登记失败返回 -1，**绝不能因此拒单**：计数器只影响报数。
+    if chan.local:
+        comfy_gate.add_pending(1)
     if weight > 1:
         # 入队就记一行：模型选渠道的决策只有在这里才看得见，出问题时先查这行。
         log.info("重渠道 %s 入队（%s %s，权重 %d，前面 %d 张）",
@@ -2694,6 +2719,16 @@ def _finish(job):
     两条通道共用这一份：通道从任务自己身上取（见 _channel_of_job），所以
     `_take` 那边不用把 chan 一层层传下来。
     """
+    # 跨进程待跑计数 -1（2026-11-25 方案 A）。**放在最前面**：下面任何一条
+    # return / 抛异常之前都得走到，否则这个进程的计数只增不减，别人会永远
+    # 看到「前面还有 N 张」。
+    #
+    # 用 `job._pending_counted` 标记防重：`_finish` 在测试里会被同一个 Job 调
+    # 两次（手搓 Job、_drain 的异常路径），重复减会让别人的 ahead 变小、
+    # 报「已经在画了」——比多报一张伤人得多。
+    if _channel_of_job(job).local and not getattr(job, "_pending_counted", False):
+        job._pending_counted = True
+        comfy_gate.release_pending(1)
     # 任务到此终结（出图投递完 / 失败 / 超时都走这里）→ 从任务账本划掉。
     # 放在最前面：下面任何一条 return 之前都得先走到，否则重启后的恢复流程
     # 会去追一张已经处理完的图。唯一的窗口是「图发出去 → 走到这里」这几毫秒，
@@ -2784,6 +2819,9 @@ def _reset():
             chan.total_run = 0
             chan.last_restart_try = 0.0
         _recent.clear()
+    # 跨进程待跑计数也要归零（2026-11-25）：测试之间它落在 state 目录里不会
+    # 自己消失，留着会让下一条用例读到上一条的残留。
+    comfy_gate.release_pending(comfy_gate.pending_mine())
 
 
 # ─── ComfyUI 交互 ────────────────────────────────────

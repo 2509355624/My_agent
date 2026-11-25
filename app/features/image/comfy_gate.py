@@ -37,6 +37,20 @@
 ⚠️ **两个进程都要用上这一版才有效**：老进程不登记票，`mkdir` 一空就抢，
 无视队首——那等于给它开了后门。升级后必须把 5174 和 QQ 一起重启。
 
+## 待跑计数（2026-11-25 补，用户报「我提交 5 张，QQ 那边说已经在画了」）
+
+票是**开跑前**才登记的，所以某个进程队列里排着的 N 张一张票都没有，别人看
+不见。现在另加一套「待跑计数」（`state/comfy.pending/`）：入队即 +1、终结即
+-1，谁要报数就把所有进程的计数加起来。
+
+**两套东西各管各的，别混**：
+
+| | 排队号 `ticket` | 待跑计数 `cnt` |
+|---|---|---|
+| 管什么 | **顺序**（谁先 mkdir 谁先跑） | **数量**（前面还有几张） |
+| 何时登记 | worker 取到任务、准备开跑 | 一进队列就登记 |
+| 谁读 | `hold()` 自己 | `jobs.ahead_of()` 报数、状态页 |
+
 ## 关键取舍
 
 - **幂等/僵尸**：进程被强杀时目录不会自己消失。心跳停顿超过 `STALE` 秒即视为
@@ -52,6 +66,7 @@
   `TimeoutError`，不自杀、不改全局状态。
 """
 
+import atexit
 import json
 import logging
 import os
@@ -68,6 +83,10 @@ LOCK_NAME = "comfy.lock"
 
 # 排队号目录名（state/ 下）。文件名即顺序，谁最小谁是队首。
 QUEUE_NAME = "comfy.queue"
+
+# 待跑计数目录名（state/ 下）。每个进程一个文件，内容是「我还有几张没跑」。
+# 见文件末尾「待跑计数」那一节。
+PENDING_NAME = "comfy.pending"
 
 # 排队号被判僵尸的门槛：票的 mtime 超过这么久没被刷过 = 等的人已经死了。
 # 和锁用同一个数量级：持锁方每 HEARTBEAT(10s) 刷一次、排队方每 POLL(1s) 刷一次，
@@ -447,3 +466,249 @@ def hold(label="", timeout=DEFAULT_WAIT, priority=False):
             return gate
     finally:
         _drop_ticket(ticket)
+
+
+# ─── 待跑计数（2026-11-25，用户拍板「方案 A」）────────────────
+#
+# ## 它解决什么
+#
+# 用户的原话：「网页端 3 张在排队，QQ 端又发一张，那 QQ 就能看到前面还有 3 张
+# 在排。我不在乎前面那 3 张是网页端的还是 QQ 端的，我只需要知道一个准确的数。」
+#
+# 上面那套票（ticket）解决不了这个：票只在 worker **取到任务、准备开跑**时
+# 才登记（见 `hold`），所以某个进程队列里排着的 N 张**一张票都没有**。QQ 端
+# 这时入队，`ahead` 数出来是 0 或 1，回执说「已经在画了」，实际要等 5 分钟
+# ——2026-11-25 用户实测踩到了这个。
+#
+# ## 做法：一个计数器，不是队列
+#
+# ⚠️ 刻意**不**做成跨进程任务队列：出图调度本来就靠抢锁，谁先抢到谁跑，这对
+# 用户来说是公平的；他缺的只是「一个准确的数」。把任务搬到跨进程队列要动
+# `_Channel.queue` 的排序 / 冷却 / 每会话在途 / 连环取消一整套，得不偿失。
+#
+# 所以这里只共享一个整数：每个进程一个文件 `state/comfy.pending/<pid>-<rand>.cnt`，
+# 内容是**本进程待跑（含正在跑）的本地张数**。
+#
+# - 入队 +1、任务终结 -1（挂载点在 `jobs.enqueue` / `jobs._finish`）。
+# - 全局待跑 = 所有活着的计数文件之和。
+# - 「前面还有几张」= 本进程队列位置 + **其它**进程的计数。
+#
+# 为什么是「每进程一个文件」而不是「每张图一个文件」：一次批量 5 张只是把同一
+# 个文件重写 5 次，目录里始终只有 2~3 个文件，`sum` 一遍的成本可以忽略；也不
+# 需要为 20 个文件轮询。
+#
+# ## 进程被强杀
+#
+# 计数文件不会自己消失，所以和锁一样用 **mtime 当心跳**：`add_pending`/
+# `release_pending` 每次重写都会刷新 mtime，另有 `_beat_pending` 线程每
+# `PENDING_BEAT` 秒刷一次（**必须要有**：一个进程可能十分钟不增不减，光靠
+# 「重写时刷新」会被别家当成僵尸清掉，于是它排着的队凭空消失）。
+# 超过 `PENDING_STALE` 没刷过 = 进程已经死了，不计入，并顺手删掉。
+#
+# ## 失败一律不阻塞出图
+#
+# 计数器只影响**报数**，不影响能不能出图。目录建不出来、写不进去，一律
+# 当作「这个进程没登记」，`pending_others()` 少算它——数字偏差远好过出不了图。
+
+# 计数心跳间隔。要明显小于 PENDING_STALE，又要小到不会让别的进程误判。
+PENDING_BEAT = 20.0
+
+# 计数被判僵尸的门槛（秒）。取 3 倍心跳：一次网络抖动 / GC 停顿不至于让整条
+# 队凭空消失，而真的崩了的进程最多挡 60 秒。
+PENDING_STALE = 60.0
+
+# 本进程的计数文件路径（首次用到时定下）。多线程同时登记要加锁。
+# ⚠️ 必须是 **RLock**：add_pending / release_pending 持锁后还会调 `_write_mine`
+# → `_pending_file`，非可重入锁会自己把自己锁死。
+_pending_lock = threading.RLock()
+_pending_path = [""]            # [0] = 本进程的计数文件路径
+_pending_beat_started = [False]
+
+
+def pending_dir():
+    """待跑计数目录。不存在 = 没人登记过（也没人排队）。"""
+    return state_path(PENDING_NAME)
+
+
+def _pending_file():
+    """本进程的计数文件路径（首次调用时定下来，之后恒定）。
+
+    ⚠️ 只缓存**文件名**、每次现拼目录：`pending_dir()` 是 `state_path()` 算出来
+    的，测试会 patch 它（临时目录）。缓存整个路径的话，patch 之后还指着老目录，
+    写失败判据就测不出来了。
+    """
+    with _pending_lock:
+        if not _pending_path[0]:
+            _pending_path[0] = "%08d-%s.cnt" % (os.getpid(), uuid.uuid4().hex[:8])
+        return os.path.join(pending_dir(), _pending_path[0])
+
+
+def _live_pending_files():
+    """所有**活着**的计数文件 → [(路径, 张数)]。僵尸顺手删掉。
+
+    读不出来的（半截文件、内容坏了）按 0 算，不删——可能对方正在写。
+    """
+    d = pending_dir()
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return []
+    now = time.time()
+    out = []
+    for name in names:
+        if not name.endswith(".cnt"):
+            continue
+        fp = os.path.join(d, name)
+        try:
+            age = now - os.path.getmtime(fp)
+        except OSError:
+            continue                    # 刚好被删了，下一轮再说
+        if age > PENDING_STALE:
+            try:
+                os.remove(fp)
+                log.warning("清掉一个僵尸待跑计数 %s（心跳已停 %.0f 秒）",
+                            name, age)
+            except OSError:
+                pass
+            continue
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                n = int((f.read() or "0").strip() or 0)
+        except (OSError, ValueError):
+            n = 0
+        out.append((fp, max(0, n)))
+    return out
+
+
+def _beat_pending():
+    """后台心跳：每 PENDING_BEAT 秒把自己那个计数文件的 mtime 刷一下。
+
+    只在**已经登记过**（文件路径定下来且文件存在）时才动，从不创建——
+    没有待跑任务的进程不该在目录里留一张「0」的票。
+    """
+    while True:
+        time.sleep(PENDING_BEAT)
+        try:
+            if _pending_path[0]:            # 登记过才刷（没登记就不该出现在目录里）
+                fp = _pending_file()
+                if os.path.isfile(fp):
+                    os.utime(fp, None)
+        except OSError:
+            pass
+
+
+def _ensure_pending_beat():
+    with _pending_lock:
+        if _pending_beat_started[0]:
+            return
+        _pending_beat_started[0] = True
+        threading.Thread(target=_beat_pending, daemon=True,
+                         name="comfy-pending-heartbeat").start()
+        # 正常退出时把自己的计数摘掉（2026-11-25）：不摘的话，用户重启 5174
+        # 之后 QQ 端还会看到「前面还有 5 张」一直挂到 PENDING_STALE 过期，
+        # 明明那边已经空了。
+        #
+        # ⚠️ atexit 只在正常退出时跑。被强杀 / `os._exit` / 断电都走不到这里，
+        # 所以 `_live_pending_files` 的 mtime 僵尸判活**不能删**——那是兜底。
+        atexit.register(_drop_mine)
+
+
+def _drop_mine():
+    """删掉本进程的计数文件（正常退出时调）。"""
+    if not _pending_path[0]:
+        return
+    try:
+        os.remove(_pending_file())
+    except OSError:
+        pass
+
+
+def _read_mine():
+    """本进程当前登记的张数；没登记过 = 0。"""
+    if not _pending_path[0]:
+        return 0
+    try:
+        with open(_pending_file(), "r", encoding="utf-8") as f:
+            return max(0, int((f.read() or "0").strip() or 0))
+    except (OSError, ValueError):
+        return 0
+
+
+def _write_mine(n):
+    """把本进程的张数写成 n。n<=0 时删掉文件（不占着目录）。"""
+    fp = _pending_file()
+    if n <= 0:
+        try:
+            os.remove(fp)
+        except OSError:
+            pass
+        return True
+    try:
+        os.makedirs(pending_dir(), exist_ok=True)
+        tmp = fp + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(str(n))
+        os.replace(tmp, fp)             # 原子替换：别人永远读不到半截文件
+        _ensure_pending_beat()
+        return True
+    except OSError as e:
+        log.warning("待跑计数写入失败（%s）——本次这张不计入全局排队长", e)
+        return False
+
+
+def add_pending(n=1):
+    """本进程多排了 n 张（入队时调）。返回登记后的张数。
+
+    失败返回 -1，**调用方不许因此拒单**：计数器只影响报数。
+    """
+    with _pending_lock:
+        cur = _read_mine() + n
+        return cur if _write_mine(cur) else -1
+
+
+def release_pending(n=1):
+    """本进程少了 n 张（任务终结时调）。
+
+    必须保证「加了就一定减」：减多了（变成负数）按 0 处理，宁少不多——
+    负数会让别人的 `ahead` 变成 0，报「已经在画了」比报多一张更伤人。
+    """
+    with _pending_lock:
+        cur = max(0, _read_mine() - n)
+        _write_mine(cur)
+        return cur
+
+
+def pending_mine():
+    """本进程待跑几张（含正在跑的那张）。"""
+    return _read_mine()
+
+
+def pending_others():
+    """**别的进程**还有几张待跑。
+
+    自己那个文件不算：调用方（`jobs.ahead_of`）已经把自己队列里的位置单独
+    算进去了，加上自己就重复计数了。
+    """
+    if not _pending_path[0]:
+        return sum(n for _fp, n in _live_pending_files())   # 我还没登记，全是别人的
+    mine = os.path.basename(_pending_file())
+    return sum(n for fp, n in _live_pending_files()
+               if os.path.basename(fp) != mine)
+
+
+def pending_total():
+    """全局待跑总张数（所有活着的进程加起来）。状态页 / 排查用。"""
+    return sum(n for _fp, n in _live_pending_files())
+
+
+def pending_breakdown():
+    """每个进程各排了几张 → {pid 或文件名: 张数}。排查「到底谁在排队」用。"""
+    out = {}
+    for fp, n in _live_pending_files():
+        name = os.path.basename(fp)
+        try:
+            pid = int(name.split("-")[0])
+        except (ValueError, IndexError):
+            pid = name
+        out[pid] = out.get(pid, 0) + n
+    return out
