@@ -55,7 +55,7 @@
   function submit(prompt, skill, refs, described) {
     if (!skill) {
       H.sysNote("还没拿到渠道列表，去跑图台看一眼再回来");
-      return;
+      return null;
     }
     /* 用户连着点「重画」不要一堆卡（2026-11-24）：
        · 同一份提示词 + 同一个渠道，上一条还在排队 / 在画 → 不再新开一张，
@@ -68,10 +68,13 @@
       if (twin.card && (twin.card.submitting ||
           (twin.card.job && S().pending[twin.card.job]))) {
         global.WSCard.flash(twin.card);
-        return;
+        // 重复重画只闪卡片太容易被当成没提交（用户 2026-11-25 实测）：
+        // 同一句请求给一条一次性提示，并让调用方撤掉刚冒出来的蓝气泡。
+        if (H.busyTip) H.busyTip("这张已经在画了，等它出来再说");
+        return null;
       }
       restart(twin.card, twin.rec, refs, described);
-      return;
+      return null;   // 复用旧卡和旧气泡，不该再多一条蓝色消息
     }
     var rec = { k: "img", cls: "", prompt: prompt, ask: prompt, skill: skill,
                 refs: (refs || []).slice(),
@@ -87,6 +90,7 @@
     card.noted = "排队中…";
     H.save(rec);
     fire(card, rec, refs, described);
+    return card;     // 只有真新建了卡片，调用方才该留下那条蓝色消息
   }
 
   /* 找「同一次请求」的上一张卡：同渠道 + **用户当初那句话**一样。

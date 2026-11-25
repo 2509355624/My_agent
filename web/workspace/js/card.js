@@ -105,6 +105,10 @@
       b.className = "user-fail-btn";
       b.textContent = "重画";
       b.addEventListener("click", function () {
+        // 连点只认第一下：重画会撤掉这条消息，按钮来不及拿回来之前再点
+        // 就会多送一条一样的请求（用户 2026-11-25 实测连点出三条蓝气泡）。
+        if (b.disabled) return;
+        b.disabled = true;
         clearFailLine(host);
         if (onRetry) onRetry();
       });
@@ -257,6 +261,8 @@
       retry.setAttribute("aria-label", "重新排一次");
       retry.innerHTML = ICON_AGAIN + "<span>" + retryLabel + "</span>";
       retry.addEventListener("click", function () {
+        if (retry.disabled) return;
+        retry.disabled = true;
         retry.blur();
         if (hooks.again) hooks.again(card);
       });
@@ -301,6 +307,8 @@
     if (retryLabel) again.innerHTML = ICON_AGAIN + "<span>" + retryLabel + "</span>";
     else again.innerHTML = ICON_AGAIN + "<span>重画</span>";
     again.addEventListener("click", function () {
+      if (again.disabled) return;      // 一次重画只收一次
+      again.disabled = true;
       again.blur();                    // 闪完别在按钮上留一圈焦点框
       if (hooks.again) hooks.again(card);
     });

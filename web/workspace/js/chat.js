@@ -5,12 +5,8 @@
 (function (global) {
   "use strict";
 
-  /* 气泡折叠、轮询间隔、超时两条线都不在这份文件里了（2026-11-24 拆的）：
-        · 折叠在 card.js（`WSCard.COLLAPSE_AT`），气泡就是那边画的；
-        · 轮询 / 超时在 gen_flow.js（`SETTLE_MS` 排队 8 分钟、`PAINT_MS`
-          真在画 25 分钟）；
-        · 铺图的档位在 shot.js（`WSShot.FIT = "1m"`）。
-     这里只留状态和编排，值一律不再抄第二份。 */
+  /* 折叠在 card.js、轮询/超时在 gen_flow.js、图片档位在 shot.js。
+     这里只留状态和编排，那些值一律不再抄第二份。 */
 
   var el = {};
   var S = {
@@ -23,15 +19,9 @@
 
   function $(id) { return document.getElementById(id); }
 
-  /* 消息区一律是根那一个（#chat-scroll）。
-     AI 创作页早先借走过输入栏、也自带过一块 .gchat 收消息，那是为「在浏览页
-     里直接对话」准备的；现在口径变了——创作回聊天页做，子页只负责浏览。
-     所以「发送气泡」「挂参考卡」都写回根，子页那份历史消息区不再收新东西。
-
-     ⚠️ 别再用「哪个 .view-push 里带 [data-chat-scroll]」来挑：退页动画播完
-     之前那一页还在 DOM 里（连 .in 都还挂着，closeNow 先摘 .in、节点要等
-     transitionend 才移除），这时候写进去的消息会跟着节点一起被回收——
-     「画同款」的参考卡就是这么凭空消失的（2026-11-23 实测）。 */
+  /* 消息区一律是根那个 #chat-scroll：创作回聊天页做，子页只浏览。
+     ⚠️ 别用「哪个 .view-push 带 data-chat-scroll」去挑——退页动画播完前
+     那一页还在 DOM 里，写进去的消息会跟着节点被回收（2026-11-23 实测）。 */
   function box() {
     return el.scroll;
   }
@@ -79,12 +69,8 @@
     if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
   }
 
-  /* 一批参考图发出去之后，把存档里对应的 `k:"ref"` 记录一并清掉。
-
-     这类记录的本意是「这张还没发，刷新后要挂回输入栏」，所以只要它留在
-     存档尾巴上，下一次 restore 就会把它认回来——用户 2026-11-24 报的
-     「每次刷新引用图栏自己冒出来」就是这个。发送成功 = 它已经兑现了，
-     记录该走。 */
+  /* 参考图发出去后清掉存档里的 `k:"ref"`：这类记录的本意是「还没发，
+     刷新后挂回输入栏」，留着就会被 restore 认回来（2026-11-24 实测）。 */
   function dropRefRecords(ids) {
     if (!ids || !ids.length) return;
     var want = {};
@@ -149,6 +135,22 @@
     userNodes.push(node);
     log({ k: "user", t: text, refs: briefRefs(refs) });
     return node;
+  }
+
+  /* 撤掉一条没有对应卡片的蓝色消息（重复重画被吞 / 限流没排上）。
+     只按文字找最后一条，避免误删同一句话的更早那次请求。 */
+  function dropUser(node, text) {
+    if (node && node.parentNode) node.parentNode.removeChild(node);
+    userNodes = userNodes.filter(function (n) { return n !== node; });
+    if (text) {
+      for (var i = S.msgs.length - 1; i >= 0; i--) {
+        if (S.msgs[i].k === "user" && S.msgs[i].t === text) {
+          S.msgs.splice(i, 1);
+          break;
+        }
+      }
+    }
+    if (global.WSStore) global.WSStore.save({ msgs: S.msgs });
   }
 
   function shell(cls) { return global.WSCard.shell(cls); }
@@ -280,10 +282,7 @@
       },
       afterCancel: startPoll,
       clearFail: function (node) { global.WSCard.clearFailLine(node); },
-      removeUser: function (node) {
-        if (node.parentNode) node.parentNode.removeChild(node);
-        userNodes = userNodes.filter(function (n) { return n !== node; });
-      },
+      removeUser: function (node, text) { dropUser(node, text); },
       removeCard: function (node) {
         if (node && node.parentNode) node.parentNode.removeChild(node);
       },
@@ -305,13 +304,19 @@
       },
       defaultSkill: function () { return S.skill; },
       send: function (text, refs, described, skill) {
-        addUser(text, refs);
+        var user = addUser(text, refs);
         if (described) {
-          submitJob(text, skill, refs.map(function (r) { return r.id || r; }), true);
+          if (!submitJob(text, skill,
+                         refs.map(function (r) { return r.id || r; }), true)) {
+            dropUser(user, text);
+          }
           return;
         }
         global.WSRef.ensureDescribed(refs).then(function (read) {
-          submitJob(text, skill, read.map(function (r) { return r.id || r; }));
+          if (!submitJob(text, skill,
+                         read.map(function (r) { return r.id || r; }))) {
+            dropUser(user, text);   // 重复请求被吞 / 没排上：不留孤儿蓝气泡
+          }
         });
       }
     });

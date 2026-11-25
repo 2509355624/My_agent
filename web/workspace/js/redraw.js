@@ -29,7 +29,8 @@
   }
 
   function run(card) {
-    if (!card) return;
+    if (!card || card.redrawing) return;   // 同一次重画只走一遍
+    card.redrawing = true;
     var rec = card.rec || {};
     var text = rec.ask || rec.prompt || card.prompt || "";
     /* rec.refs 存的是 id 数组，统一成 {id}：识图和缩略图都认对象。 */
@@ -54,7 +55,7 @@
     H.removeRec(rec, text);
     H.save();
 
-    if (!text || !H.send) return;
+    if (!text || !H.send) { card.redrawing = false; return; }
     H.send(text, refs, described, skill);
   }
 
@@ -63,6 +64,11 @@
     if (!card) return;
     if (H.removeCard) H.removeCard(card.node);
     if (card.userNode && H.clearFail) H.clearFail(card.userNode);
+    /* 没排上队的那张连用户气泡一起撤：蓝气泡留着、卡片没了，用户看到的就是
+       「发了消息，看图之后没下文」。记录也一起摘，刷新后不会再冒孤儿气泡。 */
+    if (card.userNode && H.removeUser) {
+      H.removeUser(card.userNode, (card.rec && (card.rec.ask || card.rec.prompt)) || "");
+    }
     if (card.rec) H.removeRec(card.rec, "");
     H.save();
   }

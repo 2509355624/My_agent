@@ -179,12 +179,59 @@ class TestWorkspaceFeedback(unittest.TestCase):
         self.assertIn("again: function (c) { redraw(c); }", chat)
         self.assertIn("busyTip: function (text) { busyNote(text, 3000); }", chat)
         self.assertIn("dropCard: function (card) { global.WSRedraw.drop(card); }", chat)
+        self.assertIn("if (!card || card.redrawing) return;", redraw)
+        self.assertIn("H.removeUser(card.userNode", redraw)
+        card = _read("js/card.js")
+        self.assertIn("if (again.disabled) return;", card)
         flow = _read("js/gen_flow.js")
         self.assertIn("if (d && d.busy)", flow)
+        self.assertIn("这张已经在画了，等它出来再说", flow)
+        self.assertIn("return card;     // 只有真新建了卡片", flow)
         api = os.path.join(ROOT, "app", "features", "qq", "friend_api.py")
         with open(api, encoding="utf-8") as f:
             py = f.read()
         self.assertIn('"busy": True', py)
+
+    def test_redraw_accepts_only_one_click(self):
+        script = r'''
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+class El {
+  constructor() {
+    this.children = []; this.listeners = {}; this.disabled = false;
+    this.hidden = false; this.innerHTML = ""; this.textContent = "";
+    this.style = {}; this.classList = {add(){}, remove(){}};
+  }
+  appendChild(n) { this.children.push(n); return n; }
+  addEventListener(k, fn) { this.listeners[k] = fn; }
+  setAttribute() {} blur() {} remove() {}
+  click() { if (this.listeners.click) this.listeners.click(); }
+}
+const root = process.argv[1];
+const w = {addEventListener(){}, setTimeout(){}};
+const context = vm.createContext({window:w, document:{addEventListener(){},
+  createElement:()=>new El(), body:new El()}, console, Map, Promise, Date,
+  setInterval:()=>1, clearInterval(){}, setTimeout:()=>1});
+function load(name) { vm.runInContext(fs.readFileSync(root+"/js/"+name,"utf8"),context); }
+load("card.js"); load("gen_flow.js"); load("redraw.js");
+let again = 0;
+const card = {acts:new El(), node:new El(), say(){}, skill:"s"};
+w.WSCard.buildActs(card, "", {again(){again++;}, download(){}});
+const button = card.acts.children[2];   // 复制 / 下载 / 重画
+button.click(); button.click();
+assert.equal(again, 1, "同一颗重画按钮连点只收一次");
+let sends = 0;
+w.WSRedraw.bind({pending:()=>({}), clearFail(){}, removeCard(){}, removeUser(){},
+  msgs:()=>[], removeRec(){}, save(){}, defaultSkill:()=>"s", send(){sends++;}});
+const old = {rec:{ask:"画猫"}, refs:[], skill:"s", node:new El()};
+w.WSRedraw.run(old); w.WSRedraw.run(old);
+assert.equal(sends, 1, "同一条旧消息重复重画只送一次");
+'''
+        result = subprocess.run(
+            [shutil.which("node"), "-e", script, WS],
+            capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_inflight_limit_restored_to_five(self):
         api = os.path.join(ROOT, "app", "features", "qq", "friend_api.py")
