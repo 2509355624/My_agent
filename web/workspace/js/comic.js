@@ -233,9 +233,10 @@
       img.decoding = "async";
       img.addEventListener("load", function () { fitImage(d, img); });
       img.src = withRev(src, p.rev);
-      /* 缓存命中时 load 可能在挂上监听之前就发生了，再来一发兜底 */
-      if (img.complete && img.naturalWidth) fitImage(d, img);
       d.appendChild(img);
+      /* 先挂进 d 再量：d 还没进文档时 clientHeight 是 0，量出来等于没算。
+         缓存命中时 load 可能已经过去了，所以这里补一次。 */
+      if (img.complete && img.naturalWidth) fitImage(d, img);
       return d;
     }
 

@@ -53,9 +53,19 @@ class TestLowresPlan(unittest.TestCase):
         self.assertTrue(p["on"], p.get("why"))
         self.assertEqual(before, (1024, 1536))
         self.assertEqual(p["canvas"], (512, 768))
-        # 成品不能变小：原来 1024×1.2×2 = 2457，降档后必须还是这个量级
-        self.assertGreaterEqual(p["est"][0], before[0] * 2)
         self.assertGreater(p["latent"], 1.0, "画布降了，延迟倍率必须补上去")
+
+        # 成品尺寸必须**等于**原来那档，不是「不低于」。
+        # 原链：1024 ×lat1.2 = 1228.8 → 对齐 8 = 1232 → ×2模型 = 2464。
+        # 2026-11-26 实测过一版把模型那 2x 也乘进倍数补偿里，成品从
+        # 2464×3680 缩成 2048×3072——这条断言就是防那个回归的。
+        est_w, est_h = p["est"]
+        want_w = 1232 * 2
+        self.assertLessEqual(abs(est_w - want_w), 16, "成品宽 %d 不对（要 ~%d）" % (est_w, want_w))
+        self.assertLessEqual(abs(est_h - 3680), 32, "成品高 %d 不对（要 ~3680）" % est_h)
+
+        # 更本质的一条：降档后的「采样段像素」要还原出原链的采样段像素。
+        self.assertAlmostEqual(p["canvas"][0] * p["latent"], 1232, delta=8)
 
     def test_canvas_is_multiple_of_8(self):
         for skill in ("silver", "krea2", "anima_curvy", "hd_3_clear"):
