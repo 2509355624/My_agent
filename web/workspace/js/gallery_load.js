@@ -49,8 +49,19 @@
       return seq;
     }
 
-    /* 这个回包还是不是「当前」那一次 → true 才许往界面上写。 */
-    function owns(n) { return n === seq; }
+    /* 这个回包还是不是「当前」那一次 → true 才许往界面上写。
+
+       带 `rest` 的那一发（接着翻页）单独认领：翻页**不换号**，所以「我发的
+       那一页」和「这期间被新分类顶掉的那一页」号是一样的，光看号分不出来。
+       认领过就不再放第二发进来，也就不会出现两页同时往网格里塞卡片
+       （2026-11-26 用户：「上边的滚动条滑动再点击，内容跟标签对不上」）。 */
+    function owns(n, rest) {
+      if (n !== seq) return false;
+      if (!rest) return true;
+      if (!busy) return false;   // 已经被别的回包认领过
+      busy = false;
+      return true;
+    }
 
     /* 让外部（比如「重画完回来刷新」）能把 busy 清掉。 */
     function done() { busy = false; }

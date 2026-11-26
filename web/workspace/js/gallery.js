@@ -186,7 +186,7 @@
 
     var page = S.page;
     global.WSApi.get(listUrl(page)).then(function (d) {
-      if (!S.claim.owns(seq)) return;       // 已经被更新的一次换分类顶掉
+      if (!S.claim.owns(seq, !reset)) return;   // 已经被更新的一次换分类顶掉
       S.busy = false;
       clearSkeletons();
       if (!d || !d.ok) {
