@@ -82,7 +82,8 @@ from app.config import (
     QQ_PRIVATE_ENABLE, QQ_QUOTE_MAX_CHARS, QQ_TOKEN, QQ_TURN_TIMEOUT,
     QQ_WHITELIST_GROUPS, QQ_WHITELIST_USERS, QQ_WS_URL,
 )
-from app.features.chat.memory import load_history, save_history, strip_noise
+from app.features.chat.memory import (QQ_BOT_TURNS, load_history,
+                                      save_history, strip_noise)
 
 try:
     from websockets.asyncio.client import connect as ws_connect
