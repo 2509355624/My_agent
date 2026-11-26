@@ -345,10 +345,13 @@
     var job = String((rec && rec.job) || "").trim();
     var id = rid(rec);
     if (!job && !id) return Promise.resolve(null);
-    var body = id ? { id: id } : { job: job };
-    if (job && id) body.job = job;
-    var f = fields || {};
-    Object.keys(f).forEach(function (k) { body[k] = f[k]; });
+    /* 身份键单独放顶层，要改的字段全部塞进 `m`（服务端优先读 m，见
+       `api_archive_patch`）。摊平写会被 fields 里的 `job: ""` 盖掉——那就成了
+       「id 和 job 都空」，服务端回 400（2026-11-26 实测 4 次全 400，出图结果
+       一条都没写回存档，用户「图有了、记录里没有」就是这么来的）。 */
+    var body = { m: fields || {} };
+    if (id) body.id = id;
+    if (job) body.job = job;
     return global.fetch(API, {
       method: "PATCH",
       credentials: "same-origin",

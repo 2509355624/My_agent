@@ -1087,7 +1087,7 @@ def _web_decide(text, skill, hist, ctx):
         # 模型判「要垫这张图」（图生图 / 照着画 / 复刻）。前端把图以 data
         # URL 交回来，`_enqueue_job` → `_run` 会带着它进 `generate_image`。
         body["source_images"] = ctx["images"]
-    job, busy = _enqueue_job(body, owner=_who_qq(),
+    job, busy = _enqueue_job(body, owner=_owner_key(),
                              lowres_on=bool(ctx.get("lowres", WORKSPACE_LOWRES)))
     if job is None:
         raise RuntimeError(busy or "没排上队，等一下再发")
@@ -1128,6 +1128,19 @@ def _web_revise(text, channel, hist, images):
 def _who_qq():
     from app.features.chat import routes as chat_routes
     return chat_routes._who() or ""
+
+
+def _owner_key():
+    """入队 / 认领 / 状态查询**同一条身份口径**（2026-11-26）。
+
+    `_who_qq()` 对访客是空串，而 `/api/gen/status` 对访客按 `guest_<id>`
+    收口、adopt 也按 `_owner()` 找人。ask 这条路原先用 `_who_qq()`，于是访客
+    在聊天页发的那张：任务在跑、owner 却是空串 → 状态里查不到 → 前端 15 秒
+    后判「服务重启过，这张没了」，等真出图时记录已经被写成失败，认不回来
+    （实测 21:58:40 图正常落盘、记录却是 err）。跟 `api_submit` 用同一个口子。
+    """
+    from app.features.chat import routes as chat_routes
+    return chat_routes._owner() or "__anonymous__"
 
 
 class _WebReply(Exception):
@@ -1572,9 +1585,14 @@ def api_status():
       · queued  —— 还在我们自己的队列里，前面还有 N 张；
       · submit  —— 已被 worker 取走，正在装模型 / 等 ComfyUI，还没交出去；
       · running —— ComfyUI 手里确有这个 prompt_id，正在采样；
-      · lost    —— **两边都没有它**（ComfyUI 重启过 / 任务被清掉了）。
-                   这一条是用户这次报的核心：「我都重启了，网页还写着画图中，
-                   我怎么知道它有没有在画？」——不知道就说不知道，别装作在跑。
+      · unknown —— **拿不到准信**：ComfyUI 探不到（正在重启），或者两边都没
+                   查到但 worker 线程还活着。跟「不知道就说不知道」同一条：
+                   这一格只回答「我们不知道它此刻在哪」，不替 ComfyUI 判死。
+      · lost    —— **确实没了**：ComfyUI 探得到、队列和 history 都没有它，
+                   并且 **worker 线程已经不在**（2026-11-26 用户拍板）。
+                   以前只要探不到就给 lost，把正在被 `wait_comfy_up` 耐心等待
+                   的图当场判死（实测 21:58:00 掉线、21:58:06 回来、
+                   21:58:40 正常出图），用户被引去重排，白跑一张。
     探针只问**本台正在跑的那一张**，最多 1 次 /queue，不会因为状态轮询把
     ComfyUI 打爆；问不到（超时、离线）返回 None，前端按「探不到」处理。
     """
@@ -1585,7 +1603,9 @@ def api_status():
     # 任务（包括站主在 QQ 那边发起的）都会吐给任何访客，任务标题就是提示词。
     # **只对访客收口**：登录用户和站主本机保持原样（跑图台、管理页都用同一
     # 条接口看全量队列，那里不能变）。
-    _mine = _guest_key()
+    # 登录用户身上就算还挂着旧的访客证，也不能按访客收口——他自己的任务
+    # owner 是 qq，按 `guest_<id>` 筛会把自己所有任务都滤掉（2026-11-26）。
+    _mine = "" if _who_qq() else _guest_key()
     if _mine:
         jobs = [j for j in jobs if j.get("owner") == _mine]
     try:
@@ -1614,7 +1634,14 @@ def api_status():
         return _comfy_up
 
     def _phase_of(job):
-        """这一张现在到底在哪一段（见 docstring 那四个阶段）。"""
+        """这一张现在到底在哪一段（见 docstring 那几段）。
+
+        `lost` 只留一个出口：**worker 线程已经没了**（2026-11-26 用户拍板）。
+        探不到 ComfyUI 不等于这张没了——worker 那边 `wait_comfy_up` 正在等它
+        回来（上限 180 秒），ComfyUI 起来后它自己的队列还会把这张接着跑完
+        （实测 21:58:00 掉线、21:58:06 回来、21:58:40 出图）。漫画台走的就是
+        `wait_comfy_up` 那一套，这里跟它对齐：拿不到准信就给 `unknown`。
+        """
         jid = job["id"]
         pid = str(job.get("pid") or "")
         if jid in queued_tags:
@@ -1626,13 +1653,18 @@ def api_status():
             return "submit"
         if not pid:
             return "submit"
-        if _probe_up() is False:
-            return "lost"
-        has = image_jobs._comfy_queue_has(pid)
-        # 队列里没有、但 history 有 = 画完了，回包还没到，仍算 running
-        if has is False and image_jobs.poll_once(pid) is None:
-            return "lost"
-        return "running"
+        # 探不到 ComfyUI：它大概率在重启。不知道就只说不知道。
+        if _probe_up() is not True:
+            return "unknown"
+        # 队列里有它 = 还排着；history 里有它 = 刚画完、回包还没到。都算 running。
+        if image_jobs._comfy_queue_has(pid) is not False:
+            return "running"
+        if image_jobs.poll_once(pid) is not None:
+            return "running"
+        # 两边都查不到，但 worker 线程还在 = 它在等重启 / 正在重试提交，别判死
+        if job.get("_thread_alive", True):
+            return "unknown"
+        return "lost"
 
     for job in jobs:
         if job["state"] == "queued":

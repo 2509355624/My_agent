@@ -60,24 +60,40 @@ class TestFakeQueueCard(unittest.TestCase):
         self.assertIn("failCard", seg, "应该直接判成「没跑完」")
 
     def test_fail_writes_back_to_server(self):
-        js = _read("js", "chat.js")
+        js = _read("js", "gen_flow.js")
         i = js.index("function fail(card, msg, stuck)")
         seg = js[i:i + 1100]
-        self.assertIn("WSStore.patch", seg, "失败要回写服务端存档")
+        self.assertIn("H.patch", seg, "失败要回写服务端存档")
         # patch 必须在清 job 之前——patch 靠 job 认人
-        self.assertLess(seg.index("WSStore.patch"), seg.index("card.rec.job = \"\""))
+        self.assertLess(seg.index("H.patch"), seg.index('card.rec.job = ""'))
 
     def test_show_writes_back_to_server(self):
-        js = _read("js", "chat.js")
+        # 出图 / 判失败 2026-11-26 已经搬到 gen_flow.js（chat.js 只剩转发），
+        # 断言跟着过去；那边调的是宿主注入的 `H.patch`。
+        js = _read("js", "gen_flow.js")
         i = js.index("function showImage")
         seg = js[i:js.index("function fail(", i)]
-        self.assertIn("WSStore.patch", seg, "出图也要回写服务端存档")
+        self.assertIn("H.patch", seg, "出图也要回写服务端存档")
 
     def test_store_has_patch(self):
         js = _read("js", "store.js")
         self.assertIn("function patch(rec, fields)", js)
         self.assertIn('method: "PATCH"', js)
         self.assertIn("patch: patch", js, "得导出")
+
+    def test_patch_keeps_identity_keys(self):
+        """回写不能把 `id` / `job` 摊平进 body（2026-11-26 实测 400 的根因）。
+
+        `gen_flow` 会带 `job: ""` 表示「这张已经收尾」，摊平写就等于把唯一的
+        身份凭据一起清成空串，服务端只认「没给 job 或 id」→ 400，出图结果
+        一条都写不回存档（用户看到的就是「图有了、记录里没有」）。现在要改
+        的字段一律走 `m`，身份键单独放顶层。
+        """
+        js = _read("js", "store.js")
+        i = js.index("function patch(rec, fields)")
+        seg = js[i:js.index("/* ── 服务端", i)]
+        self.assertIn("m: fields", seg, "要改的字段得塞进 m")
+        self.assertNotIn("body[k] = f[k]", seg, "不能把 fields 摊平进 body")
 
     def test_backend_accepts_patch(self):
         from app import main

@@ -184,6 +184,25 @@ class VisitorArchiveTest(unittest.TestCase):
         g = self.client.get("/api/chat/archive", headers=h2).get_json() or {}
         self.assertEqual(g.get("msgs") or [], [])
 
+    def test_ask_enqueues_with_the_same_owner_as_submit(self):
+        """ask 入队的 owner 必须和 submit / status 收口同一口径（2026-11-26）。
+
+        用户实测：访客在聊天页发「画一个纳西妲」，图 21:58:40 正常落盘，卡片
+        却写着「服务重启过，这张没了」。原因是 ask 那条路拿 `_who_qq()` 当
+        owner（访客是空串），而 `/api/gen/status` 按 `guest_<id>` 收口 →
+        任务在状态里查不到 → 前端 15 秒后判死，等真出图时记录已经写成失败。
+        """
+        from app.features.chat import routes as chat
+        from app.features.image import routes as gen_api
+        raw, h = self._guest()
+        with self.client.application.test_request_context(
+                "/api/gen/ask", headers=h):
+            want = chat._guest_owner()
+            self.assertTrue(want, "访客应该有自己的 owner 键")
+            self.assertEqual(gen_api._owner_key(), want,
+                             "ask 的 owner 和访客档位口径不一致")
+        self.assertIn(visitor.check_id(raw), want)
+
     def test_forged_or_missing_token_is_rejected(self):
         """签名不对、或者没有内部令牌 → 当没带，照旧 401。"""
         raw = visitor.new_id()
