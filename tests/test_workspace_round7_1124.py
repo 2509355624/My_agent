@@ -75,6 +75,15 @@ class TestFakeQueueCard(unittest.TestCase):
         seg = js[i:js.index("function fail(", i)]
         self.assertIn("H.patch", seg, "出图也要回写服务端存档")
 
+    def test_note_line_takes_one_arg(self):
+        """`WSChat.paintNote` 是「往消息流加一行字」的一参数接口（chat.js）。
+
+        传两个参数就是把这个对象当文本写进 DOM，屏幕上于是出现一行
+        `[object Object]`（2026-11-26 实测：点发送就出现、退出重进才消失，
+        因为它只挂在 DOM 上，不落存档）。
+        """
+        js = _read("js", "archive.js")
+        self.assertNotIn("WSChat.paintNote(card", js)
     def test_store_has_patch(self):
         js = _read("js", "store.js")
         self.assertIn("function patch(rec, fields)", js)

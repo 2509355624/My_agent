@@ -503,8 +503,8 @@
             if (card.rec) {
               card.rec.job = "";
               card.rec.note = "已终止";
-              card.rec.err = false;
-              H.patch(card.rec, { job: "", note: "已终止", err: false });
+              card.rec.err = false; card.rec.stopped = true;   // 自己按的停
+              H.patch(card.rec, { job: "", note: "已终止", err: false, stopped: true });
               H.save(null);
             }
             forget(card);

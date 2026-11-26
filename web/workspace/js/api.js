@@ -7,7 +7,9 @@
     return fetch(path, Object.assign({ credentials: "same-origin" }, opt || {}))
       .then(function (r) {
         return r.json().catch(function () {
-          return { ok: false, error: "服务器返回看不懂" };
+          /* 带上路径和状态码（2026-11-26）：原来只有一句「服务器返回看不懂」，
+             服务端日志里一个 5xx 都没有，根本不知道是哪个接口、错在哪一步。 */
+          return { ok: false, error: "服务器返回看不懂（" + path + " " + r.status + "）" };
         });
       })
       .catch(function () {

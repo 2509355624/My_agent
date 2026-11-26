@@ -94,6 +94,21 @@ class StreamForwardTest(unittest.TestCase):
         self.assertEqual(r.headers.get("Content-Length"), "1000")
         self.assertEqual(r.headers.get("Accept-Ranges"), "bytes")
 
+    def test_patch_is_forwarded_as_patch(self):
+        """PATCH 必须原样转发（2026-11-26）。
+
+        原来 `_forward` 只有 GET / DELETE / multipart / POST 四支，PATCH 落进
+        最后那支被当成「追加」发出去；追加接口要 `msgs` 数组，于是每次都回
+        400「参数不对」——工作台的出图结果 / 失败 / 终止一条都没写进服务端
+        存档，只能靠随后那次全量 save 兜着，`job` 字段于是常年为空。
+        """
+        with patch.object(self._sess, "patch", return_value=_FakeResp()) as m:
+            r = self.client.patch("/api/chat/archive",
+                                  json={"job": "GP-1", "m": {"note": "已出图"}})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(m.call_args.kwargs["json"]["m"]["note"], "已出图")
+        self.assertEqual(m.call_args.kwargs["json"]["qq"], "2509355624")
+        self.assertFalse(self._sess.post.called, "PATCH 不能落到 POST 那一支")
     def test_cookie_qq_wins_over_query_qq(self):
         """改 URL 里的 qq 不能看别人的东西——一律用登录态里的号。"""
         _, _, m = self._get("/api/gal/img/7?s=full&qq=123456")

@@ -244,7 +244,9 @@
              那块 3:4 的灰底（用户 2026-11-24：「每次滑动都是一大堆的
              大卡片，影响观看」）。 */
           global.WSChat.failCard(c,
-             m.err ? m.note : "这条没跑完就断了（服务重启 / 页面关太早），点重试再排一次",
+             m.stopped ? "已终止，点重试可以重新排一次"
+               : m.err ? m.note
+               : "这条没跑完就断了（服务重启 / 页面关太早），点重试再排一次",
              true);
         }
       } else if (m.k === "comic") {
@@ -476,7 +478,6 @@
     if (global.WSChat) {
       global.WSChat.pending[card.job] = card;
       global.WSChat.armStop(card);
-      global.WSChat.paintNote(card, NOTE_RUN);
       if (card.say) card.say(NOTE_RUN, false, true);
       if (global.WSStore) {
         global.WSStore.patch(rec, { job: rec.job, prompt: rec.prompt,
@@ -503,7 +504,7 @@
     rec.note = NOTE_UNKNOWN;
     rec.err = false;
     if (global.WSChat) {
-      global.WSChat.paintNote(card, NOTE_UNKNOWN);
+      if (card.say) card.say(NOTE_UNKNOWN, false, false);
       if (global.WSStore) {
         global.WSStore.patch(rec, { job: "", note: NOTE_UNKNOWN, err: false });
         global.WSStore.save({ msgs: global.WSChat.msgs() });

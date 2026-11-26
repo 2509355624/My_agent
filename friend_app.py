@@ -864,6 +864,19 @@ def _forward(prefix, sub, allow_guest=False, force_guest=False,
                          timeout=(10, 600), stream=streaming)
         elif request.method == "DELETE":
             r = sess.delete(url, params=params, headers=headers, timeout=60)
+        elif request.method == "PATCH":
+            # 就地改一条记录（2026-11-26）。原来只有下面那一支 else（POST），
+            # PATCH 被当成「追加」送过去，而追加接口要 `msgs` 数组，于是每次都
+            # 回 400「参数不对」——工作台的回写（出图结果 / 失败 / 终止）一条都
+            # 没写进服务端存档，只靠随后那次全量 save 兜着，`job` 字段因此常年
+            # 是空的，图出来了记录还停在旧状态。
+            body = request.get_json(silent=True) or {}
+            if qq:
+                body["qq"] = qq
+            else:
+                body.pop("qq", None)
+            r = sess.patch(url, params=params, headers=headers, json=body,
+                           timeout=post_timeout)
         elif request.mimetype == "multipart/form-data":
             # 上传作品集：文件必须原样转发（不能先读进内存再重编码——
             # 几百 MB 一次读进来会把 5175 顶爆）。requests 支持传 fileobj。
