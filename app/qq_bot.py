@@ -82,7 +82,7 @@ from app.config import (
     QQ_PRIVATE_ENABLE, QQ_QUOTE_MAX_CHARS, QQ_TOKEN, QQ_TURN_TIMEOUT,
     QQ_WHITELIST_GROUPS, QQ_WHITELIST_USERS, QQ_WS_URL,
 )
-from app.features.chat.memory import load_history, save_history
+from app.features.chat.memory import load_history, save_history, strip_noise
 
 try:
     from websockets.asyncio.client import connect as ws_connect
@@ -345,8 +345,9 @@ def _ensure_system_prompt(session_key):
     head, aid = _session_head(session_key, aid)
     keep = [m for m in load_history(aid, session_key)
             if m.get("role") != "system"]
+    # 走硬裁（2026-11-26）：这里是最常见的落盘点，不传就会把胖历史原样写回去
     save_history([{"role": "system", "content": head}] + keep,
-                 aid, session_key)
+                 aid, session_key, hard_turns=QQ_BOT_TURNS)
 
 
 def _sync_session_head(session_key, aid):
@@ -368,7 +369,7 @@ def _sync_session_head(session_key, aid):
     keep = [m for m in load_history(aid, session_key)
             if m.get("role") != "system"]
     save_history([{"role": "system", "content": head}] + keep,
-                 aid, session_key)
+                 aid, session_key, hard_turns=QQ_BOT_TURNS)
     log.info("[head] %s 的 system 头已重写（%d 字）→ 这条会话前缀缓存作废，"
              "下一轮按全价重读", session_key, len(head))
     return True
@@ -1425,6 +1426,18 @@ class SessionRunner:
             # 新头的历史。没变时一个字节都不动，前缀缓存不受影响。
             history = load_history(run_agent, self.session_key)
 
+        # 把报错 / 回执菜单类的 tool_result 挡在模型视野之外（2026-11-26 用户
+        # 拍板）。这是「AI 莫名其妙说画不了」的直因：上一轮那条
+        # `错误：超出显存（qwen_image_v1）` / `错误：生图功能在本群已被管理员
+        # 关闭` 会作为 tool_result 留在历史里，模型看到就照着继续拒，哪怕这次
+        # 根本没问题。
+        #
+        # 只对**没用借**的生图机器人做：被借的通用助手要读真实失败原因才做得了
+        # 决策。`strip_noise` 返回新列表，落盘那份不受影响（老记录也会被滤掉，
+        # 所以不需要清洗脚本）。
+        if not borrowed:
+            history = strip_noise(history)
+
         # 群里垫一层「刚才在聊什么」的背景，让回复接得上话，而不是干巴巴地
         # 只答那一句。走 extra_context 而不是拼进 text：拼进 text 会写进会话
         # 历史，每轮重复堆一份，十几轮就把预算占满；这条通道每轮现取现用、
@@ -1650,14 +1663,25 @@ class SessionRunner:
             # 不落的话「刚才那只」这类指代也没有依据可查。
             if direct_reply == "":
                 try:
-                    # 上一轮直达动作的那句话由 direct_gen 自己记——单张生图和
-                    # 连续漫画的格式不一样，别在这儿拼。
-                    desc = direct_gen.last_direct_desc(self.session_key)
+                    # **只落用户原话，不落 `[直达生图] <渠道>：<整段提示词>`**
+                    # （2026-11-26 用户拍板删除）。
+                    #
+                    # 那条记录行是 assistant 身份、内容是完整提示词（实测 3768
+                    # 条 / 79.8 万字 / 中位 218 字 / 最长 4949 字），而**它从来
+                    # 没有被转译看到过**——`direct_gen._recent_lines` 只挑
+                    # `role=="user"`，删掉前后输出逐字节相同（已实测）。
+                    #
+                    # 上一张的渠道 + 提示词走【上一张】那条独立通路：
+                    # `_last_job()` 先读进程内 `_LAST_JOB`，空了从
+                    # `state/image_log.jsonl` 账本兜底，跨重启可用。引用图的场景
+                    # 另走 `_ledger_note`（按 HT 编号查同一条账本）。
+                    # 所以删它不影响「换成白色毛衣」这类改写。
+                    #
+                    # 真正在吃这条行的是 agent 循环（DIRECT_GEN=0 / 主动接话轮），
+                    # 那正是「AI 照着自己上一轮的话继续说」的来源之一。
                     history.append({"role": "user", "content": own_text})
-                    if desc:
-                        history.append({"role": "assistant",
-                                        "content": desc})
-                    save_history(history, run_agent, self.session_key)
+                    save_history(history, run_agent, self.session_key,
+                                 hard_turns=QQ_BOT_TURNS)
                 except Exception:
                     log.exception("直达轮落史失败 %s", self.session_key)
             else:
@@ -1669,7 +1693,8 @@ class SessionRunner:
                         history.append({"role": "user", "content": qa[0]})
                         history.append({"role": "assistant",
                                         "content": qa[1]})
-                        save_history(history, run_agent, self.session_key)
+                        save_history(history, run_agent, self.session_key,
+                                 hard_turns=QQ_BOT_TURNS)
                     except Exception:
                         log.exception("问答轮落史失败 %s", self.session_key)
             return
@@ -1708,7 +1733,8 @@ class SessionRunner:
                 # 先落盘再处理（与 main.py 的契约一致）
                 if etype in SESSION_EVENTS:
                     try:
-                        save_history(history, run_agent, self.session_key)
+                        save_history(history, run_agent, self.session_key,
+                                 hard_turns=QQ_BOT_TURNS)
                     except Exception:
                         log.exception("落盘失败 %s", self.session_key)
                 if etype == "assistant":

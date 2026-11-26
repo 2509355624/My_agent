@@ -40,6 +40,77 @@ log = logging.getLogger("memory")
 _SAVE_LOCK = threading.Lock()
 
 
+# ─── 「别把失败喂回去」：QQ 生图机器人专用 ─────────────────
+# 2026-11-26 用户拍板：大大怪是生图机器人，它需要的只有「用户说了什么」和
+# 「上一张的提示词」。「报错 / 拒绝话术 / 服务商的限额提示」一旦跟着历史回喂，
+# 下一轮它就照着继续拒——这是用户反复报「AI 莫名其妙说画不了」的根因
+# （`direct_gen.py` 里有同一条历史教训：2026-10-16 实测）。
+#
+# 判据：这些记录是**系统生成**的，模型看了只会照着念，没有任何决策价值。
+# 代码只做检测，不猜语义。
+#
+# 注意：这里删的是**落盘的历史**，不回喂已经发生的上下文。工具当轮返回的
+# 结果模型照样看得到（它得知道自己这次成没成），只是不留在历史里反复回放。
+_TOOL_NOISE_PREFIXES = (
+    "错误", "错误:", "错误：",
+    "[工具结果] 错误", "[工具结果] 错误:",
+    "该工具在当前 agent 不可用",
+    "这次调用**没有执行**",
+    "⚠️ 已达到最大轮次限制",
+    "❌",
+)
+# 生图成功回执也是噪音：它自带菜单（跑图台地址、渠道列表、常用渠道）和
+# 「不要复述排队」这类指令，每轮回喂一遍等于每轮都在提醒它「你在排队」。
+# 成功这件事由 `image_jobs.recent_line()` 每轮现算给（那条干净得多）。
+_TOOL_NOISE_MARKS = (
+    "【回执已直发】",
+    "已经在画了，画好会自动发到群里",
+    "不要再复述排队",
+)
+# 明确要留下的：一句话的「已提交」事实（不带菜单的那种）
+_TOOL_KEEP_MARKS = (
+    "任务已提交",
+)
+
+
+def _is_noise_tool_result(msg):
+    """这条 tool_result 该不该在历史里留痕（QQ 生图机器人视角）。
+
+    ⚠️ 也认 `role=="user"` 且以 `[工具结果] ` 开头的老记录：2026-11 之前
+    `_history_for_llm` 会把 tool_result 转成 user 消息再落盘，那批脏数据还在
+    几十个会话文件里躺着。不清洗文件，读取时一律滤掉。
+    """
+    role = msg.get("role")
+    content = (msg.get("content") or "").strip()
+    if role not in ("tool_result", "user"):
+        return False
+    if role == "user" and not content.startswith("[工具结果]"):
+        return False
+    if not content:
+        return True
+    # 中断说明要留：它告诉下一轮「上一条回复是半截的」
+    if msg.get("tool_name") == "user_cancel":
+        return False
+    if any(k in content for k in _TOOL_KEEP_MARKS) and not any(
+            k in content for k in _TOOL_NOISE_MARKS):
+        return False
+    if any(content.startswith(p) for p in _TOOL_NOISE_PREFIXES):
+        return True
+    if any(("[工具结果] " + p) in content[:30] for p in _TOOL_NOISE_PREFIXES):
+        return True
+    return any(k in content for k in _TOOL_NOISE_MARKS)
+
+
+def strip_noise(history):
+    """去掉报错 / 回执菜单类的 tool_result，返回新列表（不改入参）。
+
+    只给 QQ 生图机器人这条线用（见 `_is_noise_tool_result` 的说明）。
+    网页端 / 扮演态 / 被借用的通用助手**不能**用它——那些地方模型确实需要
+    看到工具的失败原因来决定下一步。
+    """
+    return [m for m in history if not _is_noise_tool_result(m)]
+
+
 def _atomic_replace(src, dst, attempts=5, delay=0.05):
     """把 src 原子替换为 dst。
 
@@ -58,7 +129,8 @@ def _atomic_replace(src, dst, attempts=5, delay=0.05):
             time.sleep(delay)
 
 
-def save_history(history, agent_id=None, session_key=None, reserve=0):
+def save_history(history, agent_id=None, session_key=None, reserve=0,
+                 hard_turns=0):
     """原子保存某个 agent 的会话到它的 JSONL 文件。
 
     先写同目录临时文件 -> flush + fsync -> os.replace 原子替换。
@@ -72,6 +144,9 @@ def save_history(history, agent_id=None, session_key=None, reserve=0):
     reserve: 不在 history 里、但每轮都会进 prompt 的尾部开销（token），
     转交 trim_window 预留。QQ 侧传 agent.tail_tokens(...)。
 
+    hard_turns: 按轮数硬裁（>0 时绕开 token 预算）。QQ 生图机器人传
+    `QQ_BOT_TURNS`，其余调用方不传 = 老行为。
+
     落盘前先过一遍压缩（见 trim_window）：超出 token 预算的最老轮次在这里就
     摘走，于是下一轮 load_history 读回来的已经是裁剪后的历史。**只裁要写的
     这份副本**，不动调用方手上的 list——本轮该看什么还看什么。
@@ -79,7 +154,7 @@ def save_history(history, agent_id=None, session_key=None, reserve=0):
     同轮的后续保存会把压好的历史原样冲回去（见 trim_window 的注释）。
     """
     history = trim_window(history, agent_id=agent_id, session_key=session_key,
-                          reserve=reserve)
+                          reserve=reserve, hard_turns=hard_turns)
     path = _agent_session_file(agent_id, session_key)
     parent = os.path.dirname(path)
     if parent:
@@ -500,8 +575,24 @@ WINDOW_TRIM_HIGH = 1.3
 WINDOW_TRIM_LOW = 0.6
 
 
+# 按轮数硬裁（2026-11-26 用户拍板）：QQ 生图机器人只留最近 N 轮，不看 token。
+# 用户原话：「就是 6 条 AI 回复，6 条用户消息加对应的 AI 回复即可」
+# 「不要按什么 token 预算了」。
+#
+# 为什么只给它开：它是「用户说一句 → 工具跑一张」，历史里没有需要长期保留的
+# 信息；真正的「上一张画了什么」走 `image_log.jsonl` 账本（跨重启可用），
+# 跟历史无关。网页端 / 扮演态 / 小说模式都是长对话，砍到 6 轮会直接坏掉，
+# 那些走原来的 token 预算。
+QQ_BOT_TURNS = 6
+
+# 保留轮里单条消息的截断长度。用户原话通常几十字，真正长的是粘贴的提示词
+# 和 AI 回复；截断是为了防止「一轮里塞了 5000 字提示词」把 6 轮又撑回几千
+# token。截在前部——需求本身就在开头。
+MAX_TURN_CHARS = 400
+
+
 def trim_window(history, agent_id=None, session_key=None, max_turns=None,
-                budget=None, reserve=0):
+                budget=None, reserve=0, hard_turns=0):
     """按 **token 预算**压缩会话（2026-09-29 用户定：不再按轮数开窗）。
 
     原来按轮数（CONTEXT_MAX_TURNS=100 轮）开窗，实测群会话能攒到 8 万 token
@@ -525,6 +616,9 @@ def trim_window(history, agent_id=None, session_key=None, max_turns=None,
 
     max_turns 保留只为兼容旧调用点（=0 仍表示关闭），不再参与判据。
 
+    hard_turns: **按轮数硬裁**，>0 时完全绕开 token 预算（2026-11-26）。
+    只给 QQ 生图机器人用（`QQ_BOT_TURNS`），见函数体 ① 段的说明。
+
     reserve: **不在 history 里、但每轮都会进 prompt** 的尾部开销（token）。
     QQ 侧就是那条状态栏消息——群聊背景 + 长期记忆 + 表情包清单 + 时间/条数，
     实测群聊有 2.5K 上下。它每轮都按未命中计费，却完全不计入
@@ -539,6 +633,35 @@ def trim_window(history, agent_id=None, session_key=None, max_turns=None,
     other_msgs = [m for m in history if m.get("role") != "system"]
     if not other_msgs:
         return history
+
+    # ① 按轮数硬裁（2026-11-26 用户拍板，只给 QQ 生图机器人这条路用）。
+    #    用户原话：「不要按什么 token 预算了，就只要 6 轮用户消息」。
+    #
+    #    为什么这里可以不看预算：大大怪是个生图机器人，一轮就是「用户说一句
+    #    → 工具跑一张」，预算对它没意义；真按 token 走，它要攒到 3 万才裁一次，
+    #    期间的历史全是它自己说过的话，等于越攒越偏。
+    #
+    #    **不摘摘要、不转长期记忆**：被裁掉的是它自己的回执和自言自语，
+    #    没有任何值得记的东西。群聊背景（群友说了什么）走的是 recent 缓存，
+    #    跟这里无关。
+    #
+    #    每条保留的消息**截到 MAX_TURN_CHARS**（用户原话本来就只有几十字，
+    #    真正长的是粘贴的提示词和 AI 回复）。超了从前截——保留开头那句需求。
+    if hard_turns and hard_turns > 0:
+        turns = _split_turns(other_msgs)
+        if len(turns) <= hard_turns:
+            return history
+        kept = []
+        for turn in turns[-hard_turns:]:
+            for m in turn:
+                c = m.get("content")
+                if isinstance(c, str) and len(c) > MAX_TURN_CHARS:
+                    m = dict(m)
+                    m["content"] = c[:MAX_TURN_CHARS] + "…"
+                kept.append(m)
+        log.info("[window] 按轮数裁剪：%d 轮 → %d 轮（%d 条 → %d 条）",
+                 len(turns), hard_turns, len(other_msgs), len(kept))
+        return list(system_msgs) + kept
 
     budget = _agent_budget(agent_id) if not budget else budget
     reserve = max(0, reserve)

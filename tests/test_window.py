@@ -535,3 +535,139 @@ class WebSearchTruncateTest(unittest.TestCase):
                                return_value="y" * 3000):
             out = web_search._web_search("测试")
         self.assertLess(len(out), 1000)
+
+class HardTurnsTest(unittest.TestCase):
+    """按轮数硬裁（2026-11-26）。QQ 生图机器人只留最近 N 轮，不看 token。
+
+    用户原话：「就是 6 条 AI 回复，6 条用户消息加对应的 AI 回复即可」
+    「不要按什么 token 预算了」。判据从 token 改成轮数，是因为大大怪一轮
+    就是「用户说一句 → 工具跑一张」，攒到 3 万才裁一次期间的全是自言自语。
+    """
+
+    def _history(self, n, tail=""):
+        h = [{"role": "system", "content": "S"}]
+        for i in range(1, n + 1):
+            h.append({"role": "user", "content": "需求%d%s" % (i, tail)})
+            h.append({"role": "assistant", "content": "回应%d" % i})
+        return h
+
+    def test_keeps_only_last_n_turns(self):
+        out = memory.trim_window(self._history(20), agent_id="qq",
+                                 session_key="group_9", hard_turns=6)
+        users = [m["content"] for m in out if m["role"] == "user"]
+        self.assertEqual(6, len(users))
+        self.assertEqual("需求15", users[0])       # 20-6+1
+        self.assertEqual("需求20", users[-1])
+
+    def test_system_head_survives(self):
+        out = memory.trim_window(self._history(20), agent_id="qq",
+                                 session_key="group_9", hard_turns=6)
+        self.assertEqual("system", out[0]["role"])
+        self.assertEqual("S", out[0]["content"])
+
+    def test_under_limit_untouched(self):
+        h = self._history(3)
+        self.assertIs(h, memory.trim_window(h, agent_id="qq",
+                                            session_key="group_9", hard_turns=6))
+
+    def test_long_message_truncated_from_front(self):
+        # 粘贴一长串提示词不能把 6 轮又撑回几千 token；截在前部保需求
+        h = self._history(8, tail="x" * 2000)
+        out = memory.trim_window(h, agent_id="qq", session_key="group_9",
+                                 hard_turns=6)
+        for m in out[1:]:
+            self.assertLessEqual(len(m["content"]), memory.MAX_TURN_CHARS + 1)
+
+    def test_hard_turns_beats_budget(self):
+        # 预算极小也不裁（token 判据被完全绕开）——反过来预算极大也不放过
+        h = self._history(20)
+        self.assertEqual(13, len(memory.trim_window(
+            h, agent_id="qq", session_key="group_9", hard_turns=6, budget=10)))
+        self.assertEqual(13, len(memory.trim_window(
+            h, agent_id="qq", session_key="group_9", hard_turns=6,
+            budget=10 ** 7)))
+
+    def test_default_off(self):
+        # 不传 hard_turns 的老调用方行为不变（网页端/扮演态走 token 预算）
+        h = self._history(20)
+        self.assertIs(h, memory.trim_window(h, agent_id="qq",
+                                            session_key="group_9"))
+
+
+class StripNoiseTest(unittest.TestCase):
+    """报错 / 回执菜单不进历史（2026-11-26 用户拍板）。
+
+    用户原话：「AI 自己的拒绝话术一旦回喂，下一轮会继续拒绝」
+    「API 服务商返回的那些限制、报错，都不要进到历史里面」。
+    """
+
+    def test_error_tool_result_dropped(self):
+        h = [{"role": "tool_result", "tool_name": "generate_image",
+              "content": "错误: 超出显存（qwen_image_v1），这张没画成。"}]
+        self.assertEqual([], memory.strip_noise(h))
+
+    def test_admin_closed_dropped(self):
+        h = [{"role": "tool_result",
+              "content": "错误：生图功能在本群已被管理员关闭，本次不生成图片。别再重试"}]
+        self.assertEqual([], memory.strip_noise(h))
+
+    def test_receipt_menu_dropped(self):
+        h = [{"role": "tool_result",
+              "content": "【回执已直发】任务已提交，前面还有 2 张在排队。\n跑图台 https://x"}]
+        self.assertEqual([], memory.strip_noise(h))
+
+    def test_legacy_user_wrapped_error_dropped(self):
+        # 老版本把 tool_result 转成 user 消息落盘，那批脏数据还在文件里
+        h = [{"role": "user",
+              "content": "[工具结果] 错误: 超出显存（qwen_image_v1），这张没画成。"}]
+        self.assertEqual([], memory.strip_noise(h))
+
+    def test_plain_submit_kept(self):
+        # 一句话的「已提交」事实要留（不含菜单那种）
+        h = [{"role": "tool_result", "content": "任务已提交，前面还有 1 张。"}]
+        self.assertEqual(1, len(memory.strip_noise(h)))
+
+    def test_abort_note_kept(self):
+        h = [{"role": "tool_result", "tool_name": "user_cancel",
+              "content": "用户手动中断了上一条回复"}]
+        self.assertEqual(1, len(memory.strip_noise(h)))
+
+    def test_user_and_assistant_untouched(self):
+        h = [{"role": "user", "content": "画个银发少女"},
+             {"role": "assistant", "content": "好"}]
+        self.assertEqual(h, memory.strip_noise(h))
+
+    def test_does_not_mutate_input(self):
+        h = [{"role": "tool_result", "content": "错误: x"}]
+        memory.strip_noise(h)
+        self.assertEqual(1, len(h))
+
+
+class RecentLinesIgnoreAssistantTest(unittest.TestCase):
+    """转译只喂用户原话（2026-11-18 用户拍板，2026-11-26 复验）。
+
+    删掉 `[直达生图]` 记录行之后，`_recent_lines` 的输出必须与删除前
+    **逐字节相同**——它是「换成白色毛衣」这类改写所依赖的上下文，
+    一旦有变化就说明删错了东西。
+    """
+
+    def test_record_line_never_reaches_translate(self):
+        from app.features.image import direct_gen
+        with_rec = [
+            {"role": "user", "content": "大大怪 silver 银发少女坐窗边"},
+            {"role": "assistant", "content": "[直达生图] silver：" + "tag, " * 300},
+            {"role": "user", "content": "大大怪 换成白色毛衣"},
+        ]
+        without = [m for m in with_rec if m["role"] == "user"]
+        self.assertEqual(direct_gen._recent_lines(with_rec, 6),
+                         direct_gen._recent_lines(without, 6))
+
+    def test_only_user_role_picked(self):
+        from app.features.image import direct_gen
+        h = [{"role": "user", "content": "画银发"},
+             {"role": "assistant", "content": "好"},
+             {"role": "user", "content": "换白毛衣"}]
+        out = direct_gen._recent_lines(h, 6)
+        self.assertIn("画银发", out)
+        self.assertIn("换白毛衣", out)
+        self.assertNotIn("好", out)
