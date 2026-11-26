@@ -97,7 +97,7 @@ def _friend_context():
     # 和写接口一律拒；`tasks` 走空列表（用户：「点进去访客空列表」）。
     try:
         from app.gateways import visitor as _visitor
-        g.comic_guest = bool(_visitor.current())
+        g.comic_guest = bool(_visitor.current()["id"])
     except Exception:                       # noqa: BLE001
         g.comic_guest = False
     # 除了 `tasks`（空列表）和下面这几个只读，访客一个接口都不给。

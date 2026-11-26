@@ -115,10 +115,7 @@
     log({ k: "say", t: text || "" });
     return p;
   }
-  /* 一条会自己消失的提示（「正在传参考图…」「正在看图…」这类）。
-     跟 sysNote 分开：sysNote 是对话记录的一部分，要进存档；这种过场提示
-     不该进存档，刷新后也不该再出现一条「正在看图…」。返回的句柄用来提前
-     收掉（传完了、看完了），到点也会自己走。 */
+
   function busyNote(text, ms) {
     var p = paintNote(text);
     var t = setTimeout(function () { if (p.parentNode) p.remove(); }, ms || 20000);
@@ -130,9 +127,7 @@
     };
   }
 
-  /* 用户气泡 / 提示 / 卡片壳 / 按钮全在 card.js（2026-11-24 拆的）。
-     那边只管长相，往哪写、写完要不要落盘由这里决定，所以先把它接上我们
-     自己的「塞进根消息区 + 滚到底」。 */
+  /* 气泡长相在 card.js；往哪写由这里定（根消息区 + 滚到底）。 */
   function paintUser(text, refs) {
     var b = global.WSCard.paintUser(text, refs);
     scrollBottom();
@@ -159,7 +154,6 @@
     return node;
   }
 
-
   function dropUser(node, text) {
     if (node && node.parentNode) node.parentNode.removeChild(node);
     userNodes = userNodes.filter(function (n) { return n !== node; });
@@ -184,8 +178,7 @@
     });
   }
 
-  /* 一张新的出图卡。**先只有一行「排队中…」**：没有占位块、没有 3:4 的底，
-     真的要开始画了才 `spawn()`（见 gen_flow.js 里 tick 的 running 分支）。 */
+  /* 新出图卡：先只有一行「排队中…」，真要开画才 spawn()（见 gen_flow.js）。 */
   function newCard(prompt, skill, rec) {
     var c = shell();
     c.say("排队中…");
@@ -198,16 +191,12 @@
              userNode: user };
   }
 
-  /* 铺图 / 放大 / 下载都搬到 shot.js 了（2026-11-24）：这边已经一千多行，
-     那三件事只跟「一张已经出好的图」有关，跟排队、存档、重画都无关。
-     FIT 还是那个 1MB 档，值只在 shot.js 里写一次，这里转发一下给老调用点。 */
+  /* 铺图 / 放大 / 下载在 shot.js，FIT（1MB 档）那里只写一次，这里转发。 */
   var FIT = global.WSShot.FIT;
   function shotEl(file) { return global.WSShot.shotEl(file); }
   function downloadImage(card, button) { return global.WSShot.download(card, button); }
 
-  /* 出图 / 失败 / 失败提示这三块搬到 gen_flow.js 了（2026-11-25）：它们是
-     「一张卡走到终点」的收尾，跟轮询是同一件事。这边只留转发，存档怎么落
-     盘、气泡怎么找仍然由 bindFlow 里的钩子说了算。 */
+  /* 出图 / 失败是「一张卡走到终点」的收尾，跟轮询同一件事，在 gen_flow.js。 */
   function showImage(card, job) {
     return global.WSGenFlow.showImage(card, job);
   }
@@ -218,9 +207,7 @@
 
   // ── 生图 ──────────────────────────────────────────────
 
-  /* 提交 / 轮询 / 判超时 / 终止全在 gen_flow.js（2026-11-24 拆的）：
-     那边只做「发请求、看状态」，画卡片的活儿由 card.js 干，这里只负责
-     把三样东西交给它——存档数组、落盘函数、和上面那几个渲染函数。 */
+  /* 提交 / 轮询 / 判超时 / 终止全在 gen_flow.js，两边靠 bindFlow 的钩子对接。 */
   function submitJob(prompt, skill, refs, described, userNode, defer, finalPrompt,
                       route) {
     return global.WSGenFlow.submit(prompt, skill, refs, described, userNode,
@@ -229,8 +216,7 @@
   function armStop(card) { return global.WSGenFlow.armStop(card); }
   function disarmStop(card) { return global.WSGenFlow.disarmStop(card); }
   function startPoll() { return global.WSGenFlow.startPoll(); }
-  /* 把重画依赖交给 redraw.js。send 回调用 send() 那条正常路径的精简版：
-     识图 → 提交，和手动点发送完全同一套。 */
+  /* 把重画依赖交给 redraw.js（识图 → 提交，和手动发送同一套）。 */
   function bindRedraw() {
     global.WSRedraw.bind({
       clearFail: function (node) { global.WSCard.clearFailLine(node); },
@@ -303,8 +289,7 @@
       "--composer-h", el.composer.offsetHeight + "px");
   }
 
-  /* 输入栏被挪进子页（视图构建时移的）那一刻还没有尺寸，上面量到的是 0。
-     这里补量一次，并替子页盯着：宿主一出现就补，别停在 0。 */
+  /* 输入栏被挪进子页那一刻还没尺寸（量到的是 0）：这里补量一次。 */
   function fitWhenSized() {
     if (!el.composer) return;
     if (el.composer.offsetHeight) { fitComposer(); return; }
@@ -386,16 +371,10 @@
   }
 
   /* 「直达」：粘进来的词**原样**用，不经过大大怪，一次连排 5 张、每张换一个
-     种子（2026-11-26 用户：粉丝群反馈「同一提示词连跑 5 张，出来 5 张都
-     不一样」，因为点发送会先让 AI 优化词）。
-
-     连排交给后端的 `/api/gen/batch`（一次建 N 条任务）。不在前端循环调
-     submit：提交是顺序 await 的，第 1 张在跑时第 2 张还在等回执，看到的
-     就是「一张一张慢慢来」。
-
-     参考图照旧读成描述拼进去——「原样」指的是**不改写用户的词**，不是不看
-     用户自己喂的图。漫画模式不借这颗（那颗按钮在输入栏，漫画那页用不着
-     连排 5 本书）：直达时按图片生成处理。 */
+     种子（用户 2026-11-26：粉丝群反馈「同一提示词连跑 5 张出来 5 张都不
+     一样」，因为点发送会先让 AI 优化词）。连排交给 `/api/gen/batch` 一次
+     建 N 条，不在前端循环 submit（那是顺序 await，看着像一张张慢慢来）。
+     参考图照旧读成描述拼进去：原样 = 不改写用户的词，不是不看用户喂的图。 */
   var DIRECT_N = 5;
 
   function sendDirect() {
@@ -444,12 +423,9 @@
     });
   }
 
-  /* 重画改由 redraw.js 负责（2026-11-25 拆出，chat.js 破 600 行）。
-     bindRedraw() 在 init 里接上，这边只留一个转发。 */
+  /* 重画在 redraw.js（bindRedraw() 在 init 里接上），这里只转发。 */
   function redraw(card) { return global.WSRedraw.run(card); }
-
-  /* 复制走 card.js 的实现。 */
-  function copyText(text) { return global.WSCard.copyText(text); }
+  function copyText(text) { return global.WSCard.copyText(text); }   // card.js
 
   // ── 画风 ──────────────────────────────────────────────
 
@@ -573,9 +549,14 @@
       global.WSScroll.pin();
     }
 
-    /* 先取图片签名再重放存档：`WSGen.img()` 拼出来的地址要带 `k=`，本地缓存
-       那条路才走得通（拿不到也不拦，页面照旧按 URL 显示图）。 */
-    global.WSGen.imgsign().then(function () {
+    /* 先认身份（访客要换本地存档的键、也不该去拉服务端那份）再取图片签名
+       ——`WSGen.img()` 拼出来的地址要带 `k=`，本地缓存那条路才走得通
+       （拿不到也不拦，页面照旧按 URL 显示图）。 */
+    var who = (global.WSStore && global.WSStore.whoami)
+      ? global.WSStore.whoami() : Promise.resolve(null);
+    who.then(function () {
+      return global.WSGen.imgsign();
+    }).then(function () {
       if (global.WSArchive) global.WSArchive.restore();
     }, function () {
       if (global.WSArchive) global.WSArchive.restore();
@@ -594,31 +575,23 @@
     log: log,
     dropRef: dropRef,
     dropRefRecords: dropRefRecords,
-    /* 参考图拆到 ref.js 了，这里留个转发：旧的调用点还在的话不会炸 */
     syncHint: function () { if (global.WSRef) global.WSRef.syncHint(); },
     paintUser: paintUser,
     paintNote: paintNote,
     say: sayText,
-    /* 重放存档时复用同一张图（同一条地址 → 同一个缓存 key，重放和历史不会
-       各下一遍）。见 archive.js 的 replay()。 */
-    shotEl: shotEl,
+    shotEl: shotEl,     // 重放复用同一张图（同一个缓存 key，不重下）
     buildActs: buildActs,
-    /* 重画收口用（2026-11-24）：存档重放时把「记录 → 卡片」交给这张表，
-       用户再点重画才能认得出上一条是同一份请求。 */
-    cards: S.cards,
+    cards: S.cards,     // 记录 → 卡片，重画时认得出「上一条」
     spawn: spawn,
     flash: flash,
     box: box,
     hideEmpty: hideEmpty,
     scrollBottom: scrollBottom,
-    /* 进页面 / 历史重放完之后用来钉在底部（见 scroll.js） */
     pinBottom: function (ms) { if (global.WSScroll) global.WSScroll.pin(ms); },
     pending: S.pending,
     msgs: function () { return S.msgs; },
     startPoll: startPoll,
-    /* 重放存档时用（见 archive.js）：把一条「其实已经没在跑」的卡片就地
-       判成失败并给「重试」，以及给还活着的那条挂上终止/计时。 */
-    failCard: fail,
+    failCard: fail,     // 重放时把「其实没在跑」的卡判失败
     showImage: showImage,
     armStop: armStop
   };

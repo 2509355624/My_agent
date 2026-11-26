@@ -98,9 +98,14 @@
     restoring = true;
     var local = global.WSStore && global.WSStore.load();
 
-    var ready = (global.WSStore && global.WSStore.pull)
-      ? global.WSStore.pull()
-      : Promise.resolve(null);
+    /* 访客（2026-11-26 用户：「访客模式不需要再给他存聊天记录了」）：
+       服务端那条整个不碰，只重放这个浏览器本地那份。 */
+    var ready = (global.WSStore && global.WSStore.isGuest &&
+                 global.WSStore.isGuest())
+      ? Promise.resolve(null)
+      : ((global.WSStore && global.WSStore.pull)
+        ? global.WSStore.pull()
+        : Promise.resolve(null));
 
     ready.then(function (d) {
       var use = (d && d.msgs && d.msgs.length) ? d.msgs : null;

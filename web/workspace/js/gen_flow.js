@@ -1,33 +1,21 @@
-/* 生图这一趟的「干活的」部分：提交、轮询、判超时、挂/摘「终止」。
-   从 chat.js 拆出来的（2026-11-24，那边已经七百多行）。
+/* 生图这一趟「干活的」部分：提交、轮询、判超时、挂/摘「终止」。
+   这里不画任何东西——卡片长相在 card.js，图在 shot.js，存档怎么落由 chat.js
+   的回调决定。两条硬口径：同一份词连点「重画」不许越点越多张空卡；排队中 /
+   报错只是一行字，不占 3:4 的大壳（is-idle，见 card.js）。 */
 
-   这里不画任何东西——卡片长什么样在 card.js，图长什么样在 shot.js，
-   存档怎么落盘由 chat.js 的回调决定。`bind()` 里那几个回调就是全部接口。
-
-   两条硬口径（都是用户提的，改这里前先看清楚）：
-     · 同一份提示词、同一个渠道，连着点「重画」不许越点越多张空卡：
-       还在跑 → 只闪一下那一行字；已经失败 → 复用那一张重新排。
-     · 排队中 / 报错只是一行字，不占 3:4 的大壳（is-idle，见 card.js）。 */
 (function (global) {
   "use strict";
 
-  var POLL_MS = 2000;
+  var POLL_MS = 2000, NOTE_RUN = "正在跑，画好会自动弹出来";
   var MAX_FAIL = 5;         // 连续失败这么多次就停轮询，别无限打接口
-  /* 卡死兜底（2026-11-24 用户：「昨天晚上的图现在还显示排队中，卡死了」）。
-     后端已经有超时，但它只管「线程还在跑」的情形；服务重启 / 任务丢掉之后
-     存档里那条会永远停在「排队中」。所以前端**自己**也计时：
-       · 一直没轮到（排队 / 准备中）超过 SETTLE_MS → 判它卡住了；
-       · 真在画的那张按渠道给得更宽，别误杀。
-     判超时不是「报错完事」：卡片上给一个「重试」，用户点了就按同一份提示词
-     重排一张。 */
+  /* 卡死兜底：服务重启后存档那条会永远停在「排队中」，前端自己计时，
+     排队 / 准备中超 SETTLE_MS 判卡住，给「重试」。 */
   var SETTLE_MS = 8 * 60 * 1000;
-  /* /api/gen/status 里查不到这张时的宽容期（2026-11-25：两台设备同时开着时，
-     另一台一刷新就判「服务重启过，这张没了」）。服务重启后状态接口先空、
-     账本后接回来，这段时间里它是真的还在排。 */
+  /* status 里查不到这张时的宽容期（两台设备开着，一台刷新不该判死） */
   var GHOST_MS = 15 * 1000;
   var PAINT_MS = 25 * 60 * 1000;
 
-  /* 由 chat.js 注入的回调（都是必需的，少一个这里就该报错而不是静默死循环） */
+  /* chat.js 注入的回调（都必需：少一个这里就该报错，不能静默死循环） */
   var H = {
     state: null,      // () → {pending, timer, fails, msgs, cards}
     save: null,       // () → 落盘存档
@@ -189,7 +177,7 @@
     });
   }
 
-  /* 出图后那三个按钮。chat.js 那边连好了「重画 / 下载」的落点，这里只转发。 */
+  /* 出图后那三个按钮（「重画 / 下载」的落点在 chat.js），这里只转发。 */
   function buildActs(card) {
     if (global.WSChat && global.WSChat.buildActs) global.WSChat.buildActs(card);
   }
@@ -365,73 +353,6 @@
       card.submitting = false;
       fail(card, "提交失败，检查网络后点重试", true);
     });
-  }
-
-  // ── 直达：一次连排 N 张（2026-11-26）────────────────────
-  //
-  /* 把 `/api/gen/batch` 的回执接成本台的 N 张卡。
-
-     为什么不复用 `fire()`：那边是「一张卡发一次请求」，回执本身就是这一
-     张的答案；这里是「一次请求回 N 条任务」，卡在请求发之前就已经建好了。
-     硬塞进去等于让 fire 分成两半，两边的状态机（submitting / since / job）
-     还得各管各的。
-
-     记账口径跟单张一样：每张卡都 `H.save(rec)` 进存档、都塞进
-     `S().pending` 交给同一个 tick 轮询——所以刷新页面后照样能把图收回
-     原位（存档重放按 rec 走，见 archive.js），终止按钮也是同一颗。
-
-     一张都没排上 / 有一半没排上：
-       · 全失败 → 撤掉用户气泡，闪一行提示（不落存档，跟 busyTip 同款）；
-       · 部分失败 → 用户气泡留着（他确实说了这句），剩下的补一张说明卡
-         在外面，别让「只出来 3 张」看起来像丢了两张。 */
-  function linkBatch(d, text, userNode) {
-    var jobs = (d && d.jobs) || [];
-    if (!d || !d.ok || !jobs.length) {
-      if (H.dropCard && userNode) H.dropCard(userNode, text);
-      if (H.busyTip) {
-        H.busyTip((d && d.error) || "没排上队，等一下再发");
-      }
-      return 0;
-    }
-    jobs.forEach(function (j, i) {
-      var rec = { k: "img", cls: "", prompt: j.prompt || "",
-                  ask: text, skill: j.skill || "",
-                  id: H.newId ? H.newId("img") : "",
-                  refs: [], described: true, route: "direct",
-                  userId: userNode ? (userNode._wsUserId || "") : "",
-                  userText: text, job: j.id || "", file: "",
-                  note: "正在跑，画好会自动弹出来", err: false,
-                  batch: { n: jobs.length, at: i + 1 } };
-      var card = H.newCard(rec.prompt || text, rec.skill, rec);
-      card.rec = rec;
-      card.refs = [];
-      card.described = true;
-      /* 气泡只给第一张：一条需求五张图，一条气泡才对。后面四张卡片靠
-         `batch` 那个序号自己认位置，不必再挂同一个节点（挂上去的话，失败
-         行会在同一条气泡下面叠五遍）。 */
-      card.userNode = i === 0 ? userNode : null;
-      card.since = Date.now();
-      S().cards.set(rec, card);
-      H.save(rec);
-      if (!j.id) {
-        fail(card, "这张没排上队，等一下再点一次");
-        return;
-      }
-      card.job = j.id;
-      armStop(card);
-      S().pending[card.job] = card;
-      card.say("正在跑，画好会自动弹出来", false, true);
-      paintNote(card, "正在跑，画好会自动弹出来");
-    });
-    /* 访客额度：batch 回执里每张都带同一个 `visitor_left`，取一条就够。 */
-    if (jobs[0].visitor && global.WSVisitor) {
-      global.WSVisitor.syncLeft(jobs[0].visitor_left);
-    }
-    if (d.note && H.busyTip) H.busyTip(d.note);
-    if ((d.fail || []).length && H.busyTip) H.busyTip(d.fail[0]);
-    startPoll();
-    tick();
-    return jobs.length;
   }
 
   // ── 终止 ──────────────────────────────────────────────
@@ -655,14 +576,23 @@
     restart: restart,
     armStop: armStop,
     disarmStop: disarmStop,
-    /* 直达：一次回执接成 N 张卡（见 linkBatch） */
-    linkBatch: linkBatch,
+    linkBatch: function (d, t, u) { return global.WSDirect.linkBatch(d, t, u); },
+    newCard: function (p, s, r) { return H.newCard(p, s, r); },
+    save: function (rec) { H.save(rec); }, fail: fail,
+    dropCard: function (c, t) { if (H.dropCard) H.dropCard(c, t); },
+    busyTip: function (t) { if (H.busyTip) H.busyTip(t); },
+    newId: function (p) { return H.newId ? H.newId(p) : ""; },
+    claim: function (card) {          // 直达卡接进轮询（挂终止 + 塞 pending）
+      if (!card || !card.job) return;
+      armStop(card);
+      S().pending[card.job] = card;
+      card.say(NOTE_RUN, false, true); paintNote(card, NOTE_RUN);
+    },
+    kick: function () { startPoll(); tick(); },
     startPoll: startPoll,
     stopPoll: stopPoll,
     tick: tick,
-    /* 出图 / 失败这两个收尾现在住在这儿（见上面注释），chat.js 转发即可 */
     showImage: showImage,
-    fail: fail,
     SETTLE_MS: SETTLE_MS,
     PAINT_MS: PAINT_MS
   };

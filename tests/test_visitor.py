@@ -6,7 +6,7 @@
     「访客直接点就进去了，能生图」「每天 5 张，换浏览器就随便他换」
     「加号只有图片生成」「我的漫画作品点进去访客空列表」
     「画廊正常放行，但看不到隐藏的内容」
-    「聊天存档照旧，给他存呗」
+    「访客模式不需要再给他存聊天记录了」
     「我的作品和收藏隐藏」
 
 钉死几条容易悄悄漂掉的边界：
@@ -17,6 +17,7 @@
   4. 访客路径白名单只开工作台真的会调的那四组，生产类接口一律不放。
   5. 5174 侧必须先验内部令牌，再验访客头；伪造的头当没带。
   6. `_seer` 对访客一律 False（隐藏内容不可见），但不改任何数据。
+  7. 访客**不写服务端聊天存档**（用户 2026-11-26 后半句改口径）。
 """
 
 import json
@@ -83,16 +84,18 @@ class GuestIdentityTest(unittest.TestCase):
         with mock.patch("flask.request",
                         _FakeReq({"X-Friend-Token": good,
                                   "X-Friend-Guest": raw})):
-            self.assertTrue(visitor.current())
+            got = visitor.current()
+            self.assertTrue(got["id"])
+            self.assertEqual(got["raw"], raw)
         # 没令牌 → 不认（哪怕访客头签名是对的）
         with mock.patch("flask.request",
                         _FakeReq({"X-Friend-Guest": raw})):
-            self.assertEqual(visitor.current(), "")
+            self.assertEqual(visitor.current()["id"], "")
         # 令牌错 → 不认
         with mock.patch("flask.request",
                         _FakeReq({"X-Friend-Token": "wrong-token",
                                   "X-Friend-Guest": raw})):
-            self.assertEqual(visitor.current(), "")
+            self.assertEqual(visitor.current()["id"], "")
 
 
 class GuestQuotaTest(unittest.TestCase):
@@ -144,10 +147,14 @@ class GuestPathTest(unittest.TestCase):
     def test_workspace_surface_allowed(self):
         for path in ("/api/gen/channels", "/api/gen/ask", "/api/gen/submit",
                      "/api/gen/status", "/api/gen/img",
-                     "/api/gal/list", "/api/gal/img/abc",
-                     "/api/chat/archive"):
+                     "/api/gal/list", "/api/gal/img/abc"):
             self.assertTrue(visitor.path_allowed(path, "GET"), path)
         self.assertTrue(visitor.path_allowed("/api/gen/ask", "POST"))
+
+    def test_no_server_archive_for_visitor(self):
+        """访客不存聊天记录（2026-11-26 用户改的口径），存档接口整个挡住。"""
+        for m in ("GET", "POST", "PATCH", "DELETE"):
+            self.assertFalse(visitor.path_allowed("/api/chat/archive", m), m)
 
     def test_comic_read_only(self):
         self.assertTrue(visitor.path_allowed("/api/comic/tasks", "GET"))

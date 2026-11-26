@@ -16,7 +16,7 @@ WS = os.path.join(ROOT, "web", "workspace")
 CHAT_FILES = ("chat.html", "css/chat.css", "css/sheet.css",
               "js/gen.js", "js/chat.js", "js/stack.js", "js/views.js",
               "js/card.js", "js/gen_flow.js", "js/shot.js", "js/redraw.js",
-              "js/scroll.js")
+              "js/direct.js", "js/scroll.js")
 
 
 def _read(rel):
@@ -451,7 +451,8 @@ assert.equal(el.scrollTop, 200, "放手之后绝不能再把用户拽回去");
         self.assertNotIn("H.retry(", redraw, "重画不再原地重试，一律底部新开")
         self.assertNotIn("afterCancel", redraw)
         chat = _read("js/chat.js")
-        self.assertIn("submitJob(prompt, skill, refs, described, userNode, defer, finalPrompt)", chat)
+        # 2026-11-26：submitJob 多了第 8 个参数 `route`（"ask" = 走大大怪那条）
+        self.assertIn("submitJob(prompt, skill, refs, described, userNode, defer, finalPrompt,", chat)
         self.assertIn("user = user || addUser(text, refs);", chat)
         self.assertIn("prompt_is_final", _read("js/gen_flow.js"))
         self.assertIn("busyTip: function (text) { busyNote(text, 3000); }", chat)

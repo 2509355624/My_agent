@@ -24,6 +24,7 @@
   function apply() {
     if (!isVisitor()) return;
 
+    guardViews();
     /* 加号里只剩「图片生成」。连整块摘掉而不是 display:none——
        留个空位会在两格网格里撑出一条白边。 */
     var comicBtn = $("pick-comic");
@@ -42,10 +43,36 @@
     /* 「我的」：右上角人形按钮 + 已经建出来的那页。 */
     var meBtns = document.querySelectorAll("[data-me]");
     Array.prototype.forEach.call(meBtns, function (b) { b.hidden = true; });
-    var meView = document.querySelector('.view[data-view="me"]');
-    if (meView && meView.parentNode) meView.parentNode.removeChild(meView);
+    dropMeView();
 
     document.documentElement.setAttribute("data-role", "visitor");
+  }
+
+  /* 「我的」那页是点进来才创建的（stack.js 现建现推），所以光摘一次按钮
+     不够——`apply()` 跑完之后再从任何地方点「我的」，那页又会被建出来，
+     里面 `/api/gal/mine` 没有 qq → 400「参数不对」，看着像页面坏了。
+     这里包一层 `WSViews.build`：访客要建 `me` 就直接给一个空壳，什么都
+     不建。用 `replaceChild` 换顶层的路径（`build` 返回 null 会抛）也不会
+     走到：那个入口本来就是 me 页里的按钮，访客根本进不去那页。 */
+  function dropMeView() {
+    var meView = document.querySelector('.view[data-view="me"]');
+    if (meView && meView.parentNode) meView.parentNode.removeChild(meView);
+  }
+
+  function guardViews() {
+    var views = global.WSViews;
+    if (!views || guardViews.done) return;
+    guardViews.done = true;
+    var real = views.build;
+    views.build = function (name, opts) {
+      if (isVisitor() && name === "me") {
+        var none = document.createElement("section");
+        none.className = "view view-push";
+        none.dataset.view = "me";
+        return none;
+      }
+      return real.apply(views, arguments);
+    };
   }
 
   /* ── 顶栏那行字 ──────────────────────────────────────
@@ -93,7 +120,12 @@
       }
       S.loaded = true;
       apply();
-      if (isVisitor()) badge();
+      if (isVisitor()) {
+        badge();
+        /* 收口之后还有人从「我的」那页点进来（外面那层已经建出来的时候
+           `apply` 摘不掉它新建的），所以再扫一次，把 `me` 整页摘掉。 */
+        dropMeView();
+      }
       try {
         global.dispatchEvent(new CustomEvent("ws:role", { detail: state() }));
       } catch (e) { /* 老浏览器没有 CustomEvent 构造器就算了 */ }

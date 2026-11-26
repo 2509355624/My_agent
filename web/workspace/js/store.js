@@ -20,6 +20,39 @@
   "use strict";
 
   var KEY = "ws_chat_v1";
+  /* 访客的本地档位（2026-11-26 用户：「访客模式不需要再给他存聊天记录」）。
+     服务端那条路整个关掉之后，本地这份也得换个键：同一个浏览器上，站主
+     登录过、又点过「先以访客身份逛逛」，两边的记录不能互相看得见。
+     键里带的是 5175 签的身份串（`/me` 的 `session`），续签一次就是新的
+     一份，跟额度账本同一把钥匙。 */
+  var KEY_GUEST = "ws_chat_guest_v1";
+  var MODE = { guest: false, sid: "" };
+
+  /* store.js 在 chat.html 里排在 visitor.js / me.js 之前，拿不到已经
+     解析好的身份，所以这里自己去要一次 /me（浏览器会命中 5175 那边
+     的短缓存，不额外多走一次转发）。失败就当普通用户，一切照旧。 */
+  var ready = null;
+  function whoami() {
+    if (ready) return ready;
+    ready = global.fetch("/me", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        d = d || {};
+        MODE.guest = (d.role === "visitor");
+        MODE.sid = MODE.guest ? String(d.session || "") : "";
+        return MODE;
+      })
+      .catch(function () { return MODE; });
+    return ready;
+  }
+
+  function key() {
+    if (!MODE.guest) return KEY;
+    /* 身份串里有 `.`（段分隔），localStorage 的键没限制，原样拼就行；
+       万一 /me 没给出 session（老网关），退回一个固定的访客键。 */
+    return MODE.sid ? (KEY_GUEST + ":" + MODE.sid) : KEY_GUEST;
+  }
+
   /* 本地缓存窗口（条）。**这不是「能看多少历史」**——总长度由服务端的 KEEP
      决定（2000 条）前端按页往回要。120 是「首屏先铺什么」和「离线时还能看到
      什么」的那一段。 */
@@ -39,7 +72,7 @@
   function read() {
     if (!alive()) return null;
     try {
-      var raw = global.localStorage.getItem(KEY);
+      var raw = global.localStorage.getItem(key());
       if (!raw) return null;
       var d = JSON.parse(raw);
       if (!d || !Array.isArray(d.msgs)) return null;
@@ -96,12 +129,12 @@
     var bag = pendingIds || readPending();
     var box = { v: 2, msgs: keep, pending: bag };
     try {
-      global.localStorage.setItem(KEY, JSON.stringify(box));
+      global.localStorage.setItem(key(), JSON.stringify(box));
     } catch (e) {
       /* 配额满了就丢掉更老的一半再试一次，还不行就放弃 */
       var half = keep.slice(-Math.floor(keep.length / 2));
       try {
-        global.localStorage.setItem(KEY, JSON.stringify({ v: 2, msgs: half, pending: bag }));
+        global.localStorage.setItem(key(), JSON.stringify({ v: 2, msgs: half, pending: bag }));
       } catch (e2) { half = []; }
       return half;
     }
@@ -162,7 +195,13 @@
       if (f === pushed[d]) return;            // 这次会话里已经推成功过
       dirty.push(m);
     });
-    if (dirty.length) flush(dirty);
+    if (!dirty.length) return;
+    /* 访客：没有服务端档位，只在本地留一份。不排队、不推、不补推——
+       推上去 5174 也是 401，白占家用上行（2026-11-26）。
+       `MODE.guest` 要等 /me 回来才准，正常序列里 chat.js 先等 `whoami()`
+       再起步，所以这条已经生效；万一抢在前面，`send()` 里还有一道。 */
+    if (MODE.guest) return;
+    flush(dirty);
   }
 
   /* 「拉下来的就不算脏」的记号：id → 指纹。和 `pushed` 分开记，因为
@@ -201,6 +240,7 @@
 
   function send() {
     if (!queue.length) return Promise.resolve(null);
+    if (MODE.guest) { queue = []; return Promise.resolve(null); }
     var batch = queue.slice(0, 40);
     queue = queue.slice(batch.length);
     // 发出去的那一刻就记成「已推」：不等响应。否则响应回来之前任何一次
@@ -238,6 +278,8 @@
      只补推还在本地窗口里的那些：更老的已经被覆盖掉了，按指纹补推会把
      顺序打乱，不如不补。 */
   function resync() {
+    /* 访客：本地那份已经是全部，没有可补推的（也没有档位可推）。 */
+    if (MODE.guest) return Promise.resolve(null);
     var box = read() || {};
     var msgs = box.msgs || [], bag = readPending(), ids = Object.keys(bag);
     if (!ids.length) return Promise.resolve(null);
@@ -261,6 +303,7 @@
      记录真的变了；轮询拿到结果的那一刻，用户可能马上关页面，这里先就地把
      状态落一次，比等他下一次操作更稳。 */
   function patch(rec, fields) {
+    if (MODE.guest) return Promise.resolve(null);   // 访客没有服务端那条可改
     var job = String((rec && rec.job) || "").trim();
     var id = rid(rec);
     if (!job && !id) return Promise.resolve(null);
@@ -310,6 +353,7 @@
      服务端一次默认只给尾部 TAIL 条，要更早的整段就带上更大的 limit（服务端
      封顶 KEEP）。这里不负责拼进页面，由 archive.js 按 id 去重后接在顶上。 */
   function earlier(limit) {
+    if (MODE.guest) return Promise.resolve(null);   // 访客没有更早的（本地窗就是全部）
     var n = Math.max(MAX, limit || 0) + MAX;
     return global.fetch(API + "?limit=" + n, { credentials: "same-origin" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -321,6 +365,11 @@
       .catch(function () { return null; });
   }
 
+  /* 访客模式（2026-11-26 用户）：「访客模式不需要再给他存聊天记录了」。
+     服务端那条路整个关掉——`/api/chat/archive` 对访客 401（5175 那边直接
+     不放行），所以这里所有网络动作都跳过，只留 localStorage 这一份。
+     键也分开（`key()`）：同一个浏览器上站主和访客不能看见彼此的记录。 */
+
   /* 退出登录：本地清掉。服务端那份**不删**——它属于这个 QQ 号，换台设备
      登录还得能看见（用户 2026-11-24 的要求）。共享设备上的隔离由服务端
      按登录态分档保证，不靠清本地。 */
@@ -329,8 +378,11 @@
     queue = [];
     pushed = {};
     clean = {};
-    try { global.localStorage.removeItem(KEY); } catch (e) { /* 忽略 */ }
+    try { global.localStorage.removeItem(key()); } catch (e) { /* 忽略 */ }
   }
+
+  /* 让别的模块能问「这次是不是访客」（/me 回来之后才有值）。 */
+  function isGuest() { return MODE.guest; }
 
   global.WSStore = {
     load: load,
@@ -341,6 +393,8 @@
     resync: resync,
     patch: patch,
     merge: merge,
+    isGuest: isGuest,
+    whoami: whoami,
     KEY: KEY
   };
 })(window);

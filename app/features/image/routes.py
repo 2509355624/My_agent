@@ -53,6 +53,7 @@ from app.core.cancel import Cancelled
 from app.config import COMFYUI_URL, NAI_API_KEY, WEB_DIR, state_path
 from app.config import WORKSPACE_LOWRES
 from app.features.image.direct_gen import _allowed_skills
+from app.gateways import visitor as _visitor
 from app.core.skills import load_skill, skill_summary
 
 log = logging.getLogger("gen_api")
@@ -784,28 +785,34 @@ def api_ask():
         return jsonify({"ok": False, "error": "未知渠道 %r" % skill}), 400
     from app.features.chat import routes as chat_routes
     qq = chat_routes._who() or ""
-    if not qq:
-        return jsonify({"ok": False, "error": "没登录"}), 401
     # 访客模式（2026-11-26）：没有 QQ，也没登录过。额度按 5175 签的访客
     # 身份算，每天 5 张，**在提交这一刻扣**（干完再扣就成了「排队中不占额度」
     # 可以被刷）。额度不够就一句人话，别让它跑完再报错。
-    from app.gateways import visitor as _visitor
-    gid = _visitor.current()
+    #
+    # ⚠️ 这里原先写成 `if not qq: 401 没登录`，把访客当成了没登录：访客在
+    # 聊天页发「画一个可莉西装」，蓝色气泡下面直接挂一行「没登录 · 重画」，
+    # 图发不出去。访客**有身份**，只是身份不在 qq 上——先认访客再判空。
+    gid = _visitor.current()["id"]
+    if not qq and not gid:
+        return jsonify({"ok": False, "error": "没登录"}), 401
     if gid:
         left = _visitor.remaining(gid)
         if left <= 0:
             return jsonify({"ok": False, "visitor": True,
                             "error": "访客每天 5 张，今天已经用完了"}), 403
+    # 模型那套接口要一个「这轮是谁」的键：访客用身份段拼一个，别给空串——
+    # 空串会让所有访客共用一条会话（历史、上一张图、指代全串）。
+    who = qq or _guest_key(gid)
     refs = data.get("refs")
     # 访客走**原尺寸**：用户 2026-11-26 明确「访客不用走降档，没有意义，
     # 浪费时间」——他们把全部渠道都开着给访客玩，要的就是成品本身。
     ctx = {"images": _web_images(refs), "refs": list(refs or []),
            "lowres": (not gid) and WORKSPACE_LOWRES}
-    hist = _web_history(qq)
+    hist = _web_history(who)
     # ⚠️ `bind_context` 是**赋值 + 返回 None**，不是上下文管理器（它把当前
     # 会话写进线程本地，靠 finally 里的 `clear_context` 收尾）。按 QQ 那边
     # 的老用法一模一样地写：绑 → 干活 → finally 清。
-    qq_api.bind_context("private_%s" % qq, "private", qq,
+    qq_api.bind_context("private_%s" % who, "private", who,
                         user_text=text,
                         own_images=ctx["images"] or None,
                         quoted_images=ctx["images"] or None)
@@ -813,7 +820,7 @@ def api_ask():
         job = _web_decide(text, skill, hist, ctx)
     except _WebReply as e:
         # 模型说这轮不画（纯聊天 / 问问题）：**不扣额度**，只有真出图才扣。
-        _web_history_push(qq, text, str(e.reply))
+        _web_history_push(who, text, str(e.reply))
         return jsonify({"ok": True, "reply": str(e.reply), "say": True})
     except RuntimeError as e:
         # 没名额 / 模型没交作业 → 一句话说清。**不回落直通**：已经花了一次
@@ -825,7 +832,7 @@ def api_ask():
             qq_api.clear_context()
         except Exception:
             pass
-    _web_history_push(qq, text, "", job.get("prompt") or text,
+    _web_history_push(who, text, "", job.get("prompt") or text,
                       job.get("skill") or "")
     job["visitor"] = bool(gid)
     if gid:
@@ -887,9 +894,15 @@ def api_batch():
                                  % (len(body_prompt), _MAX_PROMPT)}), 400
 
     from app.features.chat import routes as chat_routes
-    owner = chat_routes._who() or "__anonymous__"
-    from app.gateways import visitor as _visitor
-    gid = _visitor.current()
+    qq = chat_routes._who() or ""
+    # 访客（2026-11-26）：跟 `api_ask` 同一套身份口径。原先这里没有「没登录
+    # 就不给排」的判断，访客能直接打这条接口把 5 张额度用掉——现在补上，
+    # 并让访客的会话线/账本键落在身份段上（`__anonymous__` 会让所有访客共用
+    # 一条历史，直达那轮记的上下文跑到别人身上）。
+    gid = _visitor.current()["id"]
+    if not qq and not gid:
+        return jsonify({"ok": False, "error": "没登录"}), 401
+    owner = qq or _guest_key(gid)
 
     # 访客：额度按**真的要建几张**扣。不够就只建剩下的那几张（5 张额度、
     # 今天还剩 2 张 → 建 2 张），并明说一句，别让他以为点了 5 张。
@@ -955,6 +968,16 @@ def api_batch():
 #     改了词接着改，跨端也是同一张图的延续。
 
 _WEB_ASK_TURNS = 6          # 喂给模型的轮数（与 QQ_BOT_TURNS 同值）
+
+# 访客在模型那套接口里挂的名字（2026-11-26）。访客没有 QQ，但 `_translate`
+# / `_revise` / `bind_context` 都要一个「这轮是谁」的键：给空串的话所有访客
+# 会挤进同一条会话、互相看见对方的提示词，指代（「换成白色毛衣」）也会串到
+# 别人的上一张上去。用 5175 签的身份段拼一个出来，同一个访客前后一致。
+def _guest_key(gid=""):
+    gid = gid or _visitor.current()["id"]
+    return ("guest_" + gid) if gid else ""
+
+
 _WEB_IMG_CACHE = {}         # chat_ref_id -> data URL（临时参考图，见 _web_ctx）
 _WEB_IMG_LOCK = threading.Lock()
 _WEB_IMG_MAX = 12           # 一个用户最多藏 12 张，超了丢最老的
@@ -1118,8 +1141,7 @@ def _web_history_path(qq):
     if not qq:
         # 访客：按身份段分线（见 `_web_history` 的说明）。身份坏了就退到
         # 一个公共的匿名线——宁可上下文串一点，也不能因为文件名非法写崩。
-        from app.gateways import visitor as _visitor
-        key = "g_" + (_visitor.current() or "anon")
+        key = _guest_key() or "anon"
         return state_path("web_chat_%s.jsonl" % key)
     return state_path("web_chat_%s.jsonl" % qq)
 
@@ -1174,19 +1196,22 @@ def api_chat_upload():
         return jsonify({"ok": False, "error": "图片格式不对"}), 400
     if len(image) > (6 << 20):
         return jsonify({"ok": False, "error": "图片太大了"}), 400
-    qq = _who_qq_or_401()
-    if qq is None:
+    # 访客也能上传参考图（2026-11-26 修）：原先只认 qq，访客会被挡成
+    # 「没登录」。图片不落图库，只在这个进程内存里挂两小时，跟 qq 无关——
+    # 归属键换成「qq 或访客身份段」，换浏览器也读不到别人的那份。
+    owner = _who_qq_or_401() or _guest_key()
+    if not owner:
         return jsonify({"ok": False, "error": "没登录"}), 401
     ref = references.new_chat_ref()
     now = time.time()
     with _WEB_IMG_LOCK:
         mine = [(k, v) for k, v in _WEB_IMG_CACHE.items()
-                if v.get("qq") == qq]
+                if v.get("qq") == owner]
         if len(mine) >= _WEB_IMG_MAX:
             mine.sort(key=lambda kv: kv[1]["at"])
             for k, _v in mine[:len(mine) - _WEB_IMG_MAX + 1]:
                 _WEB_IMG_CACHE.pop(k, None)
-        _WEB_IMG_CACHE[ref] = {"qq": qq, "data": image, "at": now}
+        _WEB_IMG_CACHE[ref] = {"qq": owner, "data": image, "at": now}
     return jsonify({"ok": True, "ref": ref})
 
 

@@ -233,7 +233,7 @@ def _seer(qq):
     """
     try:
         from app.gateways import visitor as _visitor
-        if _visitor.current():
+        if _visitor.current()["id"]:
             return False
     except Exception:                       # noqa: BLE001
         pass

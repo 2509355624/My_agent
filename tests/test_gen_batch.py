@@ -56,6 +56,13 @@ class BatchDirectTest(unittest.TestCase):
                              return_value={"anima-2s", "moss"})
         p.start()
         self.addCleanup(p.stop)
+        # 2026-11-26 起 `/api/gen/batch` 也要求身份（访客或登录），没有身份
+        # 一律 401。这里默认按「登录的群友」跑，访客那两条自己改桩。
+        from app.features.chat import routes as chat_routes
+        p = mock.patch.object(chat_routes, "_who", return_value="10001",
+                              create=True)
+        p.start()
+        self.addCleanup(p.stop)
         visitor.reset()
         self.addCleanup(visitor.reset)
 
@@ -112,6 +119,14 @@ class BatchDirectTest(unittest.TestCase):
         r = self._post({"skill": "nope", "prompt": "x", "count": 5})
         self.assertEqual(r.status_code, 400)
 
+    def test_no_identity_is_401(self):
+        """既没登录、也不是访客：直达不给排（以前这里漏了这道）。"""
+        from app.features.chat import routes as chat_routes
+        with mock.patch.object(chat_routes, "_who", return_value=""):
+            r = self._post({"skill": "anima-2s", "prompt": "1girl",
+                            "count": 5, "prompt_is_final": True})
+        self.assertEqual(r.status_code, 401)
+
     def test_history_written_once(self):
         """同一句话连排 5 张，历史里只记一轮——记成 5 轮下一轮模型会以为
         用户连着问了五遍，改词的上下文就乱了。"""
@@ -129,7 +144,8 @@ class BatchDirectTest(unittest.TestCase):
         for _ in range(3):
             visitor.consume(gid_id)              # 先用掉 3 张，剩 2
         self.assertEqual(visitor.remaining(gid_id), 2)
-        with mock.patch.object(visitor, "current", return_value=gid_id), \
+        with mock.patch.object(visitor, "current",
+                               return_value={"id": gid_id, "raw": gid}), \
                 mock.patch.object(image_routes, "_web_history_push"):
             r = self._post({"skill": "anima-2s", "prompt": "1girl",
                             "count": 5, "prompt_is_final": True})
@@ -144,7 +160,8 @@ class BatchDirectTest(unittest.TestCase):
         gid_id = visitor.check_id(gid)
         for _ in range(visitor.IMG_PER_DAY):
             visitor.consume(gid_id)
-        with mock.patch.object(visitor, "current", return_value=gid_id):
+        with mock.patch.object(visitor, "current",
+                               return_value={"id": gid_id, "raw": gid}):
             r = self._post({"skill": "anima-2s", "prompt": "1girl",
                             "count": 5, "prompt_is_final": True})
         self.assertEqual(r.status_code, 403)

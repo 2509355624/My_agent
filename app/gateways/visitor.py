@@ -236,20 +236,35 @@ def current():
     必须先验内部令牌：`X-Friend-Guest` 这个头的签名密钥虽然只有本机
     两个进程知道，但「知道密钥」这件事和「知道令牌」是同一件事——不先卡
     令牌，就等于把签名校验当成了鉴权，口径和 `comic_quota.friend_qq` 不齐。
+
+    `raw`（2026-11-26 补）：没登录时聊天记录不存服务端（用户：「访客模式
+    不需要给他存聊天记录」），前端本地那份缓存要换个键，不能跟这台设备上
+    上一个真登录的人共用一份——所以把整条身份串回给前端当键用。
     """
     try:
         from flask import request
         good = _secret()
         got = str(request.headers.get("X-Friend-Token") or "")
         if not got or not hmac.compare_digest(got, good):
-            return ""
+            return _NONE
         raw = str(request.headers.get("X-Friend-Guest") or "")
     except Exception:                                   # noqa: BLE001
-        return ""
-    return check_id(raw) or ""
+        return _NONE
+    return {"id": check_id(raw) or "", "raw": raw}
+
+
+# 不是访客时返回的那个（只读，别改它）。用 dict 而不是空串：`current()["id"]`
+# 在「不是访客」这条最常见的路上不该抛 TypeError。
+_NONE = {"id": "", "raw": ""}
 
 
 # ─── 5175 侧的路径放行 ───────────────────────────────────
+
+# 访客**不能**碰的那几条（即便前缀在白名单里）。2026-11-26 用户：
+# 「访客模式不需要再给他存聊天记录了」——不打这个接口，页面全部走本地
+# 缓存（`store.js` 按访客身份串另存一份），5174 那边也不会给访客存档。
+_GUEST_DENY = ("/api/chat/archive",)
+
 
 def path_allowed(path, method="GET"):
     """访客能不能打这个接口。
@@ -264,8 +279,10 @@ def path_allowed(path, method="GET"):
     if p.startswith(_GEN_PREFIX) or p.startswith(_GAL_PREFIX):
         return True
     if p.startswith(_CHAT_PREFIX):
-        # 聊天存档：访客照存（用户：「给他存呗，我定期删」）
-        return True
+        # 聊天存档：访客**不存**（用户 2026-11-26：「访客模式不需要再给他
+        # 存聊天记录了」）。只读也一起挡：不存就没东西可读，放进来只会
+        # 让 5174 那边一路 401。
+        return not p.startswith(_GUEST_DENY)
     if p.startswith("/api/comic/"):
         return comic_allowed(p[len("/api/comic/"):], m)
     return False

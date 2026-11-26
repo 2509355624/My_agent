@@ -433,6 +433,10 @@ def me():
            "role": "user" if qq else ("visitor" if gid else "guest")}
     if gid:
         out["quota"] = visitor.snapshot(gid)
+        # 2026-11-26：访客不存服务端聊天记录（用户：「访客模式不需要再给他
+        # 存聊天记录了」），前端把 localStorage 换个键，别跟这台设备上一个
+        # 真登录的人（或上一个访客）共用一份。整条身份串当键，续签就换新的。
+        out["session"] = request.cookies.get(visitor.COOKIE_NAME) or ""
     return jsonify(out)
 
 
