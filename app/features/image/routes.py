@@ -901,7 +901,7 @@ def _web_decide(text, skill, hist, ctx):
         # 模型判「要垫这张图」（图生图 / 照着画 / 复刻）。前端把图以 data
         # URL 交回来，`_enqueue_job` → `_run` 会带着它进 `generate_image`。
         body["source_images"] = ctx["images"]
-    job, busy = _enqueue_job(body, owner=_who_qq(), lowres=WORKSPACE_LOWRES)
+    job, busy = _enqueue_job(body, owner=_who_qq(), lowres_on=WORKSPACE_LOWRES)
     if job is None:
         raise RuntimeError(busy or "没排上队，等一下再发")
     return job

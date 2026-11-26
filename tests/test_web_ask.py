@@ -39,6 +39,7 @@ class _Base(unittest.TestCase):
         self.trans = []      # _translate 调用
         self.rev = []        # _web_revise 调用
         self.enq = []        # 入队的 spec
+        self.lowres_flags = []   # 每次入队带的 lowres_on
         self.tr_result = {"skill": "silver", "prompt": "MASTER-OUT"}
         self.rev_result = {"skill": "silver", "prompt": "REVISED"}
 
@@ -51,8 +52,9 @@ class _Base(unittest.TestCase):
                              "images": images})
             return self.rev_result
 
-        def _enq(spec, owner, user_text=""):
+        def _enq(spec, owner, user_text="", lowres_on=False):
             self.enq.append(spec)
+            self.lowres_flags.append(lowres_on)
             return ({"id": "GP-1", "skill": spec["skill"],
                      "prompt": spec["prompt"],
                      "source_images": spec.get("source_images") or []}, None)
@@ -179,7 +181,8 @@ class NoAnswerTest(_Base):
     def test_busy_surfaces_as_runtime_error(self):
         with mock.patch.object(
                 R, "_enqueue_job",
-                new=lambda spec, owner, user_text="": (None, "同时最多画 5 张")):
+                new=lambda spec, owner, user_text="", lowres_on=False:
+                    (None, "同时最多画 5 张")):
             with self.assertRaises(RuntimeError) as ctx:
                 self._run("画只猫")
         self.assertIn("5 张", str(ctx.exception))
@@ -272,6 +275,28 @@ class EnqueueJobTest(unittest.TestCase):
         self.assertIsNone(job["steps"])
         self.assertFalse(job["landscape"])
         self.assertEqual(job["source_images"], [])
+        R._JOBS.pop(job["id"], None)
+
+    def test_lowres_keyword_matches_signature(self):
+        """`_web_decide` 传的关键字必须真在 `_enqueue_job` 的签名里。
+
+        2026-11-26 实跑抓到：`_web_decide` 写 `lowres=...`、函数签名是
+        `lowres_on`，工作台每点一次「画」都是 `TypeError` → 500。
+        单元测试全绿，因为桩函数自己写了 `**k` / 少写的参数**吞掉了这个错**。
+        这条不靠桩，直接对签名。
+        """
+        import inspect
+        params = inspect.signature(R._enqueue_job).parameters
+        self.assertIn("lowres_on", params)
+        self.assertNotIn("lowres", params)
+
+        # 真正带这个关键字调一次，签名对不上会 TypeError
+        with mock.patch.object(R, "_run", lambda job: None):
+            job, err = R._enqueue_job(
+                {"skill": "silver", "prompt": "x"}, owner="1",
+                lowres_on=True)
+        self.assertIsNone(err)
+        self.assertTrue(job["lowres"])
         R._JOBS.pop(job["id"], None)
 
 
