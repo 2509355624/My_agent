@@ -101,6 +101,17 @@
 
   function load(reset) {
     if (S.busy) return;
+    /* 访客 / 身份还没回来：这一页马上就会被 `visitor.js` 换成「还没登录 +
+       登录」，别再发一个注定 400 的请求。2026-11-26 用户实测「进「我的」先
+       闪一下作品/收藏，再变成访客卡」——闪的就是这里发出去的空列表。
+       `pending()` 是「可能访客」：身份没回来时先按住，`ws:role` 回来再决定
+       要不要发（见 mountBody 末尾）。 */
+    var vis = global.WSVisitor;
+    if (vis && vis.isVisitor && (vis.isVisitor() || (vis.pending && vis.pending()))) {
+      el.grid.innerHTML = "";
+      el.more.hidden = true;
+      return;
+    }
     S.busy = true;
 
     if (reset) {
@@ -190,10 +201,10 @@
         });
         return;
       }
-      /* 去登录用**跳地址**而不是 reload（2026-11-26）：reload 之后子页栈会
-         从 sessionStorage 恢复回来，人又被送回「我的」这一页，看起来就是
-         「点了登录又弹回来」（见 visitor.js 的 leaveToLogin）。 */
-      global.location.replace("/workspace/");
+      /* 去登录走**登录页自己的地址**（2026-11-26）：`/workspace/` 对有身份的
+         人直接发聊天页，访客拿着证去了就是原地画圈（详见 visitor.js 的
+         leaveToLogin）。 */
+      global.location.replace("/workspace/login");
     });
 
     
@@ -238,9 +249,8 @@
 
   // ── 挂到子页 ──────────────────────────────────────────
 
-  /* 顶栏那格的标题（2026-11-26 用户：「头顶那个我的，它不是放在中间的」）。
-     位置由 CSS 锚在整栏中线上（sheet.css 的 `.vtop > .vtitle`），这里只管
-     文字——建页时它是空的，`mount` 同步跑完就有字了。 */
+  /* 顶栏那格的字（2026-11-26 用户：「头顶那个我的，它不是放在中间的」——
+     位置由 CSS 锚在中线，这里只管文字）。 */
   function mountTop(mid) {
     mid.textContent = "我的";
   }
@@ -291,7 +301,18 @@
     S.busy = false;
     S.total = 0;
     syncTabs();
-    load(true);
+    /* 身份已经知道就直接拉；还不知道（多半是刚 reload）就先等 `ws:role`
+       ——`visitor.js` 那边 `/me` 一回来就广播。访客不拉、站主照旧。 */
+    var vis = global.WSVisitor;
+    if (!vis || !vis.pending || !vis.pending()) {
+      load(true);
+    } else {
+      global.addEventListener("ws:role", function once() {
+        global.removeEventListener("ws:role", once);
+        if (vis.isVisitor && vis.isVisitor()) return;
+        load(true);
+      });
+    }
 
     el.scroll.addEventListener("scroll", function () { POS = el.scroll.scrollTop; });
     global.requestAnimationFrame(function () { el.scroll.scrollTop = POS; });

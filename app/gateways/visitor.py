@@ -51,8 +51,7 @@ log = logging.getLogger("visitor")
 
 COOKIE_NAME = "fr_visit"
 COOKIE_TTL = 24 * 3600      # 用户 2026-11-26 定的 24 小时（隧道会重启，长了没意义）
-IMG_PER_DAY = 5             # 每天几张免费图（用户定的 5 张）
-# 一次连发最多几张（工作台「直达」按钮，2026-11-26）。用户在 233 粉丝群
+IMG_PER_DAY = 5             # 每天几张免费图（用户定的 5 张）# 一次连发最多几张（工作台「直达」按钮，2026-11-26）。用户在 233 粉丝群
 # 看到的现象是「同一提示词连跑 5 张，出来 5 张都不一样」——直达就是让他
 # 一次把 5 张排满，每张不同 seed。数字跟 QQ/工作台的 MAX_INFLIGHT 对齐。
 BATCH_MAX = 5
@@ -89,7 +88,26 @@ def _sign(gid, exp):
 
 def new_id():
     """签一个新访客身份：`<随机>.<过期时间>.<签名>`。"""
-    gid = secrets.token_hex(8)
+    return _mint(secrets.token_hex(8))
+
+
+def resign(value):
+    """手上那张证还有效就沿用它（续期），否则签一张新的。
+
+    为什么需要这个（2026-11-26 用户实测「次数会被刷新」）：`/login/visitor`
+    原先每次都 `new_id()`，而额度账本按 **id 段** 记账，于是「点登录 → 回
+    登录页 → 再点先逛逛」等于每点一次领一张新证、永远 5 张。
+
+    复用旧证时**用同一个 id 重新签**（新过期时间、对应新签名），因为账本只
+    认 id 段；直接把旧串塞回去也行（没过期），但那样每次点都拿同一个 cookie，
+    用户手上那张就永远不续期，最后在某个下午毫无预兆地变成「没身份」。
+    """
+    raw = str(value or "").strip()
+    gid = check_id(raw)
+    return _mint(gid) if gid else new_id()
+
+
+def _mint(gid):
     exp = int(time.time() + COOKIE_TTL)
     return "%s.%d.%s" % (gid, exp, _sign(gid, exp))
 

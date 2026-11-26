@@ -20,12 +20,22 @@
   "use strict";
 
   var KEY = "ws_chat_v1";
-  /* 访客的本地档位（2026-11-26 用户：「访客模式不需要再给他存聊天记录」）。
-     服务端那条路整个关掉之后，本地这份也得换个键：同一个浏览器上，站主
-     登录过、又点过「先以访客身份逛逛」，两边的记录不能互相看得见。
-     键里带的是 5175 签的身份串（`/me` 的 `session`），续签一次就是新的
-     一份，跟额度账本同一把钥匙。 */
+  /* 访客那一格（2026-11-26 用户：「访客模式不需要再给他存聊天记录」——录不
+     进服务端，但**这台设备**上要留着，不然「大退再进」刚才那张就没了）。
+     2026-11-26 第二轮实测又发现两件事：带身份串的键每续签一次就换一把，重进
+     就看不见自己刚画的；点「登录」再点「先逛逛」又续一轮。所以现在按**天**
+     分段（北京时间），旧版留下的那几把键在读的时候并一次进来。
+     `KEY_GUEST` 是老格式（`ws_chat_guest_v1[:sid]`），留着只为搬旧账。 */
   var KEY_GUEST = "ws_chat_guest_v1";
+  var KEY_GUEST_DAY = "ws_chat_visitor_v2:";
+  var KEY_GUEST_FIXED = "ws_chat_guest_v1";
+  var migrateDone = false;
+
+  function day() {
+    /* 北京时间的日期，跟 5174 记额度那个「零点」是同一个零点 */
+    var d = new Date(Date.now() + 8 * 3600 * 1000);
+    return d.toISOString().slice(0, 10);
+  }
   var MODE = { guest: false, sid: "" };
 
   /* store.js 在 chat.html 里排在 visitor.js / me.js 之前，拿不到已经
@@ -48,9 +58,7 @@
 
   function key() {
     if (!MODE.guest) return KEY;
-    /* 身份串里有 `.`（段分隔），localStorage 的键没限制，原样拼就行；
-       万一 /me 没给出 session（老网关），退回一个固定的访客键。 */
-    return MODE.sid ? (KEY_GUEST + ":" + MODE.sid) : KEY_GUEST;
+    return KEY_GUEST_DAY + day();
   }
 
   /* 本地缓存窗口（条）。**这不是「能看多少历史」**——总长度由服务端的 KEEP
@@ -80,6 +88,39 @@
     } catch (e) {
       return null;
     }
+  }
+
+  /* 把老访客键里的记录并进今天这一格，然后删掉老键。
+   *
+   * 2026-11-26 换键的当天，用户手机上「刚画的可莉」还躺在
+   * `ws_chat_guest_v1:<身份串>` 里；不搬的话他看到的正是「重进就没了」。
+   * 只搬一次（`migrateDone`），并且**只搬带着记录的格子**——空的直接删，
+   * 免得配额里堆一堆一天就没用的键。 */
+  function migrate() {
+    if (migrateDone || !MODE.guest) return;
+    migrateDone = true;
+    var keep = KEY_GUEST_FIXED;
+    var olds = [];
+    try {
+      for (var i = 0; i < global.localStorage.length; i++) {
+        var k = global.localStorage.key(i);
+        if (k && (k === keep || k.indexOf(KEY_GUEST + ":") === 0)) olds.push(k);
+      }
+    } catch (e) { return; }
+    var now = key(), msgs = [];
+    olds.forEach(function (k) {
+      if (k === now) return;
+      var d = null;
+      try { d = JSON.parse(global.localStorage.getItem(k) || "null"); } catch (e2) { d = null; }
+      if (d && Array.isArray(d.msgs)) msgs = msgs.concat(d.msgs);
+      try { global.localStorage.removeItem(k); } catch (e3) {}
+    });
+    if (!msgs.length) return;
+    var cur = read();
+    var all = merge((cur && cur.msgs) || [], msgs);
+    try {
+      global.localStorage.setItem(now, JSON.stringify({ v: 2, msgs: all.slice(-MAX) }));
+    } catch (e4) { /* 配额满了就算了，下次 save 还会写 */ }
   }
 
   /* 记录 id。带 id 的记录是「同一条」——卡片从排队中走到已出图，id 不变。 */
@@ -113,6 +154,7 @@
 
   /* 本地那份（同步返回）。页面首屏先拿它铺，避免等服务端回来白屏一下。 */
   function load() {
+    migrate();
     return read();
   }
 

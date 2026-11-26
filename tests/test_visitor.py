@@ -75,6 +75,28 @@ class GuestIdentityTest(unittest.TestCase):
         raw = "%s.%d.%s" % (gid, exp, visitor._sign(gid, exp))
         self.assertIsNone(visitor.check_id(raw))
 
+    def test_resign_keeps_same_identity(self):
+        """再点一次「先逛逛」必须还是同一个人。
+
+        2026-11-26 用户实测：「点登录 → 回登录页 → 再点逛逛，次数会被刷新」。
+        额度按 `id` 段记账，而 `/login/visitor` 原来每次都 `new_id()`，等于
+        每点一次领一张新证、永远 5 张。`resign()` 复用 id、只续期。
+        """
+        raw = visitor.new_id()
+        gid = visitor.check_id(raw)
+        for _ in range(3):
+            raw = visitor.resign(raw)
+            self.assertEqual(visitor.check_id(raw), gid)
+        # 签名随过期时间一起换，别拿旧签名硬套新过期
+        self.assertEqual(len(raw.split(".")), 3)
+        self.assertNotEqual(raw, visitor.new_id())
+
+    def test_resign_replaces_broken_cookie(self):
+        """手上那张已经过期 / 被改坏 → 签一张新的，不能把人锁在门外。"""
+        self.assertNotEqual(visitor.check_id(visitor.resign("garbage")),
+                            visitor.check_id("garbage"))
+        self.assertTrue(visitor.check_id(visitor.resign(None)))
+
     def test_junk_never_raises(self):
         for junk in (None, "", ".", "..", "a.b.c", "1.2.3.4.5", 123):
             self.assertIsNone(visitor.check_id(junk))
@@ -278,6 +300,35 @@ class GuestScopeTest(unittest.TestCase):
         self.assertEqual(plain.post("/api/gen/submit",
                                     json={"prompt": "x"}).status_code, 401)
 
+    def test_login_page_is_reachable_with_visitor_cookie(self):
+        """`/workspace/login` 不论身份都发登录页；`/workspace/` 才是回工作台。
+
+        2026-11-26 用户实测的循环：访客带着证点「登录」→ `/workspace/` 直接
+        把他发回聊天页 → 只能清状态回到登录页 → 再点「先逛逛」额度换新了。
+        """
+        c = self.app.test_client()
+        self.assertEqual(c.post("/login/visitor").status_code, 200)
+        page = c.get("/workspace/login").get_data(as_text=True)
+        self.assertIn("btn-visitor", page, "访客带着证也要能进登录页")
+        # `/workspace/` 仍是「有身份就回工作台」，聊天页里带着访客脚本
+        chat = c.get("/workspace/").get_data(as_text=True)
+        self.assertIn("visitor.js", chat)
+        # 没身份的人两边都是登录页
+        plain = self.app.test_client()
+        self.assertIn("btn-visitor", plain.get("/workspace/login").get_data(as_text=True))
+        self.assertIn("btn-visitor", plain.get("/workspace/").get_data(as_text=True))
+
+    def test_second_visitor_login_keeps_identity(self):
+        """同一个浏览器再点一次「先逛逛」→ 同一个人、同一份额度。"""
+        c = self.app.test_client()
+        c.post("/login/visitor")
+        first = c.get("/me").get_json()
+        c.post("/login/visitor")
+        again = c.get("/me").get_json()
+        self.assertEqual(again.get("role"), "visitor")
+        self.assertEqual(again.get("session"), first.get("session"))
+        self.assertEqual(again.get("quota"), first.get("quota"))
+
 
 class GuestGallerySeerTest(unittest.TestCase):
     """画廊的隐藏内容判定**不再看访客头**（2026-11-26 用户：「其他的不要变」）。
@@ -351,6 +402,44 @@ class WorkspaceVisitorJsTest(unittest.TestCase):
         """退场只认自己那层 transform 的 transitionend。"""
         src = self._src("stack.js")
         self.assertIn('e.target === view && e.propertyName === "transform"', src)
+
+    def test_me_page_does_not_fetch_while_identity_pending(self):
+        """身份没回来 / 是访客时，「我的」不能去拉作品列表。
+
+        2026-11-26 用户实测：「进「我的」先闪一下作品/收藏，再变成访客卡」。
+        闪的就是 `me.js` 在 mount 当刻发出的 `/api/gal/mine`。
+        """
+        src = self._src("me.js")
+        self.assertIn("vis.pending()", src)
+        self.assertIn("vis.isVisitor()", src)
+        # 访客确实进来了就不要再发（发出去必定 400「参数不对」）
+        head = src.split("function load(reset)")[1].split("S.busy = true;")[0]
+        self.assertIn("return;", head)
+
+    def test_visitor_store_key_is_per_day(self):
+        """访客的本地存档按天分段，不能挂在身份串上。
+
+        2026-11-26 用户实测两次：「大退再进，之前画的可莉没了」。带身份串的键
+        每续签一次就换一把；按天分段之后，同一天怎么进出都看得见。
+        """
+        src = self._src("store.js")
+        self.assertIn('var KEY_GUEST_DAY = "ws_chat_visitor_v2:";', src)
+        self.assertIn("KEY_GUEST_DAY + day()", src)
+        # 老键（带身份串那版）只允许出现在「搬家」那条路上
+        self.assertNotIn("KEY_GUEST + \":\" + MODE.sid", src)
+
+    def test_login_button_goes_to_login_page(self):
+        """「登录」要去登录页自己的地址，不能去 `/workspace/`。
+
+        2026-11-26 用户实测：「访客点登录 → 到登录页 → 再点先逛逛，次数被
+        刷新」。`/workspace/` 是**回工作台**的地址，访客带着证去会被直接发
+        回聊天页（原地画圈），只能靠清状态回去，而那条路顺手换了额度。
+        """
+        src = self._src("visitor.js")
+        self.assertIn('global.location.replace("/workspace/login")', src)
+        self.assertNotIn('global.location.replace("/workspace/")', src)
+        me = self._src("me.js")
+        self.assertIn('global.location.replace("/workspace/login")', me)
 
 
 if __name__ == "__main__":

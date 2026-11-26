@@ -5,13 +5,13 @@
 
   var SIZE = 24;
 
-  var S = { grp: "", page: 1, more: true, busy: false, works: [] };
+  var S = { grp: "", page: 1, more: true, busy: false, works: [], seq: 0 };
   var el = {};
   var io = null;
   var v = { list: [], idx: 0, jump: 0, faved: false, node: null, work: null,
-            hist: false };
+            hist: false, slow: 0 };
 
-  function $(id) { return document.getElementById(id); }
+  function $id(id) { return document.getElementById(id); }
 
   function listUrl(page) {
     var q = "?page=" + page + "&size=" + SIZE;
@@ -20,17 +20,9 @@
 
   // ── 顶栏：文件夹横滑标签 ──────────────────────────────
 
-  /* 重建标签栏时必须把滚动位置还回去。
-     2026-11-23 用户第三次报「AI 创作页头顶那条滑动条滑不动」——根因就在这：
-     `fillTabs` 每次列表加载完都会 `innerHTML = ""` 整条重建，滚动位置
-     随之归零。用户手正按着往右滑的时候正好赶上一次加载回包，标签条就
-     「弹回最左边」，手感上就是卡死、白滑。当时记下 scrollLeft 重建完再写回，
-     但手指正压在屏幕上的那一刻连「先清空再写回」都来不及——2026-11-24
-     用户还是报「头顶的横向滚动条直接卡死」。
-
-     所以现在**分类没变就一个节点都不动**（`dataset.key` 不变直接 return，
-     这条本来就有）；分类变了也只做**就地增删**，不整条清空——DOM 一直在，
-     手指按着的那条滚动轴就不会被重置。 */
+  /* 标签栏只做**就地增删**（2026-11-23/24 用户两次报「头顶那条滑不动」：
+     整条 `innerHTML=""` 重建会把 scrollLeft 清零，手指正按着时就是「卡死」）。
+     分类没变就一个节点都不动；变了也只增删差集，DOM 一直在。 */
   function fillTabs(grps) {
     if (!el.tabs) return;
     /* 同名标签只留一个。后端已经按分类收过一遍（2026-11-24 那批重复的
@@ -107,9 +99,7 @@
     for (var i = 0; i < n; i++) {
       var d = document.createElement("div");
       d.className = "gcard gsk";
-      var pic = document.createElement("div");
-      pic.className = "gpic";
-      d.appendChild(pic);
+      d.appendChild(document.createElement("div")).className = "gpic";
       el.grid.appendChild(d);
     }
   }
@@ -164,6 +154,7 @@
     return b;
   }
 
+  // 空态 / 出错那一行，`retry` 为真时带一个「重试」按钮
   function note(text, retry) {
     var p = document.createElement("p");
     p.className = "gnote";
@@ -181,24 +172,23 @@
 
   // ── 列表 ──────────────────────────────────────────────
 
+  /* 新分类能**打断**正在飞的那一次（发号机在 `gallery_load.js`，2026-11-26
+     用户实测「快速连点几个标签会卡住、内容和标签对不上」）。 */
   function load(reset) {
-    if (S.busy) return;
-    S.busy = true;
-
+    if (!S.claim) S.claim = WSTake.it();
+    var seq = S.claim(reset);
+    if (seq === null) return;
     if (reset) {
-      S.page = 1;
-      S.more = true;
-      S.works = [];
-      el.grid.innerHTML = "";
-      el.more.hidden = true;
+      S.page = 1; S.more = true; S.works = [];
+      el.grid.innerHTML = ""; el.more.hidden = true;
       skeleton(6);
     }
 
     var page = S.page;
     global.WSApi.get(listUrl(page)).then(function (d) {
+      if (!S.claim.owns(seq)) return;       // 已经被更新的一次换分类顶掉
       S.busy = false;
       clearSkeletons();
-
       if (!d || !d.ok) {
         note((d && d.error) || "图库没打开，稍后再试", true);
         return;
@@ -208,10 +198,7 @@
       /* 当前分类没了（目录清空 / 那面墙的图全被隐藏）→ 退回「全部」，
          别让用户停在一面空墙上（2026-11-24）。 */
       if (d.grp_gone && S.grp) {
-        S.grp = "";
-        markTabOn();
-        load(true);
-        return;
+        S.grp = ""; markTabOn(); load(true); return;
       }
 
       (d.works || []).forEach(function (w) {
@@ -225,17 +212,22 @@
 
       if (!S.works.length) note("这一格还是空的", false);
       if (S.more) watchMore();
+    }, function () {
+      /* 网络断了：`WSApi` 自己会兜成 `{ok:false, error:"网络断了…"}`，正常
+         不会走到这里；真走到（老版本 api.js）就认领回来，别把 S.busy 卡死
+         ——卡死之后翻页和换分类全都点不动了。 */
+      if (!S.claim.owns(seq)) return;
+      S.busy = false;
+      clearSkeletons();
+      note("图库没打开，稍后再试", true);
     });
   }
 
-  // 滚到底自动加页，不用用户去点
+  // 滚到底自动加页，不用用户去点（实现在 `gallery_load.js`）
   function watchMore() {
-    if (!global.IntersectionObserver || !el.more) return;
-    if (io) io.disconnect();
-    io = new global.IntersectionObserver(function (rows) {
-      if (rows[0] && rows[0].isIntersecting && !S.busy) load(false);
-    }, { root: el.scroll, rootMargin: "200px" });
-    io.observe(el.more);
+    io = WSTake.watch(io, el.more, el.scroll, function () {
+      if (!S.busy) load(false);
+    });
   }
 
   // ── 查看器 ────────────────────────────────────────────
@@ -272,24 +264,20 @@
 
   function buildViewer() {
     var box = document.createElement("div");
-    box.className = "gviewer";
-    box.hidden = true;
+    box.className = "gviewer"; box.hidden = true;
 
     var top = document.createElement("div");
     top.className = "gv-top";
 
     var close = document.createElement("button");
-    close.type = "button";
-    close.className = "gv-btn";
+    close.type = "button"; close.className = "gv-btn";
     close.setAttribute("aria-label", "关闭");
-    close.textContent = "✕";
-    close.addEventListener("click", closeViewer);
+    close.textContent = "✕"; close.addEventListener("click", closeViewer);
 
     var count = document.createElement("span");
     count.className = "gv-count";
 
-    var pad = document.createElement("span");
-    pad.className = "gv-pad";
+    var pad = document.createElement("span"); pad.className = "gv-pad";
 
     top.appendChild(close);
     top.appendChild(count);
@@ -297,28 +285,24 @@
 
     var stage = document.createElement("div");
     stage.className = "gv-stage";
-    var track = document.createElement("div");
+    var track = stage.appendChild(document.createElement("div"));
     track.className = "gv-track";
-    stage.appendChild(track);
 
     var acts = document.createElement("div");
     acts.className = "gv-acts";
 
     var fav = document.createElement("button");
-    fav.type = "button";
-    fav.className = "gv-act";
+    fav.type = "button"; fav.className = "gv-act";
     fav.innerHTML = ICON_STAR + "<span>收藏</span>";
     fav.addEventListener("click", toggleFav);
 
     var dl = document.createElement("button");
-    dl.type = "button";
-    dl.className = "gv-act";
+    dl.type = "button"; dl.className = "gv-act";
     dl.innerHTML = ICON_DL + "<span>下载</span>";
     dl.addEventListener("click", download);
 
     var same = document.createElement("button");
-    same.type = "button";
-    same.className = "gv-act gv-same";
+    same.type = "button"; same.className = "gv-act gv-same";
     same.innerHTML = ICON_SAME + "<span>画同款</span>";
     same.addEventListener("click", sameAs);
 
@@ -353,8 +337,14 @@
      chat/shot.js，不能串到这里。网格仍使用上面的 `s=t` 缩略图。 */
   function imgUrl(it) { return "/api/gal/img/" + it.id + "?s=v"; }
 
-  /* 给查看器压一条历史记录。已经压过（还开着）就不再压——连点两本不同的
-     作品集会走两次 open，第二次再压一条，关的时候要多按一次返回键。 */
+  /* 「很慢」提示的计时器。连开两本时先清上一本，免得旧计时器把标题改回
+     「网络有点慢」。回包那一刻也调它，所以只留一个名字。 */
+  function linkWa() {
+    if (v.slow) { global.clearTimeout(v.slow); v.slow = 0; }
+  }
+
+  /* 给查看器压一条历史记录。已经压过就不再压——连开两本会走两次 open，
+     第二次再压一条，关的时候要多按一次返回键。 */
   function pushViewer() {
     if (v.hist) return;
     v.hist = true;
@@ -388,8 +378,17 @@
     v.jump = itemId || 0;
     v.list = [];
     v.faved = false;
+    /* E 项（2026-11-26 用户：「点进作品集等十几秒什么都没有，只有一个透明
+       玻璃」）：大图没回来之前先给一行字，6 秒后补一句「网络有点慢」。 */
+    linkWa();
+    v.node.count.textContent = "正在打开…";
+    v.slow = global.setTimeout(function () {
+      if (v.node.box.hidden) return;
+      v.node.count.textContent = "网络有点慢，再等等…";
+    }, 6000);
 
     global.WSApi.get("/api/gal/work/" + work.id).then(function (d) {
+      linkWa();
       if (!d || !d.ok) {
         v.node.count.textContent = (d && d.error) || "这本打不开";
         return;
@@ -426,6 +425,7 @@
         }
       }
       v.jump = 0;
+      linkWa();
       v.node.count.textContent = v.list.length
         ? (v.idx + 1) + " / " + v.list.length : "";
       global.requestAnimationFrame(function () {
@@ -435,9 +435,8 @@
     });
   }
 
-  /* 收起来，**不动历史**。返回键那条路走这里——那时浏览器历史已经退回去了，
-     再 back 一次就等于连退两层。✕ / 「画同款」走 closeViewer，由它负责把
-     多出来的那条补掉。 */
+  /* 收起来，**不动历史**。返回键那条路走这里——那时历史已经退回去了，
+     再 back 就是连退两层。✕ / 「画同款」走 closeViewer，由它补掉那条。 */
   function hide() {
     if (!v.node) return;
     v.node.box.hidden = true;
@@ -447,13 +446,10 @@
 
   /* 收起查看器。→ true 表示「我顺手把浏览器历史也退了一条」。
 
-     `history.back()` 是**异步**的：调用完 state 不会立刻变，紧跟着再读
-     `history.state.ws` 拿到的还是退之前那个值。「画同款」正是 closeViewer()
-     之后紧接着 WSStack.back()，两下一叠就成了连退两层——AI 创作页被一起
-     关掉。所以把「已经退了一条」这个事实返回给调用方，让它别再退。
-
-     没压过 `{gv:1}`（比如查看器是从「我的」直接开的、历史已被别处清理）
-     时不会执行 back，返回 false，调用方照原逻辑退页面栈。 */
+     `history.back()` 是异步的：调用完 `history.state.ws` 还是旧值。
+     「画同款」是 closeViewer() 紧接着 WSStack.back()，两下一叠就连退两层
+     ——AI 创作页被一起关掉。所以把「已经退了一条」返回给调用方。
+     没压过 `{gv:1}` 时不 back，返回 false，调用方照原逻辑退页面栈。 */
   function closeViewer() {
     if (!v.node || v.node.box.hidden) return false;
     hide();
@@ -567,12 +563,11 @@
 
   // ── 挂到子页 ──────────────────────────────────────────
 
-  /* 子页壳（顶栏标签条 + 内层滚动容器 + 两列网格 + 查看器）整段在
-     `gallery_shell.js`。`gallery.js` 有 600 行硬线，而这里全是「造节点」的
-     死代码；拆出去以后本文件只留「数据怎么来、状态怎么变」。
-
-     拆的时机是 2026-11-24 加完「网格回缩略图 / 下载走 blob / 标签栏不重建」
-     这三处改动之后——它们都是必要改动，不该为了行数被砍掉。 */
+  /* 子页壳（顶栏标签条 / 滚动容器 / 两列网格 / 查看器）在 `gallery_shell.js`，
+     「谁的回包算数」在 `gallery_load.js`——本文件只留「数据怎么来、状态怎么
+     变」。拆出去是因为本文件有 600 行硬线
+     （`tests/test_workspace_gallery.py`），而这两块都是必要逻辑，不该为了
+     行数被砍。 */
   function mountTop(title) {
     return global.WSGalleryShell.mountTop(title, el);
   }
@@ -584,8 +579,8 @@
   }
 
   /* 手机返回键 / 浏览器后退落到查看器那一条时，收的是查看器，不是底下的
-     子页。`stack.js` 那边按 `state.ws` 层数退页面，压 `{gv:1}` 时把当时的
-     ws 一起带上，所以退到这一条时层数没变，它不会顺手把子页也关掉。 */
+     子页。`stack.js` 按 `state.ws` 层数退页面，压 `{gv:1}` 时带上了当时的
+     ws，所以退到这一条时层数没变，它不会顺手把子页也关掉。 */
   global.addEventListener("popstate", function (e) {
     if (!v.node || v.node.box.hidden) return;
     // 退到的这条还带 gv，说明是往前退回了另一个查看器态（几乎不会发生）

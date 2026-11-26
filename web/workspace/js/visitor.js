@@ -17,6 +17,13 @@
 
   var S = { loaded: false, role: "guest", left: 0, limit: 0, waiting: [] };
 
+  /* 身份回来之前就有人来问「我是访客吗」（`me.js` 的列表在 mount 当刻就会
+     问一次）。那时 `role` 还是默认的 `guest`，照直答「不是」就等于放它去
+     发 `/api/gal/mine`——用户看到的「闪一下作品/收藏」就是那一发。所以先给
+     一个「可能是」：`pending()` 只答「这一页需不需要先按访客处理」，真正
+     的身份仍以 `/me` 回来后的 `role` 为准。 */
+  function pending() { return !S.loaded; }
+
   function $(id) { return document.getElementById(id); }
 
   function isVisitor() { return S.role === "visitor"; }
@@ -84,22 +91,23 @@
     });
   }
 
-  /* 离开工作台去登录：**跳地址**，不是 reload。
+  /* 离开工作台去登录：跳到**登录页自己的地址**（`/workspace/login`），
+   * 而不是 `/workspace/`。
    *
-   * 2026-11-26 用户报「点登录有反应，但一直加载，然后又弹回原来的我的页」。
-   * 根因：reload 之后 `WSStack.init()` 会从 sessionStorage 把子页栈恢复回来
-   * （`ws_view_v1` 里存着「我的」），于是人又被送回那一页——看起来就是
-   * 「登录了但没进去」。换个地址等于清掉那条会话栈，落地就是干净的首屏。
+   * 2026-11-26 用户实测：访客点「登录」→ 到了登录页 → 点「先以访客身份逛逛」
+   * → **次数被刷新了**。根因在落点判定，不在按钮：`/workspace/` 是有身份的
+   * 人**回工作台**的地址，访客证还在时它直接发聊天页；所以「去登录」用同一
+   * 个地址，等于原地画圈，用户只能靠清状态回去，而清状态顺手就换了额度。
+   * 登录页现在有自己的地址，谁的证都拦不住。
    *
-   * 顺序不能反：先摘访客证，再跳。不摘的话 5175 看到访客身份会直接把人
-   * 放回工作台首页，等于点了没反应（`/workspace/` 的落点判定见
-   * `workspace_index`）。 */
+   * 顺序不能反：先摘访客证，再跳。不摘的话点「先逛逛」签回来就是新的一个
+   * 人——工作台里刚才画的那张（本地存档挂在身份上）当场看不见。 */
   function leaveToLogin() {
     global.WSApi.post("/logout", {}).then(function () {
       if (global.WSStore) global.WSStore.clear();
-      global.location.replace("/workspace/");
+      global.location.replace("/workspace/login");
     }, function () {
-      global.location.replace("/workspace/");
+      global.location.replace("/workspace/login");
     });
   }
 
@@ -223,6 +231,7 @@
     load: load,
     state: state,
     isVisitor: isVisitor,
+    pending: pending,        // 身份还没回来（见顶部注释）
     syncLeft: syncLeft,
     apply: apply
   };

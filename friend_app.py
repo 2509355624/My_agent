@@ -385,8 +385,15 @@ def login_visitor():
 
     这里**不再挂限流**（同一天用户：「不要搞这种东西」）：它原先借的是
     发码那个桶（10 次/小时/IP），直接把「点访客进入」挡成 429。
+
+    **手上已经有一张有效的访客证就沿用它**（2026-11-26 用户实测发现）：
+    「以访客身份点登录、跳到登录页、再点先逛逛，次数会被刷新」。原实现每次
+    都 `new_id()`，等于每点一次就领一张新证；额度账本按证上的 id 记账，新证
+    就是全新的一天 5 张——访客掐着「点登录再点逛逛」就能无限画。
+    复用旧证同时也是「身份不变」的意思：本地存档的键带着它，重进还能看到
+    刚才画的那张。
     """
-    gid = visitor.new_id()
+    gid = visitor.resign(request.cookies.get(visitor.COOKIE_NAME))
     resp = make_response(jsonify({"ok": True, "role": "visitor",
                                   "quota": visitor.snapshot(gid)}))
     resp.set_cookie(visitor.COOKIE_NAME, gid,
@@ -611,6 +618,19 @@ def workspace_page():
     成了没样式的白纸。所以入口统一带斜杠。
     """
     return redirect("/workspace/")
+
+
+@app.route("/workspace/login")
+def workspace_login():
+    """登录页不论身份都发（2026-11-26 用户：「访客点登录后，再点先逛逛，次数会被刷新」）。
+
+    原来工作台首页按 cookie 决定发登录页还是聊天页，于是访客手里的证还在时，
+    `/workspace/` 会把他直接发回聊天页——「点登录」变成原地画圈，用户只能靠清
+    除状态回到登录页，而那条路顺手把额度也换新了。登录页给一个自己的地址，
+    是否算退出由页面自己决定（访客卡这边先 `/logout` 再进来，见 `visitor.js`
+    的 `leaveToLogin`）。
+    """
+    return send_from_directory(WORKSPACE_DIR, "index.html")
 
 
 @app.route("/workspace/")
