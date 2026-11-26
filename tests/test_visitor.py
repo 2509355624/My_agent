@@ -1,23 +1,25 @@
 # -*- coding: utf-8 -*-
-"""访客模式（2026-11-26）：身份 / 每天 5 张 / 漫画不放 / 隐藏内容看不见。
+"""访客模式（2026-11-26）：身份 / 每天 5 张 / **只限工作台**。
 
 用户拍板的口径（原话摘录）：
 
-    「访客直接点就进去了，能生图」「每天 5 张，换浏览器就随便他换」
-    「加号只有图片生成」「我的漫画作品点进去访客空列表」
-    「画廊正常放行，但看不到隐藏的内容」
-    「访客模式不需要再给他存聊天记录了」
-    「我的作品和收藏隐藏」
+    「访客直接点就进去了，能生图」
+    「访客模式只局限于工作台，其他的东西不要给我变」
+
+⚠️ 2026-11-26 后半场最重要的一条：**访客模式只属于工作台**。它上一版按
+「路径白名单」收口，结果把画廊、漫画台、角色扮演、小说、跑图台连带群聊
+一起挡成了「访客模式用不了这个功能」，主业务跟着塌。现在改为按**发起方**
+判：只有 5175 工作台页面发出的请求才算访客，别处带着访客 cookie 一律当
+它不存在。
 
 钉死几条容易悄悄漂掉的边界：
 
   1. 身份串必须**签名**：自己编一个 id 不算数（否则改个字符就换新额度）。
   2. 额度按**身份串**记而不是整条 cookie：续签一次不能白送 5 张。
   3. 第 6 张不扣、也不给过；跨天（北京时间）自动回到 5 张。
-  4. 访客路径白名单只开工作台真的会调的那四组，生产类接口一律不放。
+  4. **工作台以外不算访客**（见 `GuestScopeTest`）：答复跟没带 cookie 一样。
   5. 5174 侧必须先验内部令牌，再验访客头；伪造的头当没带。
-  6. `_seer` 对访客一律 False（隐藏内容不可见），但不改任何数据。
-  7. 访客**不写服务端聊天存档**（用户 2026-11-26 后半句改口径）。
+  6. 用户已改口「访客不存聊天记录」：存档不做，前端只留本地一份。
 """
 
 import json
@@ -143,39 +145,91 @@ class GuestQuotaTest(unittest.TestCase):
         self.assertEqual(visitor.consume(""), (False, 0))
 
 
-class GuestPathTest(unittest.TestCase):
-    def test_workspace_surface_allowed(self):
-        for path in ("/api/gen/channels", "/api/gen/ask", "/api/gen/submit",
-                     "/api/gen/status", "/api/gen/img",
-                     "/api/gal/list", "/api/gal/img/abc"):
-            self.assertTrue(visitor.path_allowed(path, "GET"), path)
-        self.assertTrue(visitor.path_allowed("/api/gen/ask", "POST"))
+class GuestScopeTest(unittest.TestCase):
+    """访客模式只属于工作台（2026-11-26 用户拍死的一条）。
 
-    def test_no_server_archive_for_visitor(self):
-        """访客不存聊天记录（2026-11-26 用户改的口径），存档接口整个挡住。"""
-        for m in ("GET", "POST", "PATCH", "DELETE"):
-            self.assertFalse(visitor.path_allowed("/api/chat/archive", m), m)
+    以前这里是「工作台能打哪些接口」的白名单。问题就出在这个思路：按**路径**
+    判，判不出「是谁在调」，于是同一批 `/api/gal/*` 被工作台的规则扣到了画廊、
+    跑图台、漫画台上，把主业务一起挡了。现在改判**发起方**——看这次请求是不是
+    工作台发出来的。所以这里钉的是「工作台以外一律不算访客」。
+    """
 
-    def test_comic_read_only(self):
-        self.assertTrue(visitor.path_allowed("/api/comic/tasks", "GET"))
-        self.assertTrue(visitor.path_allowed("/api/comic/status", "GET"))
-        for sub in ("script", "start", "rerun", "resume", "portrait",
-                    "chat_revise", "manual", "upload", "save"):
-            p = "/api/comic/%s" % sub
-            self.assertFalse(visitor.path_allowed(p, "POST"), p)
-        # 读名单里的也不许 POST
-        self.assertFalse(visitor.path_allowed("/api/comic/tasks", "POST"))
+    def setUp(self):
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        import friend_app
+        from app.gateways import visitor as v
+        self.fa = friend_app
+        self.v = v
+        self.app = friend_app.app
+        self.app.config["TESTING"] = True
 
-    def test_out_of_scope_blocked(self):
-        """工作台到不了的那些，一个都不开。"""
-        for path in ("/api/persona/chat", "/api/outfit/save",
-                     "/api/runbench/submit", "/api/raglab/ask",
-                     "/api/novel/start", "/api/moss/img"):
-            self.assertFalse(visitor.path_allowed(path, "GET"), path)
+    def _here(self, referer, host="localhost"):
+        h = {"Referer": referer} if referer else {}
+        with self.app.test_request_context("/x", headers=h,
+                                           base_url="http://" + host):
+            return self.fa._jf_here()
+
+    def test_workspace_counts(self):
+        for ref in ("http://localhost/workspace", "http://localhost/workspace/",
+                    "http://localhost/workspace/chat.html",
+                    "http://localhost/workspace/js/chat.js"):
+            self.assertTrue(self._here(ref), ref)
+
+    def test_everything_else_does_not(self):
+        """画廊 / 漫画台 / 跑图台 / 角色扮演 / 小说 / 没 Referer / 外站冒充。"""
+        for ref in ("http://localhost/gallery", "http://localhost/comic",
+                    "http://localhost/runbench", "http://localhost/persona",
+                    "http://localhost/novel", "http://localhost/showcase", ""):
+            self.assertFalse(self._here(ref), ref)
+        # 外站路径里带 workspace 也不行（主机名要跟这次请求一致）
+        self.assertFalse(self._here("https://evil.example/workspace/x"))
+        self.assertFalse(self._here("http://other.host/workspace/chat.html"))
+
+    def test_gateway_treats_visitor_as_absent_outside_workspace(self):
+        """别的页面带着访客 cookie 打进来，必须跟「什么都没带」一模一样的答复。"""
+        gid = self.v.new_id()
+        c_guest = self.app.test_client()
+        c_guest.set_cookie(self.v.COOKIE_NAME, gid, domain="localhost")
+        c_plain = self.app.test_client()
+        cases = [("/api/gal/list?size=1", "GET", "http://localhost/gallery"),
+                 ("/api/comic/tasks", "GET", "http://localhost/comic"),
+                 ("/api/gen/channels", "GET", "http://localhost/runbench"),
+                 ("/api/novel/list", "GET", "http://localhost/novel"),
+                 ("/api/friend/quota", "GET", "http://localhost/runbench"),
+                 ("/api/chat/archive", "GET", "http://localhost/gallery")]
+        for url, method, ref in cases:
+            h = {"Referer": ref}
+            a = c_guest.open(url, method=method, headers=h)
+            b = c_plain.open(url, method=method, headers=h)
+            self.assertEqual(a.status_code, b.status_code, url)
+            self.assertEqual(a.get_data(), b.get_data(), url)
+            # 更不能再出现那句把人挡回去的话
+            self.assertNotIn("访客模式用不了", a.get_data(as_text=True), url)
+
+    def test_me_answers_visitor_only_inside_workspace(self):
+        gid = self.v.new_id()
+        c = self.app.test_client()
+        c.set_cookie(self.v.COOKIE_NAME, gid, domain="localhost")
+        inside = c.get("/me", headers={"Referer": "http://localhost/workspace/chat.html"})
+        self.assertEqual(inside.get_json().get("role"), "visitor")
+        outside = c.get("/me", headers={"Referer": "http://localhost/gallery"})
+        self.assertEqual(outside.get_json().get("role"), "guest")
+        bare = c.get("/me")
+        self.assertEqual(bare.get_json().get("role"), "guest")
+
+    def test_path_whitelist_is_gone(self):
+        """白名单那两个函数别再回来——它就是「按路径扣规则」的老毛病。"""
+        self.assertFalse(hasattr(self.v, "path_allowed"))
+        self.assertFalse(hasattr(self.v, "comic_allowed"))
 
 
 class GuestGallerySeerTest(unittest.TestCase):
-    """`_seer` 对访客一律 False：隐藏内容看不见，但一行数据都不动。"""
+    """画廊的隐藏内容判定**不再看访客头**（2026-11-26 用户：「其他的不要变」）。
+
+    上一版这里钉的是「访客一律看不见隐藏内容」。那是把工作台的规则塞进了
+    画廊，连带把站主/好友在画廊里的正常视角也改掉了。现在画廊回到原来的
+    口径：站主看得见、工作台里看不见、访客头不参与判断。数据一行都不动。
+    """
 
     def setUp(self):
         from app.features.gallery import routes as gal
@@ -183,25 +237,25 @@ class GuestGallerySeerTest(unittest.TestCase):
         _reload()
         self.addCleanup(_reload)
 
-    def test_visitor_cannot_see_hidden(self):
+    def test_owner_sees_hidden_even_with_guest_header(self):
+        """站主带着访客头进画廊（工作台以外的请求），照旧看得见隐藏内容。"""
         raw = visitor.new_id()
         good = friend_auth.secret()
         with mock.patch("flask.request",
                         _FakeReq({"X-Friend-Token": good,
                                   "X-Friend-Guest": raw})):
             with mock.patch.object(self.gal, "_jf", return_value=False):
-                # 就算这个人挂了站主的 qq，访客身份优先
-                self.assertFalse(self.gal._seer("10001"))
-
-    def test_forged_guest_header_ignored(self):
-        """伪造的访客头不算数 → 回到原来那条路（这里给了站主号就该看见）。"""
-        with mock.patch("flask.request",
-                        _FakeReq({"X-Friend-Token": "wrong",
-                                  "X-Friend-Guest": visitor.new_id()})):
-            with mock.patch.object(self.gal, "_jf", return_value=False):
                 with mock.patch.object(self.gal, "_is_owner",
                                        return_value=True):
                     self.assertTrue(self.gal._seer("10001"))
+
+    def test_workspace_still_hides(self):
+        """工作台里连站主也是普通用户视角（这条是 2026-11-24 的老口径，不动）。"""
+        with mock.patch("flask.request", _FakeReq({})):
+            with mock.patch.object(self.gal, "_jf", return_value=True):
+                with mock.patch.object(self.gal, "_is_owner",
+                                       return_value=True):
+                    self.assertFalse(self.gal._seer("10001"))
 
 
 class WorkspaceVisitorJsTest(unittest.TestCase):

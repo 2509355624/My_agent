@@ -122,7 +122,13 @@ class VisitorUploadTest(unittest.TestCase):
 
 
 class VisitorArchiveTest(unittest.TestCase):
-    """访客不写服务端聊天存档（用户 2026-11-26 改的口径）。"""
+    """聊天存档：5174 不再按访客头拒绝（2026-11-26 收回到工作台边界）。
+
+    上一版这里钉的是「带访客头一律 401」。那是靠 5174 去认访客头实现的，
+    把「谁算访客」复制到了每一个共用 `_who()` 的接口上——跑图台、小说、
+    角色扮演都跟着塌。现在「访客不存聊天记录」这条由**工作台自己**兑现
+    （前端不推、网关只给工作台带访客头），5174 这边保持原样的身份口径。
+    """
 
     def setUp(self):
         visitor.reset()
@@ -133,30 +139,18 @@ class VisitorArchiveTest(unittest.TestCase):
         self.client = app.test_client()
         self.chat = chat
 
-    def test_archive_rejects_visitor(self):
-        """带访客头打存档：401，并且明确标 `guest`（不是「没登录」那种）。"""
-        for path in ("/api/chat/archive?qq=10001", "/api/chat/archive"):
-            r = self.client.get(path, headers=_guest_headers())
-            self.assertEqual(r.status_code, 401, path)
-            self.assertTrue(r.get_json().get("guest"), path)
+    def test_guest_header_does_not_change_identity(self):
+        """访客头不影响 `_who()`：还是按 qq 参数/本机直连那套判。"""
+        from app.features.chat import routes as chat
+        with self.client.application.test_request_context(
+                "/api/chat/archive?qq=10001", headers=_guest_headers()):
+            self.assertEqual(chat._who(), "10001")
 
-    def test_archive_post_rejects_visitor(self):
-        r = self.client.post("/api/chat/archive", headers=_guest_headers(),
-                             json={"msgs": [{"m": {"k": "user", "t": "hi"}}]})
+    def test_guest_header_never_makes_a_slot(self):
+        """没有 qq 就还是没有档位，不会因为带了访客头「凭空有身份」。"""
+        r = self.client.get("/api/chat/archive", headers=_guest_headers())
         self.assertEqual(r.status_code, 401)
-        self.assertTrue(r.get_json().get("guest"))
-
-    def test_visitor_path_blocked_at_gateway(self):
-        for m in ("GET", "POST", "PATCH", "DELETE"):
-            self.assertFalse(visitor.path_allowed("/api/chat/archive", m))
-
-    def test_guest_does_not_see_a_real_slot(self):
-        """访客头 + 别人的 qq 参数：不能读到那个人的存档。"""
-        r = self.client.get("/api/chat/archive?qq=10001",
-                            headers=_guest_headers())
-        self.assertEqual(r.status_code, 401)
-        self.assertNotIn("msgs", r.get_json())
-
+        self.assertNotIn("msgs", r.get_json() or {})
 
 if __name__ == "__main__":
     unittest.main()

@@ -147,27 +147,16 @@ def _rec_id(m):
     return str(m.get("id") or "").strip()
 
 
-def _is_guest():
-    """这次请求是访客转发来的吗（5175 带 `X-Friend-Guest`）。
-
-    访客**没有档位**：用户 2026-11-26 后半段改的口径是「访客模式不需要再给
-    他存聊天记录了」，所以存档接口对访客一律 401，页面那边全部走本地缓存。
-    """
-    try:
-        from app.gateways import visitor
-        return bool(visitor.current()["id"])
-    except Exception:                                    # noqa: BLE001
-        return False
-
-
 def _who():
     """当前请求属于哪个档位。→ qq 或 ""。
 
-    访客一律返回 ""（哪怕 5175 那边漏挡、带着 qq 参数打进来也不算）——否则
-    访客的聊天记录会落进站主或某个群友的档位里。
+    ⚠️ 2026-11-26 用户划死的边界：**访客模式只属于工作台**。这里曾经写过
+    「访客一律返回空串」，结果凡是共用这套身份判定的路子（跑图台、角色
+    扮演、小说、群友额度……）在访客 cookie 下一律被当成没登录，主业务被
+    一个展示用的开关拖垮。现在访客的身份**只在 5175 的 `/workspace/` 那条
+    路上**带 `X-Friend-Guest` 头，其余页面根本没有这个头，这里也就不必、
+    也不该再判访客。
     """
-    if _is_guest():
-        return ""
     qq = str(request.args.get("qq") or "").strip()
     if not qq:
         body = request.get_json(silent=True) or {}
@@ -197,7 +186,7 @@ def api_archive_get():
     qq = _who()
     if not qq:
         # 访客（2026-11-26）：不存服务端记录，前端按 //me 的 role 走本地缓存。
-        return jsonify({"ok": False, "error": "没登录", "guest": _is_guest()}), 401
+        return jsonify({"ok": False, "error": "没登录"}), 401
     msgs = _load(qq)
     total = len(msgs)
     limit = request.args.get("limit", type=int) or TAIL
@@ -222,7 +211,7 @@ def api_archive_post():
     qq = _who()
     if not qq:
         # 访客（2026-11-26）：不存服务端记录，前端按 //me 的 role 走本地缓存。
-        return jsonify({"ok": False, "error": "没登录", "guest": _is_guest()}), 401
+        return jsonify({"ok": False, "error": "没登录"}), 401
     if request.content_length and request.content_length > BODY_MAX:
         return jsonify({"ok": False, "error": "这次推的记录太大了"}), 413
 
@@ -303,7 +292,7 @@ def api_archive_patch():
     qq = _who()
     if not qq:
         # 访客（2026-11-26）：不存服务端记录，前端按 //me 的 role 走本地缓存。
-        return jsonify({"ok": False, "error": "没登录", "guest": _is_guest()}), 401
+        return jsonify({"ok": False, "error": "没登录"}), 401
     body = request.get_json(silent=True) or {}
     if not isinstance(body, dict):
         return jsonify({"ok": False, "error": "参数不对"}), 400
@@ -349,7 +338,7 @@ def api_archive_clear():
     qq = _who()
     if not qq:
         # 访客（2026-11-26）：不存服务端记录，前端按 //me 的 role 走本地缓存。
-        return jsonify({"ok": False, "error": "没登录", "guest": _is_guest()}), 401
+        return jsonify({"ok": False, "error": "没登录"}), 401
     with _LOCK:
         try:
             if os.path.isfile(_file(qq)):

@@ -31,7 +31,7 @@ import logging
 import os
 import threading
 import time
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import requests
 from flask import (Flask, Response, g, jsonify, make_response, redirect, request,
@@ -426,7 +426,9 @@ def me():
     「走 /guest 进来的只读会话」，和这里的身份判定是两件事。
     """
     qq = friend_auth.check_cookie(request.cookies.get(friend_auth.COOKIE_NAME))
-    gid = "" if qq else _visitor_id()
+    # 访客只在工作台里算数（见 `_guest_here`）：别的页面来问「我是谁」，
+    # `role` 老老实实回 guest/user，前端那边的访客收口不会被误开。
+    gid = "" if qq else _guest_here()
     out = {"ok": True, "qq": qq, "guest": bool(not qq),
            # 2026-11-26 访客模式：前端靠 `role` 决定露不露「漫画生成」、
            # 「我的」，以及顶栏那行「访客 · 今日还剩 N 张」。
@@ -459,16 +461,50 @@ def _solo_in():
 
 
 def _visitor_id():
-    """这次请求是不是**访客模式** → 身份串；不是 → ""。
+    """这个浏览器有没有访客身份串 → `id`；没有 → ""。
 
-    访客是登录页「先逛逛」那条路发出来的 `fr_visit`，不需要 QQ 号、不进
-    好友白名单（用户 2026-11-26：「访客直接点就进去了」）。真登录之后
-    `_logged_in()` 为真，访客身份自然让位——两套 cookie 同时在也不打架。
+    **只回答「有没有」，不回答「这次算不算」**。访客模式按用户拍板的口径
+    只属于工作台，所以真正决定身份的是 `_guest_here()`，谁也不该直接拿
+    这个函数的返回值当「这是访客」用。
     """
     raw = request.cookies.get(visitor.COOKIE_NAME)
     if not raw:
         return ""
     return visitor.check_id(raw) or ""
+
+
+# 工作台自己发的请求才认作「工作台」。拿 Referer 判断：工作台发出来的请求
+# 都在 `/workspace/chat.html` 底下；别的页面（画廊、漫画台、跑图台……）各自
+# 在自己的地址上，Referer 里没有 `/workspace`。直开接口（没有 Referer）也
+# 一律不算——绝不因为「浏览器里碰巧留着一个访客 cookie」就让别处跟着降级。
+def _jf_here():
+    try:
+        ref = str(request.headers.get("Referer") or "")
+        if not ref:
+            return False
+        u = urlparse(ref)
+        p = u.path or ""
+        if not (p == "/workspace" or p.startswith("/workspace/")):
+            return False
+        # 光看路径不够：外站可以拿 `https://evil.example/workspace/x` 冒充。
+        # 主机名必须和这次请求一致（隧道后面看到的是同一台机器）。
+        got = (u.netloc or "").lower()
+        want = str(request.host or "").lower()
+        return bool(got) and bool(want) and got == want
+    except Exception:                                   # noqa: BLE001
+        return False
+
+
+def _guest_here():
+    """这次请求算不算访客 → 身份串；不算 → ""。
+
+    两个条件**同时**满足才算：浏览器带着有效的访客 cookie，且这次请求是
+    工作台发出来的（`_jf_here()`）。用户 2026-11-26 的原话：「访客模式只
+    局限于工作台，其他的东西不要给我变」。所以工作台以外一律返回空串，
+    那些页面按原来的口径走（没登录就提示没登录，登录了照常用），不会再
+    因为「上次点过先逛逛」而冒出「访客模式用不了这个功能」。
+    """
+    return _visitor_id() if _jf_here() else ""
 
 
 @app.route("/guest")
@@ -674,18 +710,19 @@ def _forward(prefix, sub, allow_guest=False, force_guest=False,
     里有登录 cookie 也不注入 QQ，保证从分享链接进去的人一定是游客、看不到
     站主自己的线。只作用于 `/api/solo/*`，普通 `/persona` 页不受影响。
 
-    `vis`（2026-11-26 访客模式）：访客没有 QQ，先按路径白名单挡（工作台
-    真的会调的四组放行，其余 403），再带 `X-Friend-Guest` 头把身份送过去。
-    **不带 `qq`、不带 `__jf`**：5174 那边认这个头就当访客算，画廊的
-    `_seer()` 直接判不能看隐藏内容；额度也在 5174 扣（它才有提交那一刻）。
+    访客模式（2026-11-26）：**只认工作台**。`_guest_here()` 会先看这次请求
+    是不是工作台发来的；只有工作台的那条路走访客分支（带 `X-Friend-Guest`、
+    不塞 `qq`、额度在 5174 扣）。别的页面哪怕浏览器里还挂着访客 cookie，
+    这里也当它不存在——画廊、漫画台、角色扮演、小说、跑图台、群聊全部照旧，
+    不受这个展示用开关的影响。
+
+    `jf` 是「这条接口工作台也在用」，`_jf_here()` 是「这次请求真是工作台
+    发来的」：两者取交，所以工作台以外调同一批接口照旧走原来的判定。
     """
     qq = friend_auth.check_cookie(request.cookies.get(friend_auth.COOKIE_NAME))
     if force_guest:
         qq = ""
-    gid = "" if (qq or force_guest) else _visitor_id()
-    if gid and not visitor.path_allowed(request.path, request.method):
-        return jsonify({"ok": False,
-                        "error": "访客模式用不了这个功能"}), 403
+    gid = "" if qq else _guest_here()
     if not qq and not gid and not allow_guest:
         return jsonify({"ok": False, "error": "还没登录"}), 401
     url = "%s%s/%s" % (BACKEND, prefix, sub)
@@ -693,9 +730,9 @@ def _forward(prefix, sub, allow_guest=False, force_guest=False,
     params = dict(request.args)
     if gid:
         # 访客：身份走专用头，绝不塞 `qq`——塞了就到不了访客分支，会被当成
-        # 某个 QQ 号的登录态，配额和隐藏内容全按那个人算。
+        # 某个 QQ 号的登录态，额度全按那个人算。
         headers["X-Friend-Guest"] = request.cookies.get(visitor.COOKIE_NAME) or ""
-    elif jf:
+    elif jf and _jf_here():
         params["__jf"] = "1"
 
     # 游客身份 cookie 必须透传：5175 不解析它，只负责原样送到 5174。

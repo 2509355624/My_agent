@@ -57,17 +57,15 @@ IMG_PER_DAY = 5             # 每天几张免费图（用户定的 5 张）
 # 一次把 5 张排满，每张不同 seed。数字跟 QQ/工作台的 MAX_INFLIGHT 对齐。
 BATCH_MAX = 5
 
-# 访客**能用**哪些接口。只列生图与画廊读写（写由 5174 自己按 qq 拒），
-# 以及聊天存档（用户 2026-11-26：「聊天存档照旧，给他存呗」）。
+# 访客能调哪些接口：**不在这里判**。
 #
-# 用前缀匹配：`/api/gen/` 全部放行，额度在提交那一刻由 5174 扣。
-# 漫画单独列成「只读」——访客点得进「我的漫画作品」，但看到的是空列表。
-_GEN_PREFIX = "/api/gen/"
-_GAL_PREFIX = "/api/gal/"
-_CHAT_PREFIX = "/api/chat/"
-
-# 漫画只读的几个：允许 GET，POST 一律 403（见 `comic_allowed`）。
-_COMIC_READ = ("status", "tasks", "img", "bubble", "download")
+# 2026-11-26 用户把边界划死了：「访客模式只局限于工作台，其他的东西不要给
+# 我变」。原先这里有一张路径白名单，5175 见到访客 cookie 就把白名单外的
+# 一律 403——结果画廊、漫画台、角色扮演、小说、跑图台全被这条挡成「访客
+# 模式用不了这个功能」，主业务跟着塌。白名单是「按哪个路径」判，判不出
+# 「这是谁在调」；真正能判的是**发起方**，所以现在只有 5175 的工作台入口
+# 才把访客身份带过去（`friend_app._guest_here()`），其余页面这里根本没
+# 人来问。
 
 _FILE = state_path("visitor.json")
 _LOCK = threading.RLock()
@@ -258,44 +256,14 @@ def current():
 _NONE = {"id": "", "raw": ""}
 
 
-# ─── 5175 侧的路径放行 ───────────────────────────────────
-
-# 访客**不能**碰的那几条（即便前缀在白名单里）。2026-11-26 用户：
-# 「访客模式不需要再给他存聊天记录了」——不打这个接口，页面全部走本地
-# 缓存（`store.js` 按访客身份串另存一份），5174 那边也不会给访客存档。
-_GUEST_DENY = ("/api/chat/archive",)
-
-
-def path_allowed(path, method="GET"):
-    """访客能不能打这个接口。
-
-    只列**工作台真的会调**的那四组（用户 2026-11-26 纠正过我上一版把
-    角色扮演 / 跑图台 / 换装都列进来的错）：`/api/gen/*`、`/api/gal/*`、
-    `/api/chat/*`、`/api/comic/*` 的只读几条。其余一律 403——工作台本来
-    到不了那些地方，留着就是个口子。
-    """
-    p = str(path or "")
-    m = str(method or "GET").upper()
-    if p.startswith(_GEN_PREFIX) or p.startswith(_GAL_PREFIX):
-        return True
-    if p.startswith(_CHAT_PREFIX):
-        # 聊天存档：访客**不存**（用户 2026-11-26：「访客模式不需要再给他
-        # 存聊天记录了」）。只读也一起挡：不存就没东西可读，放进来只会
-        # 让 5174 那边一路 401。
-        return not p.startswith(_GUEST_DENY)
-    if p.startswith("/api/comic/"):
-        return comic_allowed(p[len("/api/comic/"):], m)
-    return False
-
-
-def comic_allowed(sub, method="GET"):
-    """漫画接口里访客能碰的那几个：看列表、看状态、看图、看气泡、下载。
-
-    「我的漫画作品」点进去要是个**空列表**而不是报错，所以 `tasks` 必须是
-    GET 放行；生成本身（`script` / `start` / `rerun` / `resume` / `portrait`
-    那一串）全是 POST，一律 403。
-    """
-    name = str(sub or "").split("?")[0].strip("/")
-    if str(method or "GET").upper() != "GET":
-        return False
-    return name in _COMIC_READ
+# ─── 5175 侧：已经不在这里判了 ───────────────────────────
+#
+# 原先这里有 `path_allowed()` / `comic_allowed()` 两张白名单，5175 一见访客
+# 就把名单外的请求 403 掉。问题是它们只看路径、不看是谁在调：工作台和画廊
+# 用的是同一批 `/api/gal/*`，跑图台和角色扮演各有自己的前缀——按路径判，
+# 结果就是「把工作台的规则扣到了所有页面头上」，主业务被一个展示用的开关
+# 拖塌（2026-11-26 用户报的原话：「我群聊艾特大大怪没有任何的回应」）。
+#
+# 现在改为在 5175 判**发起方**（`friend_app._guest_here()`）：只有工作台页面
+# 发出来的请求才带 `X-Friend-Guest`，其余页面这里连问都不会被问。所以这两
+# 个函数整个删掉，别让以后又有人拿它当「访客能不能用 X」的总闸。
