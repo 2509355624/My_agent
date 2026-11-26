@@ -201,9 +201,18 @@
     ph.className = "cwait" + (p.state === "error" ? " bad" : "");
     if (p.state === "error") {
       ph.textContent = p.error || "这页没画出来";
-    } else if (p.state === "running" || B.running) {
+    } else if (p.state === "running") {
       ph.textContent = "正在画…";
+    } else if (B.running) {
+      /* 整本有线程在跑（比如刚点了「重画这页」），但这一格不动：
+         它在队列里等，不是在画。说清楚是哪件事，别让每一格都喊「正在画」。 */
+      ph.textContent = "排队中，画好就出来";
     } else {
+      /* 没在画、也没出图：不冒充「正在画」。
+         2026-11-26 用户报「我只是重画这一页，滑到后面全是正在画」——
+         原来判断是 `p.state === "running" || B.running`，只要整本有一个
+         后台线程在跑，每一格都顶着「正在画…」。现在只认这一格自己的状态：
+         `running` 是这一格正在画，`pending` 就是还没画到。 */
       ph.textContent = "还没画到这页";
     }
     d.appendChild(ph);
@@ -290,6 +299,9 @@
     return true;
   }
 
+  /* 状态里哪些变化值得重铺整本：图和格状态。`sameShape` 返回真就只刷按钮，
+     返回假才重建——所以「正在画 → 排队中 → 出图」每一步都会重铺那一屏，
+     不会停在上一句话上。 */
   function apply(d) {
     B.running = d.running || "";
     B.title = d.title || B.title;

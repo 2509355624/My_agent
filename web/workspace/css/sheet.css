@@ -119,6 +119,50 @@
   margin-left: auto;
 }
 
+/* ── 看图的页（漫画单本）：顶栏不占一条，按钮浮在画面上 ─────────
+   2026-11-26 用户第三次报「头顶那行白色的栏，它依旧存在」。上一版只是把
+   空标题收成 0 宽，可 `.vtop` 自己的 padding + 分隔线 + 玻璃底还在，顶上
+   依旧横着一条白带，整页图因此短了一截。
+
+   现在这一类子页（views.js 的 FLOATING）：
+     · 顶栏摘掉边框 / 底色 / 玻璃，缩成 0 高，绝对定位浮在内容上面；
+     · 两个圆按钮保留，加一点半透明底，压在图上也看得清、点得到；
+     · 内容区铺满到屏幕顶上——图能用到整块高度。 */
+.view-float {
+  --vtop-h: 46px;
+}
+
+.view-float > .vtop {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 4;
+  padding: 4px 6px;
+  padding-top: calc(4px + env(safe-area-inset-top));
+  border-bottom: 0;
+  background: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  pointer-events: none;         /* 只有两颗按钮自己接事件，别挡住翻页手势 */
+}
+
+.view-float > .vtop > button {
+  pointer-events: auto;
+  width: 36px;
+  height: 36px;
+  background: var(--glass-2);
+  border: 1px solid var(--glass-line);
+  box-shadow: var(--shadow-1);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  backdrop-filter: blur(12px) saturate(150%);
+}
+
+.view-float > .vbody {
+  padding: 0;
+  overflow: hidden;
+}
+
 .vbody {
   flex: 1 1 auto;
   min-height: 0;

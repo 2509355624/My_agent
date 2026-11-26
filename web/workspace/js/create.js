@@ -79,9 +79,9 @@
     var run = { card: card, task: "", title: "", timer: 0, fails: 0,
                 idle: 0, grid: null, rec: rec, done: false };
 
-    run.grid = document.createElement("div");
-    run.grid.className = "cgrid";
-    card.body.appendChild(run.grid);
+    /* 格子在**第一张图出来时**才铺（见 drawGrid）：一页都没画出来的时候，
+       卡片就只剩状态那一行，不预先挂一片空壳——2026-11-26 用户报的
+       「还没出页，它现在只有一小块内容」，说的就是这里预先造了个空网格。 */
 
     card.say(rec.note);
     if (refs && refs.length) {
@@ -89,6 +89,7 @@
       tip.className = "ref-note";
       tip.textContent = "带着 " + refs.length + " 张参考图，编剧会照着写";
       card.body.appendChild(tip);
+      card.fill();
     }
     push(run);
 
@@ -206,8 +207,20 @@
       });
   }
 
-  /* 缩略格按 9:16 完整显示，不裁边；图没出来就留一个空格子 */
+  /* 缩略格按 9:16 完整显示，不裁边；图没出来就留一个空格子。
+     grid 推迟到这张卡第一次有图时才建（见 runComic 的注释）。 */
   function drawGrid(run, panels) {
+    if (!run.grid) {
+      /* 一张都没有：连空网格都不要，卡片保持一行状态 */
+      if (!panels.some(hasPic)) { run.rec.cells = []; return; }
+      run.grid = document.createElement("div");
+      run.grid.className = "cgrid";
+      run.card.body.appendChild(run.grid);
+      run.card.fill();          // 有格子了才从「一行字」变回真卡片
+    }
+    /* 只剩一页的整本：第二个格子撑不出第二列，两列的网格里会左边一张、
+       右边空一条。这时候退成一列，让那一页占满卡片宽度。 */
+    run.grid.classList.toggle("solo", panels.length <= 1);
     run.rec.cells = [];
     panels.forEach(function (p, i) {
       var cell = run.grid.children[i];
@@ -273,9 +286,11 @@
     }
     var run = { card: card, task: rec.task, title: rec.title || "",
                 timer: 0, fails: 0, idle: 0, grid: null, rec: rec };
-    run.grid = document.createElement("div");
-    run.grid.className = "cgrid";
-    card.body.appendChild(run.grid);
+    if (rec.cells && rec.cells.filter(Boolean).length) {
+      run.grid = document.createElement("div");
+      run.grid.className = "cgrid";
+      card.body.appendChild(run.grid);
+    }
     if (rec.note) card.say(rec.note, rec.err);
     acts(run, !!rec.done && !rec.err);
     if (!rec.done) armStop(run);
@@ -283,12 +298,19 @@
   }
 
   /* 重放存档：把这一话已经出来的格子直接画回去（不重新请求接口，
-     真正缺的那几页交给 resume 的轮询补） */
+     真正缺的那几页交给 resume 的轮询补）。
+     一张图都没留下的（剧本阶段就断了的）不铺空网格——空网格在卡片里就是
+     一块灰板，什么都说明不了，状态那一行已经说明白了。 */
   function repaint(shell, rec) {
-    if (!rec.cells || !rec.cells.length) return;
+    if (!rec.cells) return;
+    var withPic = rec.cells.filter(Boolean);
+    if (!withPic.length) return;
     var grid = document.createElement("div");
     grid.className = "cgrid";
     rec.cells.forEach(function (url, i) {
+      /* 中间还没出的那几页也给一个占位格：格子是按页号排的，跳着铺会让
+         「第 3 页」挤到第 2 格上去，跟整本里的页序对不上 */
+      if (!url && rec.done) return;
       var cell = document.createElement("div");
       cell.className = "ccell";
       if (url) {
@@ -385,7 +407,13 @@
   }
 
   /* 铺一张书卡。**只按记录铺**——openBook 和存档重放共用这一条，
-     这样刷新前后长得一模一样（重放走 archive.js → restoreBook）。 */
+     这样刷新前后长得一模一样（重放走 archive.js → restoreBook）。
+
+     卡面只放两样东西：一行「书名 · 点一下看整本」和底下「看整本」按钮。
+     封面缩略图**去掉了**（2026-11-26 用户：「还没出页它只有一小块内容」，
+     截图里那块灰板就是它——当初拿 last 那一格的地址当封面，地址失效或
+     那格没画出来时它就退成一个 132px 的空框，占着地方什么也没说）。
+     书卡的作用是入口，点哪儿都能进，图在整本里看。 */
   function drawBook(rec) {
     if (!rec || !rec.task) return;
     if (S.books.indexOf(rec.task) < 0) S.books.push(rec.task);
@@ -394,12 +422,11 @@
     card.node.classList.add("is-book");
     card.say((rec.title || task) + " · 点一下看整本");
     card.fill();
-    card.body.appendChild(bookCover(rec.cover ? [rec.cover] : [], task));
     var box = card.acts;
     box.hidden = false;
     box.appendChild(btn("read", "看整本", function () { enterBook(task, rec.title); }));
     card.node.addEventListener("click", function (e) {
-      // 卡面上的图 / 标题都能点进去，只有按钮区自己按自己的走
+      // 整个卡面都能点进去，只有按钮区自己按自己的走
       if (e.target.closest(".acts")) return;
       enterBook(task, rec.title);
     });
@@ -407,29 +434,6 @@
   }
 
   function restoreBook(rec) { drawBook(rec); }
-
-  /* 书卡上的封面：用这一本最后一页（画完的那页最有信息量），没有就留空框。
-     只显示一张，不铺九宫格——书卡的作用是「入口」，不是又一份结果。 */
-  function bookCover(cells, task) {
-    var cover = document.createElement("div");
-    cover.className = "bcover";
-    var src = "";
-    for (var i = cells.length - 1; i >= 0; i -= 1) {
-      if (cells[i]) { src = cells[i]; break; }
-    }
-    if (src) {
-      var img = document.createElement("img");
-      img.alt = "封面";
-      img.decoding = "async";
-      img.src = src;
-      cover.appendChild(img);
-    } else {
-      cover.classList.add("empty");
-      cover.textContent = "还没出页";
-    }
-    cover.dataset.task = task;
-    return cover;
-  }
 
   function enterBook(task, title) {
     if (!task) return;

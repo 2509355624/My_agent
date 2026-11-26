@@ -21,9 +21,14 @@
   gap: 10px;
 }
 
+/* 作品卡：左边封面 + 右边书名 / 进度 / 进度条。
+   2026-11-26 用户：「回值弄成那种比较大的，还没出页它只有一小块内容」——
+   截图里这张卡下半截是一整块空白、进度条只有一根 3px 的细线，看着像没
+   加载完。现在：卡高由封面（96px 宽 3:4）撑起来，进度条加粗到 5px，右边
+   那列内容垂直居中，不再留下半截空。 */
 .cwork {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   gap: 12px;
   width: 100%;
   padding: 10px;
@@ -43,7 +48,7 @@
 
 .cpic {
   flex: 0 0 auto;
-  width: 74px;
+  width: 96px;
   aspect-ratio: 3 / 4;
   overflow: hidden;
   border-radius: 10px;
@@ -60,7 +65,7 @@
 }
 
 .cpic.nopic span {
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--text-dim);
 }
 
@@ -70,7 +75,7 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 7px;
+  gap: 8px;
   padding-right: 2px;
 }
 
@@ -79,19 +84,19 @@
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  font-size: 14.5px;
+  font-size: 15px;
   font-weight: 600;
   line-height: 1.4;
 }
 
 .cmeta {
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.4;
   color: var(--text-dim);
 }
 
 .cbar {
-  height: 3px;
+  height: 5px;
   border-radius: 999px;
   background: var(--line);
   overflow: hidden;
@@ -107,7 +112,7 @@
 
 /* 骨架：还没拿到列表时先占两行，别让页面空一下再跳 */
 .csk {
-  height: 116px;
+  height: 148px;
   border-color: transparent;
   background: linear-gradient(100deg, var(--card-2) 30%, var(--line) 50%,
               var(--card-2) 70%);
@@ -130,6 +135,10 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  /* 现在整页是「画面 + 页码 + 缩略条 + 按钮」四段，画面要吃掉剩下的全部
+     高度。顶栏在这个子页上是浮着的（sheet.css 的 .view-float），所以画面
+     从屏幕最顶上就开始了。 */
+  background: var(--card-2);
 }
 
 .cstage {
@@ -152,14 +161,16 @@
 .ctrack::-webkit-scrollbar { display: none; }
 
 /* 一页一屏：整张图按原比例缩到框里，上下左右都看得见，不裁边、不拉伸。
-   长图也一样缩，不靠滚动——用户要的是打开就能看全整页。 */
+   长图也一样缩，不靠滚动——用户要的是打开就能看全整页。
+   上面留出浮层按钮那条高度，第一页的头顶不会被 ✕ 压住（其余页也统一，
+   翻页时图不会上下跳）。 */
 .cslide {
   flex: 0 0 100%;
   height: 100%;
   scroll-snap-align: start;
   display: grid;
   place-items: center;
-  padding: 0;
+  padding: calc(46px + env(safe-area-inset-top)) 0 0;
 }
 
 .cslide img {
@@ -189,17 +200,22 @@
 
 .cpageno {
   flex: 0 0 auto;
-  padding: 2px 0 6px;
+  padding: 2px 0 4px;
   text-align: center;
   font-size: 12px;
   color: var(--text-dim);
 }
 
+/* 缩略条：只是一排「跳到第几页」的把手，不是结果本身。
+   2026-11-26 用户：「下面那个缩略图可以压缩一下，它不需要占据那么大的
+   空间，我要能够看到整个漫画」。原来是 36×64（9:16）+ 上下 12px 内边距，
+   加起来吞掉一百来像素的图高；现在收到 26×46，条本身也压到几像素内边距。 */
 .cstrip {
   flex: 0 0 auto;
   display: flex;
-  gap: 6px;
-  padding: 2px 12px 10px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 12px 6px;
   overflow-x: auto;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
@@ -211,15 +227,15 @@
    小图和上面的大图是同一个构图，不会出现「缩略图里人物变大」的错觉 */
 .cthumb {
   flex: 0 0 auto;
-  width: 36px;
+  width: 26px;
   aspect-ratio: 9 / 16;
   padding: 0;
   overflow: hidden;
   border: 2px solid transparent;
-  border-radius: 7px;
+  border-radius: 5px;
   background: var(--card-2);
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: 10px;
   display: grid;
   place-items: center;
 }
@@ -243,7 +259,7 @@
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
-  padding: 6px 12px calc(10px + env(safe-area-inset-bottom));
+  padding: 6px 12px calc(8px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--hair);
   background: var(--glass);
   -webkit-backdrop-filter: blur(18px) saturate(170%);
@@ -251,7 +267,7 @@
 }
 
 .cbtn {
-  padding: 9px 4px;
+  padding: 8px 4px;
   border: 1px solid var(--hair);
   border-radius: 12px;
   background: var(--card);

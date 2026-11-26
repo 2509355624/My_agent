@@ -102,18 +102,27 @@
 
 .mode-tag .mt-x:active { background: var(--card); opacity: 1; }
 
-/* ── 漫画结果卡 ──────────────────────────────────────── */
+/* ── 漫画结果卡 ────────────────────────────────────────
+   两列而不是三列（2026-11-26 用户：「先把这个回值弄成那种比较大的」）：
+   聊天卡最宽 340px，三列时每格只有 ~105px 宽、187px 高，一整页漫画糊成
+   一片看不出画了什么。两列每格 ~160px 宽，一屏能看见两页，翻起来才认得出
+   是谁、在做什么。格数超过 4 页就往下排，卡片跟着长。 */
 .card-comic .cgrid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 5px;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+
+/* 整本只有一页时不硬撑两列（第二列会是空的，左边一张右边一条空） */
+.card-comic .cgrid.solo {
+  grid-template-columns: 1fr;
 }
 
 .card-comic .ccell {
   position: relative;
   aspect-ratio: 9 / 16;
   overflow: hidden;
-  border-radius: 9px;
+  border-radius: 10px;
   background: var(--card-2);
   cursor: pointer;
 }
@@ -142,35 +151,15 @@
 }
 
 /* ── 书卡：点「打开整本」在聊天里落下的那一张 ────────────
-   不是又一份结果，是入口：一张封面 + 书名，点哪儿都进整本
-   （2026-11-25 用户：「点之后应该跳出来一个卡片，点卡片再打开整本」）。 */
+   不是又一份结果，是入口：一行「书名 · 点一下看整本」+ 一颗「看整本」，
+   点卡面任何地方都进整本（2026-11-25 用户：「点之后应该跳出来一个卡片，
+   点卡片再打开整本」）。
+   2026-11-26 去掉了卡面那张 132px 的封面框：截图里它退成了一块空白灰板，
+   把卡撑得很高却什么也没说。图在整本里看，这里只当门牌。 */
 .card-book { cursor: pointer; }
 
 .card-book .bcover {
-  position: relative;
-  width: 132px;
-  max-width: 42vw;
-  aspect-ratio: 9 / 16;
-  margin: 2px 0 6px;
-  overflow: hidden;
-  border-radius: 10px;
-  background: var(--card-2);
-}
-
-.card-book .bcover img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: 0;
-}
-
-.card-book .bcover.empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  color: var(--text-dim);
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

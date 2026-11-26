@@ -100,7 +100,9 @@ class TestCreateBookBugfix1125(unittest.TestCase):
     def test_open_book_drops_a_card_first(self):
         js = _read("js/create.js")
         i = js.index("function openBook(")
-        body = js[i:js.index("function bookCover(")]
+        # 边界取到 enterBook 为止（书卡那张封面框 2026-11-26 撤了，
+        # 原来的 `function bookCover(` 已经不存在）
+        body = js[i:js.index("function enterBook(")]
         # 铺卡在前、进整本只能由点卡片触发
         self.assertIn("drawBook(rec)", body, "打开整本必须先落一张书卡")
         self.assertNotIn('WSStack.push("book"', body,

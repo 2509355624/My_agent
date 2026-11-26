@@ -11,6 +11,13 @@
     me: "我的"
   };
 
+  /* 「看图的页」：内容自己满屏，顶栏不占一条，两个圆按钮浮在画面上。
+     漫画单本页（2026-11-26 用户第三次报头顶那条白栏）：整页是一张竖图，
+     顶上再横一条 38px 的白带，图的上下就都短了一截，而且那条带什么都没有
+     ——标题本来就空。现在 ✕ / 人形做成半透明圆钮浮在图的左上 / 右上，
+     要退回的按钮还在，图能铺到 100%。 */
+  var FLOATING = { book: true };
+
   var PLACEHOLDER = {
     gallery: "画廊还在接，先回聊天页生图",
     comic: "我的漫画作品还在接",
@@ -90,7 +97,7 @@
     var arg = opts || {};
 
     var view = document.createElement("section");
-    view.className = "view view-push";
+    view.className = "view view-push" + (FLOATING[name] ? " view-float" : "");
     view.dataset.view = name;
 
     var top = document.createElement("div");
