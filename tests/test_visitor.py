@@ -204,5 +204,44 @@ class GuestGallerySeerTest(unittest.TestCase):
                     self.assertTrue(self.gal._seer("10001"))
 
 
+class WorkspaceVisitorJsTest(unittest.TestCase):
+    """前端那两处容易改回去的地方（2026-11-26 用户第二次报同一个入口）。
+
+    现场：访客登录 → 落在「我的」→ 闪一下进 AI 创作 → 点右上角人形没反应；
+    彻底退回聊天页再进又好了。根因是 reload 之后身份还没回来时前端已经
+    开始收口，把栈里恢复出来的「我的」摘掉（`WSStack.top()` 指向已摘除的
+    节点），顺手也把那一屏留成了「参数不对 / 重试」。
+
+    这里只钉「规则还在」，不跑浏览器（真机由 tools/_probe_visitor_me_click.py 验）。
+    """
+
+    def setUp(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.js = os.path.join(root, "web", "workspace", "js")
+
+    def _src(self, name):
+        import io
+        with io.open(os.path.join(self.js, name), encoding="utf-8") as f:
+            return f.read()
+
+    def test_apply_waits_for_identity(self):
+        """身份没回来之前一个字都不改：apply 必须同时看 loaded。"""
+        src = self._src("visitor.js")
+        self.assertIn("if (!S.loaded || !isVisitor()) return;", src)
+        self.assertNotIn("dropMeView", src.split("function state()")[0])
+
+    def test_me_page_is_repainted_not_removed(self):
+        """「我的」只能换内容，不能整页摘掉（摘掉栈就对不上号了）。"""
+        src = self._src("visitor.js")
+        self.assertIn("paintMeViews", src)
+        # 不再有「把页从 DOM 上摘下来」的那句
+        self.assertNotIn("meView.parentNode.removeChild(meView)", src)
+
+    def test_pop_ignores_child_transitions(self):
+        """退场只认自己那层 transform 的 transitionend。"""
+        src = self._src("stack.js")
+        self.assertIn('e.target === view && e.propertyName === "transform"', src)
+
+
 if __name__ == "__main__":
     unittest.main()

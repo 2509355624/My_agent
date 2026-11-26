@@ -100,7 +100,13 @@
     var done = function () {
       if (view.parentNode) view.parentNode.removeChild(view);
     };
-    view.addEventListener("transitionend", done, { once: true });
+    /* 只认这一页自己的位移过渡。以前不带判据：页里任何一个子节点先结束
+       一个过渡（图片淡入、按钮变色、状态行闪现……），`{once:true}` 就把
+       这条监听烧掉了，退场动画才播到一半、页面已经被摘——用户看到的是
+       「点返回闪一下」。属性名也一起卡住，别让子节点的 transform 顶替。 */
+    view.addEventListener("transitionend", function (e) {
+      if (e.target === view && e.propertyName === "transform") done();
+    });
     setTimeout(done, 420);              // 兜底：过渡被打断也要摘掉
   }
 

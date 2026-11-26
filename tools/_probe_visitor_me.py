@@ -273,15 +273,16 @@ def main():
         # 所以请求从 CDP 的 Network 事件里看。
         c.hits = []
         HITS[:] = []
+        c.js("window.__oldDoc = 1; 1")
         c.js("(function(){var v=%s;var b=v&&v.querySelector('.vguest-btn');"
              "if(b)b.click();return 1})()" % me_view)
         time.sleep(1.0)
         c.drain()
         check("/logout" in HITS, "点「登录」先退出访客身份",
               "(%s)" % (HITS or "服务端没收到"))
-        # 退出之后回的是站首登录页：这里临时站没有登录页，验「已经离开访客态」
-        check(c.js("!document.querySelector('.vguest-btn')"),
-              "访客卡已经不在（页面重新加载）")
+        # 退出之后回的是站首登录页：这里临时站没有登录页，只验「页面确实
+        # 重新加载过」——旧文档上一个标记在 reload 之后就没了。
+        check(not c.js("!!window.__oldDoc"), "页面重新加载了")
 
         print("\n%d 通过 / %d 失败" % (ok, bad))
         return 0 if bad == 0 else 1

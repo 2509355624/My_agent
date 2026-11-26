@@ -22,9 +22,18 @@
   function isVisitor() { return S.role === "visitor"; }
 
   /* ── 界面收口 ────────────────────────────────────────
-     全部按 id / data-chip 找，不依赖别的模块有没有先跑。 */
+     全部按 id / data-chip 找，不依赖别的模块有没有先跑。
+
+     ⚠️ 身份没回来之前（`loaded` 为假）**一个字都不改**。
+     2026-11-26 用户报「访客登录后点头像没反应」，根因就在这里：reload 之后
+     `role` 默认是 `guest`，而 `chat.html` 里 `WSStack.init()` 比
+     `WSVisitor.load()` 先跑，栈已经把「我的」那页恢复出来了。这时 apply()
+     按「非访客」处理、那页也不换内容——用户先
+     看到「参数不对 / 重试」，再点人形进的是站主那套（还会报错）。等 /me
+     回来（手机上就是几百毫秒，用户那次实测空了 697ms）才收口，屏幕上已经
+     是一副错的样子了。 */
   function apply() {
-    if (!isVisitor()) return;
+    if (!S.loaded || !isVisitor()) return;
 
     guardViews();
     /* 加号里只剩「图片生成」。连整块摘掉而不是 display:none——
@@ -42,25 +51,37 @@
       if (c.parentNode) c.parentNode.removeChild(c);
     });
 
-    /* 「我的」：右上角人形按钮 + 已经建出来的那页。 */
+    /* 「我的」：右上角人形按钮藏掉，已经建出来的那页换成访客卡。 */
     var meBtns = document.querySelectorAll("[data-me]");
     Array.prototype.forEach.call(meBtns, function (b) { b.hidden = true; });
-    dropMeView();
+    paintMeViews();
 
     document.documentElement.setAttribute("data-role", "visitor");
   }
 
-  /* 「我的」那页是点进来才创建的（stack.js 现建现推），所以光摘一次按钮
-     不够——`apply()` 跑完之后再从任何地方点「我的」，那页又会被建出来，
-     里面 `/api/gal/mine` 没有 qq → 400「参数不对」，看着像页面坏了。
+  /* 「我的」那页是点进来才创建的（stack.js 现建现推），也可能是 reload 之后
+     从 sessionStorage 恢复出来的。以前这里一律把整页摘掉，结果是两个坑：
 
-     2026-11-26 用户第四次报这个入口：**空白界面会让用户以为一直在加载**。
-     摘掉按钮治不了本（画廊顶栏那个人形是每个子页都有的），所以不再返回
-     空壳，改成一块「未登录 + 登录」：说明白现在是访客，给一个能点的蓝按钮
-     回登录页。两边共用同一份，见 `guestPanel()`。 */
-  function dropMeView() {
-    var meView = document.querySelector('.view[data-view="me"]');
-    if (meView && meView.parentNode) meView.parentNode.removeChild(meView);
+       1. 摘掉的如果是**栈顶那页**，`WSStack.top()` 还指着它、DOM 里却没了
+          ——之后点人形、按返回都对不上号（实测 reload 后就是
+          `top=me[脱离DOM]`，栈里只剩根视图）。
+       2. 用户明明点开了「我的」，屏幕上却什么都没有，像坏了。
+
+     改成**就地换内容**：保留这一页，正文换成 `guestPanel()`。栈、历史、
+     返回手势都还成立，用户看到的是「还没登录 + 登录」。
+     里面 `/api/gal/mine` 没有 qq → 400「参数不对」，所以必须换掉。 */
+  function paintMeViews() {
+    var all = document.querySelectorAll('.view[data-view="me"]');
+    Array.prototype.forEach.call(all, function (v) {
+      var me = v.querySelector("[data-me]");
+      /* 顶栏只有 ✕ / 标题 / 人形，人形在这里点进去会再叠一层同样的页，
+         没有意义——这时候已经能看到「怎么登录」了。 */
+      if (me && me.parentNode) me.parentNode.removeChild(me);
+      var body = v.querySelector(".vbody");
+      if (!body || body.querySelector(".vguest")) return;
+      body.innerHTML = "";
+      body.appendChild(guestPanel());
+    });
   }
 
   function guestPanel() {
@@ -102,6 +123,8 @@
     return box;
   }
 
+  /* 包里这一层是为了**以后**从任何地方新建「我的」时直接是访客卡。
+     reload 恢复出来的那页不走 build，由 `paintMeViews()` 补。 */
   function guardViews() {
     var views = global.WSViews;
     if (!views || guardViews.done) return;
@@ -110,8 +133,6 @@
     views.build = function (name, opts) {
       var view = real.apply(views, arguments);
       if (isVisitor() && name === "me") {
-        /* 顶栏只有 ✕ / 标题 / 人形，人形在这里点进去会再叠一层同样的页，
-           没有意义——访客这时已经能看到「怎么登录」了。 */
         var me = view.querySelector("[data-me]");
         if (me && me.parentNode) me.parentNode.removeChild(me);
         var body = view.querySelector(".vbody");
@@ -152,7 +173,7 @@
 
   /* ── 启动 ────────────────────────────────────────────── */
   function load() {
-    if (!global.WSApi) { apply(); return Promise.resolve(S); }
+    if (!global.WSApi) { S.loaded = true; apply(); return Promise.resolve(S); }
     return global.WSApi.get("/me").then(function (d) {
       d = d || {};
       /* 5174 直连没有 /me：那是站主本人，一切照旧。 */
@@ -169,12 +190,7 @@
       }
       S.loaded = true;
       apply();
-      if (isVisitor()) {
-        badge();
-        /* 收口之后还有人从「我的」那页点进来（外面那层已经建出来的时候
-           `apply` 摘不掉它新建的），所以再扫一次，把 `me` 整页摘掉。 */
-        dropMeView();
-      }
+      if (isVisitor()) badge();
       try {
         global.dispatchEvent(new CustomEvent("ws:role", { detail: state() }));
       } catch (e) { /* 老浏览器没有 CustomEvent 构造器就算了 */ }
