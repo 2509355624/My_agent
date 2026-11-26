@@ -398,7 +398,10 @@ def _public(job):
                                     "steps", "steps_label", "cfg",
                                     "negative", "width", "height",
                                     "size_label", "secs", "landscape",
-                                    "ref_note", "lowres")}
+                                    "ref_note", "lowres",
+                                    # 访客模式的回执：前端直接读这个数显示
+                                    # 「今日还剩 N 张」，不必再打一趟 /me。
+                                    "visitor", "visitor_left")}
 
 
 def _enabled_loras(job):
@@ -783,8 +786,21 @@ def api_ask():
     qq = chat_routes._who() or ""
     if not qq:
         return jsonify({"ok": False, "error": "没登录"}), 401
+    # 访客模式（2026-11-26）：没有 QQ，也没登录过。额度按 5175 签的访客
+    # 身份算，每天 5 张，**在提交这一刻扣**（干完再扣就成了「排队中不占额度」
+    # 可以被刷）。额度不够就一句人话，别让它跑完再报错。
+    from app.gateways import visitor as _visitor
+    gid = _visitor.current()
+    if gid:
+        left = _visitor.remaining(gid)
+        if left <= 0:
+            return jsonify({"ok": False, "visitor": True,
+                            "error": "访客每天 5 张，今天已经用完了"}), 403
     refs = data.get("refs")
-    ctx = {"images": _web_images(refs), "refs": list(refs or [])}
+    # 访客走**原尺寸**：用户 2026-11-26 明确「访客不用走降档，没有意义，
+    # 浪费时间」——他们把全部渠道都开着给访客玩，要的就是成品本身。
+    ctx = {"images": _web_images(refs), "refs": list(refs or []),
+           "lowres": (not gid) and WORKSPACE_LOWRES}
     hist = _web_history(qq)
     # ⚠️ `bind_context` 是**赋值 + 返回 None**，不是上下文管理器（它把当前
     # 会话写进线程本地，靠 finally 里的 `clear_context` 收尾）。按 QQ 那边
@@ -796,6 +812,7 @@ def api_ask():
     try:
         job = _web_decide(text, skill, hist, ctx)
     except _WebReply as e:
+        # 模型说这轮不画（纯聊天 / 问问题）：**不扣额度**，只有真出图才扣。
         _web_history_push(qq, text, str(e.reply))
         return jsonify({"ok": True, "reply": str(e.reply), "say": True})
     except RuntimeError as e:
@@ -810,6 +827,14 @@ def api_ask():
             pass
     _web_history_push(qq, text, "", job.get("prompt") or text,
                       job.get("skill") or "")
+    job["visitor"] = bool(gid)
+    if gid:
+        ok, left = _visitor.consume(gid)
+        if not ok:
+            # 极窄的竞态（同一秒内开了两个标签页）：图已经排上了，不撤——
+            # 撤掉反而是「扣了额度没图」更糟。这里只把剩余数照实回给前端。
+            left = _visitor.remaining(gid)
+        job["visitor_left"] = left
     return jsonify({"ok": True, "job": _public(job)})
 
 
@@ -901,7 +926,8 @@ def _web_decide(text, skill, hist, ctx):
         # 模型判「要垫这张图」（图生图 / 照着画 / 复刻）。前端把图以 data
         # URL 交回来，`_enqueue_job` → `_run` 会带着它进 `generate_image`。
         body["source_images"] = ctx["images"]
-    job, busy = _enqueue_job(body, owner=_who_qq(), lowres_on=WORKSPACE_LOWRES)
+    job, busy = _enqueue_job(body, owner=_who_qq(),
+                             lowres_on=bool(ctx.get("lowres", WORKSPACE_LOWRES)))
     if job is None:
         raise RuntimeError(busy or "没排上队，等一下再发")
     return job

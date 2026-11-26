@@ -91,6 +91,22 @@
     say("", "");
   }
 
+  function onVisitor() {
+    /* 访客模式（2026-11-26）：不收码、不要 QQ，后端签一个 24 小时的身份
+       直接下 cookie，然后让服务器重判落点（和登录成功那条同一个做法）。 */
+    el.visitor.disabled = true;
+    say("正在进访客模式…", "");
+    global.WSApi.post("/login/visitor", {}).then(function (d) {
+      if (d && d.ok) {
+        stopTimer();
+        global.location.reload();
+        return;
+      }
+      say((d && d.error) || "进不去，稍后再试", "err");
+      if (el.visitor) el.visitor.disabled = false;
+    });
+  }
+
   function init() {
     el.qqStep = $("step-qq");
     el.codeStep = $("step-code");
@@ -102,11 +118,13 @@
     el.send = $("btn-send");
     el.login = $("btn-login");
     el.back = $("btn-back");
+    el.visitor = $("btn-visitor");
 
     el.next.addEventListener("click", onNext);
     el.send.addEventListener("click", onSend);
     el.login.addEventListener("click", onLogin);
     el.back.addEventListener("click", onBack);
+    if (el.visitor) el.visitor.addEventListener("click", onVisitor);
     el.code.addEventListener("input", function () {
       el.login.disabled = el.code.value.trim().length < 6;
     });

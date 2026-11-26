@@ -95,3 +95,14 @@ button { cursor: pointer; }
 
 .wstoast.bad { background: var(--danger); }
 
+/* 访客模式（2026-11-26）：聊天页没有顶栏，剩额就压在输入栏上沿一条细提示。
+   只在访客进来时才会有这个节点（见 js/visitor.js 的 badge()）。 */
+.vbar {
+  margin: 0 12px;
+  padding: 6px 10px 2px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  text-align: center;
+  letter-spacing: .2px;
+}

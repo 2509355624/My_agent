@@ -340,6 +340,11 @@
       }
       card.job = d.job.id;
       rec.job = card.job;
+      /* 访客额度（2026-11-26）：服务端在提交那一刻扣，回执里带 `left`。
+         这里只做显示，不做判断——额度真不够时上面那条 `!d.ok` 已经接住了。 */
+      if (d.job.visitor && global.WSVisitor) {
+        global.WSVisitor.syncLeft(d.job.visitor_left);
+      }
       /* 复制拿的是**实际出这张图用的那串提示词**，不是用户敲的那句话
          （2026-11-24 用户：「点击复制，结果拿到的是我发送给 ai 的原始需求，
          而不是 ai 生成这个图片使用的英文提示词 tags」）。

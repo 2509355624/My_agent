@@ -13,6 +13,12 @@
   gap: 8px;
 }
 
+/* 访客模式（2026-11-26）：加号里只剩「图片生成」，两格改成一格。
+   不改的话那一格占左半边，右边空出一条白——比直接摘掉还难看。 */
+.pm-grid.pm-solo {
+  grid-template-columns: 1fr;
+}
+
 .pm-tile {
   display: flex;
   flex-direction: column;

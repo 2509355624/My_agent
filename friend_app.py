@@ -39,6 +39,7 @@ from flask import (Flask, Response, g, jsonify, make_response, redirect, request
 
 from app.gateways import friend_auth
 from app.gateways import guest_view
+from app.gateways import visitor
 from app.config import WEB_DIR, WORKSHOP_HTML
 from app.core.logsetup import setup as log_setup
 
@@ -370,11 +371,35 @@ def login_verify():
     return resp
 
 
+@app.route("/login/visitor", methods=["POST"])
+def login_visitor():
+    """访客进入：不发码、不要 QQ，直接签一个 24 小时的访客 cookie。
+
+    用户 2026-11-26 拍板：「访客直接点就进去了，能生图」「每天 5 张，
+    换浏览器就随便他换」。所以这里只做两件事：签身份、下发 cookie。
+    额度在 5174 那边按身份串记（`app/gateways/visitor.py`），5175 不管账。
+    """
+    if not rate_ok("send"):
+        return jsonify({"ok": False, "error": "发太多次了，等一会儿"}), 429
+    gid = visitor.new_id()
+    resp = make_response(jsonify({"ok": True, "role": "visitor",
+                                  "quota": visitor.snapshot(gid)}))
+    resp.set_cookie(visitor.COOKIE_NAME, gid,
+                    max_age=visitor.COOKIE_TTL, httponly=True,
+                    samesite="Lax", secure=_cookie_secure(), path="/")
+    # 之前登录过的浏览器如果还留着 fr_sess，访客身份会被忽略（_logged_in 优先），
+    # 于是「点了访客还是全权限」。这里先把它清掉，确认用户是真的要走访客这条。
+    resp.delete_cookie(friend_auth.COOKIE_NAME, path="/")
+    resp.delete_cookie(SOLO_COOKIE, path="/")
+    return resp
+
+
 @app.route("/logout", methods=["POST"])
 def logout():
     resp = make_response(jsonify({"ok": True}))
     resp.delete_cookie(friend_auth.COOKIE_NAME, path="/")
     resp.delete_cookie(GUEST_COOKIE, path="/")
+    resp.delete_cookie(visitor.COOKIE_NAME, path="/")
     # 退出登录顺手解开 /play 的页面锁：站主想回自己的画廊不用去清浏览器 cookie。
     resp.delete_cookie(SOLO_COOKIE, path="/")
     return resp
@@ -396,7 +421,14 @@ def me():
     「走 /guest 进来的只读会话」，和这里的身份判定是两件事。
     """
     qq = friend_auth.check_cookie(request.cookies.get(friend_auth.COOKIE_NAME))
-    return jsonify({"ok": True, "qq": qq, "guest": bool(not qq)})
+    gid = "" if qq else _visitor_id()
+    out = {"ok": True, "qq": qq, "guest": bool(not qq),
+           # 2026-11-26 访客模式：前端靠 `role` 决定露不露「漫画生成」、
+           # 「我的」，以及顶栏那行「访客 · 今日还剩 N 张」。
+           "role": "user" if qq else ("visitor" if gid else "guest")}
+    if gid:
+        out["quota"] = visitor.snapshot(gid)
+    return jsonify(out)
 
 
 # ─── 页面 ────────────────────────────────────────────────
@@ -415,6 +447,19 @@ def _guest_in():
 def _solo_in():
     """进过独立游客页（/play）的标记。和登录态无关：站主自己点开也要算。"""
     return request.cookies.get(SOLO_COOKIE) == "1"
+
+
+def _visitor_id():
+    """这次请求是不是**访客模式** → 身份串；不是 → ""。
+
+    访客是登录页「先逛逛」那条路发出来的 `fr_visit`，不需要 QQ 号、不进
+    好友白名单（用户 2026-11-26：「访客直接点就进去了」）。真登录之后
+    `_logged_in()` 为真，访客身份自然让位——两套 cookie 同时在也不打架。
+    """
+    raw = request.cookies.get(visitor.COOKIE_NAME)
+    if not raw:
+        return ""
+    return visitor.check_id(raw) or ""
 
 
 @app.route("/guest")
@@ -484,7 +529,7 @@ def workspace_index():
     旧的 `/gallery`、`/comic` 两个地址都 302 到这里（2026-11-23），
     所以它也是 QQ 那些老链接的落地页。
     """
-    if not _logged_in():
+    if not _logged_in() and not _visitor_id():
         return send_from_directory(WORKSPACE_DIR, "index.html")
     return send_from_directory(WORKSPACE_DIR, "chat.html")
 
@@ -619,20 +664,35 @@ def _forward(prefix, sub, allow_guest=False, force_guest=False,
     `force_guest`（2026-11-06）：独立游客页 `/play` 的专用代理用。哪怕浏览器
     里有登录 cookie 也不注入 QQ，保证从分享链接进去的人一定是游客、看不到
     站主自己的线。只作用于 `/api/solo/*`，普通 `/persona` 页不受影响。
+
+    `vis`（2026-11-26 访客模式）：访客没有 QQ，先按路径白名单挡（工作台
+    真的会调的四组放行，其余 403），再带 `X-Friend-Guest` 头把身份送过去。
+    **不带 `qq`、不带 `__jf`**：5174 那边认这个头就当访客算，画廊的
+    `_seer()` 直接判不能看隐藏内容；额度也在 5174 扣（它才有提交那一刻）。
     """
     qq = friend_auth.check_cookie(request.cookies.get(friend_auth.COOKIE_NAME))
     if force_guest:
         qq = ""
-    if not qq and not allow_guest:
+    gid = "" if (qq or force_guest) else _visitor_id()
+    if gid and not visitor.path_allowed(request.path, request.method):
+        return jsonify({"ok": False,
+                        "error": "访客模式用不了这个功能"}), 403
+    if not qq and not gid and not allow_guest:
         return jsonify({"ok": False, "error": "还没登录"}), 401
     url = "%s%s/%s" % (BACKEND, prefix, sub)
     headers = {"X-Friend-Token": friend_auth.secret()}
     params = dict(request.args)
-    if jf:
+    if gid:
+        # 访客：身份走专用头，绝不塞 `qq`——塞了就到不了访客分支，会被当成
+        # 某个 QQ 号的登录态，配额和隐藏内容全按那个人算。
+        headers["X-Friend-Guest"] = request.cookies.get(visitor.COOKIE_NAME) or ""
+    elif jf:
         params["__jf"] = "1"
 
     # 游客身份 cookie 必须透传：5175 不解析它，只负责原样送到 5174。
-    gs = request.cookies.get("gs_id")
+    # 访客模式（gid）不带它：那条路 5174 只认 `X-Friend-Guest`，混两个身份
+    # 会让 persona 那套游客线误把访客当成 /play 进来的人。
+    gs = "" if gid else request.cookies.get("gs_id")
     if gs:
         headers["Cookie"] = "gs_id=" + gs
 

@@ -92,6 +92,38 @@ def _friend_context():
         g.comic_qq = comic_quota.friend_qq()
     except Exception:
         g.comic_qq = ""
+    # 访客模式（2026-11-26）：没有 qq，但也不是站主。原来 `_qq()` 返回空串
+    # 等于「站主，全部放行」——访客就能生成漫画了。这里单独标出来，`_need()`
+    # 和写接口一律拒；`tasks` 走空列表（用户：「点进去访客空列表」）。
+    try:
+        from app.gateways import visitor as _visitor
+        g.comic_guest = bool(_visitor.current())
+    except Exception:                       # noqa: BLE001
+        g.comic_guest = False
+    # 除了 `tasks`（空列表）和下面这几个只读，访客一个接口都不给。
+    # 用户 2026-11-26：「访客没有漫画生成」「点进去访客空列表」。
+    if g.comic_guest:
+        sub = (request.path or "").split("/api/comic/", 1)[-1].strip("/")
+        if not _guest_may(sub):
+            return jsonify({"ok": False,
+                            "error": "访客模式不支持漫画功能"}), 403
+
+
+# 访客能碰的漫画接口：够「我的漫画作品」这一页空着不报错，以及看得到图。
+_GUEST_COMIC = ("tasks", "status", "img", "download", "bubble",
+                "friend_config", "channels", "characters", "render_opts")
+
+
+def _guest_may(sub):
+    """访客放的几个都要是 GET；`bubble` 虽在名单里但只让看（GET）。
+
+    名单故意留得窄：`script` / `start` / `rerun` / `resume` / `portrait` /
+    `chat_revise` / `manual` / `upload` 全是**生产**动作，一个都不放。
+    """
+    name = str(sub or "").split("?")[0]
+    if name not in _GUEST_COMIC:
+        return False
+    return request.method in ("GET", "HEAD")
 
 
 def _qq():
@@ -733,7 +765,12 @@ def api_comic_tasks():
 
     默认隐藏「测试空壳」（`_is_test_shell`）：联调残留不该占着历史任务下拉。
     站主排查时可带 `?include_test=1` 临时看回全部，不影响正常创作流程。
+
+    访客（2026-11-26）：**一律空列表**。访客没有自己的作品，把站主的任务名
+    列给他等于白送一份目录；用户原话「点进去访客空列表」。
     """
+    if getattr(g, "comic_guest", False):
+        return jsonify({"ok": True, "tasks": [], "items": [], "total": 0})
     out = []
     qq = _qq()
     include_test = request.args.get("include_test") == "1"

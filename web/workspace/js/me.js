@@ -201,6 +201,17 @@
         return;
       }
       var qq = d.qq || "";
+      /* 访客模式（2026-11-26）：没 qq 但有 role=visitor。访客这一页本来
+         就被 visitor.js 摘掉了，这里留一份兜底显示，免得以后入口又长回来
+         却显示成「游客」。 */
+      if (d.role === "visitor") {
+        var q = d.quota || {};
+        badge.textContent = "访";
+        name.textContent = "访客 · 今日还剩 " + (q.left || 0) + " 张";
+        out.textContent = "退出访客";
+        out.dataset.act = "logout";
+        return;
+      }
       name.textContent = qq ? ("QQ " + qq) : "游客";
       badge.textContent = qq ? qq.slice(-2) : "游";
       if (qq) {
