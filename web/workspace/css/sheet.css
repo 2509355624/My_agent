@@ -179,6 +179,57 @@
   color: var(--text-dim);
 }
 
+/* 访客点「我的」：**不能是空白**（2026-11-26 用户：「空白界面会让用户以为
+   一直在加载」）。一张卡说清现在是访客，下面一颗蓝按钮回登录页——颜色和
+   登录页那颗 `.btn` 同一套 token，看着是同一个入口。 */
+.vguest {
+  margin: 18vh auto 0;
+  max-width: 260px;
+  text-align: center;
+}
+
+.vguest-badge {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 14px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.vguest-title {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.vguest-hint {
+  margin: 0 0 18px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.vguest-btn {
+  width: 100%;
+  height: 42px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--brand);
+  color: var(--brand-on);
+  font-size: 14.5px;
+  font-weight: 500;
+  box-shadow: var(--shadow-brand);
+}
+
+.vguest-btn:active { background: var(--brand-2); }
+.vguest-btn:disabled { opacity: .6; }
+
 /* ── 底部抽屉 ───────────────────────────────────────── */
 .sheet {
   position: fixed;

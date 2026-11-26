@@ -4,7 +4,9 @@
      · 访客能生图，**每天 5 张**（额度在 5174 扣，这里只显示）
      · 没有「漫画生成」——加号里那块直接摘掉，不是藏起来
      · 「我的漫画作品」点进去是空列表 → 把那个入口隐掉，省得白点
-     · 「我的」整块隐藏（没有自己的作品，进去是空的）
+     · 「我的」整块隐藏；万一还是点到了右上角那个人形（2026-11-26 用户：
+       「AI 画廊里点右上角头像给我一个空白界面」），这一页不再空白——给一张
+       「还没登录」+ 蓝色「登录」按钮，点了就退回站首那页登录
      · 顶栏/我的页显示「访客 · 今日还剩 N 张」
 
    为什么不在每个模块里各打一次 `/me`：那会打四五次，而且各模块加载
@@ -51,12 +53,53 @@
   /* 「我的」那页是点进来才创建的（stack.js 现建现推），所以光摘一次按钮
      不够——`apply()` 跑完之后再从任何地方点「我的」，那页又会被建出来，
      里面 `/api/gal/mine` 没有 qq → 400「参数不对」，看着像页面坏了。
-     这里包一层 `WSViews.build`：访客要建 `me` 就直接给一个空壳，什么都
-     不建。用 `replaceChild` 换顶层的路径（`build` 返回 null 会抛）也不会
-     走到：那个入口本来就是 me 页里的按钮，访客根本进不去那页。 */
+
+     2026-11-26 用户第四次报这个入口：**空白界面会让用户以为一直在加载**。
+     摘掉按钮治不了本（画廊顶栏那个人形是每个子页都有的），所以不再返回
+     空壳，改成一块「未登录 + 登录」：说明白现在是访客，给一个能点的蓝按钮
+     回登录页。两边共用同一份，见 `guestPanel()`。 */
   function dropMeView() {
     var meView = document.querySelector('.view[data-view="me"]');
     if (meView && meView.parentNode) meView.parentNode.removeChild(meView);
+  }
+
+  function guestPanel() {
+    var box = document.createElement("div");
+    box.className = "vguest";
+
+    var badge = document.createElement("div");
+    badge.className = "vguest-badge";
+    badge.textContent = "访";
+
+    var title = document.createElement("p");
+    title.className = "vguest-title";
+    title.textContent = "还没登录";
+
+    var hint = document.createElement("p");
+    hint.className = "vguest-hint";
+    hint.textContent = "现在是以访客身份看，作品和收藏都没挂在账号上。";
+
+    var out = document.createElement("button");
+    out.type = "button";
+    out.className = "vguest-btn";
+    out.textContent = "登录";
+    out.addEventListener("click", function () {
+      out.disabled = true;
+      /* 先摘掉访客 cookie 再 reload：不摘的话 5175 看到访客身份会把人直接
+         放回工作台，等于点了没反应。退出和进登录页是同一套办法（me.js）。 */
+      global.WSApi.post("/logout", {}).then(function () {
+        if (global.WSStore) global.WSStore.clear();
+        global.location.reload();
+      }, function () {
+        global.location.reload();
+      });
+    });
+
+    box.appendChild(badge);
+    box.appendChild(title);
+    box.appendChild(hint);
+    box.appendChild(out);
+    return box;
   }
 
   function guardViews() {
@@ -65,13 +108,19 @@
     guardViews.done = true;
     var real = views.build;
     views.build = function (name, opts) {
+      var view = real.apply(views, arguments);
       if (isVisitor() && name === "me") {
-        var none = document.createElement("section");
-        none.className = "view view-push";
-        none.dataset.view = "me";
-        return none;
+        /* 顶栏只有 ✕ / 标题 / 人形，人形在这里点进去会再叠一层同样的页，
+           没有意义——访客这时已经能看到「怎么登录」了。 */
+        var me = view.querySelector("[data-me]");
+        if (me && me.parentNode) me.parentNode.removeChild(me);
+        var body = view.querySelector(".vbody");
+        if (body) {
+          body.innerHTML = "";
+          body.appendChild(guestPanel());
+        }
       }
-      return real.apply(views, arguments);
+      return view;
     };
   }
 
