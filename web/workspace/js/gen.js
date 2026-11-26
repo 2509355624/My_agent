@@ -36,6 +36,15 @@
     return global.WSApi.post(BASE + "/ask", body);
   }
 
+  /* 直达（2026-11-26）：粘进来的词**原样**用，一次连排 N 张、每张一个随机
+     种子。和 ask 正相反——一个让大大怪改写，一个一个字都不动。
+
+     回 `{ok, jobs:[同 submit 的 job…], fail:[…], note?}`；一张都没排上时是
+     `{ok:false, busy?, error}`，跟 ask/submit 一样由调用方接管。 */
+  function direct(body) {
+    return global.WSApi.post(BASE + "/batch", body);
+  }
+
   /* 聊天页上传的参考图：存服务端内存、两小时过期，不落作品墙。
      回 `{ok, ref:"cr_…"}`，这个 ref 跟画廊的 item id 一样挂在 refs 里带上去。 */
   function chatUpload(image) {
@@ -108,6 +117,7 @@
     channels: channels,
     submit: submit,
     ask: ask,
+    direct: direct,
     chatUpload: chatUpload,
     status: status,
     adopt: adopt,

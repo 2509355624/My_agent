@@ -107,8 +107,16 @@ class SendReturnsToChatTest(unittest.TestCase):
         src = _read("web", "workspace", "js", "chat.js")
         i = src.index("function send()")
         seg = src[i:src.index("function copyText", i)]
+        # 2026-11-26 起，「发完退页」抽成 leaveDock() 给两个发送按钮共用
+        # （多了「直达」），send() 里只剩一次调用。这里两处都要认。
+        if "leaveDock()" in seg:
+            seg = src[src.index("function leaveDock()"):
+                      src.index("function send()")]
         self.assertIn("WSStack.back()", seg)
         self.assertIn('dataset.dock', seg, "只退借了输入栏的那一页")
+        self.assertIn("leaveDock()", src[
+            src.index("function send()"):src.index("function copyText")],
+            "send() 里必须真的退页")
 
     def test_gallery_is_the_docked_page(self):
         views = _read("web", "workspace", "js", "views.js")

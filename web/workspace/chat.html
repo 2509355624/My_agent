@@ -12,14 +12,14 @@
     if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
   })();
 </script>
-<link rel="stylesheet" href="css/tokens.css?v=20261126j">
-<link rel="stylesheet" href="css/base.css?v=20261126j">
-<link rel="stylesheet" href="css/chat.css?v=20261126j">
-<link rel="stylesheet" href="css/sheet.css?v=20261126j">
-<link rel="stylesheet" href="css/gallery.css?v=20261126j">
-<link rel="stylesheet" href="css/comic.css?v=20261126j">
-<link rel="stylesheet" href="css/create.css?v=20261126j">
-<link rel="stylesheet" href="css/me.css?v=20261126j">
+<link rel="stylesheet" href="css/tokens.css?v=20261126k">
+<link rel="stylesheet" href="css/base.css?v=20261126k">
+<link rel="stylesheet" href="css/chat.css?v=20261126k">
+<link rel="stylesheet" href="css/sheet.css?v=20261126k">
+<link rel="stylesheet" href="css/gallery.css?v=20261126k">
+<link rel="stylesheet" href="css/comic.css?v=20261126k">
+<link rel="stylesheet" href="css/create.css?v=20261126k">
+<link rel="stylesheet" href="css/me.css?v=20261126k">
 </head>
 <body>
 
@@ -106,7 +106,13 @@
 
           <textarea id="say" rows="1" maxlength="20000"
                     placeholder="描述你想创作的内容" aria-label="创作内容"></textarea>
-          <button class="send-btn" id="btn-send" type="button" disabled>发送</button>
+          <!-- 两种发送（2026-11-26 用户提的）：粘进来的词可以选择不被改写。
+               「直达」= 原样连排 N 张、只换 seed；「AI 发送」= 老行为，
+               交给大大怪改词再出图。N 只在「直达」这颗上，点一下 5 张。 -->
+          <button class="send-btn" id="btn-send" type="button" disabled
+                  title="交给大大怪改写提示词后出图">AI 发送</button>
+          <button class="send-btn direct" id="btn-direct" type="button" disabled
+                  title="原样提示词，连排 5 张（每张不同种子）">直达</button>
         </div>
 
         <input type="file" id="file-camera" accept="image/*" capture="environment" hidden>
@@ -130,27 +136,27 @@
   </div>
 </div>
 
-<script src="js/api.js?v=20261126j"></script>
-<script src="js/store.js?v=20261126j"></script>
-<script src="js/gen.js?v=20261126j"></script>
-<script src="js/shot.js?v=20261126j"></script>
-<script src="js/scroll.js?v=20261126j"></script>
-<script src="js/card.js?v=20261126j"></script>
-<script src="js/gen_flow.js?v=20261126j"></script>
-<script src="js/redraw.js?v=20261126j"></script>
-<script src="js/imgcache.js?v=20261126j"></script>
-<script src="js/views.js?v=20261126j"></script>
-<script src="js/hide.js?v=20261126j"></script>
-<script src="js/gallery_shell.js?v=20261126j"></script>
-<script src="js/gallery.js?v=20261126j"></script>
-<script src="js/comic.js?v=20261126j"></script>
-<script src="js/create.js?v=20261126j"></script>
-<script src="js/me.js?v=20261126j"></script>
-<script src="js/ref.js?v=20261126j"></script>
-<script src="js/archive.js?v=20261126j"></script>
-<script src="js/stack.js?v=20261126j"></script>
-<script src="js/chat.js?v=20261126j"></script>
-<script src="js/visitor.js?v=20261126j"></script>
+<script src="js/api.js?v=20261126k"></script>
+<script src="js/store.js?v=20261126k"></script>
+<script src="js/gen.js?v=20261126k"></script>
+<script src="js/shot.js?v=20261126k"></script>
+<script src="js/scroll.js?v=20261126k"></script>
+<script src="js/card.js?v=20261126k"></script>
+<script src="js/gen_flow.js?v=20261126k"></script>
+<script src="js/redraw.js?v=20261126k"></script>
+<script src="js/imgcache.js?v=20261126k"></script>
+<script src="js/views.js?v=20261126k"></script>
+<script src="js/hide.js?v=20261126k"></script>
+<script src="js/gallery_shell.js?v=20261126k"></script>
+<script src="js/gallery.js?v=20261126k"></script>
+<script src="js/comic.js?v=20261126k"></script>
+<script src="js/create.js?v=20261126k"></script>
+<script src="js/me.js?v=20261126k"></script>
+<script src="js/ref.js?v=20261126k"></script>
+<script src="js/archive.js?v=20261126k"></script>
+<script src="js/stack.js?v=20261126k"></script>
+<script src="js/chat.js?v=20261126k"></script>
+<script src="js/visitor.js?v=20261126k"></script>
 
 <script>
   (function () {

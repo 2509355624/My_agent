@@ -838,8 +838,112 @@ def api_ask():
     return jsonify({"ok": True, "job": _public(job)})
 
 
-# ─── 工作台「一句话」通道（见 api_ask）────────────────────────────────
+# ─── 直达：同一串词连排 N 张（2026-11-26）─────────────────────────────
 #
+# 用户原话（233 粉丝群反馈）：「同一个提示词连续跑 5 张，5 张图都是不一样的
+# ——因为点发送会先让大大怪优化提示词」。所以给一个**不经过模型**的入口：
+# 粘进来的词原样进模型，只换 seed，连排 N 张。
+#
+# 和 `/api/gen/submit` 的唯一区别是「一次建 N 条任务」：不新开图片管道，
+# 复用同一个 `_enqueue_job`（限额、记账、终止、轮询全是一份实现）。这里是
+# **批量版**而不是让前端循环打 N 次 submit——前端的提交是顺序 await 的，
+# 第 1 张在跑时第 2 张还在等回执，用户看到的就是「一张一张慢慢来」。
+#
+# seed：`_enqueue_job` 本来每条就随机一个，天然不同，所以这里**不指定**
+# 同一个 seed，也不让前端传——「连跑 5 张相同」正是要解决的问题。
+@bp.route("/api/gen/batch", methods=["POST"])
+def api_batch():
+    """原样提示词连排 N 张。→ {ok, jobs:[...], fail:[一句话…], remain?}
+
+    部分失败照实回：排队名额不够时先建能建的，剩下的写进 `fail`，前端按
+    「已发 3 张，还有 2 张没排上：<原因>」提示。**不整批回滚**——已经排上的
+    那几张撤下来只会让用户更糊涂。
+    """
+    data = request.get_json(silent=True) or {}
+    skill = str(data.get("skill") or "").strip()
+    prompt = str(data.get("prompt") or "").strip()
+    if skill not in _channel_ids():
+        return jsonify({"ok": False, "error": "未知渠道 %r（刷新页面重载渠道列）"
+                        % skill}), 400
+    if not prompt:
+        return jsonify({"ok": False, "error": "提示词是空的"}), 400
+    try:
+        want = int(data.get("count") or 5)
+    except (TypeError, ValueError):
+        want = 5
+    want = max(1, min(want, image_jobs.MAX_INFLIGHT, 10))
+    # 中文原样进 CLIP = 等于没给提示词。直达的卖点是「原样」，但「原样」
+    # 指的是**不被模型改写**，不是不看渠道语种——跟 submit 同一套判断：
+    # 渠道要英文、而用户写的是中文时仍然翻一遍，否则出的是噪声图。
+    final = bool(data.get("prompt_is_final"))
+    body_prompt = prompt
+    if not final and _needs_translate(skill, body_prompt):
+        en = _translate_prompt(skill, body_prompt)
+        if en:
+            body_prompt = en
+    if len(body_prompt) > _MAX_PROMPT:
+        return jsonify({"ok": False,
+                        "error": "提示词太长了（%d 字，上限 %d）"
+                                 % (len(body_prompt), _MAX_PROMPT)}), 400
+
+    from app.features.chat import routes as chat_routes
+    owner = chat_routes._who() or "__anonymous__"
+    from app.gateways import visitor as _visitor
+    gid = _visitor.current()
+
+    # 访客：额度按**真的要建几张**扣。不够就只建剩下的那几张（5 张额度、
+    # 今天还剩 2 张 → 建 2 张），并明说一句，别让他以为点了 5 张。
+    fits = want
+    if gid:
+        left = _visitor.remaining(gid)
+        if left <= 0:
+            return jsonify({"ok": False, "visitor": True,
+                            "error": "访客每天 %d 张，今天已经用完了"
+                                     % _visitor.IMG_PER_DAY}), 403
+        fits = min(want, left)
+
+    jobs, fail = [], []
+    for _ in range(fits):
+        job, busy = _enqueue_job(
+            {"skill": skill, "prompt": body_prompt,
+             "ref_note": ""},
+            owner=owner,
+            # 访客走原尺寸（用户 2026-11-26：「访客不用走降档」）
+            lowres_on=(not gid) and WORKSPACE_LOWRES)
+        if job is None:
+            fail.append(busy or "没排上队")
+            break
+        jobs.append(job)
+    if not jobs:
+        return jsonify({"ok": False, "busy": True,
+                        "error": fail[0] if fail else "没排上队"}), 429
+    for _ in jobs:
+        if gid:
+            _visitor.consume(gid)
+    # 历史只记一轮：这一句用户只说了**一次**，记成 5 轮会让下一轮模型以为
+    # 他连着问了五遍（改词的上下文就乱了）。
+    _web_history_push(owner, prompt, "", jobs[0].get("prompt") or body_prompt,
+                      skill)
+    out = [_public(j) for j in jobs]
+    for j in out:
+        j["visitor"] = bool(gid)
+    resp = {"ok": True, "jobs": out, "fail": fail,
+            "count": len(jobs), "asked": want}
+    if want > fits:
+        resp["note"] = "访客今天只剩 %d 张，这次先排了 %d 张" % (fits, fits)
+    # 排队名额撞满（一次最多 MAX_INFLIGHT）：建了几张就是几张，剩下的一句
+    # 人话说明，别让用户以为已经排满了。
+    if want > len(jobs) and not resp["fail"]:
+        resp["fail"].append("一次最多排 %d 张" % image_jobs.MAX_INFLIGHT)
+    if gid:
+        left = _visitor.remaining(gid)
+        for j in out:
+            j["visitor_left"] = left
+        resp["remain"] = left
+    return jsonify(resp)
+
+
+# ─── 工作台「一句话」通道（见 api_ask）────────────────────────────────
 # 和 QQ 的关系：**同一套转译、同一份历史规则、不同的落盘位置**。
 #   - 转译：`direct_gen._translate`，一个字都不改（用户 2026-11-26：
 #     「我要求就是提示词那一套东西，要跟 QQ 一样」）。
@@ -984,6 +1088,11 @@ def _web_history(qq):
     转译用的模板是 `_MASTER_TEMPLATE`，跟 QQ 人设文件无关，塞 head 只会污染
     `_recent_lines` 之外的地方。这里只存 `user` / `assistant` 两种消息，
     读的时候过一遍 `strip_noise` + 按 6 轮硬裁。
+
+    访客没有 QQ（`_who()` 回空串）：不能拿空串拼文件名——`web_chat_.jsonl`
+    一个文件会被所有访客共写共读，等于让陌生人互相看见对方的提示词。所以
+    访客按 5175 签的身份段分线（`web_guest_<id>.jsonl`），跟额度账本同一把
+    身份钥匙。
     """
     from app.features.chat import memory
     path = _web_history_path(qq)
@@ -1006,6 +1115,12 @@ def _web_history(qq):
 def _web_history_path(qq):
     # `state_path` 只收一个文件名（不建子目录）：工作台的会话线直接铺在
     # state/ 下，名字带前缀，跟 `image_log.jsonl` 那批同层。
+    if not qq:
+        # 访客：按身份段分线（见 `_web_history` 的说明）。身份坏了就退到
+        # 一个公共的匿名线——宁可上下文串一点，也不能因为文件名非法写崩。
+        from app.gateways import visitor as _visitor
+        key = "g_" + (_visitor.current() or "anon")
+        return state_path("web_chat_%s.jsonl" % key)
     return state_path("web_chat_%s.jsonl" % qq)
 
 

@@ -314,7 +314,26 @@
   }
 
   function syncSend() {
-    el.send.disabled = !el.say.value.trim() || el.say.disabled;
+    var off = !el.say.value.trim() || el.say.disabled;
+    el.send.disabled = off;
+    if (el.direct) el.direct.disabled = off;
+  }
+
+  /* 在子页里发完话要退回聊天页（2026-11-24 用户：「我在 AI 创作界面，上传
+     图片，然后说需求，然后点击发送的时候，没有自动回到初始的聊天界面」）。
+
+     为什么要退而不是原地等：气泡和出图卡片全都写进根消息区（见 box() 上面
+     的注释），子页盖在上面时用户看到的是「点了发送、什么都没发生」。退页
+     动画 0.28s，正好盖住识图 + 排队的起步，回来就是聊天页在跑。
+
+     只退一层：AI 创作是从聊天页推进来的，退一层就回到根。漫画单本页
+     （book）不借输入栏，走不到这儿。两个发送按钮（AI 发送 / 直达）共用。 */
+  function leaveDock() {
+    if (global.WSStack && global.WSStack.top()) {
+      var top = global.WSStack.top();
+      // 只退「借了输入栏」的页；别的子页里如果以后也能发，别顺手把人退出去
+      if (top.dataset && top.dataset.dock) global.WSStack.back();
+    }
   }
 
   /* 发送。参考图的识图挪到这一步（2026-11-23 用户：上传不许立刻实图，
@@ -334,21 +353,7 @@
     el.say.value = "";
     grow();
     syncSend();
-
-    /* 在子页里发的话，发完就该回聊天页（2026-11-24 用户：「我在 AI 创作界面，
-       上传图片，然后说需求，然后点击发送的时候，没有自动回到初始的聊天界面」）。
-
-       为什么要退而不是原地等：气泡和出图卡片全都写进根消息区（见 box() 上
-       面的注释），子页盖在上面时用户看到的是「点了发送、什么都没发生」。
-       退页动画 0.28s，正好盖住识图 + 排队的起步，回来就是聊天页在跑。
-
-       只退一层：AI 创作是从聊天页推进来的，退一层就回到根。漫画单本页
-       （book）不借输入栏，走不到这儿。 */
-    if (global.WSStack && global.WSStack.top()) {
-      var top = global.WSStack.top();
-      // 只退「借了输入栏」的页；别的子页里如果以后也能发，别顺手把人退出去
-      if (top.dataset && top.dataset.dock) global.WSStack.back();
-    }
+    leaveDock();
 
     // 漫画模式：这句话是剧情需求，交给创作面板去跑「编剧 → 分页画」
     // 漫画那条链自己会读参考，不需要在这里等识图
@@ -377,6 +382,65 @@
                               read.map(function (r) { return r.id; }), false, user,
                               false, false, "ask");
       if (!newCard) dropUser(user, text);
+    });
+  }
+
+  /* 「直达」：粘进来的词**原样**用，不经过大大怪，一次连排 5 张、每张换一个
+     种子（2026-11-26 用户：粉丝群反馈「同一提示词连跑 5 张，出来 5 张都
+     不一样」，因为点发送会先让 AI 优化词）。
+
+     连排交给后端的 `/api/gen/batch`（一次建 N 条任务）。不在前端循环调
+     submit：提交是顺序 await 的，第 1 张在跑时第 2 张还在等回执，看到的
+     就是「一张一张慢慢来」。
+
+     参考图照旧读成描述拼进去——「原样」指的是**不改写用户的词**，不是不看
+     用户自己喂的图。漫画模式不借这颗（那颗按钮在输入栏，漫画那页用不着
+     连排 5 本书）：直达时按图片生成处理。 */
+  var DIRECT_N = 5;
+
+  function sendDirect() {
+    var text = el.say.value.trim();
+    if (!text) return;
+    var refs = global.WSRef.list();
+    var user = addUser(text, refs);
+    el.say.value = "";
+    grow();
+    syncSend();
+    leaveDock();
+
+    if (global.WSCreate && global.WSCreate.mode() === "comic") {
+      // 漫画页上按了直达：那是「这一句剧情要画 5 本书」，不是用户想要的。
+      // 退回去当一条普通漫画需求，并说一句，免得他以为按错了。
+      sysNote("漫画模式不连发，已按一次生成提交");
+      global.WSRef.commit();
+      global.WSCreate.runComic(text, refs.map(function (r) { return r.id; }));
+      return;
+    }
+
+    var pre = refs.filter(function (r) { return r && r.pre && r.id; });
+    if (pre.length) {
+      global.WSRef.commit();
+      fireDirect(text, pre.map(function (r) { return r.id; }), true, user);
+      return;
+    }
+    global.WSRef.ensureDescribed(refs).then(function (read) {
+      global.WSRef.commit();
+      fireDirect(text, read.map(function (r) { return r.id; }), false, user);
+    });
+  }
+
+  function fireDirect(text, refs, described, user) {
+    global.WSGen.direct({
+      prompt: text,
+      skill: S.skill,
+      count: DIRECT_N,
+      refs: refs,
+      ref_described: !!described
+    }).then(function (d) {
+      global.WSGenFlow.linkBatch(d, text, user);
+    }, function () {
+      dropUser(user, text);
+      sysNote("直达没发出去，检查网络后再点一次");
     });
   }
 
@@ -429,6 +493,7 @@
     el.composer = $("composer");
     el.say = $("say");
     el.send = $("btn-send");
+    el.direct = $("btn-direct");
     el.plus = $("btn-plus");
     el.menu = $("plus-menu");
     el.cam = $("file-camera");
@@ -447,6 +512,9 @@
     global.addEventListener("resize", fitWhenSized);
 
     el.send.addEventListener("click", send);
+    /* 直达（2026-11-26）：原样连排 5 张。回车/发送键仍然是「AI 发送」——
+       连发 5 张是有代价的动作，不该被一个手滑的回车触发。 */
+    if (el.direct) el.direct.addEventListener("click", sendDirect);
     el.say.addEventListener("input", function () { grow(); syncSend(); });
     el.say.addEventListener("keydown", function (e) {
       // 手机回车就是换行；桌面 Enter 发送，Shift+Enter 换行

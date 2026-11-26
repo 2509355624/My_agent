@@ -478,6 +478,30 @@
   box-shadow: none;
 }
 
+/* 「直达」（2026-11-26）：跟「AI 发送」并排的第二颗。它不抢主按钮的位置，
+   做成描边款——主操作仍然是 AI 发送，直达是「我知道自己在干什么」时才用的。
+   两颗都收着 padding，窄屏（320）上也不至于把输入框挤没。 */
+.send-btn.direct {
+  padding: 0 12px;
+  background: var(--card);
+  border: 1px solid var(--brand-soft);
+  color: var(--brand);
+  box-shadow: var(--shadow-1);
+  font-weight: 500;
+}
+
+.send-btn.direct:active {
+  background: var(--brand-soft);
+  transform: scale(.96);
+}
+
+.send-btn.direct:disabled {
+  border-color: var(--hair);
+  background: var(--card-2);
+  color: var(--text-dim);
+  box-shadow: none;
+}
+
 /* 输入栏被借到子页里（AI 创作）：宿主是子页内容区，跟着子页一起滑入滑出。
    ⚠️ 底部留白只能做在这里：.vbody 是滚动容器，padding-bottom 就是滚动内容的
    终点留白，滚动时那块空白也跟着走，输入栏因此钉在原地（用户 2026-11-23：

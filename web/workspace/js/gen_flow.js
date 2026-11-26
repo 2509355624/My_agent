@@ -367,6 +367,73 @@
     });
   }
 
+  // ── 直达：一次连排 N 张（2026-11-26）────────────────────
+  //
+  /* 把 `/api/gen/batch` 的回执接成本台的 N 张卡。
+
+     为什么不复用 `fire()`：那边是「一张卡发一次请求」，回执本身就是这一
+     张的答案；这里是「一次请求回 N 条任务」，卡在请求发之前就已经建好了。
+     硬塞进去等于让 fire 分成两半，两边的状态机（submitting / since / job）
+     还得各管各的。
+
+     记账口径跟单张一样：每张卡都 `H.save(rec)` 进存档、都塞进
+     `S().pending` 交给同一个 tick 轮询——所以刷新页面后照样能把图收回
+     原位（存档重放按 rec 走，见 archive.js），终止按钮也是同一颗。
+
+     一张都没排上 / 有一半没排上：
+       · 全失败 → 撤掉用户气泡，闪一行提示（不落存档，跟 busyTip 同款）；
+       · 部分失败 → 用户气泡留着（他确实说了这句），剩下的补一张说明卡
+         在外面，别让「只出来 3 张」看起来像丢了两张。 */
+  function linkBatch(d, text, userNode) {
+    var jobs = (d && d.jobs) || [];
+    if (!d || !d.ok || !jobs.length) {
+      if (H.dropCard && userNode) H.dropCard(userNode, text);
+      if (H.busyTip) {
+        H.busyTip((d && d.error) || "没排上队，等一下再发");
+      }
+      return 0;
+    }
+    jobs.forEach(function (j, i) {
+      var rec = { k: "img", cls: "", prompt: j.prompt || "",
+                  ask: text, skill: j.skill || "",
+                  id: H.newId ? H.newId("img") : "",
+                  refs: [], described: true, route: "direct",
+                  userId: userNode ? (userNode._wsUserId || "") : "",
+                  userText: text, job: j.id || "", file: "",
+                  note: "正在跑，画好会自动弹出来", err: false,
+                  batch: { n: jobs.length, at: i + 1 } };
+      var card = H.newCard(rec.prompt || text, rec.skill, rec);
+      card.rec = rec;
+      card.refs = [];
+      card.described = true;
+      /* 气泡只给第一张：一条需求五张图，一条气泡才对。后面四张卡片靠
+         `batch` 那个序号自己认位置，不必再挂同一个节点（挂上去的话，失败
+         行会在同一条气泡下面叠五遍）。 */
+      card.userNode = i === 0 ? userNode : null;
+      card.since = Date.now();
+      S().cards.set(rec, card);
+      H.save(rec);
+      if (!j.id) {
+        fail(card, "这张没排上队，等一下再点一次");
+        return;
+      }
+      card.job = j.id;
+      armStop(card);
+      S().pending[card.job] = card;
+      card.say("正在跑，画好会自动弹出来", false, true);
+      paintNote(card, "正在跑，画好会自动弹出来");
+    });
+    /* 访客额度：batch 回执里每张都带同一个 `visitor_left`，取一条就够。 */
+    if (jobs[0].visitor && global.WSVisitor) {
+      global.WSVisitor.syncLeft(jobs[0].visitor_left);
+    }
+    if (d.note && H.busyTip) H.busyTip(d.note);
+    if ((d.fail || []).length && H.busyTip) H.busyTip(d.fail[0]);
+    startPoll();
+    tick();
+    return jobs.length;
+  }
+
   // ── 终止 ──────────────────────────────────────────────
 
   /* 挂上「终止」：只有在卡片真的还挂着任务时才露出来（出图 / 失败时
@@ -588,6 +655,8 @@
     restart: restart,
     armStop: armStop,
     disarmStop: disarmStop,
+    /* 直达：一次回执接成 N 张卡（见 linkBatch） */
+    linkBatch: linkBatch,
     startPoll: startPoll,
     stopPoll: stopPoll,
     tick: tick,

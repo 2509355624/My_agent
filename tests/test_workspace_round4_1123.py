@@ -46,8 +46,12 @@ class TestDescribeOnlyOnSend(unittest.TestCase):
         self.assertIn("ensureDescribed", seg, "点发送才去读图")
         # 读图的等待必须在真正 submitJob 之前，顺序反了就白读。
         # 从最后一个 ensureDescribed 找起：函数里前面还有注释提到它。
-        at = seg.rindex("ensureDescribed")
-        self.assertLess(at, seg.index("submitJob", at), "读完才提交")
+        # 2026-11-26 后 chat.js 里多了「直达」（sendDirect），它排在 send()
+        # 后面、走的是另一条接口。所以只取 send() 自己这一段来判顺序。
+        own = seg[:seg.index("function sendDirect")] \
+            if "function sendDirect" in seg else seg
+        at = own.rindex("ensureDescribed")
+        self.assertLess(at, own.index("submitJob", at), "读完才提交")
 
     def test_ensure_described_is_parallel_and_skips_read_ones(self):
         js = _read("js/ref.js")

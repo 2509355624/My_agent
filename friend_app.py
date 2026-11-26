@@ -98,7 +98,9 @@ def _new_session():
 # ─── 限流 ────────────────────────────────────────────────
 #
 # 内存计数即可：进程重启就清零，没人会盯着重启窗口刷。
-# 三道闸：全局每 IP 每分钟、登录发码每 IP 每小时、登录校验每 IP 每 10 分钟。
+# 2026-11-26 用户拍板：**登录相关的这几种按 IP 限流全部撤掉**（「没有这样的
+# 限流」），所以下面 send / verify / gv_* 四个桶上限填 0 = 不设限；页面与图片
+# 那两个桶是防「自己把自己挡住」的，跟登录无关，原样保留。
 _RL = {}
 _RL_LOCK = threading.Lock()
 
@@ -109,12 +111,12 @@ LIMITS = {
     # 图片单独一口桶：画廊翻两屏就是几十张缩略图，跟「接口调用」混在一个
     # 计数里等于让看图把功能位吃掉。1500/分钟 对家用上行已经是天花板了。
     "img": (1500, 60),
-    "send": (10, 3600),      # 发码：每小时 10 次
-    "verify": (30, 600),     # 验码：10 分钟 30 次
+    "send": (0, 3600),       # 发码：不限次（2026-11-26 用户要求撤掉按 IP 限流）
+    "verify": (0, 600),      # 验码：不限次（同上）
     # 游客会话查看（2026-11-08）：管理员自己的入口，不需要太严。
     # 发码略放宽到 20/小时（他可能反复试登录），验码 30/10 分钟同群友页。
-    "gv_send": (20, 3600),
-    "gv_verify": (30, 600),
+    "gv_send": (0, 3600),    # 游客会话查看：不限次
+    "gv_verify": (0, 600),   # 同上
     # 产品展示页：聊天与状态共用一个宽松桶，真实生图单独限流。
     # 状态轮询 1.6s/次（生图全程 1~3 分钟 ≈ 200+ 次），600/10分钟才够轮询，
     # 原先 120 会在轮询 3 分钟后被自己掐成 429。
@@ -138,8 +140,10 @@ def client_ip():
 
 
 def rate_ok(bucket):
-    """→ True 表示还能来一次。超了返回 False。"""
+    """→ True 表示还能来一次。超了返回 False。`limit <= 0` = 这个桶不设限。"""
     limit, window = LIMITS[bucket]
+    if limit <= 0:
+        return True
     key = (bucket, client_ip())
     now = time.time()
     with _RL_LOCK:
@@ -343,8 +347,9 @@ def _cookie_secure():
 
 @app.route("/login/send", methods=["POST"])
 def login_send():
-    if not rate_ok("send"):
-        return jsonify({"ok": False, "error": "发太多次了，等一会儿"}), 429
+    # 2026-11-26 用户：「什么每个 IP 每小时 10 次，没有这样的限流，取消掉。」
+    # 发码这条桶整个撤掉——真被刷时 auth 自己的冷却还在（同一 QQ 短时间
+    # 重复发码会被拒），不需要再按 IP 卡一层。
     data = request.get_json(silent=True) or {}
     ok, msg = friend_auth.send_code(data.get("qq"))
     return jsonify({"ok": ok, "message": msg, "error": "" if ok else msg}), \
@@ -353,8 +358,7 @@ def login_send():
 
 @app.route("/login/verify", methods=["POST"])
 def login_verify():
-    if not rate_ok("verify"):
-        return jsonify({"ok": False, "error": "试太多次了，等一会儿"}), 429
+    # 同发码那条：2026-11-26 用户要求撤掉按 IP 的「试太多次了」。
     data = request.get_json(silent=True) or {}
     ok, msg, token = friend_auth.verify(data.get("qq"), data.get("code"))
     if not ok:
@@ -378,9 +382,10 @@ def login_visitor():
     用户 2026-11-26 拍板：「访客直接点就进去了，能生图」「每天 5 张，
     换浏览器就随便他换」。所以这里只做两件事：签身份、下发 cookie。
     额度在 5174 那边按身份串记（`app/gateways/visitor.py`），5175 不管账。
+
+    这里**不再挂限流**（同一天用户：「不要搞这种东西」）：它原先借的是
+    发码那个桶（10 次/小时/IP），直接把「点访客进入」挡成 429。
     """
-    if not rate_ok("send"):
-        return jsonify({"ok": False, "error": "发太多次了，等一会儿"}), 429
     gid = visitor.new_id()
     resp = make_response(jsonify({"ok": True, "role": "visitor",
                                   "quota": visitor.snapshot(gid)}))
@@ -910,8 +915,7 @@ def gv_me():
 
 @app.route("/gv/send", methods=["POST"])
 def gv_send():
-    if not rate_ok("gv_send"):
-        return jsonify({"ok": False, "error": "发太多次了，等一会儿"}), 429
+    # 游客会话查看的发码：跟着 /login/send 一起撤掉限流（2026-11-26）。
     data = request.get_json(silent=True) or {}
     qq = str(data.get("qq") or "").strip()
     # 不区分「不在名单」和「不在好友」——统一回「无法登录」，不给枚举空间。
@@ -924,8 +928,7 @@ def gv_send():
 
 @app.route("/gv/verify", methods=["POST"])
 def gv_verify():
-    if not rate_ok("gv_verify"):
-        return jsonify({"ok": False, "error": "试太多次了，等一会儿"}), 429
+    # 同上，验码也不再按 IP 卡。
     data = request.get_json(silent=True) or {}
     qq = str(data.get("qq") or "").strip()
     if not guest_view.is_admin(qq):
