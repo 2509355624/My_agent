@@ -1472,6 +1472,10 @@ def enqueue(target, target_id, workflow, skill=None, nai_i2i=None, prompt=None,
     # 登记失败返回 -1，**绝不能因此拒单**：计数器只影响报数。
     if chan.local:
         comfy_gate.add_pending(1)
+    # 入队即记一条「还在排队」的轻记录（2026-11-26）：重启后至少能告诉用户
+    # 「这几张没画成」，而不是让他对着「正在画」一直等。**放在 `_lock` 外面**
+    # ——是磁盘 IO，占着队列锁做它会让出队线程白等。
+    _ledger_queued(job)
     if weight > 1:
         # 入队就记一行：模型选渠道的决策只有在这里才看得见，出问题时先查这行。
         log.info("重渠道 %s 入队（%s %s，权重 %d，前面 %d 张）",
@@ -2358,6 +2362,36 @@ def _process_nai(job):
     except Exception as exc:
         job.error = exc
         _notice(job, stage="send")
+
+
+def _ledger_queued(job):
+    """入队即记一条 `queued` 轻记录（2026-11-26 用户拍板「第一步」）。
+
+    只为了让重启后能说一句「你之前排的这几张没画成」——**不存 workflow、
+    不存源图 base64**，几十字节，救不回任务本身（理由见 job_ledger 模块头）。
+
+    跳过 quiet / NAI，与 `_ledger_add` 同一口径：前者上下文随进程消失、
+    后者云端同步，重启后都没有「告诉谁」的意义。
+    """
+    if getattr(job, "skill", None) in NAI_SKILLS \
+            or getattr(job, "quiet", False):
+        return
+    if not getattr(job, "tag", ""):
+        return
+    try:
+        from app.features.image import job_ledger
+        job_ledger.add({
+            "tag": job.tag,
+            "state": job_ledger.STATE_QUEUED,
+            "pid": os.getpid(),
+            "target": job.target,
+            "target_id": job.target_id,
+            "skill": job.skill or "",
+            "prompt": job.prompt or "",
+            "created": job.created,
+        })
+    except Exception:
+        log.warning("排队记录写入失败（不影响出图）", exc_info=True)
 
 
 def _ledger_add(job):
@@ -3600,6 +3634,110 @@ def _notify_batch_blocked(target, target_id, sent, blocked, total):
 # 情况兜底——不然账本里会一直躺着一条发不掉的记录，每次启动都白试一遍。
 _RESUME_MAX_ATTEMPTS = 3
 
+# 排队残留最多一次报几张（2026-11-26）。上界是 MAX_QUEUE=20，超出只是理论上
+# 可能；真要超出就报个总数，别刷一屏。
+_RESUME_QUEUED_MAX = 20
+
+
+def _pid_alive(pid):
+    """这个 pid 现在还有人在跑吗？（重启残留判定用）
+
+    判不了（pid 空、系统调用不支持）一律当**活着**——宁可不报，也不能把
+    另一个进程正在排队、马上就出图的任务说成「没画成」。
+    """
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return True
+    if pid <= 0:
+        return True
+    if pid == os.getpid():
+        return False        # 自己的任务在内存里，账本里留着就只能是死记录
+    if os.name == "nt":
+        # Windows 没有 os.kill(pid, 0)，用 kernel32 的 OpenProcess 探：
+        # 拿得到句柄就是还活着（哪怕它已经要退出了，也比误判成死强）。
+        import ctypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        try:
+            k32 = ctypes.windll.kernel32
+            h = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not h:
+                return False
+            try:
+                code = ctypes.c_ulong()
+                if k32.GetExitCodeProcess(h, ctypes.byref(code)):
+                    return code.value == STILL_ACTIVE
+                return True
+            finally:
+                k32.CloseHandle(h)
+        except Exception:
+            return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True                 # 无权限 = 进程在，只是不是我们的
+    return True
+
+
+def _notify_lost(recs):
+    """把「重启时还在排队、现在确实没了」的那几张汇总成一句话发出去。
+
+    按会话归并：一次重启最多 20 张，逐张回就是刷屏（2026-10-18 那次的教训）。
+    `quiet` / NAI 在入队时就没记，这里不会碰到。
+    """
+    by_target = collections.OrderedDict()
+    for rec in recs:
+        target = rec.get("target")
+        target_id = rec.get("target_id")
+        if not target or not target_id:
+            continue                # 网页侧（target=None）没有「回一句」的去处
+        by_target.setdefault((target, target_id), []).append(rec)
+
+    for (target, target_id), items in by_target.items():
+        n = len(items)
+        skills = []
+        for rec in items:
+            s = rec.get("skill") or ""
+            if s and s not in skills:
+                skills.append(s)
+        detail = "（%s）" % "、".join(skills[:3]) if skills else ""
+        if n == 1:
+            text = ("刚才重启的时候，你排着的那张图%s还没开始画，"
+                    "已经没了。要的话把需求再发我一次。" % detail)
+        else:
+            text = ("刚才重启的时候，你排着的 %d 张图%s还没开始画，"
+                    "已经没了。要的话把需求再发我一次。" % (n, detail))
+        try:
+            _send_text(target, target_id, text)
+            log.info("排队残留：已告知 %s %s 共 %d 张没画成",
+                     target, target_id, n)
+        except Exception:
+            log.warning("排队残留：告知 %s %s 失败（记录已清，不再重试）",
+                        target, target_id, exc_info=True)
+
+
+def _report_queued_lost():
+    """重启后第一件事：把上一个进程留下的排队记录处理掉（2026-11-26）。
+
+    只处理 `state="queued"`——已提交的（有 prompt_id）走 `resume_pending`
+    老老实实捞图，两条路互不干扰。返回报出去的张数（主要给测试看）。
+    """
+    try:
+        from app.features.image import job_ledger
+        lost = job_ledger.drop_queued(_pid_alive)
+    except Exception:
+        log.warning("排队残留：处理失败，本次跳过", exc_info=True)
+        return 0
+    if not lost:
+        return 0
+    recs = list(lost.values())
+    log.info("排队残留：上个进程留下 %d 张没开画的，开始告知", len(recs))
+    _notify_lost(recs[:_RESUME_QUEUED_MAX])
+    return len(recs)
+
 # 等一张「重启前就已经在跑」的图时，比正常时限多给几秒。它的计时起点在我们
 # 重新接上之前，剩下的只是收尾；卡着正常时限判死会把一张马上就好的图丢掉。
 _RESUME_EXTRA_WAIT = 60
@@ -3748,6 +3886,10 @@ def resume_pending():
         if _resumed:
             return None
         _resumed = True
+    # 排队残留先处理（2026-11-26）：这几张**救不回来**，只能告诉用户一声。
+    # 放在读账本之前——`_report_queued_lost` 自己会清掉那几条，后面的补发
+    # 流程就不会把它们当成「已提交没投递」误追一遍。
+    _report_queued_lost()
     try:
         from app.features.image import job_ledger
         pending = job_ledger.load()

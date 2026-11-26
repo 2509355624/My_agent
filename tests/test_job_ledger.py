@@ -231,5 +231,146 @@ class ResumeTest(_TempLedger):
         m_one.assert_called_once()
 
 
+class QueuedLostTest(_TempLedger):
+    """重启时「还在排队」的那几张：救不回来，但**必须让人知道**（2026-11-26）。
+
+    用户报的现场：回执已经说过「正在画」，这时重启，那几张无声无息就没了，
+    用户对着「正在画」等半小时。所以入队就记一条 `queued` 轻记录，重启后
+    只有「留下它的进程已经不在了」才报，且**按会话汇总成一句**。
+    """
+
+    def _queued(self, tag="HT-Q1", pid=999999, target="private",
+                target_id="42", skill="silver"):
+        return {"tag": tag, "state": job_ledger.STATE_QUEUED,
+                "pid": pid, "target": target, "target_id": target_id,
+                "skill": skill, "prompt": "1girl", "created": 0.0}
+
+    def test_queued_record_needs_no_prompt_id(self):
+        # 这是和「已提交」记录唯一的区别：排队中当然没有 prompt_id
+        self.assertTrue(job_ledger.add(self._queued()))
+        self.assertEqual(job_ledger.load()["HT-Q1"]["state"], "queued")
+
+    def test_submitted_record_still_requires_prompt_id(self):
+        # 老规矩不能松：没有 prompt_id 的「已提交」记录捞不回来
+        self.assertFalse(job_ledger.add({"tag": "HT-S1", "target": "private"}))
+
+    def test_live_pid_record_is_kept(self):
+        """另一个进程还活着（5174 起来了、QQ 还没重启）→ 一个字都不许动。"""
+        job_ledger.add(self._queued(pid=12345))
+        lost = job_ledger.drop_queued(lambda pid: True)
+        self.assertEqual({}, lost)
+        self.assertIn("HT-Q1", job_ledger.load())
+
+    def test_dead_pid_record_is_reported_and_cleared(self):
+        job_ledger.add(self._queued(pid=999999))
+        lost = job_ledger.drop_queued(lambda pid: False)
+        self.assertIn("HT-Q1", lost)
+        self.assertEqual({}, job_ledger.load())     # 报完就清，别每次启动都报
+
+    def test_submitted_records_are_untouchable(self):
+        # 有 prompt_id 的走 resume 捞图，绝不能被当成「丢了」清掉
+        job_ledger.add({"tag": "HT-S1", "prompt_id": "pid-1",
+                        "target": "private", "target_id": "42"})
+        lost = job_ledger.drop_queued(lambda pid: False)
+        self.assertEqual({}, lost)
+        self.assertIn("HT-S1", job_ledger.load())
+
+    def test_alive_check_failure_counts_as_alive(self):
+        # 判不了就当他活着：宁可少报一句，不能把马上要出图的活说成没画成
+        job_ledger.add(self._queued())
+        lost = job_ledger.drop_queued(lambda pid: 1 / 0)
+        self.assertEqual({}, lost)
+
+    def test_own_pid_counts_as_dead(self):
+        # 自己的队列在内存里，账本里留着自己的 queued = 老进程留下的死记录
+        job_ledger.add(self._queued(pid=os.getpid()))
+        self.assertFalse(image_jobs._pid_alive(os.getpid()))
+        self.assertIn("HT-Q1", job_ledger.drop_queued(image_jobs._pid_alive))
+
+    def _run_report(self, recs):
+        for rec in recs:
+            job_ledger.add(rec)
+        with mock.patch.object(image_jobs, "_send_text") as m_text:
+            n = image_jobs._report_queued_lost()
+        return n, m_text
+
+    def test_one_lost_job_gets_one_sentence(self):
+        n, m_text = self._run_report([self._queued(pid=999999)])
+        self.assertEqual(1, n)
+        m_text.assert_called_once()
+        self.assertIn("还没开始画", m_text.call_args[0][2])
+        self.assertIn("silver", m_text.call_args[0][2])
+
+    def test_batch_of_queued_jobs_is_summed_not_spammed(self):
+        """一次批量 5 张 → **一句**，不是 5 句（2026-10-18 刷屏的教训）。"""
+        recs = [self._queued(tag="HT-Q%d" % i, pid=999999) for i in range(5)]
+        n, m_text = self._run_report(recs)
+        self.assertEqual(5, n)
+        m_text.assert_called_once()
+        text = m_text.call_args[0][2]
+        self.assertIn("5 张", text)
+        self.assertEqual("private", m_text.call_args[0][0])   # 发回原会话
+
+    def test_web_side_has_nowhere_to_send(self):
+        # 跑图台/漫画台 target 是 None：没有「回一句」的去处，静默清掉即可
+        n, m_text = self._run_report(
+            [self._queued(pid=999999, target=None, target_id=None)])
+        self.assertEqual(1, n)
+        m_text.assert_not_called()
+
+    def test_report_is_wired_into_resume_pending(self):
+        """重启入口必须真的调到它——这条是整个改动的落地点。"""
+        job_ledger.add(self._queued(pid=999999))
+        with mock.patch.object(image_jobs, "_resumed", False), \
+             mock.patch.object(image_jobs, "_pid_alive", return_value=False):
+            t = image_jobs.resume_pending()
+            if t is not None:
+                t.join(5)
+        self.assertEqual({}, job_ledger.load())
+
+
+class EnqueueRecordsQueuedTest(_TempLedger):
+    """`enqueue` 一进队就记账（不是等提交）。"""
+
+    def setUp(self):
+        super().setUp()
+        self._saved = [mock.patch.object(image_jobs, "_ensure_worker",
+                                         lambda: None),
+                       mock.patch.object(image_jobs.comfy_gate, "add_pending",
+                                         lambda n=1: 0)]
+        for p in self._saved:
+            p.start()
+
+    def tearDown(self):
+        for p in self._saved:
+            p.stop()
+        image_jobs._COMFY.queue.clear()
+        image_jobs._COMFY.per_session.clear()
+        super().tearDown()
+
+    def test_enqueue_writes_a_queued_record(self):
+        job, reason = image_jobs.enqueue("private", "42", {"1": {}},
+                                         skill="silver", prompt="1girl")
+        self.assertIsNone(reason)
+        rec = job_ledger.load()[job.tag]
+        self.assertEqual("queued", rec["state"])
+        self.assertEqual(os.getpid(), rec["pid"])
+        self.assertEqual("42", rec["target_id"])
+        # 只记轻量字段：workflow 不进账本（那才是持久化队列的难点）
+        self.assertNotIn("workflow", rec)
+
+    def test_quiet_is_not_recorded(self):
+        job, _ = image_jobs.enqueue("private", "42", {"1": {}},
+                                    skill="silver", quiet=True)
+        self.assertNotIn(job.tag, job_ledger.load())
+
+    def test_finish_of_a_never_submitted_job_clears_it(self):
+        """排队中被取消/失败（压根没提交）也要划账，否则下次启动会误报。"""
+        job, _ = image_jobs.enqueue("private", "42", {"1": {}}, skill="silver")
+        self.assertIn(job.tag, job_ledger.load())
+        image_jobs._finish(job)
+        self.assertNotIn(job.tag, job_ledger.load())
+
+
 if __name__ == "__main__":
     unittest.main()
