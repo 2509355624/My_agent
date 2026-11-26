@@ -1,15 +1,17 @@
 # -*- coding: utf-8 -*-
 """工作台「一句话」通道（2026-11-26）守卫测试。
 
-用户要的是「工作台的提示词那一套跟 QQ 一样」：同一个模型、同一条
-`_MASTER_TEMPLATE`、同一份 6 轮历史窗口。这条链路新建时只补了两块网页端
-缺的能力（改词、点名渠道），别再被后来的人扩成第二套。
+用户要的只有一件事：**工作台的文生图 / 图生图，走大怪那套提示词**，
+渠道由画风抽屉定死。这一条锁住三件事：
 
-为什么必须单独锁：这几条错了**照样能出图**，只是出的不是用户要的那张
-（「换成白毛衣」被当成「画个白毛衣的东西」、LoRA 槽位被模型改掉），
+1. 每一句请求都过 `direct_gen`（有图走 `_revise`，没图走 `_translate`），
+   不存在「某个条件下偷偷回落到只中译英的旧路」——那是改版前的老毛病。
+2. 界面上选了哪个渠道，出图就用哪个渠道，模型改判也不算数。
+3. 模型说「这轮不用画」时回一句；它没交作业时提示重来。
+
+为什么必须单独锁：这几条错了**照样能出图**，只是出的不是用户要的那张，
 跑图跑通了完全看不出来。
 """
-import json
 import os
 import unittest
 from unittest import mock
@@ -30,156 +32,157 @@ class _FakeHistory(object):
         return list(self.rows)
 
 
-class ReviseBranchTest(unittest.TestCase):
-    """改词轮：有上一张 + 这句是接着说的 → 走 QQ 那份转译。"""
+class _Base(unittest.TestCase):
+    """公共桩：身份、历史、入队，以及两条转译管道。"""
 
     def setUp(self):
-        self.trans = []
-        self.enq = []
+        self.trans = []      # _translate 调用
+        self.rev = []        # _web_revise 调用
+        self.enq = []        # 入队的 spec
+        self.tr_result = {"skill": "silver", "prompt": "MASTER-OUT"}
+        self.rev_result = {"skill": "silver", "prompt": "REVISED"}
+
+        def _translate(text, hist, skill=None, **k):
+            self.trans.append({"text": text, "skill": skill, "hist": hist})
+            return self.tr_result
+
+        def _revise(text, channel, hist, images):
+            self.rev.append({"text": text, "channel": channel,
+                             "images": images})
+            return self.rev_result
+
+        def _enq(spec, owner, user_text=""):
+            self.enq.append(spec)
+            return ({"id": "GP-1", "skill": spec["skill"],
+                     "prompt": spec["prompt"],
+                     "source_images": spec.get("source_images") or []}, None)
+
         self._p = [
             mock.patch.object(R, "_who_qq", return_value="10001"),
             mock.patch.object(R, "_web_history", new=_FakeHistory()),
-            mock.patch.object(
-                R, "_enqueue_job",
-                new=lambda spec, owner, user_text="": (
-                    self.enq.append(spec),
-                    ({"id": "GP-1", "skill": spec["skill"],
-                      "prompt": spec["prompt"]}, None))[1]),
+            mock.patch.object(R, "_enqueue_job", new=_enq),
+            mock.patch.object(R, "_web_revise", new=_revise),
         ]
         for p in self._p:
             p.start()
         from app.features.image import direct_gen
         self.dg = direct_gen
-        self._orig_last = direct_gen._last_job
         self._orig_tr = direct_gen._translate
-        direct_gen._last_job = lambda sk: {
-            "skill": "silver",
-            "prompt": "1girl, silver hair, school uniform, classroom"}
-        # 转译本身打桩：测的是「这一轮走没走 QQ 那条路」，不是模型输出质量
-        # （模型的质量由 test_direct_gen 那批锁着）。
-        direct_gen._translate = lambda text, hist, skill=None, **k: (
-            self.trans.append({"text": text, "hist": hist, "skill": skill}),
-            {"skill": skill or "silver", "prompt": "WHITE-SWEATER"})[1]
+        direct_gen._translate = _translate
 
     def tearDown(self):
-        self.dg._last_job = self._orig_last
         self.dg._translate = self._orig_tr
         for p in self._p:
             p.stop()
 
-    def _run(self, text, skill="silver", data=None):
-        return R._web_decide(text, skill, [], {"images": [], "refs": []},
-                             data or {})
+    def _run(self, text, skill="silver", images=None, refs=None):
+        return R._web_decide(text, skill, [],
+                             {"images": images or [], "refs": refs or []})
 
-    def test_short_line_goes_through_translate(self):
-        """「换成白色毛衣」必须过 QQ 那份转译——这是整个需求的起因。"""
-        got = self._run("换成白色毛衣")
-        self.assertIsNotNone(got)
+
+class TextToImageTest(_Base):
+    """文生图：选了渠道说一句需求，走大怪那套提示词。"""
+
+    def test_every_sentence_goes_through_master_template(self):
+        job = self._run("银发少女在雨里奔跑")
         self.assertEqual(len(self.trans), 1)
-        self.assertEqual(self.enq[0]["prompt"], "WHITE-SWEATER")
-        # 渠道沿用点名的那个（用户在工作台选了 silver）
-        self.assertEqual(self.enq[0]["skill"], "silver")
+        self.assertEqual(job["prompt"], "MASTER-OUT")
+        self.assertEqual(job["skill"], "silver")
 
-    def test_english_tag_string_is_not_rewritten(self):
-        """用户自己写好的成品串不该被当「改上一张」再改写一遍。"""
-        got = self._run("1girl, silver hair, white sweater, masterpiece")
-        self.assertIsNone(got)
+    def test_short_sentence_is_not_a_special_case(self):
+        """「换成白色毛衣」和长句走同一条路——不再有「短句算改词」的分支。"""
+        self._run("换成白色毛衣")
+        self._run("一个穿和服的男孩站在海边码头上等朋友，背景是傍晚泛红的云层")
+        self.assertEqual(len(self.trans), 2)
+        self.assertEqual(self.rev, [])
+
+    def test_english_tag_string_also_goes_through(self):
+        """用户自己贴的英文串照样过一遍（跟 QQ 一样：AI 必须参与决策）。"""
+        self._run("1girl, silver hair, white sweater")
+        self.assertEqual(len(self.trans), 1)
+
+    def test_ui_channel_wins_over_model(self):
+        """界面选了 silver，模型想画 krea2 也不算数。"""
+        self.tr_result = {"skill": "krea2-jiguang", "prompt": "X"}
+        job = self._run("用极光画个赛博城市", skill="silver")
+        self.assertEqual(job["skill"], "silver")
+
+    def test_no_ui_channel_falls_back_to_model(self):
+        self.tr_result = {"skill": "krea2-jiguang", "prompt": "X"}
+        job = self._run("用极光画个赛博城市", skill="")
+        self.assertEqual(job["skill"], "krea2-jiguang")
+
+    def test_no_channel_anywhere_asks_for_one(self):
+        self.tr_result = {"skill": "", "prompt": "X"}
+        with self.assertRaises(RuntimeError) as ctx:
+            self._run("画只猫", skill="")
+        self.assertIn("画风", str(ctx.exception))
         self.assertEqual(self.enq, [])
 
-    def test_weighted_prompt_is_not_rewritten(self):
-        got = self._run("1.2::artist:x::, 1girl")
-        self.assertIsNone(got)
 
-    def test_new_scene_falls_through(self):
-        """另一张新画面（长句、和上一张没重叠）→ 回落老路。
+class ImageToImageTest(_Base):
+    """图生图：传了图就说一句，图 + 话一起交给大怪那套。"""
 
-        句子要够长（> 24 字）：短句按「接上一张说的」处理，那是工作台
-        这个界面里最省事的判据（「换成白毛衣」就是这么长）。"""
-        got = self._run("一个穿和服的男孩站在海边码头上等朋友，背景是傍晚泛红的云层")
-        self.assertIsNone(got)
-        self.assertEqual(self.enq, [])
+    def test_upload_goes_through_revise(self):
+        job = self._run("把这个人换到我旁边", images=["data:image/png;base64,AA"],
+                        refs=["cr_x"])
+        self.assertEqual(len(self.rev), 1)
+        self.assertEqual(self.rev[0]["channel"], "silver")
+        self.assertEqual(job["prompt"], "REVISED")
 
-    def test_runner_params_always_fall_through(self):
-        """跑图台的 LoRA 槽位 / 步数 / 横屏这些参数，转译那条路不认 → 必须回落。"""
-        for data in ({"loras": [{"slot": 1, "on": True}]},
-                     {"steps": 40}, {"cfg": 5.5}, {"landscape": True},
-                     {"width": 1024, "height": 1536},
-                     {"prompt_is_final": True}, {"artist_prefix": "a, b"}):
-            self.assertIsNone(self._run("换成白色毛衣", data=data),
-                              "带 %r 还接管了" % (data,))
-        self.assertEqual(self.enq, [])
+    def test_source_image_only_when_model_asks(self):
+        """模型判要垫图 → 把 data URL 一起交给任务；不垫就不传。"""
+        self.rev_result = {"skill": "silver", "prompt": "P", "source_image": True}
+        job = self._run("图生图", images=["data:image/png;base64,AA"])
+        self.assertEqual(job["source_images"], ["data:image/png;base64,AA"])
 
-    def test_model_says_no_paint_raises_reply(self):
-        """模型判「这轮不用画」→ 抛 _WebReply，交给前端显示气泡。"""
-        self.dg._translate = lambda *a, **k: {"reply": "这句没说要画什么"}
+        self.rev_result = {"skill": "silver", "prompt": "P"}
+        job = self._run("图生图", images=["data:image/png;base64,AA"])
+        self.assertEqual(job["source_images"], [])
+
+    def test_ui_channel_wins_over_revise(self):
+        self.rev_result = {"skill": "qwen_image_v1", "prompt": "P"}
+        job = self._run("改一下", skill="silver",
+                        images=["data:image/png;base64,AA"])
+        self.assertEqual(job["skill"], "silver")
+
+    def test_cr_refs_pass_through(self):
+        self._run("改一下", images=["data:image/png;base64,AA"],
+                  refs=["cr_abc", "not-a-ref"])
+        self.assertEqual(self.enq[0]["refs"], ["cr_abc"])
+
+
+class NoAnswerTest(_Base):
+    """模型的两类「没给图」：判不画 / 没交作业。"""
+
+    def test_reply_raises_web_reply(self):
+        self.tr_result = {"reply": "这句没说要画什么"}
         with self.assertRaises(R._WebReply) as ctx:
-            self._run("换成白色毛衣")
+            self._run("嗯嗯")
         self.assertEqual(ctx.exception.reply, "这句没说要画什么")
         self.assertEqual(self.enq, [])
 
+    def test_empty_result_asks_to_retry(self):
+        """空返回 / JSON 没解析出来 = 没交作业，提示重来，不硬画。"""
+        self.tr_result = None
+        with self.assertRaises(RuntimeError) as ctx:
+            self._run("画只猫")
+        self.assertIn("再发", str(ctx.exception))
+        self.assertEqual(self.enq, [])
 
-class ChannelBranchTest(unittest.TestCase):
-    """点名渠道：让模型的渠道判定生效（工作台不再只有下拉框那一个渠道）。"""
+    def test_reply_with_prompt_still_paints(self):
+        """既有 prompt 又有 reply → 要画（reply 只是附带话），不能当成不画。"""
+        self.tr_result = {"skill": "silver", "prompt": "P", "reply": "画了"}
+        job = self._run("画只猫")
+        self.assertEqual(job["prompt"], "P")
 
-    def setUp(self):
-        self.enq = []
-        self._p = [
-            mock.patch.object(R, "_who_qq", return_value="10001"),
-            mock.patch.object(R, "_web_history", new=_FakeHistory()),
-            mock.patch.object(
+    def test_busy_surfaces_as_runtime_error(self):
+        with mock.patch.object(
                 R, "_enqueue_job",
-                new=lambda spec, owner, user_text="": (
-                    self.enq.append(spec),
-                    ({"id": "GP-2", "skill": spec["skill"],
-                      "prompt": spec["prompt"]}, None))[1]),
-        ]
-        for p in self._p:
-            p.start()
-        from app.features.image import direct_gen
-        self.dg = direct_gen
-        self._orig_last = direct_gen._last_job
-        direct_gen._last_job = lambda sk: None       # 没有上一张
-        self._orig_tr = direct_gen._translate
-        direct_gen._translate = lambda text, hist, skill=None, **k: {
-            "skill": "krea2-jiguang", "prompt": "cyberpunk city"}
-
-    def tearDown(self):
-        self.dg._last_job = self._orig_last
-        self.dg._translate = self._orig_tr
-        for p in self._p:
-            p.stop()
-
-    def test_named_channel_uses_model_judgement(self):
-        got = R._web_decide("用极光画个赛博城市", "",
-                            [], {"images": [], "refs": []}, {})
-        self.assertIsNotNone(got)
-        self.assertEqual(got["skill"], "krea2-jiguang")
-
-    def test_ui_picked_channel_wins(self):
-        """用户在下拉框已经选了渠道 → 不再让模型改判。"""
-        got = R._web_decide("用极光画个赛博城市", "silver",
-                            [], {"images": [], "refs": []}, {})
-        self.assertIsNone(got)
-
-
-class LooksLikeReviseTest(unittest.TestCase):
-
-    def test_short_is_revise(self):
-        self.assertTrue(R._looks_like_revise("换成白色毛衣", {"prompt": "a"}))
-        self.assertTrue(R._looks_like_revise("再换个姿势", {"prompt": "a"}))
-
-    def test_overlap_in_long_sentence(self):
-        prev = {"prompt": "1girl, silver hair, school uniform, classroom, sunset"}
-        self.assertTrue(R._looks_like_revise(
-            "还是银发少女，但是把背景换成下雨的夜晚街道", prev))
-
-    def test_no_overlap_no_revise(self):
-        prev = {"prompt": "1girl, silver hair, school uniform, classroom, sunset"}
-        self.assertFalse(R._looks_like_revise(
-            "一个穿和服的男孩站在海边码头上等朋友，背景是傍晚泛红的云层", prev))
-
-    def test_empty_is_not_revise(self):
-        self.assertFalse(R._looks_like_revise("", {"prompt": "a"}))
+                new=lambda spec, owner, user_text="": (None, "同时最多画 5 张")):
+            with self.assertRaises(RuntimeError) as ctx:
+                self._run("画只猫")
+        self.assertIn("5 张", str(ctx.exception))
 
 
 class WebHistoryTest(unittest.TestCase):
@@ -231,9 +234,30 @@ class ChatRefTest(unittest.TestCase):
         self.assertFalse(references.valid_chat_ref("abc"))
         self.assertFalse(references.valid_chat_ref(""))
 
-    def test_upload_rejects_non_data_url(self):
-        a = R.bp
-        self.assertTrue(hasattr(a, "name"))
+
+class BuildI2iTest(unittest.TestCase):
+    """图生图骨架：占位名要先填进去，真名由 worker 上传完回填。"""
+
+    def test_data_url_decodes(self):
+        raw = R._data_url_bytes(
+            "data:image/png;base64," + "aGVsbG8=")
+        self.assertEqual(raw, b"hello")
+
+    def test_bad_data_url_rejected(self):
+        for bad in ("", "http://x/y.png", "data:image/png,abc"):
+            with self.assertRaises(RuntimeError):
+                R._data_url_bytes(bad)
+
+    def test_placeholder_matches_worker(self):
+        """两处占位串必须同值，否则 worker 回填时替换不到。"""
+        from app.tools.normal import generate_image as gi
+        self.assertEqual(R._I2I_PLACEHOLDER, gi._I2I_SRC_PLACEHOLDER)
+
+    def test_channel_without_i2i_skeleton_raises(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            R._build_i2i({"skill": "moss", "prompt": "x", "seed": 1,
+                          "source_images": ["data:image/png;base64,AA"]})
+        self.assertIn("图生图", str(ctx.exception))
 
 
 class EnqueueJobTest(unittest.TestCase):
@@ -247,6 +271,7 @@ class EnqueueJobTest(unittest.TestCase):
         self.assertEqual(job["loras"], [])
         self.assertIsNone(job["steps"])
         self.assertFalse(job["landscape"])
+        self.assertEqual(job["source_images"], [])
         R._JOBS.pop(job["id"], None)
 
 

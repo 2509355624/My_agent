@@ -27,6 +27,7 @@
 `image_out` 临时目录；跑图台只保存带 `nai:` 前缀的受控文件名，不保存绝对路径。
 """
 
+import base64
 import json
 import logging
 import os
@@ -438,6 +439,35 @@ def _run(job):
             steps_label = ""
             size_label = ""
             secs = None
+        elif job.get("source_images"):
+            # 图生图（2026-11-26）：跟 QQ 的 `generate_image` 同一条骨架。
+            # 源图由 `_build_i2i` 缩放好、挂成占位名，真上传在 worker 里做
+            # （那时 ComfyUI 一定在线，see `image_jobs._upload_i2i`）。
+            wf, i2i_src = _build_i2i(job)
+            steps_label = ""
+            size_label = ""
+            secs = 0
+            seed = job["seed"]
+            if job["abort"].is_set():
+                raise Cancelled("用户中断了这张图")
+            mj, reason = image_jobs.enqueue(
+                "web", job.get("owner") or "anonymous", wf,
+                skill=job["skill"], prompt=job["prompt"], seed=job["seed"],
+                out_dir="web_" + str(job.get("owner") or "anonymous"),
+                i2i_src=i2i_src, i2i_name=_I2I_PLACEHOLDER)
+            if mj is None:
+                raise RuntimeError(reason or "没排上队")
+            mj.cancel = job["abort"]
+            try:
+                mj.tag = job["id"]
+            except Exception:               # noqa: BLE001
+                pass
+            entry = mj.wait()
+            paths = image_jobs.output_images(entry, job=mj)
+            if not paths:
+                raise RuntimeError("图生图完成但没有返回图片")
+            name = paths[0]
+            file_ref = name
         else:
             wf = generate_image_build(job["skill"], job["prompt"], job["seed"])
             if wf is None:
@@ -566,6 +596,71 @@ def _run(job):
             job["_thread_alive"] = False
 
 
+_I2I_PLACEHOLDER = "__I2I_SRC__"   # 与 `generate_image._I2I_SRC_PLACEHOLDER` 同值
+
+
+def _data_url_bytes(url):
+    """`data:image/png;base64,...` → 原始字节。工作台的上传图是这个形态。"""
+    s = str(url or "")
+    if not s.startswith("data:"):
+        raise RuntimeError("源图格式不认识")
+    head, _, body = s.partition(",")
+    if ";base64" not in head:
+        raise RuntimeError("源图不是 base64")
+    raw = base64.b64decode(body)
+    if not raw:
+        raise RuntimeError("源图是空的")
+    return raw
+
+
+def _build_i2i(job):
+    """工作台的图生图：按渠道取 i2i 骨架，把源图缩好挂成占位名。
+
+    返回 `(workflow, 源图字节)`。规则**照抄** `generate_image` 里那段 i2i
+    分支，不另立一套——两处骨架要是各写一份，早晚一个改了一个没改：
+
+      - 骨架：qwen 用 `workflow_i2i_qq.json`（1248 面积档 / 真人 LoRA），
+        其余渠道用 `workflow_i2i.json`
+      - 重绘强度：qwen 1.0（零 latent 架构，0.85 会出平铺废图），其余 0.6
+      - 缩放：按该渠道文生图画布的长边归一化（EXIF 方向 / 透明通道 / 8 的倍数）
+      - 上传：这里**只填占位名**，真上传在 worker 里做——那时 ComfyUI 一定
+        在线（见 `image_jobs._upload_i2i`）
+
+    渠道没有 i2i 骨架 → 直接报错。QQ 那边是静默降级成文生图（用户看不见
+    后台，白等一轮也得给张图）；工作台相反——他传了图就是想改这张，给他一张
+    凭空画的才是骗人。
+    """
+    import json
+    from app.tools.normal import generate_image as gi
+    from app.features.image import comfy_src
+
+    skill = job["skill"]
+    if skill not in gi._I2I_SKILLS:
+        raise RuntimeError("「%s」不支持图生图，换一个画风再试" % skill)
+    sd = gi.load_skill(skill)
+    if not sd:
+        raise RuntimeError("画风 %s 没加载起来" % skill)
+    name = ("workflow_i2i_qq.json" if skill == "qwen_image_v1"
+            else "workflow_i2i.json")
+    i2i = gi.load_workflow(os.path.join(sd["path"], name))
+    if not i2i:
+        raise RuntimeError("画风 %s 没有图生图工作流" % skill)
+    fitted, _size = comfy_src.fit(
+        _data_url_bytes(job["source_images"][0]),
+        max_side=gi._canvas_long_side(sd["workflow"]) or comfy_src.MAX_SIDE)
+    # 先填骨架自带的两个占位（源图名 / 重绘强度），再填提示词与种子。
+    # 顺序无所谓——两组占位不重叠；但源图名必须是**占位串**，真名在 worker
+    # 上传完才回填（`_upload_i2i` 按 JSON 字符串整段替换）。
+    wf = json.loads(json.dumps(i2i).replace(
+        json.dumps("__SOURCE_IMAGE__"), json.dumps(_I2I_PLACEHOLDER)).replace(
+        json.dumps("__DENOISE__"), json.dumps("%.2f" % gi._i2i_denoise(skill))))
+    wf = json.loads(gi.apply_prompt_placeholders(
+        json.dumps(wf), job["prompt"], job["seed"] or 0))
+    if job.get("loras"):
+        lora_slots.apply_slots(wf, job["loras"])
+    return wf, fitted
+
+
 def generate_image_build(skill, prompt, seed):
     """包一层只为测试好 patch；逻辑就是 build_t2i_workflow。"""
     from app.tools.normal import generate_image
@@ -678,28 +773,20 @@ def api_ask():
                         own_images=ctx["images"] or None,
                         quoted_images=ctx["images"] or None)
     try:
-        got = _web_decide(text, skill, hist, ctx, data)
+        job = _web_decide(text, skill, hist, ctx)
     except _WebReply as e:
         _web_history_push(qq, text, str(e.reply))
         return jsonify({"ok": True, "reply": str(e.reply), "say": True})
     except RuntimeError as e:
-        # 没名额 / 渠道没模板这类「说一句就够」的失败。**不回落直通**：
-        # 已经花了一次转译，再走一遍 submit 只会把同一件事重新翻一遍。
+        # 没名额 / 模型没交作业 → 一句话说清。**不回落直通**：已经花了一次
+        # 转译，再来一遍只会把同一件事翻第二次，还翻得更差。
         return jsonify({"ok": False, "busy": True, "error": str(e) or
                         "没排上队，等一下再发"}), 429
-    except Exception as e:                        # noqa: BLE001
-        log.warning("[gen] 工作台判意图失败，回落直通：%s", e, exc_info=True)
-        got = None
     finally:
         try:
             qq_api.clear_context()
         except Exception:
             pass
-    if got is None:
-        # 不接管（纯画面描述 / 带跑图台参数 / 转译失败）→ 老行为：翻译后直通。
-        # 这条路上没有对话可言，历史不落：下一轮看不到这一轮，跟从前一样。
-        return api_submit()
-    job = got
     _web_history_push(qq, text, "", job.get("prompt") or text,
                       job.get("skill") or "")
     return jsonify({"ok": True, "job": _public(job)})
@@ -744,47 +831,90 @@ def _web_images(refs):
     return urls
 
 
-def _web_decide(text, skill, hist, ctx, data):
-    """工作台这一轮：只补网页端缺的那一块，其余原样回落 `api_submit`。
+def _web_decide(text, skill, hist, ctx):
+    """工作台这一轮 → 一张已入队的图，或一句「这轮不用画」。
 
-    **两条新能力**（其余全交给 submit 老路）：
-      ② 改词轮：有上一张 + 这句是接着它说的 → 在上一张的词上改
-      ③ 点名渠道：用户句子里点了渠道 → 让模型的渠道判定生效
+    **只有一条路**（2026-11-26 用户拍板，原话：「我唯一的诉求就是工作台
+    的文生图、图生图……选什么渠道就是什么渠道，然后把大大怪的那套提示词
+    用到工作台这个地方」）：
 
-    ⚠️ 为什么不整条丢给 `direct_gen.decide`：那是 QQ 的入口（@ 我 + 一句话，
-    落点回 QQ 会话），里面还有菜单、随机口令、反推、漫画、群/私聊差异一大
-    堆工作台没有的东西；而且跑图台的 LoRA 槽位 / 步数 / CFG / 横屏
-    `decide` 根本不认——那些在本模块的 `api_submit` 里。所以这里只挑「网页端
-    真正缺的」补上，不接管的地方原样回落。转译本身仍是 QQ 那条
-    `_translate`（用户 2026-11-26：「提示词那一套东西要跟 QQ 一样」）。
+        · 有上传图 → `direct_gen._revise`（QQ 那条改图管道：真识图 + 在
+          原提示词上改 + 模型自己判要不要垫图）
+        · 没上传图 → `direct_gen._translate`（QQ 那条主模板：`_MASTER_TEMPLATE`）
+
+    两条都是 QQ 正在跑的那两份，一个字不改。**渠道由界面定死**：画风抽屉
+    选了哪个，就用哪个出图——`_translate` 的 `skill` 入参本来就是
+    「代码点名的 > 模型判的」，`_revise` 的 `channel` 同理；这里再把模型
+    自己填的那个渠道覆盖掉，模型只负责写提示词。
+
+    没有第三个分支（以前那套「带 LoRA / 步数 / CFG / 横屏就回落旧路」是
+    错加的：这些控件根本不在这个页面上，`web/workspace/` 里一个都不传）。
     """
     from app.features.image import direct_gen as dg
 
-    # ── ① 参数轮：跑图台专属参数 / 已译好的成品串 → 老路，一律不碰 ──
-    if (data.get("prompt_is_final") or data.get("loras") or data.get("steps")
-            or data.get("cfg") or data.get("negative")
-            or data.get("landscape") or data.get("width")
-            or data.get("height") or data.get("artist_prefix")
-            or (skill and skill in image_jobs.NAI_SKILLS)):
-        return None
+    use = skill or ""                      # 界面选的渠道；空 = 没选（用默认）
+    if ctx.get("images"):
+        got = _web_revise(text, use, hist, ctx["images"])
+    else:
+        got = dg._translate(text, hist, skill=use or None)
+    if not got:
+        # 模型没交作业（空返回 / JSON 没解析出来）。这是可用性问题，不是它
+        # 判「不画」——判不画会走下面的 reply。重来一次比出一张错图强。
+        raise RuntimeError("这次没接住，把需求再发一遍试试")
+    reply = str(got.get("reply") or "").strip()
+    if reply and not got.get("prompt"):
+        raise _WebReply(reply)
+    # 界面定了渠道就是它：模型填的（`_revise` 的 skill / `_translate` 的
+    # 兜底渠道）一律不算数。没选才用模型判的那个。
+    out = use or str(got.get("skill") or "").strip()
+    if not out:
+        raise RuntimeError("没认出用哪条渠道出图，先在「画风」里选一个")
+    prompt = str(got.get("prompt") or "").strip()
+    if not prompt:
+        raise RuntimeError("这次没接住，把需求再发一遍试试")
+    body = {"skill": out, "prompt": prompt,
+            "user_text": text,
+            "refs": [r for r in (ctx.get("refs") or [])
+                     if isinstance(r, str) and r.startswith("cr_")]}
+    if got.get("source_image"):
+        # 模型判「要垫这张图」（图生图 / 照着画 / 复刻）。前端把图以 data
+        # URL 交回来，`_enqueue_job` → `_run` 会带着它进 `generate_image`。
+        body["source_images"] = ctx["images"]
+    job, busy = _enqueue_job(body, owner=_who_qq())
+    if job is None:
+        raise RuntimeError(busy or "没排上队，等一下再发")
+    return job
 
-    prev = dg._last_job("private_%s" % _who_qq())
-    # ── ② 改词轮 ──────────────────────────────────────────────
-    if prev and _looks_like_revise(text, prev):
-        job = _web_enqueue(text, skill or prev.get("skill") or "", ctx)
-        if job:
-            return job
 
-    # ── ③ 点名渠道：让模型的渠道判定生效（它比任何词表都全）──────
-    if not skill and _names_a_channel(text):
-        job = _web_enqueue(text, "", ctx)
-        if job:
-            return job
+def _web_revise(text, channel, hist, images):
+    """带图的轮次：走 QQ 的 `_revise`，再按界面的渠道把结果钉死。
 
-    # ── ④ 其余（纯画面描述）→ 老路：翻译后直通，零 AI 意图判定 ──
-    # 工作台是「点了画风就是认定了渠道」的界面，用户自己写画面描述时不需要
-    # 模型再判一遍意图；判了反而多一次调用，还可能改掉他选的那个渠道。
-    return None
+    `_revise` 内部自己会 `_enqueue`（它原本是给 QQ 用的、入队也在里面），
+    所以这里不能直接调它——那样会绕过工作台自己的任务表与轮询接口。
+    做法：先把它那条「入队」换成「只返回参数」，拿到 skill / prompt /
+    source_image，再交给 `_web_decide` 统一入队。
+    """
+    from app.features.image import direct_gen as dg
+
+    captured = {}
+
+    def _capture(skill, prompt, user_text="", seed=None, source_image=None):
+        captured.update({"skill": skill, "prompt": prompt,
+                         "source_image": source_image})
+        return ""
+
+    real = dg._enqueue
+    dg._enqueue = _capture
+    try:
+        out = dg._revise(text, images, hist, channel=channel or None)
+    finally:
+        dg._enqueue = real
+    if captured:
+        return captured
+    # `_revise` 判定「这轮不是改图请求」（只评价这张图 / 问别的）→ 它返回
+    # 的是一段给用户看的话，原样当回话播出去。
+    out = str(out or "").strip()
+    return {"reply": out} if out else None
 
 
 def _who_qq():
@@ -792,97 +922,8 @@ def _who_qq():
     return chat_routes._who() or ""
 
 
-def _looks_like_revise(text, prev):
-    """这句话是不是「在上一张上改」，而不是「另一张新画面」。判据全可算：
-
-    1. 长得像完整提示词（逗号成串的英文 tag / 带 `::` 权号）→ False：
-       那是用户自己写好的成品，不该被改写。
-    2. 很短（≤ 24 字）→ True：工作台一轮里的「换成白毛衣」「换个姿势」
-       就是这个长度，必然是接上一张说的。
-    3. 长句里出现上一张的画面锚点（实词重叠）→ True。
-    其余 → False（当新需求，走老路）。
-    """
-    from app.features.image import direct_gen as dg
-    t = (text or "").strip()
-    if not t:
-        return False
-    if "::" in t or dg._is_english_tags(t):
-        return False
-    if len(t) <= 24:
-        return True
-    # 上一张的词是英文 tag，用户这句是中文——直接比字面几乎不会重合。
-    # 所以两路比，命中任意一路就算「接着改」：
-    #   ① 英文整词（长度 ≥3）出现在这句里：`classroom` / `sunset` 被原样提回来；
-    #   ② 人设词对得上：上一张的词里有 `silver hair` / `school uniform`，而
-    #      这句里出现了对应的中文锚点。
-    # 两路都只做**事实匹配**，判「这算不算改」的仍是模型（`_translate` 里
-    # 【上一张】那段规则），这里只决定「要不要把这一轮交给它」。
-    prev_text = (prev.get("prompt") or "").lower()
-    words = set(re.findall(r"[a-z][a-z0-9_]{2,}", prev_text))
-    if words & set(re.findall(r"[a-z][a-z0-9_]{2,}", t.lower())):
-        return True
-    # 人设锚点：发色 / 服装 / 场景，各挑最常用的那几个。**只用于判「是不是
-    # 在接上一张说」**，不参与提示词生成，所以不存在「盖不全」的问题——
-    # 漏了只是这一轮走老路（当新需求画），不会画错。
-    anchors = {
-        "silver": ("银发", "白发", "银白色"), "white": ("白色", "白"),
-        "black": ("黑色", "黑"), "golden": ("金色", "金发"),
-        "hair": ("发",), "school": ("校服", "学校", "教室"),
-        "uniform": ("校服", "制服"), "sweater": ("毛衣", "针织"),
-        "dress": ("裙", "连衣裙"), "classroom": ("教室",),
-        "sunset": ("夕阳", "黄昏", "傍晚"), "night": ("夜", "夜晚"),
-    }
-    hit = 0
-    for en, zh in anchors.items():
-        if en in prev_text and any(z in t for z in zh):
-            hit += 1
-    return hit >= 2
-
-
-def _names_a_channel(text):
-    """这句话里有没有点名渠道（固定渠道词 / 档位 / 画风词）。
-
-    只判「有没有」，是哪个渠道交给 `_translate`——`_parse_channel` 只认
-    **开头**的词，而工作台用户常把渠道放开说，所以整句扫一遍 `_FIXED_CHAN_RE`，
-    再叠一层开头的档位/画风词。
-    """
-    from app.features.image import direct_gen as dg
-    if dg._FIXED_CHAN_RE.search(text or ""):
-        return True
-    tier, style, _rest = dg._lead_commands(text or "")
-    return tier is not None or style is not None
-
-
-def _web_enqueue(text, skill, ctx):
-    """转译 + 入队。返回和 `api_submit` **同形**的 job dict。
-
-    转译走 `direct_gen._translate`（QQ 那份，含【上一张】与 6 轮最近对话）；
-    落队走本模块的 `_enqueue_job`（与 submit 同一条：前端轮询、终止、记账
-    全部不用改）。模型判「这轮不用画」时抛 `_WebReply`，由 `api_ask` 转成
-    一条聊天气泡。
-    """
-    from app.features.image import direct_gen as dg
-    trans = dg._translate(text, _web_history(_who_qq()), skill=skill or None)
-    if not trans:
-        return None
-    if trans.get("reply"):
-        raise _WebReply(str(trans["reply"]).strip())
-    if not trans.get("skill") or not trans.get("prompt"):
-        return None
-    body = {"skill": trans["skill"], "prompt": trans["prompt"],
-            "user_text": text,
-            "refs": [r for r in (ctx.get("refs") or [])
-                     if isinstance(r, str) and r.startswith("cr_")]}
-    # `_enqueue_job` 返回 (job, 没名额时的一句话)；正式接口里 busy 那句话
-    # 直接抛出去由 `api_ask` 落成一条提示，不在这里兜成空 job。
-    job, busy = _enqueue_job(body, owner=_who_qq())
-    if job is None:
-        raise RuntimeError(busy or "没排上队")   # 由 api_ask 落成一条错误提示
-    return job
-
-
 class _WebReply(Exception):
-    """模型说这轮不画；带着要回的那句话往外抛（见 `_web_enqueue`）。"""
+    """模型说这轮不画；带着要回的那句话往外抛（见 `_web_decide`）。"""
 
     def __init__(self, reply):
         Exception.__init__(self, reply)
@@ -1159,6 +1200,11 @@ def _enqueue_job(spec, owner, user_text=""):
                "landscape": bool(spec.get("landscape")),
                "size_label": "",
                "ref_note": spec.get("ref_note") or "",
+               # 图生图（2026-11-26 工作台）：模型判「要垫这张图」时由
+               # `_web_decide` 塞进来的 data URL 列表。有就走 i2i 骨架，
+               # 没有就走文生图——跟 QQ 那边同一个判据（`generate_image`
+               # 里 `is_i2i = bool(source_image)`）。
+               "source_images": list(spec.get("source_images") or []),
                "ask": user_text,
                "secs": None,
                "state": "queued", "error": "", "file": "",
