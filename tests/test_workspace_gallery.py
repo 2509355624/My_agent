@@ -5,6 +5,7 @@
 `/api/gal/*`。测试只看文件结构与调用路径，不跑浏览器。
 """
 import os
+import re
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -100,6 +101,40 @@ class TestWorkspaceGalleryUi(unittest.TestCase):
         self.assertIn("var(--card", css)
         self.assertIn("var(--text", css)
         self.assertIn("var(--shadow", css)
+
+
+class TestListLoadClaim(unittest.TestCase):
+    """列表的「谁的回包算数」（`js/gallery_load.js`）。
+
+    2026-11-26 用户实测：「上边的滚动条滑动再点击，内容跟标签对不上」。
+    上一版只修了「换分类被 busy 吞掉」，漏了**续页那一发沿用当前序号**：
+    翻页还在飞的时候点新分类，旧翻页的包回来序号仍等于当前号，`owns()`
+    放它进来，它按自己那一页的 `page` 往新分类的墙里塞卡片，`S.page` 同时
+    被改，下一屏还会跳页。
+    """
+
+    def test_rest_claim_is_one_shot(self):
+        j = _read("js/gallery_load.js")
+        self.assertIn("function owns(n, rest)", j)
+        self.assertIn("if (!busy) return false;", j)
+        self.assertIn("if (!rest) return true;", j)
+
+    def test_head_guard_does_not_block_new_category(self):
+        j = _read("js/gallery.js")
+        head = j.split("function load(reset)")[1].split("var page = S.page;")[0]
+        self.assertNotIn("if (S.busy) return;", head,
+                         "换分类不能继续被 busy 挡回去")
+
+    def test_load_passes_rest_flag(self):
+        self.assertIn("S.claim.owns(seq, !reset)", _read("js/gallery.js"))
+
+    def test_load_script_precedes_gallery(self):
+        html = _read("chat.html")
+        i = html.index("js/gallery_load.js")
+        self.assertLess(i, html.index("js/gallery.js?"))
+        self.assertEqual(re.search(r"gallery_load\.js\?v=(\w+)", html).group(1),
+                         re.search(r"gallery\.js\?v=(\w+)", html).group(1),
+                         "两个文件同版本号，否则只更新一半")
 
 
 if __name__ == "__main__":
