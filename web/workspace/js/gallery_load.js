@@ -66,7 +66,18 @@
     /* 让外部（比如「重画完回来刷新」）能把 busy 清掉。 */
     function done() { busy = false; }
 
-    return { claim: claim, owns: owns, done: done };
+    /* 返回**函数本体**并挂两个属性，不用 `{claim: …}` 这种对象字面量
+       （2026-11-26 生产事故）。字面量挂到 `S.take` 上之后，`S.take(reset)`
+       在这台机器的运行环境里取出来变成了对象本身、`typeof` 也报 object，
+       `load()` 在发请求之前就抛 TypeError —— 用户看到「点 AI 创作什么都没有」，
+       换四个浏览器都一样，因为问题在这一版代码本身、跟缓存无关。
+
+       现在 `S.take` 就是 claim 函数本身，调用走 `S.take.claim()`（属性名
+       `claim` 保留，测试有断言钉着）。 */
+    claim.claim = claim;
+    claim.owns = owns;
+    claim.done = done;
+    return claim;
   }
 
   /* 滚到底自动加页：`.gmore` 进视野就叫一次 `hit()`。

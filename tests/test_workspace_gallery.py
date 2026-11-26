@@ -126,7 +126,20 @@ class TestListLoadClaim(unittest.TestCase):
                          "换分类不能继续被 busy 挡回去")
 
     def test_load_passes_rest_flag(self):
-        self.assertIn("S.claim.owns(seq, !reset)", _read("js/gallery.js"))
+        self.assertIn("S.take.owns(seq, !reset)", _read("js/gallery.js"))
+
+    def test_machine_is_callable(self):
+        """发号机必须是**函数**，不能是 `{claim: …}` 这样的对象字面量。
+
+        2026-11-26 生产事故：字面量挂在 `S.take` 上之后，`S.take(reset)` 在
+        那台机器的运行环境里取出来变成了对象本身，`load()` 在发请求前就抛
+        TypeError，用户看到的是「点 AI 创作什么都没有」，换浏览器也一样。
+        现在 `it()` 返回函数本体（调用走 `.claim()`），这条断言钉住形态。"""
+        j = _read("js/gallery_load.js")
+        self.assertIn("claim.claim = claim;", j)
+        self.assertIn("return claim;", j)
+        self.assertNotIn("return { claim: claim", j)
+        self.assertIn("S.take.claim(reset)", _read("js/gallery.js"))
 
     def test_load_script_precedes_gallery(self):
         html = _read("chat.html")

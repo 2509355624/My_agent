@@ -175,8 +175,8 @@
   /* 新分类能**打断**正在飞的那一次（发号机在 `gallery_load.js`，2026-11-26
      用户实测「快速连点几个标签会卡住、内容和标签对不上」）。 */
   function load(reset) {
-    if (!S.claim) S.claim = WSTake.it();
-    var seq = S.claim(reset);
+    if (!S.take) S.take = WSTake.it();
+    var seq = S.take.claim(reset);
     if (seq === null) return;
     if (reset) {
       S.page = 1; S.more = true; S.works = [];
@@ -186,7 +186,7 @@
 
     var page = S.page;
     global.WSApi.get(listUrl(page)).then(function (d) {
-      if (!S.claim.owns(seq, !reset)) return;   // 已经被更新的一次换分类顶掉
+      if (!S.take.owns(seq, !reset)) return;   // 已经被更新的一次换分类顶掉
       S.busy = false;
       clearSkeletons();
       if (!d || !d.ok) {
@@ -216,7 +216,7 @@
       /* 网络断了：`WSApi` 自己会兜成 `{ok:false, error:"网络断了…"}`，正常
          不会走到这里；真走到（老版本 api.js）就认领回来，别把 S.busy 卡死
          ——卡死之后翻页和换分类全都点不动了。 */
-      if (!S.claim.owns(seq)) return;
+      if (!S.take.owns(seq)) return;
       S.busy = false;
       clearSkeletons();
       note("图库没打开，稍后再试", true);
