@@ -1250,6 +1250,27 @@ class TasksApiTest(unittest.TestCase):
         self.assertEqual(0, t["done"])
         self.assertEqual("C20261018-9", t["prev"])
 
+    def test_done_counts_rendered_as_drawn(self):
+        """「已画」= 有图就算，不是「加完气泡才算」。
+
+        两阶段流水线里底图出来是 `rendered`、加完气泡才是 `done`。只数
+        `done` 的话，一本底图全画完、气泡还没加的，列表会写「已画 0 / N 页」，
+        点进去却满屏都是图（2026-11-26 用户报的就是这个）。
+        """
+        path = os.path.join(self.tmp, "C20261018-20")
+        os.makedirs(path)
+        script = ("# 标题：底图全出\n\n## 01\n画面: 1girl, solo, pov\n"
+                  "气泡: （女）一\n标签1: a\n\n## 02\n画面: 1girl, solo, pov\n"
+                  "气泡: （女）二\n标签1: b\n")
+        with open(os.path.join(path, "script.md"), "w", encoding="utf-8") as f:
+            f.write(script)
+        with open(os.path.join(path, "state.json"), "w", encoding="utf-8") as f:
+            json.dump({"panels": {"01": {"state": "rendered"},
+                                  "02": {"state": "done"}}}, f)
+        rows = self.c.get("/api/comic/tasks").get_json()["tasks"]
+        t = [x for x in rows if x["task"] == "C20261018-20"][0]
+        self.assertEqual(2, t["done"], "rendered 的格也算已画")
+
     def test_dir_without_script_skipped(self):
         names = [t["task"] for t in self.c.get("/api/comic/tasks").get_json()["tasks"]]
         self.assertNotIn("C20261018-11", names)

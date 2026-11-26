@@ -41,6 +41,7 @@ from flask import (Blueprint, Response, jsonify, request, send_file,
                    send_from_directory)
 
 from app.features.image import comfy_out
+from app.features.image import lowres
 from app.features.image import lora_slots
 from app.features.qq import api as qq_api
 from app.features.comic import comic
@@ -50,6 +51,7 @@ from app.features.image import gen_steps
 from app.features.image import gen_params
 from app.core.cancel import Cancelled
 from app.config import COMFYUI_URL, NAI_API_KEY, WEB_DIR, state_path
+from app.config import WORKSPACE_LOWRES
 from app.features.image.direct_gen import _allowed_skills
 from app.core.skills import load_skill, skill_summary
 
@@ -396,7 +398,7 @@ def _public(job):
                                     "steps", "steps_label", "cfg",
                                     "negative", "width", "height",
                                     "size_label", "secs", "landscape",
-                                    "ref_note")}
+                                    "ref_note", "lowres")}
 
 
 def _enabled_loras(job):
@@ -517,6 +519,21 @@ def _run(job):
             if landscape_ok:
                 # describe_size 只认 Empty* 画布；批量类画布认不出时别显示空串。
                 size_label = "%d×%d 横屏" % LANDSCAPE_SIZE
+            # 工作台的低分辨率档（2026-11-26）：画布降一档、倍率补回来，成品
+            # 尺寸不变，省掉第一段在大画布上的采样。**只对工作台**——QQ 和
+            # 本地跑图台 `/gen` 要原图。放在横屏 / 手填尺寸之后：那一档自己
+            # 有自己的画布要求，不和它抢。
+            if (job.get("lowres") and not landscape_ok
+                    and not (job.get("width") and job.get("height"))):
+                pl = lowres.apply(wf)
+                if pl.get("on"):
+                    size_label = "%d×%d → %d×%d" % (
+                        pl["canvas"][0], pl["canvas"][1],
+                        pl["est"][0], pl["est"][1])
+                    job["size_label"] = size_label
+                else:
+                    log.info("跑图台 %s：渠道 %s 不降档（%s）",
+                             job["id"], job["skill"], pl.get("why"))
             # _submit_retry 只对超时重试；其余错误一次抛清。
             # with_entry=True：拿 history entry 算 ComfyUI 真跑这张图的耗时。
             #
@@ -557,6 +574,10 @@ def _run(job):
         if landscape_ok:
             row["landscape"] = True
             row["size"] = size_label
+        if job.get("size_label"):
+            # 低分辨率档只有一个「画布 → 成品」的写法，账本里得留下这个数，
+            # 否则以后想对比「降档到底快多少」时没有依据。
+            row["size"] = job["size_label"]
         _ledger_append(row)
         with _JOBS_LOCK:
             job["state"] = "done"
@@ -880,7 +901,7 @@ def _web_decide(text, skill, hist, ctx):
         # 模型判「要垫这张图」（图生图 / 照着画 / 复刻）。前端把图以 data
         # URL 交回来，`_enqueue_job` → `_run` 会带着它进 `generate_image`。
         body["source_images"] = ctx["images"]
-    job, busy = _enqueue_job(body, owner=_who_qq())
+    job, busy = _enqueue_job(body, owner=_who_qq(), lowres=WORKSPACE_LOWRES)
     if job is None:
         raise RuntimeError(busy or "没排上队，等一下再发")
     return job
@@ -1168,12 +1189,16 @@ def api_submit():
     return jsonify({"ok": True, "job": _public(job)})
 
 
-def _enqueue_job(spec, owner, user_text=""):
+def _enqueue_job(spec, owner, user_text="", lowres_on=False):
     """建一条本台任务并起 worker。→ (job, None) 成功；→ (None, 一句人话) 没名额。
 
     `api_submit`（老路：翻译后直通）与 `api_ask`（工作台一句话，走 QQ 那份
     转译）**共用这一段**：两条路最后都是「一张确定渠道 + 确定提示词的图」，
     限额、记账、终止信号、轮询都不该有两份实现。
+
+    `lowres_on`：这条任务要不要走「工作台低分辨率档」（`image/lowres.py`）。
+    两条入口共用 worker，所以这一档**按任务标**，不是全局开关——本地跑图台
+    `/gen` 自己用、要原图，工作台那边的图出站前本来就要压到 ≤1MB。
 
     spec 只收两边都有的字段；缺省按 None / "" 落（LoRA 槽位、步数、CFG 这些
     只有 `api_submit` 会带，工作台那条路全是默认值）。
@@ -1198,6 +1223,8 @@ def _enqueue_job(spec, owner, user_text=""):
                "cfg": spec.get("cfg"), "negative": spec.get("negative"),
                "width": spec.get("width"), "height": spec.get("height"),
                "landscape": bool(spec.get("landscape")),
+               # 工作台低分辨率档：这条任务出图前画布降一档、倍率补回来。
+               "lowres": bool(lowres_on),
                "size_label": "",
                "ref_note": spec.get("ref_note") or "",
                # 图生图（2026-11-26 工作台）：模型判「要垫这张图」时由

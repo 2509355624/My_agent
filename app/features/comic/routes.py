@@ -781,8 +781,13 @@ def api_comic_tasks():
             with open(os.path.join(path, "state.json"), encoding="utf-8") as f:
                 st = json.load(f)
             item["updated"] = st.get("updated", "") or ""
+            # 「已画」= 有图就算，不是「有成品才算」。两阶段流水线里底图出来是
+            # `rendered`、加完气泡才是 `done`：只数 done 的话，一本 10 页全画完
+            # 底图、气泡还没加（或用户根本没加），列表会写「已画 0 / 10 页」，
+            # 点进去却满屏都是图（2026-11-26 用户报的就是这个）。
             item["done"] = sum(1 for p in (st.get("panels") or {}).values()
-                               if isinstance(p, dict) and p.get("state") == "done")
+                               if isinstance(p, dict)
+                               and p.get("state") in ("rendered", "done"))
         except (OSError, ValueError):
             pass
         try:

@@ -46,10 +46,13 @@
   box-shadow: var(--shadow-2);
 }
 
+/* 封面框跟着图走：格子的比例先按 2:3（现役渠道 1024×1536、512×768 都是这个
+   比例）留位，图加载完再由 comic.js 把格子的 --cpic-ar 改成这张图的真实
+   比例——框和图同比例，contain 就不会上下留黑边，也不会把人物切掉。 */
 .cpic {
   flex: 0 0 auto;
   width: 96px;
-  aspect-ratio: 3 / 4;
+  aspect-ratio: var(--cpic-ar, 2 / 3);
   overflow: hidden;
   border-radius: 10px;
   background: var(--card-2);
@@ -144,13 +147,16 @@
 .cstage {
   flex: 1 1 auto;
   min-height: 0;
+  height: 100%;
   display: flex;
   padding: 0;
+  overflow: hidden;
 }
 
 .ctrack {
   display: flex;
   width: 100%;
+  height: 100%;
   overflow-x: auto;
   overflow-y: hidden;
   scroll-snap-type: x mandatory;
@@ -162,21 +168,33 @@
 
 /* 一页一屏：整张图按原比例缩到框里，上下左右都看得见，不裁边、不拉伸。
    长图也一样缩，不靠滚动——用户要的是打开就能看全整页。
-   上面留出浮层按钮那条高度，第一页的头顶不会被 ✕ 压住（其余页也统一，
-   翻页时图不会上下跳）。 */
+
+   高度链必须死：`.cbook` 是 flex 列，`min-height:0` 才允许子项被压缩；
+   `.cslide` 用 `height:100%` 拿到的是 `.ctrack` 的内容高，`.ctrack` 自己
+   也得把高度撑满（`height:100%`），否则它只到图片原始高度那么高，超出的
+   部分被 `.cstage` 的溢出裁掉——那就是「图显示不全」。
+   具体像素由 comic.js 的 `fitImage()` 算好写在 img 的 style 上。
+
+   上面给浮层按钮留一条（--vtop-h 在 sheet.css 的 .view-float 里定义），
+   第一页的头顶不会被 ✕ 压住；其余页同样留，翻页时图不会上下跳。 */
 .cslide {
   flex: 0 0 100%;
   height: 100%;
   scroll-snap-align: start;
-  display: grid;
-  place-items: center;
-  padding: calc(46px + env(safe-area-inset-top)) 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: var(--vtop-h, 46px);
+  padding-bottom: 2px;
+  box-sizing: border-box;
 }
 
 .cslide img {
   display: block;
-  width: 100%;
-  height: 100%;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
   object-fit: contain;
   object-position: center;
 }

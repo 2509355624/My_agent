@@ -53,6 +53,15 @@
     img.loading = "lazy";
     img.decoding = "async";
     img.alt = "";
+    /* 图加载完把封面框的比例改成这张图自己的比例：框和图同比例时
+       contain 就是「正好铺满」，不会上下留黑边，人物也不会被切。
+       竖向漫画多是 2:3（1024×1536 / 512×768），老图也有 832×1216 的。 */
+    img.addEventListener("load", function () {
+      if (img.naturalWidth && img.naturalHeight) {
+        box.style.setProperty("--cpic-ar",
+          img.naturalWidth + " / " + img.naturalHeight);
+      }
+    });
     img.src = imgUrl(task, "final/01_final.png");
     img.addEventListener("error", function () {
       if (img.dataset.step === "raw") {
@@ -88,6 +97,8 @@
 
     var meta = document.createElement("div");
     meta.className = "cmeta";
+    /* 有图就算「已画」：`rendered`（底图出来了、气泡还没加）也是画出东西了。
+       后端 done 已按这个口径数，这条只是老接口 / 缓存里的数兜一层。 */
     var bits = [total ? "已画 " + done + " / " + total + " 页" : "还没出页"];
     if (t.updated) bits.push(shortTime(t.updated));
     meta.textContent = bits.join(" · ");
@@ -183,6 +194,34 @@
     return (B.idx + 1) + " / " + B.panels.length;
   }
 
+  /* 让一格「整张图都看得见」：按面板的实际高度算 contain，再交给 CSS。
+     box 高 = 轨道高 − 顶部浮层高（--vtop-h）− 这一格自己的上下内边距。
+     窄高比 < img 的宽高比时按宽铺满、高留白；反之按高铺满、两边留白。
+     宽高比还读不到（图没解码完 / 取失败）就不设，退回 CSS 的 contain。
+     2026-11-26 用户：「打开之后没有办法完整显示整个图片」——以前靠
+     `height:100%` + grid 居中，靠的是盒子的高度链，任何一环没撑起来图就
+     会溢出被裁；现在直接给像素尺寸，所见即所算。 */
+  function fitImage(slideEl, img) {
+    var w = img.naturalWidth;
+    var h = img.naturalHeight;
+    if (!w || !h) return;
+    var box = slideEl.clientHeight -
+              parseFloat(getComputedStyle(slideEl).paddingTop || 0) -
+              parseFloat(getComputedStyle(slideEl).paddingBottom || 0);
+    var availW = slideEl.clientWidth;
+    if (box <= 0 || availW <= 0) return;
+    var k = Math.min(availW / w, box / h);
+    img.style.width = Math.round(w * k) + "px";
+    img.style.height = Math.round(h * k) + "px";
+  }
+
+  function fitAll() {
+    Array.prototype.forEach.call(B.track.children, function (d) {
+      var img = d.querySelector("img");
+      if (img) fitImage(d, img);
+    });
+  }
+
   function slide(p) {
     var d = document.createElement("div");
     d.className = "cslide";
@@ -192,7 +231,10 @@
       var img = document.createElement("img");
       img.alt = "第 " + p.no + " 页";
       img.decoding = "async";
+      img.addEventListener("load", function () { fitImage(d, img); });
       img.src = withRev(src, p.rev);
+      /* 缓存命中时 load 可能在挂上监听之前就发生了，再来一发兜底 */
+      if (img.complete && img.naturalWidth) fitImage(d, img);
       d.appendChild(img);
       return d;
     }
@@ -248,9 +290,10 @@
       B.strip.appendChild(thumb(p, i));
     });
     goTo(Math.min(B.idx, B.panels.length - 1));
-    // 刚插进 DOM 时宽度可能还没算出来，下一帧再对一次位置
+    // 刚插进 DOM 时宽高可能还没算出来，下一帧再对一次位置、再量一次图
     global.requestAnimationFrame(function () {
       goTo(Math.min(B.idx, B.panels.length - 1));
+      fitAll();
     });
   }
 
@@ -453,6 +496,16 @@
     body.appendChild(el.pageno);
     body.appendChild(B.strip);
     body.appendChild(acts);
+
+    /* 手机地址栏收起/展开、横竖屏切换都会改变画面区高度，图得跟着重量。
+       节流到下一帧，免得拖动窗口时每像素算一次。 */
+    var refit = 0;
+    function onResize() {
+      if (!alive()) { global.removeEventListener("resize", onResize); return; }
+      if (refit) return;
+      refit = global.requestAnimationFrame(function () { refit = 0; fitAll(); });
+    }
+    global.addEventListener("resize", onResize);
 
     loadBook(false);
   }

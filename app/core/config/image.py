@@ -50,6 +50,13 @@ IMAGE_DEFAULT_SKILL = os.getenv("IMAGE_DEFAULT_SKILL", "silver").strip() or "sil
 # 兜底故意不做「找最新一张」的猜测——猜错会静默落一张别的图，比报错难查得多。
 COMFYUI_OUTPUT_DIR = os.getenv("COMFYUI_OUTPUT_DIR", "")
 
+# 工作台的「低分辨率档」（2026-11-26）：画布降一档采样，放大链按算术补回
+# 成品尺寸（见 `app/features/image/lowres.py`）。只对**工作台**（`/workspace/`，
+# 将来的访客模式也在这一侧）生效——QQ 机器人、本地跑图台 `/gen` 都不走它，
+# 那两边要的是原图。默认开：工作台的图出站前本来就要压到 ≤1MB，先画小一点
+# 再放大，出图快、原图小。
+WORKSPACE_LOWRES = os.getenv("WORKSPACE_LOWRES", "true").lower() not in ("0", "false", "no")
+
 # 单张图的出图上限（秒）。**注意这是「一张」的时限，不是「一次调用」的**：
 # 生图在 image_jobs 里是逐张串行排队的，计时从每张**真正开跑**算起（排队时
 # 间不算，否则排在第 5 位的人还没轮到就被判超时了）。
