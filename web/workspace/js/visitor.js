@@ -84,6 +84,25 @@
     });
   }
 
+  /* 离开工作台去登录：**跳地址**，不是 reload。
+   *
+   * 2026-11-26 用户报「点登录有反应，但一直加载，然后又弹回原来的我的页」。
+   * 根因：reload 之后 `WSStack.init()` 会从 sessionStorage 把子页栈恢复回来
+   * （`ws_view_v1` 里存着「我的」），于是人又被送回那一页——看起来就是
+   * 「登录了但没进去」。换个地址等于清掉那条会话栈，落地就是干净的首屏。
+   *
+   * 顺序不能反：先摘访客证，再跳。不摘的话 5175 看到访客身份会直接把人
+   * 放回工作台首页，等于点了没反应（`/workspace/` 的落点判定见
+   * `workspace_index`）。 */
+  function leaveToLogin() {
+    global.WSApi.post("/logout", {}).then(function () {
+      if (global.WSStore) global.WSStore.clear();
+      global.location.replace("/workspace/");
+    }, function () {
+      global.location.replace("/workspace/");
+    });
+  }
+
   function guestPanel() {
     var box = document.createElement("div");
     box.className = "vguest";
@@ -106,14 +125,7 @@
     out.textContent = "登录";
     out.addEventListener("click", function () {
       out.disabled = true;
-      /* 先摘掉访客 cookie 再 reload：不摘的话 5175 看到访客身份会把人直接
-         放回工作台，等于点了没反应。退出和进登录页是同一套办法（me.js）。 */
-      global.WSApi.post("/logout", {}).then(function () {
-        if (global.WSStore) global.WSStore.clear();
-        global.location.reload();
-      }, function () {
-        global.location.reload();
-      });
+      leaveToLogin();
     });
 
     box.appendChild(badge);

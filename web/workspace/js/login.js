@@ -76,8 +76,10 @@
     global.WSApi.verify(qq, code).then(function (d) {
       if (d.ok) {
         // 让服务器重判落点；前端直接切状态会停在旧地址，一刷新就打回登录页。
+        // 2026-11-26：改成跳地址，顺手把上次的子页栈（`ws_view_v1`）甩掉，
+        // 否则登录成功也会被 restoration 送回「我的」那一页。
         stopTimer();
-        global.location.reload();
+        global.location.replace("/workspace/chat.html");
       } else {
         say(d.error || "验证码不对", "err");
         el.login.disabled = false;
@@ -99,7 +101,10 @@
     global.WSApi.post("/login/visitor", {}).then(function (d) {
       if (d && d.ok) {
         stopTimer();
-        global.location.reload();
+        /* 用**跳地址**而不是 reload（2026-11-26）：reload 会让工作台从
+           sessionStorage 把上次那个子页栈（比如「我的」）恢复回来，访客一
+           进来就落在「还没登录」那页上。换个地址等于从干净首屏开始。 */
+        global.location.replace("/workspace/chat.html");
         return;
       }
       say((d && d.error) || "进不去，稍后再试", "err");

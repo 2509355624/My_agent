@@ -176,14 +176,32 @@ class GuestScopeTest(unittest.TestCase):
             self.assertTrue(self._here(ref), ref)
 
     def test_everything_else_does_not(self):
-        """画廊 / 漫画台 / 跑图台 / 角色扮演 / 小说 / 没 Referer / 外站冒充。"""
+        """画廊 / 漫画台 / 跑图台 / 角色扮演 / 小说 / 外站冒充。
+
+        「没 Referer」不在这一组了（2026-11-26 用户拍板：先按工作台认）。
+        原因写在 `friend_app._jf_here` 的注释里：`location.reload()`、favicon、
+        手机浏览器省 Referer，这些**页面自己**的请求全都没有 Referer，判成
+        别处就会让访客在登录页与工作台之间无限来回。见下面
+        `test_no_referer_counts_as_workspace`。
+        """
         for ref in ("http://localhost/gallery", "http://localhost/comic",
                     "http://localhost/runbench", "http://localhost/persona",
-                    "http://localhost/novel", "http://localhost/showcase", ""):
+                    "http://localhost/novel", "http://localhost/showcase"):
             self.assertFalse(self._here(ref), ref)
         # 外站路径里带 workspace 也不行（主机名要跟这次请求一致）
         self.assertFalse(self._here("https://evil.example/workspace/x"))
         self.assertFalse(self._here("http://other.host/workspace/chat.html"))
+
+    def test_no_referer_counts_as_workspace(self):
+        """完全没 Referer → 认作工作台（2026-11-26 用户拍板）。
+
+        真实浏览器里这条对应：地址栏直接打开、书签、`location.reload()`、
+        `/favicon.ico`、以及省掉 Referer 的手机浏览器。上一版把它判成「不是
+        工作台」，直接造成用户报的那一串：`/me` 回 guest → 前端发登录页 →
+        又跳回访客身份；`/api/gen/channels` 被 401 → 「没拿到渠道列表」。
+        """
+        self.assertTrue(self._here(""))
+        self.assertTrue(self._here(None))
 
     def test_gateway_treats_visitor_as_absent_outside_workspace(self):
         """别的页面带着访客 cookie 打进来，必须跟「什么都没带」一模一样的答复。"""
@@ -214,13 +232,51 @@ class GuestScopeTest(unittest.TestCase):
         self.assertEqual(inside.get_json().get("role"), "visitor")
         outside = c.get("/me", headers={"Referer": "http://localhost/gallery"})
         self.assertEqual(outside.get_json().get("role"), "guest")
+        # 没 Referer = 浏览器省掉了（页面自己的请求），仍算工作台里的访客
         bare = c.get("/me")
-        self.assertEqual(bare.get_json().get("role"), "guest")
+        self.assertEqual(bare.get_json().get("role"), "visitor")
 
     def test_path_whitelist_is_gone(self):
         """白名单那两个函数别再回来——它就是「按路径扣规则」的老毛病。"""
         self.assertFalse(hasattr(self.v, "path_allowed"))
         self.assertFalse(hasattr(self.v, "comic_allowed"))
+
+    def test_channels_work_in_workspace_only(self):
+        """渠道清单：工作台必须拿得到，别处照旧 401（2026-11-26 用户报的
+        「没拿到渠道列表」就是这里在工作台里被误挡）。"""
+        gid = self.v.new_id()
+        c = self.app.test_client()
+        c.set_cookie(self.v.COOKIE_NAME, gid, domain="localhost")
+        for ref in ("http://localhost/workspace/chat.html", None):
+            h = {"Referer": ref} if ref else {}
+            r = c.get("/api/gen/channels", headers=h)
+            self.assertEqual(r.status_code, 200, ref)
+            self.assertTrue(r.get_json().get("channels"), ref)
+        # 别处一字不差
+        plain = self.app.test_client()
+        for ref in ("http://localhost/gallery", "http://localhost/runbench"):
+            a = c.get("/api/gen/channels", headers={"Referer": ref})
+            b = plain.get("/api/gen/channels", headers={"Referer": ref})
+            self.assertEqual(a.status_code, b.status_code, ref)
+            self.assertEqual(a.get_data(), b.get_data(), ref)
+
+    def test_no_identity_only_public_reads_pass(self):
+        """工作台放行只许覆盖 `_JF_PUBLIC` 里那几个读接口。
+
+        2026-11-26 踩过的坑：按「工作台发来的就放行」写，结果没有 Referer 的
+        浏览器从 `/api/comic/tasks` 读到了站主的 21 条漫画任务标题。这条把
+        口子钉死：白名单之外的一律还是 401。
+        """
+        plain = self.app.test_client()          # 没有任何 cookie
+        allowed = {("/api/gen", "channels"), ("/api/gen", "imgsign")}
+        for prefix, sub in self.fa._JF_PUBLIC:
+            self.assertIn((prefix, sub), allowed, "白名单被放宽了")
+        for path in ("/api/comic/tasks", "/api/gal/mine", "/api/chat/archive",
+                     "/api/moss/img?x=1", "/api/friend/quota"):
+            self.assertEqual(plain.get(path).status_code, 401, path)
+        # 写也一律挡
+        self.assertEqual(plain.post("/api/gen/submit",
+                                    json={"prompt": "x"}).status_code, 401)
 
 
 class GuestGallerySeerTest(unittest.TestCase):

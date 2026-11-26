@@ -473,38 +473,86 @@ def _visitor_id():
     return visitor.check_id(raw) or ""
 
 
-# 工作台自己发的请求才认作「工作台」。拿 Referer 判断：工作台发出来的请求
-# 都在 `/workspace/chat.html` 底下；别的页面（画廊、漫画台、跑图台……）各自
-# 在自己的地址上，Referer 里没有 `/workspace`。直开接口（没有 Referer）也
-# 一律不算——绝不因为「浏览器里碰巧留着一个访客 cookie」就让别处跟着降级。
+# ── 工作台作用域 ─────────────────────────────────────────
+#
+# 「访客只属于工作台」这条口径（用户 2026-11-26 拍板）现在靠 Referer 守，
+# 但要分清三种情况，不能像上一版那样「没 Referer 就不算」：
+#
+#   · Referer 指向本站 `/workspace/...`   → 是工作台 → 认访客
+#   · Referer 指向本站别处（画廊/跑图台/漫画台…） → 不是工作台 → 不算访客
+#   · **完全没有 Referer**                → 认（用户 2026-11-26 拍板：
+#     「先按工作台认，但别处照旧」）
+#
+# 第三种是这次 bug 的正身：`location.reload()` 重开页面、`/favicon.ico`、
+# 手机浏览器与微信内置省 Referer，这些**页面自己**发出的请求全都没有
+# Referer。上一版一律判「不是工作台」→ `/me` 回 `guest` → 前端发登录页 →
+# 又跳回访客身份，于是「一直加载又弹回我的页」；渠道清单同样被 401 掉，
+# 就是用户说的「没拿到渠道列表」。
+#
+# 为什么放心把「没 Referer」算成工作台：这里判的只是「这次请求算不算工作台
+# 发来的」，真正认成访客还要 `_visitor_id()` 有**有效的访客证**（签名、没过期）。
+# 没带证的人走这条也只是「不算访客」，不会凭白多出任何权限。站主自己登录
+# 用的 `fr_sess` 跟这条路毫无关系——`_guest_here()` 只在「没有 qq」时才被调用。
 def _jf_here():
+    """这次请求算不算工作台发出的。
+
+    `True`  = Referer 明说是 `/workspace` 底下，或者**根本没有 Referer**
+              （浏览器省掉了，见上面第三种情况）。
+    `False` = Referer 明说是本站别处（`/gallery`、`/runbench`……）或外站。
+    """
+    ref = str(request.headers.get("Referer") or "").strip()
+    if not ref:
+        return True
     try:
-        ref = str(request.headers.get("Referer") or "")
-        if not ref:
-            return False
         u = urlparse(ref)
-        p = u.path or ""
-        if not (p == "/workspace" or p.startswith("/workspace/")):
-            return False
-        # 光看路径不够：外站可以拿 `https://evil.example/workspace/x` 冒充。
-        # 主机名必须和这次请求一致（隧道后面看到的是同一台机器）。
-        got = (u.netloc or "").lower()
-        want = str(request.host or "").lower()
-        return bool(got) and bool(want) and got == want
     except Exception:                                   # noqa: BLE001
         return False
+    p = u.path or ""
+    if p == "/workspace" or p.startswith("/workspace/"):
+        # 防外站冒充：路径再像，主机名也得跟这次请求一致。
+        got = (u.netloc or "").lower()
+        want = str(request.host or "").lower()
+        if got and want and got != want:
+            return False
+        return True
+    # 明确指向别处 → 不是工作台
+    return False
 
 
 def _guest_here():
     """这次请求算不算访客 → 身份串；不算 → ""。
 
-    两个条件**同时**满足才算：浏览器带着有效的访客 cookie，且这次请求是
-    工作台发出来的（`_jf_here()`）。用户 2026-11-26 的原话：「访客模式只
-    局限于工作台，其他的东西不要给我变」。所以工作台以外一律返回空串，
-    那些页面按原来的口径走（没登录就提示没登录，登录了照常用），不会再
-    因为「上次点过先逛逛」而冒出「访客模式用不了这个功能」。
+    两个条件**同时**满足才算：浏览器带着有效的访客证（`fr_visit`），且这次
+    请求不是从别处页面发出来的（`_jf_here()`）。用户 2026-11-26 的原话：
+    「访客模式只局限于工作台，其他的东西不要给我变」。所以 Referer 明说是
+    画廊 / 跑图台 / 漫画台来的，一律返回空串，那些页面按原来的口径走（没
+    登录就提示没登录，登录了照常用），不会再因为「上次点过先逛逛」而冒出
+    「访客模式用不了这个功能」。
     """
     return _visitor_id() if _jf_here() else ""
+
+
+# 工作台在没有身份时仍然要能读的**只读**接口。判据是「给了也看不出任何人的
+# 东西」——渠道清单是全局画风表，imgsign 只是一个本站签名。
+#
+# 为什么必须逐条列、不能按前缀放：`/api/comic/tasks`、`/api/gal/mine`、
+# `/api/chat/archive` 这些一动就露出站主的东西（2026-11-26 实测：放宽成
+# 「工作台发来的就放行」之后，没有身份的浏览器从 `/api/comic/tasks` 读到了
+# 21 条漫画任务标题）。所以这张表只许变窄，加东西前先问一句「没身份的人
+# 拿到它会不会看到别人的东西」。
+_JF_PUBLIC = {
+    ("/api/gen", "channels"),      # 画风/渠道清单
+    ("/api/gen", "imgsign"),       # 图片地址的站点签名
+}
+
+
+def _jf_public(prefix, sub, method):
+    """这条请求算不算「工作台没身份也该放行的公共读」。"""
+    if method != "GET":
+        # 写一律不放（提交靠 `proxy_gen` 自己再挡一次；这里再加一道，防止
+        # 以后有人把新接口挂到某个 allow_guest 前缀上顺着溜进来）。
+        return False
+    return (prefix, sub) in _JF_PUBLIC
 
 
 @app.route("/guest")
@@ -723,8 +771,20 @@ def _forward(prefix, sub, allow_guest=False, force_guest=False,
     if force_guest:
         qq = ""
     gid = "" if qq else _guest_here()
+    # 工作台自己有「先逛逛」这条路，所以**它真正要用的那几个读接口**不能因为
+    # 「没 qq 也没访客证」就 401——那正是用户 2026-11-26 报的那一串：
+    #   · 「渠道列表拿不到，先去跑图台看看，回来再试」
+    #   · 「点 AI 创作显示还未登录，点重试依旧如此」
+    #
+    # ⚠️ 放行范围**只限工作台首屏要的那几个只读接口**（`_jf_public`），
+    # 不能拿 `_jf_here()` 一放了之。踩过的坑：一开始按「工作台发来的就放行」
+    # 写，结果 `/api/comic/tasks` 在没 Referer 时也被放过去了，5174 直接把
+    # 21 条漫画任务标题吐给了没有身份的浏览器——等于把站主的私货开了个洞。
+    # 这里只放「给了也看不出任何人的东西」的那几个：渠道清单、图签名，
+    # 以及提交（POST）由 `proxy_gen` 自己再挡一次登录。
     if not qq and not gid and not allow_guest:
-        return jsonify({"ok": False, "error": "还没登录"}), 401
+        if not (_jf_here() and _jf_public(prefix, sub, request.method)):
+            return jsonify({"ok": False, "error": "还没登录"}), 401
     url = "%s%s/%s" % (BACKEND, prefix, sub)
     headers = {"X-Friend-Token": friend_auth.secret()}
     params = dict(request.args)

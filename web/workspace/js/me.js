@@ -181,7 +181,10 @@
         });
         return;
       }
-      global.location.reload();
+      /* 去登录用**跳地址**而不是 reload（2026-11-26）：reload 之后子页栈会
+         从 sessionStorage 恢复回来，人又被送回「我的」这一页，看起来就是
+         「点了登录又弹回来」（见 visitor.js 的 leaveToLogin）。 */
+      global.location.replace("/workspace/");
     });
 
     
