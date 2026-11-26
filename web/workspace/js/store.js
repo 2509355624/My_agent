@@ -20,12 +20,13 @@
   "use strict";
 
   var KEY = "ws_chat_v1";
-  /* 访客那一格（2026-11-26 用户：「访客模式不需要再给他存聊天记录」——录不
-     进服务端，但**这台设备**上要留着，不然「大退再进」刚才那张就没了）。
-     2026-11-26 第二轮实测又发现两件事：带身份串的键每续签一次就换一把，重进
-     就看不见自己刚画的；点「登录」再点「先逛逛」又续一轮。所以现在按**天**
-     分段（北京时间），旧版留下的那几把键在读的时候并一次进来。
-     `KEY_GUEST` 是老格式（`ws_chat_guest_v1[:sid]`），留着只为搬旧账。 */
+  /* 访客那一格。2026-11-26 第三轮之后**访客也有服务端档位了**
+     （`guest_<身份段>.json`，见 5174 的 `app/features/chat/routes.py`），
+     所以这里只是**本机缓存**：先铺出来别白屏、断网时还能看。
+     为什么还要按天分段：带身份串的键每续签一次就换一把，重进就看不见自己
+     刚画的；点「登录」再点「逛逛」又会续一轮。按天（北京时间）分段之后，
+     同一天里进出都是同一格。旧格式（`ws_chat_guest_v1[:sid]`）读的时候并
+     一次进来。 */
   var KEY_GUEST = "ws_chat_guest_v1";
   var KEY_GUEST_DAY = "ws_chat_visitor_v2:";
   var KEY_GUEST_FIXED = "ws_chat_guest_v1";
@@ -238,11 +239,10 @@
       dirty.push(m);
     });
     if (!dirty.length) return;
-    /* 访客：没有服务端档位，只在本地留一份。不排队、不推、不补推——
-       推上去 5174 也是 401，白占家用上行（2026-11-26）。
-       `MODE.guest` 要等 /me 回来才准，正常序列里 chat.js 先等 `whoami()`
-       再起步，所以这条已经生效；万一抢在前面，`send()` 里还有一道。 */
-    if (MODE.guest) return;
+    /* 访客也有服务端档位了（2026-11-26 用户拍板，见 `whoami` 上面那段注释）：
+       `guest_<身份段>.json`，跟 QQ 那份同一套读写、同一条 KEEP。所以这里不再
+       按访客早退——原先那句 `if (MODE.guest) return` 等于「页面一关就没人
+       写」，而轮询是唯一的写入方，用户大退回来就只能看到一张假卡。 */
     flush(dirty);
   }
 
@@ -282,7 +282,6 @@
 
   function send() {
     if (!queue.length) return Promise.resolve(null);
-    if (MODE.guest) { queue = []; return Promise.resolve(null); }
     var batch = queue.slice(0, 40);
     queue = queue.slice(batch.length);
     // 发出去的那一刻就记成「已推」：不等响应。否则响应回来之前任何一次
@@ -320,8 +319,6 @@
      只补推还在本地窗口里的那些：更老的已经被覆盖掉了，按指纹补推会把
      顺序打乱，不如不补。 */
   function resync() {
-    /* 访客：本地那份已经是全部，没有可补推的（也没有档位可推）。 */
-    if (MODE.guest) return Promise.resolve(null);
     var box = read() || {};
     var msgs = box.msgs || [], bag = readPending(), ids = Object.keys(bag);
     if (!ids.length) return Promise.resolve(null);
@@ -345,7 +342,6 @@
      记录真的变了；轮询拿到结果的那一刻，用户可能马上关页面，这里先就地把
      状态落一次，比等他下一次操作更稳。 */
   function patch(rec, fields) {
-    if (MODE.guest) return Promise.resolve(null);   // 访客没有服务端那条可改
     var job = String((rec && rec.job) || "").trim();
     var id = rid(rec);
     if (!job && !id) return Promise.resolve(null);
@@ -395,7 +391,6 @@
      服务端一次默认只给尾部 TAIL 条，要更早的整段就带上更大的 limit（服务端
      封顶 KEEP）。这里不负责拼进页面，由 archive.js 按 id 去重后接在顶上。 */
   function earlier(limit) {
-    if (MODE.guest) return Promise.resolve(null);   // 访客没有更早的（本地窗就是全部）
     var n = Math.max(MAX, limit || 0) + MAX;
     return global.fetch(API + "?limit=" + n, { credentials: "same-origin" })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -407,10 +402,10 @@
       .catch(function () { return null; });
   }
 
-  /* 访客模式（2026-11-26 用户）：「访客模式不需要再给他存聊天记录了」。
-     服务端那条路整个关掉——`/api/chat/archive` 对访客 401（5175 那边直接
-     不放行），所以这里所有网络动作都跳过，只留 localStorage 这一份。
-     键也分开（`key()`）：同一个浏览器上站主和访客不能看见彼此的记录。 */
+  /* 访客档位（2026-11-26 用户拍板）：**和 QQ 号那档同一套**，只是键不同
+     （`guest_<身份段>`）。服务端那份是正本，本地这份是缓存——所以下面所有
+     网络动作对访客和登录用户一视同仁，不再有「访客不推不拉」的分支。
+     访客证 24 小时过期，过期再来是新 id、新档位，互不可见。 */
 
   /* 退出登录：本地清掉。服务端那份**不删**——它属于这个 QQ 号，换台设备
      登录还得能看见（用户 2026-11-24 的要求）。共享设备上的隔离由服务端

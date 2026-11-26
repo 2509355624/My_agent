@@ -86,9 +86,16 @@ class TestChatPersists(unittest.TestCase):
             self.assertIn(k, arch, "重放要覆盖这一类消息: " + k)
 
     def test_replay_does_not_write_again(self):
-        """重放不能再写存档，否则每刷新一次记录翻倍。"""
+        """重放不能再写存档，否则每刷新一次记录翻倍。
+
+        2026-11-26：`attach` / `revive`（断线之后把卡接回任务）也住在这个
+        文件里，它们**是要写存档的**。所以这里只看 `replay()` 那一段，
+        不再整份文件搜。
+        """
         arch = _read("js/archive.js")
-        self.assertNotIn("WSStore.save", arch)
+        seg = arch[arch.index("function replay("):arch.index("function older(")]
+        self.assertNotIn("WSStore.save", seg)
+        self.assertNotIn("WSStore.patch", seg)
 
     def test_unfinished_jobs_are_rejoined(self):
         # 轮询表 2026-11-24 拆到了 gen_flow.js（`S().pending[...]` 取代 `S.pending[...]`）

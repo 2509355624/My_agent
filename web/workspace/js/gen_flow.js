@@ -300,6 +300,9 @@
       if (described) body.ref_described = true;
     }
     if (rec.finalPrompt) body.prompt_is_final = true;
+    /* 这条记录自己的 id 一起交上去（2026-11-26）：任务结束那一刻服务端要
+       靠它把图盖回档位。页面关掉了、轮询那一发没了，图也不会丢。 */
+    if (rec.id) body.rec = rec.id;
     // ask 那条路吃的是**用户原话**（模型靠它判意图、判是不是在改上一张），
     // 所以把 `ask` 一起带上；submit 那条路不看它，多带一个字段无副作用。
     if (ask) body.text = rec.ask || card.prompt;
@@ -318,6 +321,17 @@
           if (H.busyTip) H.busyTip(d.error || "前面还有图在画，等一下再发");
           return;
         }
+        /* 没拿到应答 ≠ 服务端说不行（2026-11-26）。这条必须先分流，否则
+           一次断网就把「其实已经排上队、甚至已经出图」的那张写成了失败卡
+           ——用户实测：图在 output 里好好的，回来只有一句「网络断了」。 */
+        if (d && d.offline) {
+          if (global.WSArchive && global.WSArchive.revive) {
+            global.WSArchive.revive(card, rec);
+          } else {
+            fail(card, "提交没成功，检查网络后点重试", true);
+          }
+          return;
+        }
         fail(card, (d && d.error) || "没排上队");
         return;
       }
@@ -326,31 +340,17 @@
         fail(card, "没排上队，重发一次试试");
         return;
       }
-      card.job = d.job.id;
-      rec.job = card.job;
       /* 访客额度（2026-11-26）：服务端在提交那一刻扣，回执里带 `left`。
          这里只做显示，不做判断——额度真不够时上面那条 `!d.ok` 已经接住了。 */
       if (d.job.visitor && global.WSVisitor) {
         global.WSVisitor.syncLeft(d.job.visitor_left);
       }
-      /* 复制拿的是**实际出这张图用的那串提示词**，不是用户敲的那句话
-         （2026-11-24 用户：「点击复制，结果拿到的是我发送给 ai 的原始需求，
-         而不是 ai 生成这个图片使用的英文提示词 tags」）。
-         服务端在这趟里做完了翻译/画师串/参考图描述合并，`job.prompt` 就是
-         最终进模型的那串英文 tags，直接记下来当复制源。 */
-      if (d.job.prompt) {
-        card.prompt = d.job.prompt;
-        rec.prompt = d.job.prompt;
-      }
-      armStop(card);
-      S().pending[card.job] = card;
-      card.say("正在跑，画好会自动弹出来", false, true);
-      rec.note = "正在跑，画好会自动弹出来";
-      H.patch(rec, { job: rec.job, prompt: rec.prompt, note: rec.note, err: false });
-      startPoll();
-      tick();
+      /* 挂牌 → 进 pending → 开始轮询：和「断网后按时间认领回来」是同一段，
+         放在 archive.js 的 `attach`（两处各写一份，早晚一处改了一处没改）。 */
+      global.WSArchive.attach(card, rec, d.job);
     })["catch"](function () {
       card.submitting = false;
+      /* 这一支是**代码自己炸了**（不是网络），照旧判失败——真没排上。 */
       fail(card, "提交失败，检查网络后点重试", true);
     });
   }

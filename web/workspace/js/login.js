@@ -6,6 +6,16 @@
   var TIMER = null;
   var el = {};
 
+  /* 子页栈的键（stack.js 里同名）。登录 / 进访客成功时要先把它丢掉：
+     不然新页面会从 sessionStorage 把上次那个子页（比如「我的」）恢复出来，
+     人一进来先看见一副不该看见的样子，再等 `/me` 回来才换掉——用户
+     2026-11-26 报的「会先在我的那个界面闪一下作品和收藏、退出登录」就是它。 */
+  var VIEW_KEY = "ws_view_v1";
+
+  function dropViews() {
+    try { global.sessionStorage.removeItem(VIEW_KEY); } catch (e) { /* 隐私模式 */ }
+  }
+
   function $(id) { return document.getElementById(id); }
 
   function say(text, cls) {
@@ -79,6 +89,7 @@
         // 2026-11-26：改成跳地址，顺手把上次的子页栈（`ws_view_v1`）甩掉，
         // 否则登录成功也会被 restoration 送回「我的」那一页。
         stopTimer();
+        dropViews();
         global.location.replace("/workspace/chat.html");
       } else {
         say(d.error || "验证码不对", "err");
@@ -104,11 +115,28 @@
         /* 用**跳地址**而不是 reload（2026-11-26）：reload 会让工作台从
            sessionStorage 把上次那个子页栈（比如「我的」）恢复回来，访客一
            进来就落在「还没登录」那页上。换个地址等于从干净首屏开始。 */
+        dropViews();
         global.location.replace("/workspace/chat.html");
         return;
       }
       say((d && d.error) || "进不去，稍后再试", "err");
       if (el.visitor) el.visitor.disabled = false;
+    });
+  }
+
+  /* 手上已经有访客证？把按钮改成「继续以访客身份使用」（2026-11-26）。
+     访客点「登录」现在不摘证了（见 visitor.js 的 leaveToLogin），所以到这一页
+     他其实还是同一个访客。按钮还写「先以访客身份逛逛」，会让人以为要重新领
+     一张——额度看起来就「刷新」了。`/login/visitor` 那边是 `resign()`，沿用
+     同一个 id 只续期，点了接着算。 */
+  function labelVisitor() {
+    if (!el.visitor) return;
+    global.WSApi.get("/me").then(function (d) {
+      if (!d || d.role !== "visitor") return;
+      var left = d.quota ? Number(d.quota.left) : NaN;
+      el.visitor.textContent = isFinite(left)
+        ? "继续以访客身份使用（今天还剩 " + left + " 张）"
+        : "继续以访客身份使用";
     });
   }
 
@@ -139,6 +167,7 @@
     el.code.addEventListener("keydown", function (e) {
       if (e.key === "Enter" && !el.login.disabled) { onLogin(); }
     });
+    labelVisitor();
   }
 
   global.WSLogin = { init: init };

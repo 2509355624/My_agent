@@ -21,19 +21,33 @@
 
 ## 存储
 
-`state/chat_archive/<qq>.json`，一档一个文件：
+`state/chat_archive/<档位>.json`，一档一个文件：
 
 · 单文件而不是 SQLite：一条记录就是几百字节的 JSON，120 条撑死几十 KB，
   读写一次就是整个文件，不存在并发写同一行的复杂度；
 · 写盘用「临时文件 + os.replace」：手机在中途刷新不会留下半截 JSON；
-· 按 QQ 号一个文件：删一个人的记录就是删一个文件，不会误伤别人。
+· 按档位一个文件：删一个人的记录就是删一个文件，不会误伤别人。
+
+**档位有两种**（2026-11-26 用户拍板，见 `_owner()`）：登录的是 `<qq>`，
+工作台访客是 `guest_<身份段>`。访客那档 7 天没人动会被
+`_purge_guests()` 收掉——访客证 24 小时就过期，过期再来是新 id、新档位、
+互不可见，所以旧档不会有人回来找。
 
 ## 鉴权
 
-只认 `qq` 参数（5175 转发时注入，见 `friend_app._forward` 的说明：qq 一律
-由网关写死，不信客户端传的）。5174 本机直连（站主自己）按 `GALLERY_OWNER_QQ`
-认——和画廊那边同一套口径。没登录就 401，不返回空列表：那会把「没登录」
-伪装成「你还没有记录」。
+只认身份，不认参数：登录的 `qq` 由 5175 注入（见 `friend_app._forward`：
+qq 一律由网关写死，不信客户端传的），访客走 `X-Friend-Guest` 头（**只有
+工作台页面发出来的请求才带**，见 `_guest_owner()`）。5174 本机直连（站主
+自己）按 `GALLERY_OWNER_QQ` 认——和画廊那边同一套口径。没身份就 401，不
+返回空列表：那会把「没登录」伪装成「你还没有记录」。
+
+## 服务端兜底写档
+
+`write_back()`：生图任务结束的那一刻（出图 / 失败 / 被终止），由 5174 的
+worker 自己把结果盖回这一档。以前只有前端在「轮询拿到图 → PATCH 回来」时
+才写，页面一关就没人写——图在 output 里躺着、档位里还停在「正在跑」，用户
+重进只能看到一张假卡（2026-11-26 用户实测，QQ 那边也有过同款「跑完了但
+没找到图片」）。前端在的时候两边都写，按记录 id 原位覆盖，天然幂等。
 """
 
 import io
@@ -71,22 +85,22 @@ _QQ_RE = re.compile(r"^\d{4,12}$")
 _LOCK = threading.Lock()
 
 
-def _file(qq):
-    return os.path.join(DIR, "%s.json" % qq)
+def _file(key):
+    return os.path.join(DIR, "%s.json" % key)
 
 
-def _load(qq):
-    return _load_box(qq)[0]
+def _load(key):
+    return _load_box(key)[0]
 
 
-def _load_box(qq):
+def _load_box(key):
     """→ (msgs, 旧记录补 id 后有没有变)。
 
     老存档里的记录没有 id（升级前的前端写的），按内容认人一错位，图和提示
     行就会串。这里按固定顺序补一个 `old_<序号>`：同样的输入永远算出同样的
     id，多台设备、多次读取都一样，相当于给它们一个稳定身份。
     """
-    p = _file(qq)
+    p = _file(key)
     if not os.path.isfile(p):
         return [], False
     try:
@@ -114,12 +128,12 @@ def _load_box(qq):
     return msgs, changed
 
 
-def _save(qq, msgs):
+def _save(key, msgs):
     os.makedirs(DIR, exist_ok=True)
-    p = _file(qq)
+    p = _file(key)
     tmp = "%s.%d.tmp" % (p, os.getpid())
     with io.open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"v": 1, "qq": qq, "msgs": msgs,
+        json.dump({"v": 1, "qq": key, "msgs": msgs,
                    "ts": round(time.time(), 3)}, f, ensure_ascii=False)
     os.replace(tmp, p)
 
@@ -175,6 +189,42 @@ def _who():
     return ""
 
 
+def _guest_owner():
+    """工作台访客的档位键 `guest_<身份段>`；不是访客 → ""。
+
+    ⚠️ 只认 `X-Friend-Guest`，**不认别的任何东西**。那个头只有 5175 在
+    「这次请求出自工作台」（`friend_app._guest_here()`）时才补，所以画廊、
+    跑图台、角色扮演那些路根本不会带它——用户 2026-11-26 划的边界「访客
+    只属于工作台」在这里是靠**发起方**守住的，不靠路径。
+
+    `visitor.current()` 会先验 `X-Friend-Token`（只有本机两个进程知道）再
+    验签名，伪造的头一律当没带。
+    """
+    try:
+        from app.gateways import visitor
+        return _guest_key_of(visitor.current().get("id") or "")
+    except Exception:                                   # noqa: BLE001
+        return ""
+
+
+def _guest_key_of(gid):
+    """身份段 → 档位键。和 `image/routes._guest_key` 同一口径，别各写一份。"""
+    gid = str(gid or "").strip()
+    return ("guest_" + gid) if gid else ""
+
+
+def _owner():
+    """这一档记录归谁：登录的 qq 优先，其次是工作台访客。都没有 → ""。
+
+    为什么另起一个函数而不改 `_who()`（2026-11-26）：`_who()` 是**全站**
+    的身份判定（角色扮演、小说、群聊额度、跑图台都在用）。让它开始认访客
+    = 那些地方突然把访客当成「登录了」，主业务跟着塌——这是上一轮踩过的
+    坑，见 `_who()` 的注释。访客档位只有聊天存档和生图回收写用得上，所以
+    单开这一条，谁要谁调。
+    """
+    return _who() or _guest_owner()
+
+
 @bp.route("/archive", methods=["GET"])
 def api_archive_get():
     """取这一档的聊天记录。→ {ok, msgs, n, total, more}
@@ -183,18 +233,18 @@ def api_archive_get():
     决定「加载更早」要不要显示）。一次默认只给尾部 TAIL 条：手机端第一次
     进页面拉十兆 JSON 会白屏几秒，那是真实的体验问题。
     """
-    qq = _who()
-    if not qq:
-        # 访客（2026-11-26）：不存服务端记录，前端按 //me 的 role 走本地缓存。
+    owner = _owner()
+    if not owner:
         return jsonify({"ok": False, "error": "没登录"}), 401
-    msgs = _load(qq)
+    _purge_guests()
+    msgs = _load(owner)
     total = len(msgs)
     limit = request.args.get("limit", type=int) or TAIL
     limit = max(1, min(limit, KEEP))
     if total > limit:
         msgs = msgs[-limit:]
     return jsonify({"ok": True, "msgs": msgs, "n": len(msgs),
-                    "total": total, "more": total > len(msgs), "qq": qq})
+                    "total": total, "more": total > len(msgs), "qq": owner})
 
 
 @bp.route("/archive", methods=["POST"])
@@ -208,9 +258,8 @@ def api_archive_post():
     后到的那台把先到的那台冲掉——这跟 localStorage 那个「整份覆盖」的
     行为正好相反，也正是「换浏览器能看到之前的记录」的关键。
     """
-    qq = _who()
-    if not qq:
-        # 访客（2026-11-26）：不存服务端记录，前端按 //me 的 role 走本地缓存。
+    owner = _owner()
+    if not owner:
         return jsonify({"ok": False, "error": "没登录"}), 401
     if request.content_length and request.content_length > BODY_MAX:
         return jsonify({"ok": False, "error": "这次推的记录太大了"}), 413
@@ -233,10 +282,10 @@ def api_archive_post():
             continue
         incoming.append((f, m))
     if not incoming:
-        return jsonify({"ok": True, "n": len(_load(qq)), "added": 0})
+        return jsonify({"ok": True, "n": len(_load(owner)), "added": 0})
 
     with _LOCK:
-        msgs, migrated = _load_box(qq)
+        msgs, migrated = _load_box(owner)
         # 去重分两层：
         #   ① 有 id 的记录按 id **原位替换**（卡片状态更新，不追加）；
         #   ② 没有 id 的老记录按内容指纹比，且只比最近这一段。
@@ -266,9 +315,9 @@ def api_archive_post():
             if added:
                 msgs = msgs[-KEEP:]
             try:
-                _save(qq, msgs)
+                _save(owner, msgs)
             except OSError:
-                log.warning("聊天存档写盘失败 qq=%s", qq, exc_info=True)
+                log.warning("聊天存档写盘失败 owner=%s", owner, exc_info=True)
                 return jsonify({"ok": False, "error": "存不下"}), 500
     return jsonify({"ok": True, "n": len(msgs), "added": added,
                     "updated": updated})
@@ -289,9 +338,8 @@ def api_archive_patch():
     只改 `k:"img"` 的那一条；找不到就 hit=0，不报错——卡片可能已经被
     截断掉了，不值得为它拦一次请求。
     """
-    qq = _who()
-    if not qq:
-        # 访客（2026-11-26）：不存服务端记录，前端按 //me 的 role 走本地缓存。
+    owner = _owner()
+    if not owner:
         return jsonify({"ok": False, "error": "没登录"}), 401
     body = request.get_json(silent=True) or {}
     if not isinstance(body, dict):
@@ -305,7 +353,7 @@ def api_archive_patch():
         patch = {k: v for k, v in body.items() if k not in ("job", "id")}
 
     with _LOCK:
-        msgs = _load(qq)
+        msgs = _load(owner)
         hit = 0
         for m in reversed(msgs):
             if not isinstance(m, dict) or m.get("k") != "img":
@@ -321,9 +369,9 @@ def api_archive_patch():
             break
         if hit:
             try:
-                _save(qq, msgs)
+                _save(owner, msgs)
             except OSError:
-                log.warning("聊天存档改写失败 qq=%s", qq, exc_info=True)
+                log.warning("聊天存档改写失败 owner=%s", owner, exc_info=True)
                 return jsonify({"ok": False, "error": "存不下"}), 500
     return jsonify({"ok": True, "hit": hit})
 
@@ -335,15 +383,103 @@ def api_archive_clear():
     **只删自己的**：qq 由网关注入，改参数也删不到别人。退出登录**不会**
     走这里——退出只是换人，记录还得留着给他换台设备登录时看。
     """
-    qq = _who()
-    if not qq:
-        # 访客（2026-11-26）：不存服务端记录，前端按 //me 的 role 走本地缓存。
+    owner = _owner()
+    if not owner:
         return jsonify({"ok": False, "error": "没登录"}), 401
     with _LOCK:
         try:
-            if os.path.isfile(_file(qq)):
-                os.remove(_file(qq))
+            if os.path.isfile(_file(owner)):
+                os.remove(_file(owner))
         except OSError:
-            log.warning("清空聊天存档失败 qq=%s", qq, exc_info=True)
+            log.warning("清空聊天存档失败 owner=%s", owner, exc_info=True)
             return jsonify({"ok": False, "error": "删不掉"}), 500
     return jsonify({"ok": True})
+
+
+# ─── 服务端兜底写档（2026-11-26）─────────────────────────────
+#
+# 用户原话：「服务端这边任务其实已经跑完了，但是没有写到记录里面，就会导致
+# 我明明已经跑出来图了，但是我却没有拿到」。
+#
+# 以前唯一的写入方是前端：轮询拿到图 → `store.patch()` → PATCH 回这一档。
+# 页面被切走 / 手机把标签页杀掉 / 用户直接大退，那一发就没了——图在 output
+# 里躺着，档位里还停在「正在跑」。现在任务结束那一刻由 5174 的 worker 自己
+# 盖一次，前端在不在都一样；前端在的话两边写的是同一条（按 id 认人），幂等。
+
+# 访客档留几天。访客证 24 小时过期，过期再来是新 id、新档位、互不可见，
+# 所以旧档不会有人回来找；留 7 天只是给「同一天里换了几次证」的那几个兜一下。
+GUEST_KEEP_DAYS = 7
+_PURGE_EVERY = 6 * 3600
+_purge_at = [0.0]
+
+
+def write_back(owner, rec_id="", job_id="", fields=None):
+    """把一条生图结果盖回档位。→ 命中的条数（0 = 这一档里没有这条）。
+
+    认人顺序：记录 id 优先（前端建的，卡片从「排队中」走到「已出图」它不变），
+    没有 id 就退回按 `job` 认（「直达」连排的那几张是**先有任务号、后有记录**
+    的，服务端建任务时还不知道记录 id）。
+
+    找不到就跳过，不新建：档位里没有这条说明前端根本没把它推上来（比如提交
+    请求都没发出去），凭空造一条只会变成一张用户没见过的卡。
+    """
+    owner = str(owner or "").strip()
+    fields = fields or {}
+    if not owner or not fields:
+        return 0
+    rid = str(rec_id or "").strip()
+    jid = str(job_id or "").strip()
+    if not rid and not jid:
+        return 0
+    with _LOCK:
+        msgs = _load(owner)
+        if not msgs:
+            return 0
+        for m in reversed(msgs):
+            if not isinstance(m, dict) or m.get("k") != "img":
+                continue
+            if rid:
+                if _rec_id(m) != rid:
+                    continue
+            elif str(m.get("job") or "") != jid:
+                continue
+            m.update(fields)
+            try:
+                _save(owner, msgs)
+            except OSError:
+                log.warning("兜底写档失败 owner=%s", owner, exc_info=True)
+                return 0
+            return 1
+    return 0
+
+
+def _purge_guests(now=None):
+    """收掉 N 天没动过的访客档。→ 删掉几个。
+
+    只碰 `guest_*.json`：登录档是永久的，绝不在这里动（用户 2026-11-24：
+    「换台设备登录还得能看见」）。节流到 6 小时一次，别让每次读档都扫目录。
+    """
+    now = float(now or time.time())
+    if now - _purge_at[0] < _PURGE_EVERY:
+        return 0
+    _purge_at[0] = now
+    cut = now - GUEST_KEEP_DAYS * 86400
+    n = 0
+    try:
+        names = os.listdir(DIR)
+    except OSError:
+        return 0
+    for name in names:
+        if not (name.startswith("guest_") and name.endswith(".json")):
+            continue
+        p = os.path.join(DIR, name)
+        try:
+            if os.path.getmtime(p) >= cut:
+                continue
+            os.remove(p)
+            n += 1
+        except OSError:
+            pass
+    if n:
+        log.info("清掉 %d 个过期访客档（%d 天没动）", n, GUEST_KEEP_DAYS)
+    return n

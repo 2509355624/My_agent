@@ -129,6 +129,24 @@ class TestWorkspaceChatGen(unittest.TestCase):
         self.assertIn("setInterval", js)
         self.assertIn("clearInterval", js, "轮询必须能停，不能无限打接口")
 
+    def test_offline_submit_is_not_a_failure(self):
+        """没拿到应答 ≠ 服务端拒绝（2026-11-26 用户实测）。
+
+        页面被切走 / 断网时那一发 fetch 被系统掐断，服务端其实已经收到、
+        任务在排队甚至已经出图。把它当「明确失败」写进档位，用户回来就只能
+        看到一句「网络断了」，图永远找不回来。所以 `api.js` 要把这一类和
+        「服务端说不行」分开（`offline`），`fire()` 里也不能直接判死。
+        """
+        self.assertIn("offline: true", _read("js/api.js"))
+        flow = _read("js/gen_flow.js")
+        seg = flow[flow.index("function fire("):flow.index("function armStop")]
+        self.assertIn("d.offline", seg)
+        self.assertIn("WSArchive.revive", seg, "断线要用认领接回来，不能判死")
+        # 认领之后「把卡接回任务」只有一份实现
+        arch = _read("js/archive.js")
+        self.assertIn("function attach(card, rec, job)", arch)
+        self.assertIn("function revive(card, rec)", arch)
+
 
 class TestWorkspaceChatStack(unittest.TestCase):
 
@@ -752,6 +770,13 @@ async function flush() { for(let i=0;i<12;i++) await Promise.resolve(); }
   w.WSGenFlow.bind({state:()=>state, save:r=>{if(r&&!state.msgs.includes(r))state.msgs.push(r);},
     patch(){}, newCard(prompt,skill,rec){return Object.assign(w.WSCard.shell(),{prompt,skill,rec});},
     fail(c,msg){c.say(msg);}, sysNote(){}});
+  /* 2026-11-26: 提交成功后的「挂牌 -> 进 pending -> 开始轮询」搬到 archive.js
+     的 `attach` 了（那边和「断线认领回来」是同一段）。这里给它一份最小的
+     WSChat 桥，口子和真页面里 chat.js 提供的那几个同形。 */
+  w.WSChat={pending:state.pending, armStop(){},
+            paintNote:(c,t)=>{if(c&&c.note)c.note.textContent=t;},
+            msgs:()=>state.msgs, failCard:(c,m)=>{if(c&&c.say)c.say(m);}};
+  load("archive.js");
   w.WSGenFlow.submit("画猫","s");
   const rec=state.msgs[0], card=state.cards.get(rec);
   assert.equal(card.note.textContent,"正在提交…");

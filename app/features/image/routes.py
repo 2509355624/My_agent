@@ -367,6 +367,28 @@ def _ledger_append(row):
         log.warning("跑图台账本写不进去 %s", _LEDGER, exc_info=True)
 
 
+def _archive_back(job, fields):
+    """把这张图的结果盖回工作台的聊天记录（2026-11-26）。
+
+    为什么在服务端做：以前只有前端「轮询拿到图 → PATCH 回档」一个写入方，
+    用户点了发送就把页面切走 / 大退，那一发永远不会有——图在 output 里躺着、
+    记录还停在「正在跑」，重进就是一张假卡（用户原话：「服务端其实已经跑完
+    了，但前端没有把这个结果传回来」）。QQ 那边也有过同款「跑完了但没找到
+    图片」，根子在同一个地方：**写记录挂在「客户端还在」这个前提上**。
+
+    只影响工作台的档位：`owner` 是 qq 或 `guest_<id>`，跑图台/QQ 的任务
+    owner 与任何一档聊天记录都对不上，`write_back` 找不到就直接返回。
+
+    失败只警告：档位写不进去不该让这张图作废（图本身已经在盘上了）。
+    """
+    try:
+        from app.features.chat import routes as chat_routes
+        chat_routes.write_back(job.get("owner"), job.get("rec"),
+                              job.get("id"), fields)
+    except Exception:                                   # noqa: BLE001
+        log.warning("兜底写档失败 %s", job.get("id"), exc_info=True)
+
+
 def _ledger_rows(limit=100):
     """账本行（新的在前），跳过「清空截止」之前的。"""
     cutoff = _cleared_at()
@@ -595,6 +617,9 @@ def _run(job):
                  job.get("cfg") if job.get("cfg") is not None else "-",
                  size_label or "-",
                  "%.1f" % secs if secs is not None else "未知")
+        # 服务端自己把结果写回这一档：前端在不在都一样（见 `_archive_back`）。
+        _archive_back(job, {"file": file_ref, "note": "", "err": False,
+                            "job": ""})
     except Cancelled:
         # 用户点了「中断」：队列里那张已由 wait() 放弃等待、worker 会跳过；
         # 正在画的由 image_jobs 定向 /interrupt 后收工。这里只改状态，不记账、
@@ -603,6 +628,8 @@ def _run(job):
             job["state"] = "cancelled"
             job["error"] = "已中断"
         log.info("跑图台 %s 已中断", job["id"])
+        # 档位里那条也要收尾：不然重进还写「正在跑」，用户以为它还在画。
+        _archive_back(job, {"note": "已终止", "err": False, "job": ""})
     except Exception as e:
         msg = str(e) or e.__class__.__name__
         with _JOBS_LOCK:
@@ -613,6 +640,8 @@ def _run(job):
                         "file": "", "ts": job["ts"], "ok": False,
                         "error": msg})
         log.warning("跑图台 %s 失败：%s", job["id"], msg)
+        # 真失败（服务端明确说了不行）才打 err，重进时直接显示这句 + 重画。
+        _archive_back(job, {"note": msg, "err": True, "job": ""})
     finally:
         # 线程退场了（成功 / 失败 / 被中断都算）。`_reap_stuck` 靠这个标记
         # 认「这张已经没人管了」——不置的话，任何一条异常退出的路径都会
@@ -807,7 +836,10 @@ def api_ask():
     # 访客走**原尺寸**：用户 2026-11-26 明确「访客不用走降档，没有意义，
     # 浪费时间」——他们把全部渠道都开着给访客玩，要的就是成品本身。
     ctx = {"images": _web_images(refs), "refs": list(refs or []),
-           "lowres": (not gid) and WORKSPACE_LOWRES}
+           "lowres": (not gid) and WORKSPACE_LOWRES,
+           # 前端那条聊天记录的 id（2026-11-26）：任务结束那一刻服务端要靠它
+           # 把结果盖回档位，页面关掉也不会丢图。
+           "rec": str(data.get("rec") or "").strip()}
     hist = _web_history(who)
     # ⚠️ `bind_context` 是**赋值 + 返回 None**，不是上下文管理器（它把当前
     # 会话写进线程本地，靠 finally 里的 `clear_context` 收尾）。按 QQ 那边
@@ -1049,6 +1081,8 @@ def _web_decide(text, skill, hist, ctx):
             "user_text": text,
             "refs": [r for r in (ctx.get("refs") or [])
                      if isinstance(r, str) and r.startswith("cr_")]}
+    if ctx.get("rec"):
+        body["rec"] = ctx["rec"]
     if got.get("source_image"):
         # 模型判「要垫这张图」（图生图 / 照着画 / 复刻）。前端把图以 data
         # URL 交回来，`_enqueue_job` → `_run` 会带着它进 `generate_image`。
@@ -1342,13 +1376,18 @@ def api_submit():
     # 这里不能 `from ...chat.routes import _who`：image 包比 chat 包先加载，
     # 那样会变成循环导入（只判"有没有拿到档位"，判断权仍归 chat 那套）。
     from app.features.chat import routes as chat_routes
-    owner = chat_routes._who() or "__anonymous__"
+    # 访客（2026-11-26）：跟 `api_ask` 同一套身份口径。原先这里是
+    # `_who() or "__anonymous__"`，于是**所有访客共用一条任务线**：认领
+    # （adopt）时按 owner 找不到自己那张，兜底写档也会写到别人那一档去。
+    # 访客的身份头只有工作台发来的请求才有，跑图台照旧无副作用。
+    owner = chat_routes._owner() or "__anonymous__"
     job, busy = _enqueue_job({
         "skill": skill, "prompt": prompt, "loras": slots,
         "steps": steps, "cfg": cfg, "negative": negative, "ref_note": ref_note,
         "width": size[0] if size else None,
         "height": size[1] if size else None,
         "landscape": landscape,
+        "rec": str(data.get("rec") or "").strip(),
     }, owner=owner)
     if job is None:
         return jsonify({"ok": False, "busy": True, "error": busy}), 429
@@ -1381,6 +1420,10 @@ def _enqueue_job(spec, owner, user_text="", lowres_on=False):
             # 2026-11-25：高峰期那档删掉，任何时间都是「最多同时 5 张」。
             return None, "同时最多画 %d 张，等一张出来再画。" % limit
         job = {"id": _new_job_id(), "owner": owner,
+               # 这条任务对应**哪个聊天记录**（2026-11-26 服务端兜底写档用）。
+               # 前端提交时带上自己的记录 id；「直达」那几条拿不到（记录是回执
+               # 之后才建的），所以写档时还会退回按任务号认，见 chat.routes.write_back。
+               "rec": str(spec.get("rec") or ""),
                "skill": skill, "prompt": spec["prompt"],
                "seed": (None if skill in image_jobs.NAI_SKILLS
                         else random.randint(0, 2 ** 31 - 1)),
@@ -1538,6 +1581,13 @@ def api_status():
     _reap_stuck()
     with _JOBS_LOCK:
         jobs = sorted(_JOBS.values(), key=lambda j: j["ts"], reverse=True)
+    # 访客只看得见自己的（2026-11-26）：原来这一条不过滤 owner，整台机器的
+    # 任务（包括站主在 QQ 那边发起的）都会吐给任何访客，任务标题就是提示词。
+    # **只对访客收口**：登录用户和站主本机保持原样（跑图台、管理页都用同一
+    # 条接口看全量队列，那里不能变）。
+    _mine = _guest_key()
+    if _mine:
+        jobs = [j for j in jobs if j.get("owner") == _mine]
     try:
         depth = image_jobs.queue_depth()
     except Exception:
@@ -1618,7 +1668,10 @@ def api_adopt():
     if at <= 0:
         return jsonify({"ok": False, "error": "没给时间"}), 400
     from app.features.chat import routes as chat_routes
-    owner = chat_routes._who() or "__anonymous__"
+    # 和提交同一口径（2026-11-26）：`_owner()` = qq，没有就是工作台访客的
+    # `guest_<身份段>`。原先这里是 `_who()`，访客恒为空 → 落到 `__anonymous__`，
+    # 而提交那边记的是 `guest_xxx`，两边永远对不上，访客刷新后认不回自己那张。
+    owner = chat_routes._owner() or "__anonymous__"
     best = None
     with _JOBS_LOCK:
         for job in _JOBS.values():

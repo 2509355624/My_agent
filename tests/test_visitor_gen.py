@@ -14,7 +14,9 @@
 """
 
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -122,22 +124,36 @@ class VisitorUploadTest(unittest.TestCase):
 
 
 class VisitorArchiveTest(unittest.TestCase):
-    """聊天存档：5174 不再按访客头拒绝（2026-11-26 收回到工作台边界）。
+    """聊天存档：访客有自己的档位（2026-11-26 用户拍板）。
 
-    上一版这里钉的是「带访客头一律 401」。那是靠 5174 去认访客头实现的，
-    把「谁算访客」复制到了每一个共用 `_who()` 的接口上——跑图台、小说、
-    角色扮演都跟着塌。现在「访客不存聊天记录」这条由**工作台自己**兑现
-    （前端不推、网关只给工作台带访客头），5174 这边保持原样的身份口径。
+    上一版这里钉的是「带访客头一律 401」——那时的口径是「访客不存服务端
+    记录」。用户 2026-11-26 把口径改回来了，理由很具体：工作台不能靠前端
+    轮询去写记录，「服务端跑完就写进档位、用户回来才拿得到图」才是对的
+    （QQ 那边就是这样）。所以访客档位是 `guest_<身份段>.json`，和 QQ 那份
+    同一套读写、同一条 KEEP。
+
+    ⚠️ 只影响**聊天存档**（走 `_owner()`）。`_who()` 一个字没改——角色扮演、
+    小说、跑图台、群聊额度那些地方照旧不认访客，这条边界不能松。
     """
 
     def setUp(self):
         visitor.reset()
         self.addCleanup(visitor.reset)
         from app.features.chat import routes as chat
+        self.tmp = tempfile.mkdtemp(prefix="ws_archive_")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        p = mock.patch.object(chat, "DIR", self.tmp)
+        p.start()
+        self.addCleanup(p.stop)
         app = Flask(__name__)
         app.register_blueprint(chat.bp)
         self.client = app.test_client()
         self.chat = chat
+
+    def _guest(self):
+        raw = visitor.new_id()
+        return raw, {"X-Friend-Token": friend_auth.secret(),
+                     "X-Friend-Guest": raw}
 
     def test_guest_header_does_not_change_identity(self):
         """访客头不影响 `_who()`：还是按 qq 参数/本机直连那套判。"""
@@ -146,11 +162,64 @@ class VisitorArchiveTest(unittest.TestCase):
                 "/api/chat/archive?qq=10001", headers=_guest_headers()):
             self.assertEqual(chat._who(), "10001")
 
-    def test_guest_header_never_makes_a_slot(self):
-        """没有 qq 就还是没有档位，不会因为带了访客头「凭空有身份」。"""
-        r = self.client.get("/api/chat/archive", headers=_guest_headers())
+    def test_guest_has_its_own_file(self):
+        """带有效访客头就有自己的档位，落在 `guest_<身份段>.json`。"""
+        raw, h = self._guest()
+        r = self.client.post("/api/chat/archive", headers=h, json={"msgs": [
+            {"k": "img", "id": "imgabc_1", "note": "排队中"}]})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual((r.get_json() or {}).get("added"), 1)
+        gid = visitor.check_id(raw)
+        path = os.path.join(self.tmp, "guest_%s.json" % gid)
+        self.assertTrue(os.path.isfile(path), "访客档位没落盘: " + path)
+        g = self.client.get("/api/chat/archive", headers=h).get_json() or {}
+        self.assertEqual([m.get("id") for m in g.get("msgs") or []],
+                         ["imgabc_1"])
+
+    def test_two_guests_do_not_see_each_other(self):
+        _, h1 = self._guest()
+        self.client.post("/api/chat/archive", headers=h1, json={"msgs": [
+            {"k": "img", "id": "imgabc_1"}]})
+        _, h2 = self._guest()
+        g = self.client.get("/api/chat/archive", headers=h2).get_json() or {}
+        self.assertEqual(g.get("msgs") or [], [])
+
+    def test_forged_or_missing_token_is_rejected(self):
+        """签名不对、或者没有内部令牌 → 当没带，照旧 401。"""
+        raw = visitor.new_id()
+        gid, exp, _sig = raw.split(".")
+        forged = "%s.%s.%s" % (gid, exp, "0" * 32)
+        r = self.client.get("/api/chat/archive", headers={
+            "X-Friend-Token": friend_auth.secret(), "X-Friend-Guest": forged})
         self.assertEqual(r.status_code, 401)
-        self.assertNotIn("msgs", r.get_json() or {})
+        r = self.client.get("/api/chat/archive",
+                            headers={"X-Friend-Guest": visitor.new_id()})
+        self.assertEqual(r.status_code, 401)
+
+    def test_write_back_fills_the_result(self):
+        """服务端兜底写档：按记录 id 把 file 盖回去（前端不在也不丢图）。"""
+        raw, h = self._guest()
+        self.client.post("/api/chat/archive", headers=h, json={"msgs": [
+            {"k": "img", "id": "imgabc_1", "job": "GP-1",
+             "note": "正在跑", "err": False}]})
+        key = "guest_" + visitor.check_id(raw)
+        hit = self.chat.write_back(key, "imgabc_1", "GP-1",
+                                   {"file": "a.png", "note": "", "err": False,
+                                    "job": ""})
+        self.assertEqual(hit, 1)
+        g = self.client.get("/api/chat/archive", headers=h).get_json() or {}
+        m = (g.get("msgs") or [{}])[0]
+        self.assertEqual(m.get("file"), "a.png")
+        self.assertEqual(m.get("job"), "")
+
+    def test_write_back_falls_back_to_job(self):
+        """没有记录 id 时按任务号认（「直达」连排那几条就是这种）。"""
+        raw, h = self._guest()
+        self.client.post("/api/chat/archive", headers=h, json={"msgs": [
+            {"k": "img", "id": "imgabc_2", "job": "GP-2", "note": "正在跑"}]})
+        key = "guest_" + visitor.check_id(raw)
+        self.assertEqual(self.chat.write_back(key, "", "GP-2", {"file": "b.png"}), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -30,12 +30,14 @@ class TestCopyGivesRealPrompt(unittest.TestCase):
 
     def test_card_prompt_takes_job_prompt(self):
         # 2026-11-24 晚：提交 / 轮询搬到 gen_flow.js 了，这一段跟着过去
-        js = _read("js", "gen_flow.js")
-        i = js.index("function fire(card, rec, refs, described)")
-        seg = js[i:js.index("function armStop", i)]
-        self.assertIn("d.job.prompt", seg,
+        # 2026-11-26：挂牌那一段又和「断线认领回来」合并成 archive.js 的
+        # `attach`（gen_flow 贴着 600 行硬线，而它本来就是「把卡接回任务」）
+        js = _read("js", "archive.js")
+        i = js.index("function attach(card, rec, job)")
+        seg = js[i:js.index("function revive(", i)]
+        self.assertIn("job.prompt", seg,
                       "提交成功要把 job.prompt 记成复制源")
-        self.assertIn("card.prompt = d.job.prompt", seg)
+        self.assertIn("card.prompt = job.prompt", seg)
 
     def test_server_returns_final_prompt(self):
         """最终串在 `_public(job)` 里带出去（翻译 / 画师串 / 参考图都已合并）。"""

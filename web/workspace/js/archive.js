@@ -7,9 +7,10 @@
 (function (global) {
   "use strict";
 
-  /* 列表里铺的那一档（服务端 `/api/gen/img?fit=` 长边 ≤1MB）：
-     铺图的活儿全在 shot.js，这边只转一下值。 */
-  var FIT = global.WSShot.FIT;
+  /* 这个模块**不在加载时碰任何别的模块**（2026-11-26）：以前开头有一句
+     `var FIT = global.WSShot.FIT;`（而且从来没被用过），于是它必须排在
+     shot.js 之后才能加载。现在 gen_flow 要回来调 `attach`，两边不能再
+     互相挑加载顺序——一律等到真正调用那一刻再去拿。 */
 
   // ── 重放 ──────────────────────────────────────────────
 
@@ -98,14 +99,13 @@
     restoring = true;
     var local = global.WSStore && global.WSStore.load();
 
-    /* 访客（2026-11-26 用户：「访客模式不需要再给他存聊天记录了」）：
-       服务端那条整个不碰，只重放这个浏览器本地那份。 */
-    var ready = (global.WSStore && global.WSStore.isGuest &&
-                 global.WSStore.isGuest())
-      ? Promise.resolve(null)
-      : ((global.WSStore && global.WSStore.pull)
-        ? global.WSStore.pull()
-        : Promise.resolve(null));
+    /* 访客也拉服务端（2026-11-26 用户拍板）：访客有自己的档位
+       `guest_<身份段>`，跑完的图由 5174 在任务结束那一刻自己写进去，
+       前端在不在都一样。所以这里不再按身份分叉——本地那份只是在服务端
+       拉不回来（断网 / 5174 没起）时垫底。 */
+    var ready = (global.WSStore && global.WSStore.pull)
+      ? global.WSStore.pull()
+      : Promise.resolve(null);
 
     ready.then(function (d) {
       var use = (d && d.msgs && d.msgs.length) ? d.msgs : null;
@@ -446,5 +446,92 @@
     return hit;
   }
 
-  global.WSArchive = { restore: restore, replay: replay, older: older };
+  // ── 接回一条真任务（2026-11-26）────────────────────────
+  //
+  // 这两段原来在 gen_flow.js，那边贴着 600 行硬线；而且它们本来就是「刷新 /
+  // 断线之后把状态接回来」那一类，和 `restore()` / `promise()` 是同一条命。
+
+  var NOTE_RUN = "正在跑，画好会自动弹出来";
+  /* 提交没拿到应答时的那句话。措辞刻意不说「失败」：服务端很可能已经收到
+     了，只是这一发被系统掐断。 */
+  var NOTE_UNKNOWN = "网络断了，正在确认这张有没有排上";
+
+  /* 把一张卡接到一条**服务端确有其事**的任务上：挂牌 → 进 pending → 开始
+     轮询。`fire()` 拿到回执走这里，断网后按时间认领回来也走这里——两处要是
+     各写一份，早晚一处改了一处没改（「图画好了、卡片还在转圈」就是这么来的）。 */
+  function attach(card, rec, job) {
+    if (!card || !rec || !job || !job.id) return false;
+    card.job = job.id;
+    rec.job = job.id;
+    rec.err = false;
+    rec.note = NOTE_RUN;
+    /* 复制拿的是**实际出这张图用的那串提示词**，不是用户敲的那句话
+       （2026-11-24 用户：「点击复制，结果拿到的是我发送给 ai 的原始需求，
+       而不是 ai 生成这个图片使用的英文提示词 tags」）。服务端在这一趟里做完
+       了翻译 / 画师串 / 参考图合并，`job.prompt` 就是最终进模型的那串。 */
+    if (job.prompt) {
+      card.prompt = job.prompt;
+      rec.prompt = job.prompt;
+    }
+    if (global.WSChat) {
+      global.WSChat.pending[card.job] = card;
+      global.WSChat.armStop(card);
+      global.WSChat.paintNote(card, NOTE_RUN);
+      if (card.say) card.say(NOTE_RUN, false, true);
+      if (global.WSStore) {
+        global.WSStore.patch(rec, { job: rec.job, prompt: rec.prompt,
+                                    note: rec.note, err: false });
+        global.WSStore.save({ msgs: global.WSChat.msgs() });
+      }
+    }
+    if (global.WSGenFlow && global.WSGenFlow.kick) global.WSGenFlow.kick();
+    return true;
+  }
+
+  /* 提交那一发**没拿到应答**（断网 / 页面被切走 / 隧道抖）→ 去问一句「这张
+     到底排上了没有」。
+
+     为什么不直接判失败：被掐断的那一刻请求很可能已经到了服务端，任务正在
+     排队甚至已经在画。写成 `err` 落进档位，用户回来看到的就是「明明出图了
+     却说没跑完」，而且再也不会有人去认领它（用户 2026-11-26 实测：图在
+     output 里好好的，回来只有一句「网络断了」）。
+
+     做法：标「结果还没确认」（**不打 err**），拿记录出生时间去 `adopt`；认到
+     就接回轮询，认不到才说没排上。等几秒是为了让服务端先把它落进队列。 */
+  function revive(card, rec) {
+    if (!card || !rec) return;
+    rec.note = NOTE_UNKNOWN;
+    rec.err = false;
+    if (global.WSChat) {
+      global.WSChat.paintNote(card, NOTE_UNKNOWN);
+      if (global.WSStore) {
+        global.WSStore.patch(rec, { job: "", note: NOTE_UNKNOWN, err: false });
+        global.WSStore.save({ msgs: global.WSChat.msgs() });
+      }
+    }
+    var at = bornAt(rec);
+    if (!at) {
+      global.WSChat.failCard(card, "提交没成功，检查网络后点重试", true);
+      return;
+    }
+    setTimeout(function () {
+      global.WSGen.adopt(at).then(function (d) {
+        if (!d || !d.ok || !d.job) {
+          global.WSChat.failCard(card, "这张没排上（网络断了），点重试再发一次",
+                                 true);
+          return;
+        }
+        attach(card, rec, d.job);
+      }, function () {
+        /* 连问都问不到（还是断网）：留在「结果还没确认」。**不判死**——
+           下次进页面 `willCheck` 还会再认一次，服务端那边已经会自己把
+           结果盖回档位。 */
+      });
+    }, 4000);
+  }
+
+  /* `bornAt` 也对外给：拿到应答之前就断掉的那次提交要靠它去认领，
+     两处算法必须是同一份。 */
+  global.WSArchive = { restore: restore, replay: replay, older: older,
+                       bornAt: bornAt, attach: attach, revive: revive };
 })(window);
