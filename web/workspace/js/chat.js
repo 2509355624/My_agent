@@ -102,6 +102,19 @@
     log({ k: "note", t: text });
     return p;
   }
+  /* 大大怪说的一句话（2026-11-26：工作台接上 QQ 那套 AI 之后，模型判
+     「这轮不用画」会回话，比如「这句没说要画什么」）。跟提示行分开：
+     贴左、能换行、跟正文一样大，因为它就是一次对话，不是系统通知。 */
+  function sayText(text) {
+    var p = document.createElement("p");
+    p.className = "say";
+    p.textContent = text || "";
+    box().appendChild(p);
+    hideEmpty();
+    scrollBottom();
+    log({ k: "say", t: text || "" });
+    return p;
+  }
   /* 一条会自己消失的提示（「正在传参考图…」「正在看图…」这类）。
      跟 sysNote 分开：sysNote 是对话记录的一部分，要进存档；这种过场提示
      不该进存档，刷新后也不该再出现一条「正在看图…」。返回的句柄用来提前
@@ -208,9 +221,10 @@
   /* 提交 / 轮询 / 判超时 / 终止全在 gen_flow.js（2026-11-24 拆的）：
      那边只做「发请求、看状态」，画卡片的活儿由 card.js 干，这里只负责
      把三样东西交给它——存档数组、落盘函数、和上面那几个渲染函数。 */
-  function submitJob(prompt, skill, refs, described, userNode, defer, finalPrompt) {
+  function submitJob(prompt, skill, refs, described, userNode, defer, finalPrompt,
+                      route) {
     return global.WSGenFlow.submit(prompt, skill, refs, described, userNode,
-                                   defer, finalPrompt);
+                                   defer, finalPrompt, route);
   }
   function armStop(card) { return global.WSGenFlow.armStop(card); }
   function disarmStop(card) { return global.WSGenFlow.disarmStop(card); }
@@ -263,6 +277,7 @@
       },
       spawn: spawn,
       sysNote: sysNote,
+      say: sayText,
       newId: newId,
       busyTip: function (text) { busyNote(text, 3000); },
       dropCard: function (card) { global.WSRedraw.drop(card); },
@@ -350,7 +365,8 @@
     if (pre.length) {
       global.WSRef.commit();
       var preCard = submitJob(text, S.skill,
-                              pre.map(function (r) { return r.id; }), true, user);
+                              pre.map(function (r) { return r.id; }), true, user,
+                              false, false, "ask");
       if (!preCard) dropUser(user, text);
       return;
     }
@@ -358,7 +374,8 @@
     global.WSRef.ensureDescribed(refs).then(function (read) {
       global.WSRef.commit();
       var newCard = submitJob(text, S.skill,
-                              read.map(function (r) { return r.id; }), false, user);
+                              read.map(function (r) { return r.id; }), false, user,
+                              false, false, "ask");
       if (!newCard) dropUser(user, text);
     });
   }
@@ -513,6 +530,7 @@
     syncHint: function () { if (global.WSRef) global.WSRef.syncHint(); },
     paintUser: paintUser,
     paintNote: paintNote,
+    say: sayText,
     /* 重放存档时复用同一张图（同一条地址 → 同一个缓存 key，重放和历史不会
        各下一遍）。见 archive.js 的 replay()。 */
     shotEl: shotEl,

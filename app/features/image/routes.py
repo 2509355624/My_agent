@@ -41,6 +41,7 @@ from flask import (Blueprint, Response, jsonify, request, send_file,
 
 from app.features.image import comfy_out
 from app.features.image import lora_slots
+from app.features.qq import api as qq_api
 from app.features.comic import comic
 from app.features.image import jobs as image_jobs
 from app.features.image import out as image_out
@@ -629,6 +630,376 @@ def api_lora_save():
         (200 if ok else 500)
 
 
+@bp.route("/api/gen/ask", methods=["POST"])
+def api_ask():
+    """工作台的**一句话**：交给大大怪判意图，要画就直接排队（2026-11-26）。
+
+    为什么要有它（用户原话：「工作台其实就是 QQ 这一边……本质上工作台它就是
+    跟大大怪一样的呀，相当于大大怪弄到网页端而已」）：
+    `/api/gen/submit` 只做「中文→英文」翻译，然后直通 ComfyUI，模型那一层
+    整个没参与。于是网页端拿不到 QQ 有的那些能力——改词（「换成白色毛衣」要
+    在【上一张】的词上替换服装段）、指代、该不该画、要不要回话。这条接口把
+    请求交给 `direct_gen.decide`，用的就是 QQ 私聊那一套（同一条
+    `_MASTER_TEMPLATE`、同一份 6 轮历史窗口），只是把结果交回网页而不是 QQ。
+
+    **不是另起一条链**：翻译/改写/渠道判定/入队全在 `decide` 里，这边只做
+    「验身份 → 绑会话上下文 → 记历史 → 依次试两项新能力 → 不行回落到
+    `submit` 的老行为」。回落到 submit 是刻意的：跑图台的 LoRA 槽位、步数、
+    CFG、横屏、画师串这些具体参数，`decide` 那条链路不认，只有 submit 有。
+
+    返回三种：
+      - `{"ok": true, "job": {...}}`            要画，已排队（前端按 id 轮询 status）
+      - `{"ok": true, "reply": "…", "say": true}` 模型判这轮不画，要回一句（前端显示气泡）
+      - `{"ok": false, "error": "…", "busy": bool}` 没排上 / 转译失败
+    """
+    data = request.get_json(silent=True) or {}
+    text = str(data.get("text") or "").strip()
+    if not text:
+        return jsonify({"ok": False, "error": "说一句想画什么"}), 400
+    if len(text) > _MAX_PROMPT:
+        return jsonify({"ok": False,
+                        "error": "太长了（%d 字，上限 %d）"
+                                 % (len(text), _MAX_PROMPT)}), 400
+    skill = str(data.get("skill") or "").strip()
+    if skill and skill not in _channel_ids():
+        return jsonify({"ok": False, "error": "未知渠道 %r" % skill}), 400
+    from app.features.chat import routes as chat_routes
+    qq = chat_routes._who() or ""
+    if not qq:
+        return jsonify({"ok": False, "error": "没登录"}), 401
+    refs = data.get("refs")
+    ctx = {"images": _web_images(refs), "refs": list(refs or [])}
+    hist = _web_history(qq)
+    # ⚠️ `bind_context` 是**赋值 + 返回 None**，不是上下文管理器（它把当前
+    # 会话写进线程本地，靠 finally 里的 `clear_context` 收尾）。按 QQ 那边
+    # 的老用法一模一样地写：绑 → 干活 → finally 清。
+    qq_api.bind_context("private_%s" % qq, "private", qq,
+                        user_text=text,
+                        own_images=ctx["images"] or None,
+                        quoted_images=ctx["images"] or None)
+    try:
+        got = _web_decide(text, skill, hist, ctx, data)
+    except _WebReply as e:
+        _web_history_push(qq, text, str(e.reply))
+        return jsonify({"ok": True, "reply": str(e.reply), "say": True})
+    except RuntimeError as e:
+        # 没名额 / 渠道没模板这类「说一句就够」的失败。**不回落直通**：
+        # 已经花了一次转译，再走一遍 submit 只会把同一件事重新翻一遍。
+        return jsonify({"ok": False, "busy": True, "error": str(e) or
+                        "没排上队，等一下再发"}), 429
+    except Exception as e:                        # noqa: BLE001
+        log.warning("[gen] 工作台判意图失败，回落直通：%s", e, exc_info=True)
+        got = None
+    finally:
+        try:
+            qq_api.clear_context()
+        except Exception:
+            pass
+    if got is None:
+        # 不接管（纯画面描述 / 带跑图台参数 / 转译失败）→ 老行为：翻译后直通。
+        # 这条路上没有对话可言，历史不落：下一轮看不到这一轮，跟从前一样。
+        return api_submit()
+    job = got
+    _web_history_push(qq, text, "", job.get("prompt") or text,
+                      job.get("skill") or "")
+    return jsonify({"ok": True, "job": _public(job)})
+
+
+# ─── 工作台「一句话」通道（见 api_ask）────────────────────────────────
+#
+# 和 QQ 的关系：**同一套转译、同一份历史规则、不同的落盘位置**。
+#   - 转译：`direct_gen._translate`，一个字都不改（用户 2026-11-26：
+#     「我要求就是提示词那一套东西，要跟 QQ 一样」）。
+#   - 历史：QQ 那份是 `agent_store` 下 `session_key = private_<号>` 的会话文件，
+#     里面混着群聊、别处私聊的记录。工作台单独一份（`session_key =
+#     web_<号>`），同样裁 6 轮、同样不带 AI 自己的回执行——各存各的，
+#     互不串味（用户当次拍板）。
+#   - 上一张：`image_log.latest_for("private", qq)`，与 QQ 私聊**同一个键**。
+#     改了词接着改，跨端也是同一张图的延续。
+
+_WEB_ASK_TURNS = 6          # 喂给模型的轮数（与 QQ_BOT_TURNS 同值）
+_WEB_IMG_CACHE = {}         # chat_ref_id -> data URL（临时参考图，见 _web_ctx）
+_WEB_IMG_LOCK = threading.Lock()
+_WEB_IMG_MAX = 12           # 一个用户最多藏 12 张，超了丢最老的
+_WEB_IMG_TTL = 2 * 3600     # 两小时没人用就丢（工作台一轮一般几分钟）
+
+
+def _web_images(refs):
+    """本轮参考图 → 送进转译的图（聊天图的 data URL）。
+
+    只认 `chat_ref_id`（`/api/gen/chat-upload` 存下的那份，长得像
+    `cr_<32 位>`）：画廊里的作品图走的是 item id，`_read_private_image_text`
+    那条路能读，但这里拿不到同一种形态，所以不带——**不猜、不错配**。
+    """
+    from app.features.gallery import references
+    urls = []
+    for r in (refs or [])[:3]:                    # `_recall_tags` 也是最多 3 张
+        if not isinstance(r, str) or not references.valid_chat_ref(r):
+            continue
+        with _WEB_IMG_LOCK:
+            row = _WEB_IMG_CACHE.get(r)
+            if row:
+                row["at"] = time.time()
+                urls.append(row["data"])
+    return urls
+
+
+def _web_decide(text, skill, hist, ctx, data):
+    """工作台这一轮：只补网页端缺的那一块，其余原样回落 `api_submit`。
+
+    **两条新能力**（其余全交给 submit 老路）：
+      ② 改词轮：有上一张 + 这句是接着它说的 → 在上一张的词上改
+      ③ 点名渠道：用户句子里点了渠道 → 让模型的渠道判定生效
+
+    ⚠️ 为什么不整条丢给 `direct_gen.decide`：那是 QQ 的入口（@ 我 + 一句话，
+    落点回 QQ 会话），里面还有菜单、随机口令、反推、漫画、群/私聊差异一大
+    堆工作台没有的东西；而且跑图台的 LoRA 槽位 / 步数 / CFG / 横屏
+    `decide` 根本不认——那些在本模块的 `api_submit` 里。所以这里只挑「网页端
+    真正缺的」补上，不接管的地方原样回落。转译本身仍是 QQ 那条
+    `_translate`（用户 2026-11-26：「提示词那一套东西要跟 QQ 一样」）。
+    """
+    from app.features.image import direct_gen as dg
+
+    # ── ① 参数轮：跑图台专属参数 / 已译好的成品串 → 老路，一律不碰 ──
+    if (data.get("prompt_is_final") or data.get("loras") or data.get("steps")
+            or data.get("cfg") or data.get("negative")
+            or data.get("landscape") or data.get("width")
+            or data.get("height") or data.get("artist_prefix")
+            or (skill and skill in image_jobs.NAI_SKILLS)):
+        return None
+
+    prev = dg._last_job("private_%s" % _who_qq())
+    # ── ② 改词轮 ──────────────────────────────────────────────
+    if prev and _looks_like_revise(text, prev):
+        job = _web_enqueue(text, skill or prev.get("skill") or "", ctx)
+        if job:
+            return job
+
+    # ── ③ 点名渠道：让模型的渠道判定生效（它比任何词表都全）──────
+    if not skill and _names_a_channel(text):
+        job = _web_enqueue(text, "", ctx)
+        if job:
+            return job
+
+    # ── ④ 其余（纯画面描述）→ 老路：翻译后直通，零 AI 意图判定 ──
+    # 工作台是「点了画风就是认定了渠道」的界面，用户自己写画面描述时不需要
+    # 模型再判一遍意图；判了反而多一次调用，还可能改掉他选的那个渠道。
+    return None
+
+
+def _who_qq():
+    from app.features.chat import routes as chat_routes
+    return chat_routes._who() or ""
+
+
+def _looks_like_revise(text, prev):
+    """这句话是不是「在上一张上改」，而不是「另一张新画面」。判据全可算：
+
+    1. 长得像完整提示词（逗号成串的英文 tag / 带 `::` 权号）→ False：
+       那是用户自己写好的成品，不该被改写。
+    2. 很短（≤ 24 字）→ True：工作台一轮里的「换成白毛衣」「换个姿势」
+       就是这个长度，必然是接上一张说的。
+    3. 长句里出现上一张的画面锚点（实词重叠）→ True。
+    其余 → False（当新需求，走老路）。
+    """
+    from app.features.image import direct_gen as dg
+    t = (text or "").strip()
+    if not t:
+        return False
+    if "::" in t or dg._is_english_tags(t):
+        return False
+    if len(t) <= 24:
+        return True
+    # 上一张的词是英文 tag，用户这句是中文——直接比字面几乎不会重合。
+    # 所以两路比，命中任意一路就算「接着改」：
+    #   ① 英文整词（长度 ≥3）出现在这句里：`classroom` / `sunset` 被原样提回来；
+    #   ② 人设词对得上：上一张的词里有 `silver hair` / `school uniform`，而
+    #      这句里出现了对应的中文锚点。
+    # 两路都只做**事实匹配**，判「这算不算改」的仍是模型（`_translate` 里
+    # 【上一张】那段规则），这里只决定「要不要把这一轮交给它」。
+    prev_text = (prev.get("prompt") or "").lower()
+    words = set(re.findall(r"[a-z][a-z0-9_]{2,}", prev_text))
+    if words & set(re.findall(r"[a-z][a-z0-9_]{2,}", t.lower())):
+        return True
+    # 人设锚点：发色 / 服装 / 场景，各挑最常用的那几个。**只用于判「是不是
+    # 在接上一张说」**，不参与提示词生成，所以不存在「盖不全」的问题——
+    # 漏了只是这一轮走老路（当新需求画），不会画错。
+    anchors = {
+        "silver": ("银发", "白发", "银白色"), "white": ("白色", "白"),
+        "black": ("黑色", "黑"), "golden": ("金色", "金发"),
+        "hair": ("发",), "school": ("校服", "学校", "教室"),
+        "uniform": ("校服", "制服"), "sweater": ("毛衣", "针织"),
+        "dress": ("裙", "连衣裙"), "classroom": ("教室",),
+        "sunset": ("夕阳", "黄昏", "傍晚"), "night": ("夜", "夜晚"),
+    }
+    hit = 0
+    for en, zh in anchors.items():
+        if en in prev_text and any(z in t for z in zh):
+            hit += 1
+    return hit >= 2
+
+
+def _names_a_channel(text):
+    """这句话里有没有点名渠道（固定渠道词 / 档位 / 画风词）。
+
+    只判「有没有」，是哪个渠道交给 `_translate`——`_parse_channel` 只认
+    **开头**的词，而工作台用户常把渠道放开说，所以整句扫一遍 `_FIXED_CHAN_RE`，
+    再叠一层开头的档位/画风词。
+    """
+    from app.features.image import direct_gen as dg
+    if dg._FIXED_CHAN_RE.search(text or ""):
+        return True
+    tier, style, _rest = dg._lead_commands(text or "")
+    return tier is not None or style is not None
+
+
+def _web_enqueue(text, skill, ctx):
+    """转译 + 入队。返回和 `api_submit` **同形**的 job dict。
+
+    转译走 `direct_gen._translate`（QQ 那份，含【上一张】与 6 轮最近对话）；
+    落队走本模块的 `_enqueue_job`（与 submit 同一条：前端轮询、终止、记账
+    全部不用改）。模型判「这轮不用画」时抛 `_WebReply`，由 `api_ask` 转成
+    一条聊天气泡。
+    """
+    from app.features.image import direct_gen as dg
+    trans = dg._translate(text, _web_history(_who_qq()), skill=skill or None)
+    if not trans:
+        return None
+    if trans.get("reply"):
+        raise _WebReply(str(trans["reply"]).strip())
+    if not trans.get("skill") or not trans.get("prompt"):
+        return None
+    body = {"skill": trans["skill"], "prompt": trans["prompt"],
+            "user_text": text,
+            "refs": [r for r in (ctx.get("refs") or [])
+                     if isinstance(r, str) and r.startswith("cr_")]}
+    # `_enqueue_job` 返回 (job, 没名额时的一句话)；正式接口里 busy 那句话
+    # 直接抛出去由 `api_ask` 落成一条提示，不在这里兜成空 job。
+    job, busy = _enqueue_job(body, owner=_who_qq())
+    if job is None:
+        raise RuntimeError(busy or "没排上队")   # 由 api_ask 落成一条错误提示
+    return job
+
+
+class _WebReply(Exception):
+    """模型说这轮不画；带着要回的那句话往外抛（见 `_web_enqueue`）。"""
+
+    def __init__(self, reply):
+        Exception.__init__(self, reply)
+        self.reply = reply
+
+
+def _web_history(qq):
+    """工作台自己的会话线（6 轮，与 QQ 同规则）。
+
+    落盘在 `agent_store` 的 `web_<号>` 会话文件里，**不带 system 头**——
+    转译用的模板是 `_MASTER_TEMPLATE`，跟 QQ 人设文件无关，塞 head 只会污染
+    `_recent_lines` 之外的地方。这里只存 `user` / `assistant` 两种消息，
+    读的时候过一遍 `strip_noise` + 按 6 轮硬裁。
+    """
+    from app.features.chat import memory
+    path = _web_history_path(qq)
+    if not os.path.exists(path):
+        return []
+    out = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                continue
+    out = memory.strip_noise(out)
+    return memory.trim_window(out, hard_turns=_WEB_ASK_TURNS)
+
+
+def _web_history_path(qq):
+    # `state_path` 只收一个文件名（不建子目录）：工作台的会话线直接铺在
+    # state/ 下，名字带前缀，跟 `image_log.jsonl` 那批同层。
+    return state_path("web_chat_%s.jsonl" % qq)
+
+
+def _web_history_push(qq, user_text, reply, prompt="", skill=""):
+    """落一轮。**只落用户原话**（+ 模型真出图时的那串提示词当事实）。
+
+    为什么不把 AI 的回话写进 assistant：工作台这一轮的 reply（「这句不用
+    画，因为…」）一旦回喂，下一轮模型会顺着继续拒——跟 QQ 那边 2026-11-26
+    排查出来的是同一个坑。所以历史里 assistant 只有一条「画了什么」，没有
+    「说了什么」。
+    """
+    path = _web_history_path(qq)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    rows = _web_history(qq)
+    rows.append({"role": "user", "content": user_text})
+    if prompt:
+        rows.append({"role": "assistant",
+                     "content": "[工作台出图] %s：%s"
+                                % (skill or "默认", str(prompt)[:400])})
+    from app.features.chat import memory
+    rows = memory.trim_window(rows, hard_turns=_WEB_ASK_TURNS)
+    with _SAVE_TMP_LOCK:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            for m in rows:
+                f.write(json.dumps(m, ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+
+
+_SAVE_TMP_LOCK = threading.Lock()
+
+
+@bp.route("/api/gen/chat-upload", methods=["POST"])
+def api_chat_upload():
+    """工作台「上传图」→ 一个短命 ref（`cr_…`），不落图库。
+
+    为什么另起一条而不是复用画廊上传：工作台是聊天优先的界面，用户随手贴
+    一张图只是「这一轮要照它改」，落进作品墙反而会把他的画库塞满（2026-11-26
+    查证：工作台现在的参考图走 `/api/gal/ref/*`，是画廊那套私有参考图，需要
+    先有作品集）。这条只把图存在内存里，两小时没人用就丢。
+
+    body: `{image: "data:image/..."}`（前端压到长边 ~960px 的缩略图）
+    → `{ok: true, ref: "cr_xxx"}`
+    """
+    from app.features.gallery import references
+    data = request.get_json(silent=True) or {}
+    image = str(data.get("image") or "").strip()
+    if not image.startswith("data:image/"):
+        return jsonify({"ok": False, "error": "图片格式不对"}), 400
+    if len(image) > (6 << 20):
+        return jsonify({"ok": False, "error": "图片太大了"}), 400
+    qq = _who_qq_or_401()
+    if qq is None:
+        return jsonify({"ok": False, "error": "没登录"}), 401
+    ref = references.new_chat_ref()
+    now = time.time()
+    with _WEB_IMG_LOCK:
+        mine = [(k, v) for k, v in _WEB_IMG_CACHE.items()
+                if v.get("qq") == qq]
+        if len(mine) >= _WEB_IMG_MAX:
+            mine.sort(key=lambda kv: kv[1]["at"])
+            for k, _v in mine[:len(mine) - _WEB_IMG_MAX + 1]:
+                _WEB_IMG_CACHE.pop(k, None)
+        _WEB_IMG_CACHE[ref] = {"qq": qq, "data": image, "at": now}
+    return jsonify({"ok": True, "ref": ref})
+
+
+def _who_qq_or_401():
+    from app.features.chat import routes as chat_routes
+    return chat_routes._who() or None
+
+
+def _purge_web_images():
+    """丢掉两小时没动过的临时参考图（`chat-upload` 的回收）。"""
+    cut = time.time() - _WEB_IMG_TTL
+    with _WEB_IMG_LOCK:
+        for k in [k for k, v in _WEB_IMG_CACHE.items() if v["at"] < cut]:
+            _WEB_IMG_CACHE.pop(k, None)
+
+
 @bp.route("/api/gen/submit", methods=["POST"])
 def api_submit():
     """提交一张图：校验 → 起 worker 线程 → 返回任务 id（前端轮询 status）。"""
@@ -744,7 +1115,30 @@ def api_submit():
     # 那样会变成循环导入（只判"有没有拿到档位"，判断权仍归 chat 那套）。
     from app.features.chat import routes as chat_routes
     owner = chat_routes._who() or "__anonymous__"
+    job, busy = _enqueue_job({
+        "skill": skill, "prompt": prompt, "loras": slots,
+        "steps": steps, "cfg": cfg, "negative": negative, "ref_note": ref_note,
+        "width": size[0] if size else None,
+        "height": size[1] if size else None,
+        "landscape": landscape,
+    }, owner=owner)
+    if job is None:
+        return jsonify({"ok": False, "busy": True, "error": busy}), 429
+    return jsonify({"ok": True, "job": _public(job)})
+
+
+def _enqueue_job(spec, owner, user_text=""):
+    """建一条本台任务并起 worker。→ (job, None) 成功；→ (None, 一句人话) 没名额。
+
+    `api_submit`（老路：翻译后直通）与 `api_ask`（工作台一句话，走 QQ 那份
+    转译）**共用这一段**：两条路最后都是「一张确定渠道 + 确定提示词的图」，
+    限额、记账、终止信号、轮询都不该有两份实现。
+
+    spec 只收两边都有的字段；缺省按 None / "" 落（LoRA 槽位、步数、CFG 这些
+    只有 `api_submit` 会带，工作台那条路全是默认值）。
+    """
     limit, _peak_label, _window = image_jobs.inflight_limit()
+    skill = spec["skill"]
     with _JOBS_LOCK:
         # 本台独立 worker 线程与公共 NAI 队列分别计数，避免重复计同一任务。
         active = sum(1 for j in _JOBS.values()
@@ -753,20 +1147,19 @@ def api_submit():
         if active >= limit:
             # 界面上一句话就够（前端只闪这一行），不带喂给模型的指令。
             # 2026-11-25：高峰期那档删掉，任何时间都是「最多同时 5 张」。
-            text = "同时最多画 %d 张，等一张出来再画。" % limit
-            return jsonify({"ok": False, "busy": True, "error": text}), 429
+            return None, "同时最多画 %d 张，等一张出来再画。" % limit
         job = {"id": _new_job_id(), "owner": owner,
-               "skill": skill, "prompt": prompt,
+               "skill": skill, "prompt": spec["prompt"],
                "seed": (None if skill in image_jobs.NAI_SKILLS
                         else random.randint(0, 2 ** 31 - 1)),
-               "loras": slots,
-               "steps": steps, "steps_label": "",
-               "cfg": cfg, "negative": negative,
-               "width": size[0] if size else None,
-               "height": size[1] if size else None,
-               "landscape": landscape,
+               "loras": spec.get("loras") or [],
+               "steps": spec.get("steps"), "steps_label": "",
+               "cfg": spec.get("cfg"), "negative": spec.get("negative"),
+               "width": spec.get("width"), "height": spec.get("height"),
+               "landscape": bool(spec.get("landscape")),
                "size_label": "",
-               "ref_note": ref_note,
+               "ref_note": spec.get("ref_note") or "",
+               "ask": user_text,
                "secs": None,
                "state": "queued", "error": "", "file": "",
                "ts": time.time(),
@@ -781,7 +1174,7 @@ def api_submit():
             if _JOBS[old]["state"] != "queued":
                 _JOBS.pop(old, None)
     threading.Thread(target=_run, args=(job,), daemon=True).start()
-    return jsonify({"ok": True, "job": _public(job)})
+    return job, None
 
 
 def _ref_ids(raw):

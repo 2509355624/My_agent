@@ -25,6 +25,23 @@
     return global.WSApi.post(BASE + "/submit", body);
   }
 
+  /* 一句话交给大大怪判（2026-11-26）：跟 QQ 私聊同一条转译、同一份 6 轮
+     历史。要画就回 `{ok, job}`（跟 submit 同形，轮询/终止都不用改）；判
+     「这轮不用画」就回 `{ok, reply, say:true}`，聊天页显示成一条 AI 消息。
+
+    和 submit 的分工：**只有聊天页那句话走这里**。重画、画同款这类「词已经
+     定了、就是要这张图」的请求继续走 submit——那时候再让模型判一遍意图
+     纯属浪费，还可能把它改成别的画面。 */
+  function ask(body) {
+    return global.WSApi.post(BASE + "/ask", body);
+  }
+
+  /* 聊天页上传的参考图：存服务端内存、两小时过期，不落作品墙。
+     回 `{ok, ref:"cr_…"}`，这个 ref 跟画廊的 item id 一样挂在 refs 里带上去。 */
+  function chatUpload(image) {
+    return global.WSApi.post(BASE + "/chat-upload", { image: image });
+  }
+
   function status() {
     return global.WSApi.get(BASE + "/status");
   }
@@ -90,6 +107,8 @@
   global.WSGen = {
     channels: channels,
     submit: submit,
+    ask: ask,
+    chatUpload: chatUpload,
     status: status,
     adopt: adopt,
     cancel: cancel,

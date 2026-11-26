@@ -57,6 +57,25 @@ def valid_ref_id(value):
     return bool(REF_ID_RE.fullmatch(str(value or "")))
 
 
+# ── 工作台「聊天图」引用（2026-11-26）──────────────────────────────
+#
+# 工作台上传的图**不落图库**（那是作品墙，塞满用户画库不合适），只存在
+# `image/routes.py` 的内存表里，两小时没人用就丢。它需要一个自己的引用前缀，
+# 免得和画廊的 ref_id 混在一起、被 `_read_private_image_text` 误当作品去查。
+# 形态：`cr_` + 32 位（与画廊 ref_id 同长度，前端两套正则互不干扰）。
+_CHAT_REF_RE = re.compile(r"cr_[A-Za-z0-9_-]{32}")
+
+
+def new_chat_ref():
+    """工作台临时参考图的引用号（只在内存有效，别往库里存）。"""
+    return "cr_" + secrets.token_urlsafe(32)[:32]
+
+
+def valid_chat_ref(value):
+    """是不是工作台那种临时引用（`cr_…`）。不判它是否还在内存里。"""
+    return bool(_CHAT_REF_RE.fullmatch(str(value or "")))
+
+
 def _new_id():
     return secrets.token_urlsafe(32)
 

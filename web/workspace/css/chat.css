@@ -80,6 +80,23 @@
   animation: ws-in .2s ease-out both;
 }
 
+/* 大大怪的一句话（2026-11-26：工作台接上 QQ 那套 AI 之后，模型判「这轮
+   不用画」时会回一句，比如「这句没说要画什么，说说画面再发」）。贴左、
+   无气泡底色，跟用户那条渐变的蓝紫气泡区分开；跟提示行同色，但左对齐、
+   能自动换行。 */
+.say {
+  align-self: flex-start;
+  max-width: 84%;
+  margin: 2px 2px 6px;
+  padding: 2px 4px;
+  font-size: 14.5px;
+  line-height: 1.65;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  animation: ws-in .2s ease-out both;
+}
+
 /* 用户消息下方的失败提示：同一句只留一条，点「重画」就撤掉。
    不占大卡片、不用刺眼的整块红色，只是一条贴右的小字。 */
 .user-fail {

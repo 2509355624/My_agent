@@ -41,6 +41,7 @@
     busyTip: null,    // 限流这类一次性提示：闪一下就消失，不落存档
     dropCard: null,   // 撤掉一张没排上队的临时卡（连用户气泡一起）
     scroll: null,     // () → 滚到底（出图 / 判失败之后）
+    say: null,        // (text) → 大大怪说的一句话（见 sayBack）
     redraw: null      // (card) → 重画（失败提示上那颗按钮）
   };
 
@@ -152,6 +153,32 @@
     if (H.scroll) H.scroll();
   }
 
+  /* 大大怪回了一句话（2026-11-26 用户拍板：「聊天气泡回一句」）。
+
+     这张图卡没排上任务，留着只会是个空壳——撤掉它，把用户那条气泡留下来
+     （他确实说了这句话），下面接一条 AI 消息。存档里把这条 img 记录换成
+     `k:"say"`，刷新后还是一问一答的样子，而不是「说了句话、卡片没了」。 */
+  function sayBack(card, rec, text) {
+    disarmStop(card);
+    if (card && card.rec) card.rec.job = "";
+    /* ⚠️ 不能用 `H.dropCard`（那是 redraw.drop）：它会把用户那条气泡一起
+       删掉。这里用户是**说了话的**，只是这句不用画，气泡得留着——否则
+       屏幕上只剩大大怪一句没头没尾的话。 */
+    if (card && card.node && card.node.parentNode) {
+      card.node.parentNode.removeChild(card.node);
+    }
+    if (rec) {
+      var at = S().msgs.indexOf(rec);
+      if (at >= 0) {
+        S().msgs.splice(at, 1);
+        if (H.save) H.save(null);
+      }
+      if (S().cards) S().cards["delete"](rec);
+    }
+    if (H.say) H.say(text);
+    if (H.scroll) H.scroll();
+  }
+
   /* 把失败提示贴到这张卡对应的用户消息下。找不到（存档重放还没配对）
      就不画——宁可少一条提示，也不刷屏。点重画时由重排流程撤掉它。 */
   function failUserLine(card, msg) {
@@ -174,7 +201,14 @@
      `described`（2026-11-24）：这些参考图**已经读成描述写进 prompt 了**
      （「画同款」就是这种）。带上它，后端就不再识一次图——用户确认过的
      口径是「不再识，用输入栏那段」。 */
-  function submit(prompt, skill, refs, described, userNode, defer, finalPrompt) {
+  /* `route`（2026-11-26）：走哪条接口。
+       - 默认 `"submit"`：翻译后直通。「词已经定了、就是要这张图」的请求
+         （重画 / 画同款 / 失败重排）走它，不再让模型判一遍意图。
+       - `"ask"`：聊天页那句话，交给大大怪判意图——跟 QQ 私聊同一条转译、
+         同一份 6 轮历史。它可能回一句「这轮不用画」，那时卡片撤掉、
+         把那句显示成一条 AI 消息（用户 2026-11-26 拍板选的那条口径）。 */
+  function submit(prompt, skill, refs, described, userNode, defer, finalPrompt,
+                  route) {
     if (!skill) {
       H.sysNote("还没拿到渠道列表，去跑图台看一眼再回来");
       return null;
@@ -184,6 +218,7 @@
                 id: H.newId ? H.newId("img") : "",
                 refs: (refs || []).slice(),
                 described: !!described,
+                route: route === "ask" ? "ask" : "",
                 userId: userNode ? (userNode._wsUserId || "") : "",
                 userText: userNode ? (userNode._wsUserText || "") : "",
                 job: "", file: "", note: "正在提交…", err: false };
@@ -260,10 +295,16 @@
     fire(card, rec, rec.refs, rec.described);
   }
 
-  /* 真正把请求发出去（submit / restart 共用）。 */
+  /* 真正把请求发出去（submit / restart 共用）。
+
+     `rec.route === "ask"` 时走 `/api/gen/ask`：那是聊天页那句话，交给
+     大大怪判意图（跟 QQ 私聊同一条转译、同一份 6 轮历史）。它可能回一句
+     「这轮不用画」——那时这张卡不该留（用户没要到图，留个空壳只会碍事），
+     把那句话播成一条 AI 消息，并把这条记录标成 `k:"say"` 收进存档。 */
   function fire(card, rec, refs, described) {
     card.submitting = true;
     card.say("正在提交…");
+    var ask = rec.route === "ask";
     var body = { skill: card.skill, prompt: card.prompt };
     if (refs && refs.length) {
       body.refs = refs;
@@ -271,8 +312,16 @@
       if (described) body.ref_described = true;
     }
     if (rec.finalPrompt) body.prompt_is_final = true;
-    global.WSGen.submit(body).then(function (d) {
+    // ask 那条路吃的是**用户原话**（模型靠它判意图、判是不是在改上一张），
+    // 所以把 `ask` 一起带上；submit 那条路不看它，多带一个字段无副作用。
+    if (ask) body.text = rec.ask || card.prompt;
+    var sent = ask ? global.WSGen.ask(body) : global.WSGen.submit(body);
+    sent.then(function (d) {
       card.submitting = false;
+      if (d && d.ok && d.say && d.reply) {
+        sayBack(card, rec, d.reply);
+        return;
+      }
       if (!d || !d.ok) {
         /* 限流（还在画 / 人太多）：只是一次性提示，不落失败行、不留卡。
            否则连点几下就挂一摞「上一张还在画」的红字，越积越多。 */
@@ -282,6 +331,11 @@
           return;
         }
         fail(card, (d && d.error) || "没排上队");
+        return;
+      }
+      if (!d.job || !d.job.id) {
+        // 接口说 ok 却没给任务号，也没给一句回话：不能留一张永远转圈的卡。
+        fail(card, "没排上队，重发一次试试");
         return;
       }
       card.job = d.job.id;

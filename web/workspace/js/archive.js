@@ -165,6 +165,13 @@
         userNodesByText[m.t].push(userNode);
       } else if (m.k === "note") {
         global.WSChat.paintNote(m.t);
+      } else if (m.k === "say") {
+        /* 大大怪回的那句话（2026-11-26）：不进 `log()`，这里已经 push 过了，
+           直接用 paint 那半边，否则刷新一次它会变成两条。 */
+        var say = document.createElement("p");
+        say.className = "say";
+        say.textContent = m.t || "";
+        global.WSChat.box().appendChild(say);
       } else if (m.k === "ref") {
         restoreRef(m);
         /* 只认**归档末尾**那条：`k:"ref"` 是「还没发出去」的回执，正常情况
