@@ -56,6 +56,15 @@
   background: var(--glass);
   -webkit-backdrop-filter: blur(18px) saturate(170%);
   backdrop-filter: blur(18px) saturate(170%);
+  /* 2026-11-26 用户：「这个我的，头顶那个我的，它不是放在中间的」。
+     标题原来靠 flex 的 `flex:1 + text-align:center` 居中，那是**在两个兄弟
+     等宽时才成立**：左 ✕ 和右人形都是 38px，本来该齐，可这页的标题不是建页
+     时写进去的（`me.js` 在 mountTop 里补字段），中间有那么几帧是空的；空
+     标题会被 `.vtitle:empty` 收成 0 宽、再靠 `space-between` 把按钮顶到两
+     端——等标题后到，位置就跟着按钮走了。左右再不对称（刘海、滚动条）就更
+     偏。改成绝对定位锚在这一栏的中线上，跟两边按钮怎么变都没关系。
+     `position: relative` 放这里，FLOATING 那一类子页自己还有一层定位。 */
+  position: relative;
 }
 
 /* 只管顶栏两端那两个圆按钮；中段可能是个标签条，不能被压成 38px */
@@ -74,8 +83,20 @@
 
 .vtop > button:active { background: var(--card-2); }
 
-.vtop .vtitle {
-  flex: 1 1 auto;
+/* 标题锚在整栏中线上（2026-11-26 用户：「头顶那个我的，它不是放在中间的」）。
+   以前靠 `flex:1 + text-align:center`，那只在左右两个兄弟**等宽**时才居中；
+   而这一页的标题是建页之后才补的（`me.js` 的 `mountTop`），中间几帧是空标题
+   → 被 `:empty` 收成 0 宽、两颗按钮被 `space-between` 顶到两端 → 标题后到，
+   位置就跟着按钮走了。绝对定位跟兄弟宽窄无关，也不再受刘海/滚动条影响。
+
+   左右各留 46px（38 按钮 + 8 内边距）给两颗按钮，标题太长就省略，不会压到
+   按钮上——顶栏本身有 gap:8 和 padding:8，那 8px 是按钮与标题之间的呼吸。 */
+.vtop > .vtitle {
+  position: absolute;
+  left: 46px;
+  right: 46px;
+  top: 50%;
+  transform: translateY(-50%);
   min-width: 0;
   text-align: center;
   font-size: 15px;
@@ -83,28 +104,29 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  pointer-events: none;          /* 中段不该挡住按钮的点击 */
+}
+
+/* `.gtabs`（AI 创作那页的文件夹标签条）是能横向滑动的真控件，不能当标题
+   居中压住——它自己占回弹性位置，事件也自己接。 */
+.vtop > .vtitle.gtabs {
+  position: static;
+  transform: none;
+  left: auto;
+  right: auto;
+  flex: 1 1 auto;
+  pointer-events: auto;
+  text-align: left;
 }
 
 /* 中段没有标题也不许撑出一条空栏（2026-11-24 用户两次报：
    「AI 创作的界面头顶有一行多余的横栏，明明什么都没有，但是还留着」、
    「我的漫画作品，点进去，依旧是头顶的白色横栏的问题」）。
-   `.vtitle` 是 flex:1，就算一个字都没有也占一行；`.vtop` 自己另有 padding
-   + 分隔线，于是顶上就横着一条 38px 的空带。
-
-   现在：正文标题为空时它退成 0 宽，顶栏只剩两端的 ✕ / 人形；两端按钮之间
-   的空档由 `justify-content: space-between` 补上。
-
-   ⚠️ 判据是 `:empty`（一个子节点都没有），不是「文字为空」：`.gtabs`
-   （AI 创作那页的文件夹标签条）也是中段，它里面装着按钮节点，所以天生
-   不匹配这一条——不能写成 `.vtitle:not(:empty)` 去「保护」它，那样只能
-   保住空标签条，真装进按钮反而被忽略。 */
+   现在标题是绝对定位，空标题本来就不占位；这条留着是为了让两端按钮在
+   没有标题时也分列左右（`:empty` 那份 `flex:0 0 0` 已无实际宽度意义，
+   但 `:has` 那条仍在起作用）。 */
 .vtop > .vtitle:empty {
-  flex: 0 0 0;
-  width: 0;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
+  display: none;
 }
 
 /* 中段让位之后，两端按钮靠 space-between 分列左右——原来那个「flex:1 的

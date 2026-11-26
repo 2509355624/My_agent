@@ -171,13 +171,22 @@
     out.addEventListener("click", function () {
       if (out.dataset.act === "logout") {
         out.disabled = true;
+        /* 2026-11-26 用户实测：「点退出登录，先显示作品和收藏，然后闪一下又
+           变成访客身份」。根因是**两件事抢跑**：`reload()` 和清 cookie 是
+           并行的，刷新有可能发生在清 cookie 生效之前，那一瞬服务器看到的
+           还是访客 → 把访客页面又发回来。
+
+           现在只做一件事：等 `/logout` 真的回来（cookie 已在响应里清掉），
+           再跳干净地址。跳地址而不是 reload，是因为 reload 会从
+           sessionStorage 把子页栈恢复回来（又送回「我的」这一页）。
+           失败也要跳：留在这一页只会是「点了没反应」。 */
         global.WSApi.post("/logout", {}).then(function () {
           /* 聊天记录是这台设备的，退出登录就该一起清掉——换个人登录
              看到上一个人的对话比「丢了记录」更糟。 */
           if (global.WSStore) global.WSStore.clear();
-          /* reload 而不是跳地址：/workspace/ 自己看 cookie 决定发登录页还是
-             聊天页，跟登录成功那边的做法一致（login.js 也是 reload）。 */
-          global.location.reload();
+          global.location.replace("/workspace/");
+        })["catch"](function () {
+          global.location.replace("/workspace/");
         });
         return;
       }
@@ -206,7 +215,10 @@
       var qq = d.qq || "";
       /* 访客模式（2026-11-26）：没 qq 但有 role=visitor。访客这一页本来
          就被 visitor.js 摘掉了，这里留一份兜底显示，免得以后入口又长回来
-         却显示成「游客」。 */
+         却显示成「游客」。
+         按钮写「退出访客」而不是「退出登录」：2026-11-26 用户点完问过
+         「退出登录，怎么又变成访客了」——那时候按钮就叫「退出登录」，而人
+         其实是访客。名不对，行为就会被误判成 bug。 */
       if (d.role === "visitor") {
         var q = d.quota || {};
         badge.textContent = "访";
@@ -226,6 +238,9 @@
 
   // ── 挂到子页 ──────────────────────────────────────────
 
+  /* 顶栏那格的标题（2026-11-26 用户：「头顶那个我的，它不是放在中间的」）。
+     位置由 CSS 锚在整栏中线上（sheet.css 的 `.vtop > .vtitle`），这里只管
+     文字——建页时它是空的，`mount` 同步跑完就有字了。 */
   function mountTop(mid) {
     mid.textContent = "我的";
   }

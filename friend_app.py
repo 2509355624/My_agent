@@ -972,8 +972,17 @@ def proxy_gen(sub):
         return _forward("/api/gen", sub)
     if sub == "img" and request.args.get("k"):
         return _forward("/api/gen", sub)
-    if request.method == "POST" and not _logged_in():
-        return _secure(jsonify({"ok": False, "error": "没登录"})), 401
+    if request.method == "POST" and not (_logged_in() or _guest_here()):
+        # 2026-11-26 用户：「现在我们就两个状态，一个是访客状态，一个是登录
+        # 态」。上面那句原先只写 `not _logged_in()`，把访客也算成没登录——
+        # 访客发「画一个可莉」直接挂一行「没登录 · 重画」，图出不去，等于
+        # 访客模式废了。5174 那边（`image.routes` 的 submit）早就改成「先认
+        # 访客再判空」了，是这里没跟上，两边口径必须一致。
+        #
+        # 放行之后也不是无条件：5174 认 `X-Friend-Guest`，按访客身份每天扣
+        # 5 张，没额度回 403 一句人话。所以这里只负责「有没有身份」，额度
+        # 不在这里管——判断只留一处。
+        return _secure(jsonify({"ok": False, "error": "还没登录"})), 401
     return _forward("/api/gen", sub)
 
 
