@@ -116,3 +116,12 @@ tools/modern-web-guidance/
 
 # 无头浏览器探针用的临时用户目录（调试产物，不进仓库）
 .tmp_*/
+
+# 人设 prompt 全量导出（2026-11-26）：本地调试「这一轮到底喂了什么」的产物，
+# 里面是具体角色的设定与对话原文，**属于私有数据**，仓库是 public，不能进。
+# 用通配是因为每换一个角色就会再导出一份 *_<name>.json / .txt。
+persona_prompt_full_*
+
+# 探针日志与布局草稿（2026-11-26）：同样只在本地看，不进仓库。
+docs/message_token_probe.log
+tools/_new_block.txt
