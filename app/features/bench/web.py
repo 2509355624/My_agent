@@ -271,7 +271,7 @@ def _parse_batch(body):
         prompt = ""
 
     known = {c["id"] for c in _channel_rows()}
-    rows, seen = [], set()
+    rows = []
     for i, it in enumerate(items[: _BATCH_MAX + 1], 1):
         it = it if isinstance(it, dict) else {}
         skill = str(it.get("skill") or "").strip()
@@ -287,17 +287,9 @@ def _parse_batch(body):
             return None, "第 %d 格没选渠道" % i, 400
         if skill not in known:
             return None, "没有「%s」这个渠道" % skill, 404
-        # 重复渠道**只在一图多风里禁**（2026-11-25 用户拍板，两种模式两套规则）：
-        # 一图多风的卖点是「同一张图看不同渠道的差异」，5 个格子撞同一个渠道等于
-        # 白跑；五图各画是 5 张不同的图，用同一个渠道才是常态（「全部同第一款」
-        # 按钮干的就是这事），这里必须放行。
-        # 拒就**整单拒，不偷偷去重**——去重后用户以为 5 张都在跑，实际只跑 3 张，
-        # 还查不出为什么。
-        if mode == "same":
-            if skill in seen:
-                return None, ("「%s」选了两遍。一图多风每个格子要用不同渠道，"
-                              "想看同一渠道的多张请用「五图各画」" % skill), 400
-            seen.add(skill)
+        # 重复渠道三种玩法一律放行（2026-11-26 用户拍板「抽卡」）：同一个提示词
+        # 或同一张图连跑 5 次同一渠道、种子各不同，是明确需求，不是误选。
+        # 选几个渠道就跑几张，撞渠道照单全跑、不去重。
         if image:
             if not image.startswith("data:image/"):
                 return None, "第 %d 格的图片格式不对，重新传" % i, 400
@@ -521,6 +513,7 @@ def _run_batch(bid, k, parsed, mode, rows):
     """
     target, target_id = parsed
     sent, fails = 0, []
+    queued_skills = []          # 真正入队的渠道（回执列它，不列用户点的——作者点错/查重会不一致）
     swallow = _SwallowReceipts()
     try:
         tags = ""
@@ -554,6 +547,7 @@ def _run_batch(bid, k, parsed, mode, rows):
                     tag, k, parsed, "channel", item["skill"],
                     item["prompt"], item["image"]), daemon=True).start()
                 sent += 1
+                queued_skills.append(item["skill"])
     except Exception as e:
         err = str(e) or e.__class__.__name__
         log.warning("跑图台批量 %s 中断：%s", bid, err)
@@ -569,7 +563,8 @@ def _run_batch(bid, k, parsed, mode, rows):
                 row["state"] = "done" if sent else "error"
                 if not sent:
                     row["error"] = "；".join(fails) or "一张都没排上"
-        _send_batch_receipt(target, target_id, rows, sent, fails, bid)
+        _send_batch_receipt(target, target_id, rows, sent, fails, bid,
+                            queued_skills=queued_skills)
 
 
 class _SwallowReceipts(object):
@@ -610,7 +605,8 @@ def _recall_once(image):
         return ""
 
 
-def _send_batch_receipt(target, target_id, rows, sent, fails, bid):
+def _send_batch_receipt(target, target_id, rows, sent, fails, bid,
+                        queued_skills=None):
     """一批跑完（全部入队）后发的**那一条**回执。
 
     用户原话：「回执发送回执的时候要等那五个全部都推完之后一起发个回执」
@@ -624,7 +620,10 @@ def _send_batch_receipt(target, target_id, rows, sent, fails, bid):
         lines.append("%d 张没排上：" % len(fails))
         lines.extend("· " + f for f in fails[:5])
     if sent:
-        names = "、".join(r["skill"] for r in rows)
+        # 列**真正入队**的渠道，不列用户点的 rows：某格被拦/改判时两者会不一致，
+        # 回执写用户点的会让对面以为「我选的渠道没了、有个渠道跑了两次」。
+        skills = queued_skills if queued_skills else [r["skill"] for r in rows]
+        names = "、".join(skills)
         lines.append("渠道：%s" % names)
     if not sent and not fails:
         lines.append("这批一张都没跑成，回跑图台再点一次。")
@@ -683,12 +682,18 @@ def _run_channel(prompt, skill, image="", tags=None):
     if not trans:
         return "错误: 提示词转译没成功，再试一次。"
     if "reply" in trans:
-        # 模型判断这轮不用画（比如问渠道本身的事）→ 把回复推回 QQ。
-        return str(trans["reply"] or "").strip()
+        # 模型判断这轮不用画（比如问渠道本身的事）。这在批量里是「这一格没
+        # 排上」，必须以「错误」开头，否则 `_run_batch` 会拿它当成功打绿勾、
+        # sent+=1，用户看到「5 张全排上」实际少一张（2026-11-26 查证）。
+        return "错误: 这一格没排上——" + (str(trans["reply"] or "").strip()
+                                     or "模型判断不用画")
     if "skill" in trans:
         # 出图任务：用转译出的 skill/prompt 入队。skill 可能被模型改成别的
         # 渠道，但点名渠道是最高优先级，_translate 里已把话说死，这里照单入队。
-        return dg._enqueue(trans["skill"], trans["prompt"], text)
+        # skip_dup=True：跑图台连排 5 张同渠道同提示词（种子各不同）是抽卡，
+        # 不是模型的重复误提交——查重守卫只管 QQ 对话那条路（2026-11-26）。
+        return dg._enqueue(trans["skill"], trans["prompt"], text,
+                           skip_dup=True)
     return "错误: 提示词转译结果看不懂，再试一次。"
 
 

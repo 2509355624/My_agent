@@ -83,14 +83,15 @@ class ParseBatchTest(unittest.TestCase):
         self.assertEqual(err, "")
         self.assertEqual([r["skill"] for r in rows], [self.ids[0], self.ids[2]])
 
-    def test_duplicate_channel_rejects_same_mode(self):
-        # 一图多风：同一张图撞同一个渠道等于白跑，整单拒，不偷偷去重。
+    def test_duplicate_channel_allowed_in_same_mode(self):
+        # 2026-11-26 用户拍板「抽卡」：一张图连跑 5 次同一渠道、种子各不同，
+        # 是明确需求。一图多风也放行重复渠道，不再整单拒、不去重。
         body = {"mode": "same", "prompt": "x",
-                "items": [{"skill": self.ids[0], "image": IMG},
-                          {"skill": self.ids[0], "image": IMG}]}
-        _, err, code = rb._parse_batch(body)
-        self.assertIn("两遍", err)
-        self.assertEqual(code, 400)
+                "items": [{"skill": self.ids[0], "image": IMG}
+                          for _ in range(5)]}
+        (mode, rows), err, code = rb._parse_batch(body)
+        self.assertEqual(err, "")
+        self.assertEqual([r["skill"] for r in rows], [self.ids[0]] * 5)
 
     def test_duplicate_channel_allowed_in_each_mode(self):
         # 2026-11-25 用户拍板：五图各画是 5 张不同的图，用同一个渠道是常态
@@ -241,8 +242,48 @@ class NoLimitTest(unittest.TestCase):
                              "%d 点也该是 5 张，不该有高峰" % hour)
 
 
+class DrawFiveTest(unittest.TestCase):
+    """2026-11-26 用户拍板「抽卡」：同提示词/图连跑同一渠道 5 张、种子各不同。
+
+    根因：generate_image 的 find_pending_duplicate 把「同会话同参数图在途」当成
+    模型的重复误提交拦掉，跑图台批量 5 张串行入队时第 2 张起被吞，只跑出 2 张，
+    回执却按用户点的渠道写「5 张全排上」。修法是跑图台落队时显式跳过查重。
+    """
+
+    def setUp(self):
+        with open(rb.__file__, encoding="utf-8") as f:
+            self.rb_src = f.read()
+        import app.features.image.direct_gen as dg
+        import app.tools.normal.generate_image as gi
+        with open(dg.__file__, encoding="utf-8") as f:
+            self.dg_src = f.read()
+        with open(gi.__file__, encoding="utf-8") as f:
+            self.gi_src = f.read()
+
+    def test_run_channel_passes_skip_dup(self):
+        # 跑图台落队必须传 skip_dup=True，否则查重会把同渠道的第 2~5 张吞掉。
+        self.assertIn("skip_dup=True", self.rb_src)
+
+    def test_generate_image_has_skip_dup_guard(self):
+        # 两处查重点（NAI 分支 + 本地分支）都得带 not skip_dup 守卫。
+        self.assertIn("character=\"\", skip_dup=False", self.gi_src)
+        self.assertEqual(self.gi_src.count("not skip_dup and image_jobs.find_pending_duplicate"), 2,
+                         "NAI 与本地两处查重都要能被 skip_dup 跳过")
+
+    def test_enqueue_forwards_skip_dup(self):
+        self.assertIn("character=\"\", skip_dup=False", self.dg_src)
+        self.assertIn("user_text=text, skip_dup=skip_dup", self.dg_src)
+
+    def test_no_dup_check_keeps_qq_default(self):
+        # QQ/群友那条路不传 skip_dup，默认 False，查重行为不变。
+        import inspect
+        import app.tools.normal.generate_image as gi
+        sig = inspect.signature(gi._generate_image)
+        self.assertFalse(sig.parameters["skip_dup"].default)
+
+
 class BatchEndpointTest(unittest.TestCase):
-    """接口层：重复渠道拒、正常单回批次号。"""
+    """接口层：重复渠道放行、正常单回批次号。"""
 
     def setUp(self):
         self.app = _app()
@@ -262,12 +303,12 @@ class BatchEndpointTest(unittest.TestCase):
     def _post(self, body):
         return self.c.post("/api/runbench/gen-many", json=dict(body, k=self.tok))
 
-    def test_duplicate_is_rejected_before_anything_starts(self):
+    def test_duplicate_in_same_mode_is_accepted(self):
+        # 2026-11-26「抽卡」：一图多风 5 格全选同一渠道也收单，各跑不同种子。
         r = self._post({"mode": "same", "prompt": "", "items": [
-            {"skill": self.ids[0], "image": IMG},
-            {"skill": self.ids[0], "image": IMG}]})
-        self.assertEqual(r.status_code, 400)
-        self.assertEqual(rb._BATCHES, {}, "拒单时不该留下任何批次")
+            {"skill": self.ids[0], "image": IMG} for _ in range(5)]})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["count"], 5)
 
     def test_same_channel_twice_is_ok_in_each_mode(self):
         # 五图各画：同渠道 3 张应当正常收单，不被重复校验拦。
@@ -384,6 +425,32 @@ class BatchReceiptTest(unittest.TestCase):
             self.assertIsNot(image_jobs._send_text, before)
         self.assertIs(image_jobs._send_text, before)
 
+    def test_rejected_slot_not_counted_as_sent(self):
+        # 2026-11-26：某格被转译判「不用画」（reply 分支）时，必须以「错误」
+        # 开头返回，_run_batch 才不会打绿勾、sent 才不会 +1。
+        def fake(prompt, skill, image="", tags=None):
+            self.calls.append((skill, tags))
+            return "错误: 这一格没排上——模型判断不用画" if skill == self.ids[1] else ""
+        rb._run_channel = fake
+        rows = [{"image": IMG, "prompt": "x", "skill": s} for s in self.ids]
+        self._run("same", rows)
+        batch = rb._BATCHES["B-T"]
+        self.assertEqual(batch["queued"], 2, "只算真正入队的两张")
+        self.assertIn("1 张没排上", self.receipts[0])
+        self.assertEqual(len(self.receipts[0].split("渠道：")[1].strip().split("、")), 2,
+                         "回执渠道行只列实际入队的两个")
+
+    def test_receipt_lists_only_queued_skills(self):
+        # 回执列真正入队的渠道，不列用户点的 rows（2026-11-26）。
+        def fake(prompt, skill, image="", tags=None):
+            self.calls.append((skill, tags))
+            return "" if skill != self.ids[2] else "错误: 拒绝"
+        rb._run_channel = fake
+        rows = [{"image": IMG, "prompt": "x", "skill": s} for s in self.ids]
+        self._run("same", rows)
+        listed = self.receipts[0].split("渠道：")[1].strip().split("、")
+        self.assertEqual(listed, self.ids[:2])
+
 
 class PresetRetiredTest(unittest.TestCase):
     """预设斜杠命令已下线（2026-11-25）：发 /存预设 不该有任何反应。"""
@@ -449,19 +516,19 @@ class PageGuardTest(unittest.TestCase):
         self.assertIn("localStorage.setItem", self.html)
         self.assertIn("runbench.batch.v1", self.html)
 
-    def test_dup_check_only_in_same_mode(self):
-        # 2026-11-25 用户拍板：重复渠道只在「一图多风」里禁，五图各画允许
-        # 同渠道多张。前端两处闸门（置灰 usedBy、提交前 dup）都得带模式判断。
-        # usedBy 里必须早退
-        self.assertIn('if(bMode !== "same") return false;', self.html)
-        # 提交前的重复校验必须包在 same 分支里
-        self.assertIn('if(bMode === "same"){', self.html)
-        self.assertIn("一图多风每个格子要换不同的渠道", self.html)
+    def test_no_dup_check_anywhere(self):
+        # 2026-11-26 用户拍板「抽卡」：同一渠道连跑 5 张（种子不同）三种玩法
+        # 全放开。前端 usedBy 恒 false（不置灰、不拦），提交前不再有 dup 校验，
+        # 切模式也不再清空重复渠道。
+        self.assertIn("function usedBy(skill, idx){\n    return false;", self.html)
+        self.assertNotIn("一图多风每个格子要换不同的渠道", self.html)
+        self.assertNotIn("选了两遍", self.html)
+        self.assertNotIn("var keep = {};", self.html)
 
-    def test_mode_switch_clears_dup_skills(self):
-        # 从「五图各画」切回「一图多风」时，5 格可能全是同一个渠道（那边合法）。
-        # 必须清掉重复的，否则整单必然被服务端拒，且用户看不出来。
-        self.assertIn("var keep = {};", self.html)
+    def test_mode_switch_keeps_dup_skills(self):
+        # 从「五图各画」切回「一图多风」时 5 格全是同一渠道也保留——那正是
+        # 「一张图连跑 5 次同渠道」的意思（2026-11-26）。
+        self.assertNotIn("var keep = {};", self.html)
 
     def test_same_all_button_only_in_each_mode(self):
         # 2026-11-25 用户拍板：「全部同第一款」只属于五图各画，而且要在

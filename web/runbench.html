@@ -433,14 +433,10 @@
     return opts.join("");
   }
 
-  // 某个渠道已经被别的格子占着了吗。
-  // 只有「一图多风」才禁重复（同一张图跑不同渠道才有意义）；「五图各画」是
-  // 5 张不同的图，同一个渠道随便用，所以那边一律返回 false，不置灰、不拦。
+  // 渠道是否被别的格子占用 → 恒 false（2026-11-26 用户拍板「抽卡」全放开）。
+  // 同一个提示词或同一张图连跑 5 次同一渠道、种子各不同，是明确需求，三种玩法
+  // 一律放行。保留这个函数只是因为置灰 / change 兜底都调它；永不置灰、永不拦。
   function usedBy(skill, idx){
-    if(bMode !== "same") return false;
-    for(var i=0;i<bSlots.length;i++){
-      if(i!==idx && bSlots[i].skill === skill) return true;
-    }
     return false;
   }
 
@@ -530,17 +526,8 @@
     bSlots.forEach(function(s){ s.done = false; });
     if(m === "same"){
       for(var i=1;i<bSlots.length;i++) bSlots[i].img = "";
-      // 一图多风不允许重复渠道。刚从「五图各画」过来时可能 5 格全是同一个
-      // 渠道（那边合法），留在这儿会让整单必然被服务端拒掉，而且置灰逻辑
-      // 会跳过「本格自己的当前值」，用户看不出哪里错了。这里直接按先到先得
-      // 留下，重复的清空，让用户重选。
-      var keep = {};
-      bSlots.forEach(function(s){
-        var v = s.skill;
-        if(!v) return;
-        if(keep[v]) s.skill = "";
-        else keep[v] = 1;
-      });
+      // 重复渠道照单全跑（2026-11-26「抽卡」）：从「五图各画」切过来时 5 格
+      // 全是同一个渠道也保留，那正是「一张图连跑 5 次同渠道」的意思。
       if(!bSlots[0].skill) bSlots[0].skill = "silver";
     } else if(m === "text"){
       // 文生图五连不要图：切过来时把格子里残留的图清掉，免得看着像「上传了
@@ -860,19 +847,8 @@
       var noSkill = items.filter(function(x){ return !x.skill; });
       if(noSkill.length){ setBStatus("还有格子没选渠道", true); return; }
     }
-    // 开跑前先在本地挡一遍重复渠道（服务端还会再挡一次，这里只为早报错）。
-    // 只有一图多风禁重复；五图各画 / 文生图五连本来就是「同一个渠道画多张」。
-    if(bMode === "same"){
-      var seen = {}, dup = "";
-      items.forEach(function(x){
-        if(seen[x.skill]) dup = x.skill;
-        seen[x.skill] = 1;
-      });
-      if(dup){
-        setBStatus("「" + chanLabel(dup) + "」选了两遍，一图多风每个格子要换不同的渠道", true);
-        return;
-      }
-    }
+    // 重复渠道三种玩法一律放行（2026-11-26「抽卡」）：同一个渠道跑 5 张、
+    // 只有种子不同是明确需求，前端不再拦，服务端也不再拦。
 
     bBusy = true;
     $("btnBatchGo").disabled = true;

@@ -938,7 +938,7 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
                     denoise=None, seed=None, use_character=None, preset=None,
                     anima_preset=None,
                     _skip_confirm=False, resample_fn=None, user_text="",
-                    character=""):
+                    character="", skip_dup=False):
     # `character`（2026-11-06）：大大怪在角色库候选块里挑好的 key，直通
     # `char_loras.apply(key=…)`——有空就不走向量召回 + 大模型判定，省一次调用
     # 也省一个误判点。空串 = 旧行为（走 `match`），这是整套改动的回滚开关。
@@ -1121,8 +1121,11 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
         intent = _intent_key(prompt, skill, lora)
         # 群聊按人上锁（2026-11-24），口径同 ComfyUI 那条。
         who = (qq_api.current_sender_uin() or "") if str(target) == "group" else ""
-        if image_jobs.find_pending_duplicate(target, target_id, intent,
-                                             who) is not None:
+        # skip_dup：跑图台批量/抽卡专用——同一个会话连着排 5 张「同提示词同渠道」
+        # 是用户明确要的（种子不同、各出各的），不是模型的重复误提交。查重守卫
+        # 只该管 QQ 对话里模型把「再跑一张」当默认动作那种重复（2026-11-26）。
+        if not skip_dup and image_jobs.find_pending_duplicate(
+                target, target_id, intent, who) is not None:
             log.info("拦下重复生图（NAI）：%s %s 已有一张同参数的图在途",
                      target, target_id)
             return _DUPLICATE_NOTE
@@ -1360,8 +1363,10 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 当成了默认动作——两种都不该真的多出一张图。只在**在途**时拦（见
     # image_jobs.find_pending_duplicate）。
     intent = _intent_key(prompt, skill, lora, seed if seed_pinned else None)
-    if image_jobs.find_pending_duplicate(target, target_id, intent,
-                                         who) is not None:
+    # skip_dup：跑图台抽卡连排多张同参数图时用。理由同 NAI 分支——那道守卫是
+    # 给 QQ 对话里模型的重复误提交用的，不该拦用户主动点的「同渠道跑 5 张」。
+    if not skip_dup and image_jobs.find_pending_duplicate(target, target_id,
+                                                          intent, who) is not None:
         log.info("拦下重复生图：%s %s 已有一张同参数的图在途，不再排第二张",
                  target, target_id)
         return _DUPLICATE_NOTE

@@ -2501,7 +2501,7 @@ def _random_resample(kind):
 
 
 def _enqueue(skill, prompt, text, source_image=False, seed=None,
-             resample_fn=None, character=""):
+             resample_fn=None, character="", skip_dup=False):
     """转译结果落队。返回要发回会话的文本；成功且回执已直发返回 ""。
 
     source_image=True → 垫本轮引用的那张图（传 "1"，下游 comfy_src.resolve
@@ -2512,6 +2512,10 @@ def _enqueue(skill, prompt, text, source_image=False, seed=None,
     resample_fn 非空 → 随机口令的「被拦静默重抽」钩子（见 _random_resample）。
     character 非空 → 大大怪在角色库候选块里挑好的 key（2026-11-06），直通
     `char_loras.apply(key=…)`；空串 = 旧行为（走向量召回 + 大模型判定）。
+    skip_dup=True（2026-11-26 跑图台抽卡专用）→ 跳过 `_generate_image` 里的
+    「同会话同参数图在途就不排第二张」守卫。那个守卫是给 QQ 对话里模型的重复
+    误提交用的；跑图台连排 5 张同渠道同提示词（种子各不同）是用户明确要的，
+    不该被它吞掉。QQ / 群友路径不传，恒 False，行为不变。
     """
     from app.tools.normal import generate_image as gi
     extra = {}
@@ -2569,7 +2573,7 @@ def _enqueue(skill, prompt, text, source_image=False, seed=None,
     try:
         result = gi._generate_image(
             prompt, skill=skill, _skip_confirm=True,
-            user_text=text, **extra)
+            user_text=text, skip_dup=skip_dup, **extra)
     except Exception:
         log.exception("[direct] 直接入队失败")
         return "生图请求没发出去，稍后再试。"
