@@ -164,6 +164,24 @@ class TestStyleSheetDrag(unittest.TestCase):
         block = js[i:js.index("\n  }", i)]
         self.assertIn('style.transform = ""', block)
 
+    def test_page_overscroll_is_off(self):
+        """下拉刷新圈是页面级橡皮筋，得在 html/body 这层关。"""
+        css = _read("css/base.css")
+        idx = css.index("html, body {")
+        block = css[idx:css.index("}", idx)]
+        self.assertIn("overscroll-behavior: none", block)
+
+    def test_whole_sheet_owns_touch_and_list_is_released(self):
+        """横条只有 4px，落偏到空隙/遮罩也会被浏览器接管，整层都得关；
+           列表是里面唯一的滚动容器，必须单独放行 pan-y。"""
+        css = _read("css/sheet.css")
+        idx = css.index(".sheet {")
+        block = css[idx:css.index("}", idx)]
+        self.assertIn("touch-action: none", block)
+        idx = css.index(".style-list {")
+        block = css[idx:css.index("}", idx)]
+        self.assertIn("touch-action: pan-y", block)
+
 
 if __name__ == "__main__":
     unittest.main()

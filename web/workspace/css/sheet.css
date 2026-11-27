@@ -260,6 +260,9 @@
   display: flex;
   align-items: flex-end;
   justify-content: center;
+  /* 抽屉开着时整层不把触摸交给浏览器（横条只有 4px，手指很容易落在
+     它旁边的空隙 / 标题行 / 遮罩上）。列表自己在下面单独放行 pan-y。 */
+  touch-action: none;
 }
 
 .sheet[hidden] { display: none; }
@@ -352,6 +355,9 @@
      管不到它。列表拉到顶还往下拽时，滚动链会传到整页，手机上是整个页面
      被一起拉下去。这里断链，滚到头就停住。 */
   overscroll-behavior: contain;
+  /* 上一层 .sheet 关了 touch-action，这里单独把列表放行，否则画风列表滚不动。
+     touch-action 只管「浏览器要不要接管手势」，和上面的滚动链断链是两回事。 */
+  touch-action: pan-y;
   padding: 0 6px 6px;
 }
 
