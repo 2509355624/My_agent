@@ -12,6 +12,8 @@
   3. 渠道语种这一层还要过：渠道要英文、用户写的是中文时仍然翻一遍——
      「原样」指的是不被模型改写，不是把中文硬塞给 CLIP。
   4. 访客按**真建成的张数**扣额度：只剩 2 张就建 2 张，并且明说。
+  5. 直达按钮一次只要 1 张（2026-11-27 用户拍板）；N 张是 batch 接口的
+     能力，只有显式传 `count` 才连排，接口缺省也必须是 1。
 """
 
 import os
@@ -110,6 +112,26 @@ class BatchDirectTest(unittest.TestCase):
                         "prompt_is_final": True})
         self.assertEqual(r.status_code, 200)
         self.assertLessEqual(r.get_json()["count"], image_jobs.MAX_INFLIGHT)
+
+    def test_default_count_is_one(self):
+        """直达按钮漏传 count 时也只跑一张，不许退回早先的 5 张。"""
+        r = self._post({"skill": "anima-2s", "prompt": "1girl",
+                        "prompt_is_final": True})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["count"], 1)
+        self.assertEqual(len(self.made), 1)
+
+    def test_frontend_button_asks_one(self):
+        root = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "web", "workspace")
+        with open(os.path.join(root, "js", "chat.js"), encoding="utf-8") as f:
+            js = f.read()
+        self.assertIn("var DIRECT_N = 1;", js)
+        self.assertNotIn("var DIRECT_N = 5;", js)
+        with open(os.path.join(root, "chat.html"), encoding="utf-8") as f:
+            html = f.read()
+        self.assertIn("直接跑一张", html)
+        self.assertNotIn("连排 5 张", html)
 
     def test_empty_prompt_rejected(self):
         r = self._post({"skill": "anima-2s", "prompt": "  ", "count": 5})

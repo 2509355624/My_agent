@@ -36,8 +36,8 @@
     return global.WSApi.post(BASE + "/ask", body);
   }
 
-  /* 直达（2026-11-26）：粘进来的词**原样**用，一次连排 N 张、每张一个随机
-     种子。和 ask 正相反——一个让大大怪改写，一个一个字都不动。
+  /* 直达：粘进来的词**原样**用，点一下只跑一张。和 ask 正相反——一个让
+     大大怪改写，一个一个字都不动。
 
      回 `{ok, jobs:[同 submit 的 job…], fail:[…], note?}`；一张都没排上时是
      `{ok:false, busy?, error}`，跟 ask/submit 一样由调用方接管。 */

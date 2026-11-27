@@ -370,12 +370,12 @@
     });
   }
 
-  /* 「直达」：粘进来的词**原样**用，不经过大大怪，一次连排 5 张、每张换一个
-     种子（用户 2026-11-26：粉丝群反馈「同一提示词连跑 5 张出来 5 张都不
-     一样」，因为点发送会先让 AI 优化词）。连排交给 `/api/gen/batch` 一次
-     建 N 条，不在前端循环 submit（那是顺序 await，看着像一张张慢慢来）。
+  /* 「直达」：粘进来的词**原样**用，不经过大大怪，点一下只跑一张。
+     （2026-11-27 用户拍板：直达就是「把这一句直接注入工作流」，5 张是
+     早先按粉丝群反馈自己加的连排，不是直达的本意。）仍走 `/api/gen/batch`
+     建任务：它和 submit 共用一套排队/记账，只是能一次建 N 条；这里只传 1。
      参考图照旧读成描述拼进去：原样 = 不改写用户的词，不是不看用户喂的图。 */
-  var DIRECT_N = 5;
+  var DIRECT_N = 1;
 
   function sendDirect() {
     var text = el.say.value.trim();
@@ -388,7 +388,7 @@
     leaveDock();
 
     if (global.WSCreate && global.WSCreate.mode() === "comic") {
-      // 漫画页上按了直达：那是「这一句剧情要画 5 本书」，不是用户想要的。
+      // 漫画页上按了直达：漫画另有入口，不该在这里插一张单图。
       // 退回去当一条普通漫画需求，并说一句，免得他以为按错了。
       sysNote("漫画模式不连发，已按一次生成提交");
       global.WSRef.commit();
@@ -411,7 +411,7 @@
   function fireDirect(text, refs, described, user) {
     var body = { prompt: text, skill: S.skill, count: DIRECT_N,
                  refs: refs, ref_described: !!described };
-    // 直达连排 N 张也认同步开关（2026-11-27）
+    // 直达也认同步开关（2026-11-27）
     if (global.WSSync && global.WSSync.on()) body.qq_sync = true;
     global.WSGen.direct(body).then(function (d) {
       global.WSGenFlow.linkBatch(d, text, user);
@@ -486,8 +486,8 @@
     global.addEventListener("resize", fitWhenSized);
 
     el.send.addEventListener("click", send);
-    /* 直达（2026-11-26）：原样连排 5 张。回车/发送键仍然是「AI 发送」——
-       连发 5 张是有代价的动作，不该被一个手滑的回车触发。 */
+    /* 直达：原样跑一张，不经过 AI。和「AI 发送」分开，别在输入框回车时
+       误触——两个入口的行为不一样。 */
     if (el.direct) el.direct.addEventListener("click", sendDirect);
     el.say.addEventListener("input", function () { grow(); syncSend(); });
     el.say.addEventListener("keydown", function (e) {

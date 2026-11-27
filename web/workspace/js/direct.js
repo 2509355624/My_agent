@@ -1,8 +1,9 @@
-/* 「直达」的回执处理：一次请求回 N 条任务，接成 N 张卡。
+/* 「直达」的回执处理：把 `/batch` 回来的任务逐条接成卡。
 
    从 gen_flow.js 拆出来的（2026-11-26）：那边主体是「一张卡发一次请求」的
    轮询状态机，直达是「一次请求回 N 条」，只共用 pending / 存档 / 终止三样
-   （从 `WSGenFlow.claim` 等口子借）。一张需求只留一条用户气泡。 */
+   （从 `WSGenFlow.claim` 等口子借）。直达按钮现在只要一张；回执循环留着，
+   一条需求只留一条用户气泡。 */
 (function (global) {
   "use strict";
 
@@ -36,9 +37,8 @@
       card.rec = rec;
       card.refs = [];
       card.described = true;
-      /* 气泡只给第一张：一条需求五张图，一条气泡才对。后面四张卡靠
-         `batch` 那个序号自己认位置（挂同一个节点的话，失败行会在同一条
-         气泡下面叠五遍）。 */
+      /* 气泡只给第一张：一条需求一条气泡。万一回执里有多张，后面的卡靠
+         `batch` 序号自己认位置（挂同一个节点的话，失败行会叠在一起）。 */
       card.userNode = i === 0 ? userNode : null;
       card.since = Date.now();
       flow.save(rec);

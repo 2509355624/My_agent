@@ -947,22 +947,21 @@ def api_ask():
     return jsonify({"ok": True, "job": _public(job)})
 
 
-# ─── 直达：同一串词连排 N 张（2026-11-26）─────────────────────────────
+# ─── 直达：同一串词原样进工作流（2026-11-26）─────────────────────────
 #
-# 用户原话（233 粉丝群反馈）：「同一个提示词连续跑 5 张，5 张图都是不一样的
-# ——因为点发送会先让大大怪优化提示词」。所以给一个**不经过模型**的入口：
-# 粘进来的词原样进模型，只换 seed，连排 N 张。
+# 粉丝群反馈「同一个提示词连续跑 5 张，5 张图都不一样」——因为点发送会先让
+# 大大怪优化提示词。所以给一个**不经过模型**的入口：粘进来的词原样进模型。
+# 2026-11-27 用户拍板：直达一次就一张；早先的「连排 5 张」不是直达的本意。
 #
-# 和 `/api/gen/submit` 的唯一区别是「一次建 N 条任务」：不新开图片管道，
-# 复用同一个 `_enqueue_job`（限额、记账、终止、轮询全是一份实现）。这里是
-# **批量版**而不是让前端循环打 N 次 submit——前端的提交是顺序 await 的，
-# 第 1 张在跑时第 2 张还在等回执，用户看到的就是「一张一张慢慢来」。
+# `/api/gen/batch` 仍保留「一次建 N 条」的接口能力，缺省 1 条；和 submit
+# 共用同一个 `_enqueue_job`（限额、记账、终止、轮询全是一份实现）。前端
+# 直达按钮传 count=1，想连多张可以显式传 count，但按钮默认不连排。
 #
 # seed：`_enqueue_job` 本来每条就随机一个，天然不同，所以这里**不指定**
-# 同一个 seed，也不让前端传——「连跑 5 张相同」正是要解决的问题。
+# 同一个 seed，也不让前端传——「连跑 N 张相同」正是要解决的问题。
 @bp.route("/api/gen/batch", methods=["POST"])
 def api_batch():
-    """原样提示词连排 N 张。→ {ok, jobs:[...], fail:[一句话…], remain?}
+    """原样提示词排 N 张（直达按钮传 1）。→ {ok, jobs:[...], fail:[…], remain?}
 
     部分失败照实回：排队名额不够时先建能建的，剩下的写进 `fail`，前端按
     「已发 3 张，还有 2 张没排上：<原因>」提示。**不整批回滚**——已经排上的
@@ -977,9 +976,9 @@ def api_batch():
     if not prompt:
         return jsonify({"ok": False, "error": "提示词是空的"}), 400
     try:
-        want = int(data.get("count") or 5)
+        want = int(data.get("count") or 1)
     except (TypeError, ValueError):
-        want = 5
+        want = 1
     want = max(1, min(want, image_jobs.MAX_INFLIGHT, 10))
     # 中文原样进 CLIP = 等于没给提示词。直达的卖点是「原样」，但「原样」
     # 指的是**不被模型改写**，不是不看渠道语种——跟 submit 同一套判断：
@@ -998,7 +997,7 @@ def api_batch():
     from app.features.chat import routes as chat_routes
     qq = chat_routes._who() or ""
     # 访客（2026-11-26）：跟 `api_ask` 同一套身份口径。原先这里没有「没登录
-    # 就不给排」的判断，访客能直接打这条接口把 5 张额度用掉——现在补上，
+    # 就不给排」的判断，访客能直接打这条接口把额度用掉——现在补上，
     # 并让访客的会话线/账本键落在身份段上（`__anonymous__` 会让所有访客共用
     # 一条历史，直达那轮记的上下文跑到别人身上）。
     gid = _visitor.current()["id"]
@@ -1006,8 +1005,8 @@ def api_batch():
         return jsonify({"ok": False, "error": "没登录"}), 401
     owner = qq or _guest_key(gid)
 
-    # 访客：额度按**真的要建几张**扣。不够就只建剩下的那几张（5 张额度、
-    # 今天还剩 2 张 → 建 2 张），并明说一句，别让他以为点了 5 张。
+    # 访客：额度按**真的要建几张**扣。不够就只建剩下的那几张（额度 5 张、
+    # 今天还剩 2 张、但要 5 张 → 建 2 张），并明说一句，别让他以为全排上了。
     fits = want
     if gid:
         left = _visitor.remaining(gid)
@@ -1039,8 +1038,8 @@ def api_batch():
     for _ in jobs:
         if gid:
             _visitor.consume(gid)
-    # 历史只记一轮：这一句用户只说了**一次**，记成 5 轮会让下一轮模型以为
-    # 他连着问了五遍（改词的上下文就乱了）。
+    # 历史只记一轮：这一句用户只说了**一次**，记成 N 轮会让下一轮模型以为
+    # 他连着问了好几遍（改词的上下文就乱了）。
     _web_history_push(owner, prompt, "", jobs[0].get("prompt") or body_prompt,
                       skill)
     out = [_public(j) for j in jobs]
