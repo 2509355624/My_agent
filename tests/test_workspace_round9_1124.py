@@ -91,6 +91,25 @@ class TestIdleCardIsOneLine(unittest.TestCase):
         self.assertIn("ahead > 0", flow)
         self.assertIn('"前面还有 " + ahead + " 张"', flow)
 
+    def test_queue_hint_lives_on_card_not_in_input(self):
+        """「可以离开、画好自动弹出来」挂在胶囊下方，不占输入栏高度。
+
+        2026-11-27 用户拍板：手机上输入栏本来就小，标语不能放那儿；出图
+        / 失败时这行字必须跟着胶囊一起消失。
+        """
+        js = _read("js/card.js")
+        s = js[js.index("function shell(cls)"):js.index("function spawn(card)")]
+        self.assertIn('hint.className = "queue-hint"', s)
+        self.assertIn("node.appendChild(hint)", s)
+        self.assertIn("note._queueHint = hint", s)
+        self.assertIn("画好会自动弹出来", s)
+        self.assertIn("qh.hidden = !o.queue", js)
+        css = _read("css/pill.css")
+        self.assertIn(".card .queue-hint", css)
+        self.assertIn(".card .queue-hint[hidden]", css)
+        html = _read("chat.html")
+        self.assertNotIn("queue-hint", html, "标语不许塞进输入区")
+
     def test_new_card_has_no_placeholder(self):
         s = _read("js/chat.js")
         i = s.index("function newCard(prompt, skill, rec)")

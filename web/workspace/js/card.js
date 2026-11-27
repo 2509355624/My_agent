@@ -159,12 +159,22 @@
     line.appendChild(note);
     line.appendChild(stop);
 
+    /* 胶囊下面的「可以先离开」小字（2026-11-27 用户拍板）：放在卡片里，
+       不占输入栏那点高度。只有排队 / 在跑的胶囊态才露出来，出图 / 失败
+       随 setNote 一起关掉。`note._queueHint` 让 setNote 不必去 DOM 里找兄弟。 */
+    var hint = document.createElement("div");
+    hint.className = "queue-hint";
+    hint.textContent = "排上队就可以离开，画好会自动弹出来 · 人少约 1–2 分钟，人多会久一点";
+    hint.hidden = true;
+    note._queueHint = hint;
+
     var acts = document.createElement("div");
     acts.className = "acts";
     acts.hidden = true;
 
     node.appendChild(body);
     node.appendChild(line);
+    node.appendChild(hint);
     node.appendChild(acts);
     mount(node);
 
@@ -176,6 +186,7 @@
       line: line,
       note: note,
       stop: stop,
+      hint: hint,
       acts: acts,
       fill: fill,
       say: function (text, bad, run, queue) {
@@ -261,6 +272,9 @@
   function setNote(note, text, opts) {
     var o = opts || {};
     note.hidden = false;
+    /* 胶囊态才显示「可以离开」那行小字；出图 / 失败的收尾都不带 queue。 */
+    var qh = note._queueHint;
+    if (qh) qh.hidden = !o.queue;
     /* 排队胶囊（2026-11-27）。`card-line` 里正好只装了两样东西——状态行和
        「终止」按钮——所以给它加一个 class 就够它们变成同一张胶囊，DOM 不用
        挪。别的时候必须把这个 class 撤掉，否则出图之后卡片上还扣着一个空壳。 */

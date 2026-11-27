@@ -77,6 +77,18 @@
   white-space: nowrap;
 }
 
+/* 胶囊下面那行「可以先离开」小字（2026-11-27）：只在胶囊态出现，跟着
+   setNote 的 queue 开关走；放在卡片里，不为它加高输入栏。窄屏允许折行。 */
+.card .queue-hint {
+  margin: 6px auto 0;
+  max-width: 100%;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.5;
+  text-align: center;
+}
+.card .queue-hint[hidden] { display: none; }
+
 /* 「终止」在胶囊里要显眼（用户：「高亮显示，点击那个按钮就终止」）：
    换成实心白底 + 粉紫字，不再是原来那条灰边胶囊。 */
 .card-line.is-queue .stop-run {
