@@ -6,8 +6,9 @@
    有缝；输入框还被＋、AI 发送、直达挤得只剩一小截。
 
    现在整块就是一张卡片：上面是占满宽度的输入区，下面一行工具（＋ / 三颗
-   入口 / 同步 QQ / AI 发送）。所有 id 都没动，`chat.js` 的事件绑定和
-   `views.js` 的 dockComposer（整块搬进子页）照旧生效。
+   入口 / 直达 / AI 发送）。所有 id 都没动，`chat.js` 的事件绑定和
+   `views.js` 的 dockComposer（整块搬进子页）照旧生效。同步 QQ 是附加动作，
+   收在「＋」面板里（2026-11-27 用户拍板）。
 
    单独成文件是因为 chat.css 已经贴着 600 行硬线（见 test_workspace_chat
    的 CHAT_FILES）。这里只在 chat.css 之后加载，用同特异性、写在后面的规则
@@ -113,17 +114,28 @@
   font-size: 12.5px;
 }
 
-/* 同步开关跟着缩一号，避免它把 chips 挤到只剩一个 */
-.composer-tools .sync-tog {
-  padding: 4px 8px;
-  border-color: transparent;
+/* 直达：跟「AI 发送」并排的第二颗发送键。做成描边胶囊，一眼看出这是
+   两个发送入口，又不跟主按钮抢注意力。 */
+.composer-tools .direct-btn {
+  flex: 0 0 auto;
+  height: 32px;
+  margin-left: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--hair);
+  border-radius: 16px;
   background: var(--card-2);
-  font-size: 11.5px;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1;
+  white-space: nowrap;
 }
 
-.composer-tools .sync-tog.on {
-  border-color: var(--ok);
-  background: var(--ok);
+.composer-tools .direct-btn:active { background: var(--brand-soft); }
+
+/* 没输入内容时跟「AI 发送」一起变灰：点不出图，没必要亮着 */
+.composer-tools .direct-btn:disabled {
+  color: var(--text-dim);
+  opacity: .55;
 }
 
 .composer-tools .send-btn {
@@ -140,35 +152,67 @@
   box-shadow: none;
 }
 
-/* ── 「＋」里的「直达生图」 ─────────────────────────────
-   2026-11-27 从输入框旁边收进来：底行只留一颗「AI 发送」。两个入口的差别
-   写在这行说明里，不靠用户猜——只写「直达」两个字，没人知道它是跳过 AI。 */
-.plus-menu .pm-item {
+/* ── 「＋」里的「同步 QQ」 ───────────────────────────────
+   2026-11-27 从底行收进面板（用户：底行换「直达生图」，同步 QQ 放＋里）。
+   不再跟 chip 抢那一行的宽度，改成一整行带说明的绿色按钮；开关状态还是
+   `sync.js` 加/去 `on`，它只认 class 和 title，结构随便换。 */
+.plus-menu .pm-sync {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1px;
+  align-items: center;
+  gap: 8px;
   width: 100%;
-  margin-top: 6px;
+  margin-top: 8px;
   padding: 9px 11px;
-  border: 0;
-  border-radius: 12px;
-  background: var(--card-2);
+  border: 1px solid var(--hair);
+  border-radius: 13px;
+  background: var(--card);
   color: var(--text);
   text-align: left;
 }
 
-.plus-menu .pm-item b {
+.plus-menu .pm-sync .pms-txt {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.plus-menu .pm-sync b {
   font-size: 13px;
   font-weight: 600;
 }
 
-.plus-menu .pm-item small {
+.plus-menu .pm-sync small {
   font-size: 11.5px;
   color: var(--text-dim);
 }
 
-.plus-menu .pm-item:active { background: var(--brand-soft); }
+/* 右端的勾圈：关着是空心，开着变白勾——绿底上不靠颜色也读得出状态 */
+.plus-menu .pm-sync .pms-check {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  border: 1.5px solid var(--hair);
+  border-radius: 50%;
+  color: transparent;
+}
 
-/* 没输入内容时它跟发送按钮一起禁用：点不出图，就没必要亮着 */
-.plus-menu .pm-item:disabled { opacity: .45; }
+.plus-menu .pm-sync.on {
+  border-color: var(--ok);
+  background: var(--ok);
+  color: #fff;
+}
+
+.plus-menu .pm-sync.on small { color: rgba(255, 255, 255, .88); }
+
+.plus-menu .pm-sync.on .pms-check {
+  border-color: #fff;
+  color: #fff;
+}
+
+/* `.pm-sync{display:flex}` 会盖掉 HTML 的 `hidden`——访客没有 QQ，露出来
+   就是个点了没反应的死按钮。同特异性、写在后面，hidden 才真生效。 */
+.plus-menu .pm-sync[hidden] { display: none; }

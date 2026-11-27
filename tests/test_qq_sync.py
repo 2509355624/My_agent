@@ -265,10 +265,16 @@ class AllRoutesTest(unittest.TestCase):
 class FrontendTest(unittest.TestCase):
     """开关本身（chat.html / sync.js / gen_flow.js）。"""
 
-    def test_switch_sits_beside_the_chips(self):
+    def test_switch_lives_in_the_plus_menu(self):
+        """2026-11-27 用户拍板：这个位置让给「直达生图」，开关收进「＋」。
+
+        底行只剩发送键（AI 发送 / 直达），同步是附加动作，放进面板里。
+        """
         html = _read("chat.html")
-        self.assertIn('class="chip-row"', html)
-        self.assertIn('id="tog-sync"', html)
+        start = html.index('class="plus-menu"')
+        menu = html[start:html.index('class="chip-row"')]
+        self.assertIn('id="tog-sync"', menu)
+        self.assertNotIn('id="tog-sync"', html[:start], "底行不该再有同步开关")
         # 默认不露，等 /me 回来（访客没有 QQ，露出来就是死按钮）
         self.assertIn('id="tog-sync" type="button" hidden', html)
 
@@ -297,16 +303,17 @@ class FrontendTest(unittest.TestCase):
         self.assertIn("WSSync.init()", html)
 
     def test_hidden_button_is_actually_hidden(self):
-        """访客实测看到过按钮：`display:inline-flex` 盖掉了 HTML 的 hidden。
+        """访客实测看到过按钮：`display:flex` 盖掉了 HTML 的 hidden。
 
         JS 把 `b.hidden` 设对了还不够——CSS 里必须有一条更高优先级的
-        `.sync-tog[hidden]{display:none}` 兜住，否则浏览器默认的
-        `[hidden]{display:none}` 会被 `.sync-tog{display:inline-flex}` 盖掉。
+        `.plus-menu .pm-sync[hidden]{display:none}` 兜住，否则浏览器默认的
+        `[hidden]{display:none}` 会被 `.pm-sync{display:flex}` 盖掉。
         """
-        css = _read("css/base.css")
-        self.assertIn("display: inline-flex", css)
-        self.assertIn(".sync-tog[hidden]", css)
-        seg = css[css.index(".sync-tog[hidden]"):]
+        css = _read("css/composer.css")
+        self.assertIn(".pm-sync {", css)
+        self.assertIn("display: flex", css)
+        self.assertIn(".plus-menu .pm-sync[hidden]", css)
+        seg = css[css.index(".plus-menu .pm-sync[hidden]"):]
         self.assertIn("display: none", seg[:120])
 
 

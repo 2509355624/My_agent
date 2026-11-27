@@ -99,6 +99,19 @@ class TestWorkspaceChatComposer(unittest.TestCase):
         html = _read("chat.html")
         self.assertRegex(html, r'id="btn-send"[^>]*disabled')
 
+    def test_bottom_row_is_ai_send_and_direct(self):
+        """底行只留两颗发送键：AI 发送（改写后再跑）和直达（原样跑）。
+
+        2026-11-27 用户拍板：原来占这个位置的「同步 QQ」收进「＋」里——
+        它是附加动作，跟「发图」不是一类东西；底行只放发送。
+        """
+        html = _read("chat.html")
+        row = html[html.index('class="chip-row"'):html.index('id="btn-send"')]
+        self.assertIn('id="btn-direct"', row)
+        self.assertIn("直达", row)
+        menu = html[html.index('class="plus-menu"'):html.index('class="chip-row"')]
+        self.assertNotIn('id="btn-direct"', menu, "直达已经搬到底行，别再留一份")
+
 
 class TestWorkspaceChatGen(unittest.TestCase):
 

@@ -13,7 +13,7 @@
   })();
 </script>
 <link rel="stylesheet" href="css/tokens.css?v=20261127i">
-<link rel="stylesheet" href="css/base.css?v=20261127l">
+<link rel="stylesheet" href="css/base.css?v=20261127m">
 <link rel="stylesheet" href="css/chat.css?v=20261127i">
 <link rel="stylesheet" href="css/pill.css?v=20261127j">
 <link rel="stylesheet" href="css/sheet.css?v=20261127t">
@@ -21,7 +21,7 @@
 <link rel="stylesheet" href="css/comic.css?v=20261127i">
 <link rel="stylesheet" href="css/create.css?v=20261127i">
 <link rel="stylesheet" href="css/me.css?v=20261127i">
-<link rel="stylesheet" href="css/composer.css?v=20261127t">
+<link rel="stylesheet" href="css/composer.css?v=20261127u">
 </head>
 <body>
 
@@ -84,13 +84,23 @@
                 </button>
               </div>
 
-              <!-- 直达生图：原样提示词跑一张，不经过 AI。
-                   2026-11-27 从输入框旁边收进来——底行只留一颗「AI 发送」，
-                   两个入口的差别就在这行的说明文字里讲清楚，不靠用户猜。 -->
-              <button class="pm-item" id="btn-direct" type="button" disabled
-                      title="原样提示词，直接跑一张（不经过 AI）">
-                <b>直达生图</b>
-                <small>原样跑一张，不让 AI 改词</small>
+              <!-- 同步 QQ（2026-11-27）：只有登录用户才露，默认绿着勾上。
+                   出图后服务端往自己的 QQ 再发一份，手机上也能收到。
+                   2026-11-27 从底行收进「＋」里：底行只留跟「发图」直接
+                   相关的按钮，同步是附加动作，埋在面板里更清楚。 -->
+              <button class="pm-sync on" id="tog-sync" type="button" hidden
+                      aria-pressed="true" title="出图后同步发一份到你的 QQ">
+                <span class="pms-txt">
+                  <b>同步 QQ</b>
+                  <small>出图后再发一份到手机 QQ</small>
+                </span>
+                <span class="pms-check" aria-hidden="true">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+                       stroke="currentColor" stroke-width="3" stroke-linecap="round"
+                       stroke-linejoin="round">
+                    <path d="M4.6 12.6l4.6 4.6L19.4 6.6"/>
+                  </svg>
+                </span>
               </button>
 
               <div class="pm-row">
@@ -121,17 +131,12 @@
                 <button class="chip" type="button" data-chip="comic">我的漫画</button>
               </div>
 
-              <!-- 同步发 QQ（2026-11-27）：登录用户才露，默认勾上。
-                   出图后服务端往自己的 QQ 再发一份，手机上也能收到。 -->
-              <button class="sync-tog on" id="tog-sync" type="button" hidden
-                      aria-pressed="true" title="出图后同步发一份到你的 QQ">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
-                     stroke="currentColor" stroke-width="3" stroke-linecap="round"
-                     stroke-linejoin="round" aria-hidden="true">
-                  <path d="M4.6 12.6l4.6 4.6L19.4 6.6"/>
-                </svg>
-                同步 QQ
-              </button>
+              <!-- 直达生图（2026-11-27）：原样提示词跑一张，不经过 AI。
+                   从「＋」里搬到底行，顶掉原来「同步 QQ」的位置——它跟
+                   「AI 发送」都是发图，并排摆着才看得出是两种发送方式；
+                   差别写在 title 里，不靠用户猜。 -->
+              <button class="direct-btn" id="btn-direct" type="button" disabled
+                      title="直达生图：原样提示词跑一张，不经过 AI">直达生图</button>
             </div>
 
             <!-- 主发送：交给大大怪改写提示词后出图。「直达」在「＋」里。 -->
@@ -182,7 +187,7 @@
 <script src="js/ref.js?v=20261127s"></script>
 <script src="js/archive.js?v=20261127i"></script>
 <script src="js/stack.js?v=20261127q"></script>
-<script src="js/chat.js?v=20261127r"></script>
+<script src="js/chat.js?v=20261127s"></script>
 <script src="js/visitor.js?v=20261127i"></script>
 <script src="js/sync.js?v=20261127i"></script>
 
