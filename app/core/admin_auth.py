@@ -32,7 +32,7 @@ from app.config import state_path
 log = logging.getLogger("admin_auth")
 
 COOKIE_NAME = "ad_sess"
-COOKIE_TTL = 7 * 86400          # 登录态保 7 天
+COOKIE_TTL = 12 * 3600          # 登录态保 12 小时（2026-11-27 从 7 天收紧）
 
 _AUTH = state_path("admin_auth.json")
 _SECRET = state_path("admin_secret")

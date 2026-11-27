@@ -117,7 +117,7 @@ button:disabled{opacity:.5;cursor:not-allowed}.err{margin-top:1rem;color:#ff9684
 <button id="b" type="submit">登录</button>
 <div class="err" id="e"></div>
 </form>
-<div class="foot">仅限站主访问 · 登录状态保留 7 天</div>
+<div class="foot">仅限站主访问 · 登录状态保留 12 小时</div>
 </div>
 <script>
 var f=document.getElementById('f'),e=document.getElementById('e'),b=document.getElementById('b');
