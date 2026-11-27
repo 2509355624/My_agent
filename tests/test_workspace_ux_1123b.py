@@ -218,6 +218,18 @@ class TestStyleSheetCovers(unittest.TestCase):
         self.assertIn("global.WSGen.setDefaultSkill(c.id)", js)
         self.assertIn("closeStyles();", js)
 
+    def test_cards_not_flattened_in_short_sheet(self):
+        """抽屉只有 66vh 高，grid 默认 stretch 会把行压进去、封面变成窄条。
+           行按内容排 + 封面不参与 flex 收缩，两处都得在，缺一处就扁。"""
+        css = _read("css/sheet.css")
+        idx = css.index(".style-list {")
+        block = css[idx:css.index("}", idx)]
+        self.assertIn("align-content: start", block)
+        idx = css.index(".style-card .s-thumb {")
+        block = css[idx:css.index("}", idx)]
+        self.assertIn("flex: 0 0 auto", block)
+        self.assertIn("aspect-ratio: 3 / 4", block)
+
 
 if __name__ == "__main__":
     unittest.main()

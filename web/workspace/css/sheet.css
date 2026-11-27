@@ -362,6 +362,10 @@
      看不出每个画风长什么样。窄屏也保持两列，缩略图靠 aspect-ratio 撑高。 */
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* 抽屉高度被 max-height:66vh 限死，grid 默认 align-content:stretch 会把
+     行高压进这块有限高度里，封面靠 aspect-ratio 撑的元素首当其冲被压扁。
+     start 让行按内容自然高度排，超出的交给上面 overflow-y:auto 滚。 */
+  align-content: start;
   gap: 10px;
   padding: 2px 6px 6px;
 }
@@ -389,6 +393,9 @@
 .style-card .s-thumb {
   position: relative;
   width: 100%;
+  /* flex 列里的子项默认会被压缩；这里封面是 flex 项、里面 img 又是绝对
+     定位不撑高，不锁住就会被压成一条。aspect-ratio 负责从宽度算出高度。 */
+  flex: 0 0 auto;
   aspect-ratio: 3 / 4;
   background: var(--card-2);
   overflow: hidden;
