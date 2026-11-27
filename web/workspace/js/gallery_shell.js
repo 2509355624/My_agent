@@ -10,7 +10,12 @@
   "use strict";
 
   function mountTop(title, el) {
-    title.className = "gtabs";
+    /* 中段原本是 vtitle（views.js 建的），这里只**追加** gtabs。
+       以前直接把 vtitle 整个换成 gtabs，sheet.css
+       里 `.vtitle:empty{display:none}` / `.vtop:has(>.vtitle:empty)` 两条
+       防白栏规则就都不命中：tabs 还没从 /api/gal/list 回来的空窗期，
+       空的 .gtabs 靠 flex:1 撑出一条白带。留着 vtitle 才能让空窗期收成 0。 */
+    title.className += " gtabs";
     title.textContent = "";
     el.tabs = title;
   }

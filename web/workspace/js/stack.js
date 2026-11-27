@@ -286,6 +286,62 @@
     });
   }
 
+  /* ── 画风封面的本地缓存 ────────────────────────────────────────
+     封面接口本身带 immutable HTTP 缓存，但那是按**完整 URL** 存的：换手机、
+     换隧道域名（xxxx.trycloudflare.com → yyyy...）就全作废，每回点「查看
+     全部」49 张又整批从服务端要一遍（用户 2026-11-27 换机实测）。
+     聊天页出图走 WSImg（IndexedDB，按相对路径存、域名不进 key），这里照
+     同一套：命中直接给 blob URL（零网络），没命中才 <img src> 走网络，并
+     顺手把字节存一份，下次换域名也能直接命中。 */
+  var COVER_DIR = "/api/runbench/cover/";
+  var coverBlobUrls = [];   // 最近发出的 blob URL，超量 revoke 最早的，免得内存无限涨
+
+  function coverKey(c) {
+    return COVER_DIR + encodeURIComponent((c && c.id) || "");
+  }
+
+  /* 用现成的 WSShot.usable 验一下是不是真图（<200B 的 JSON 错误体不算）。 */
+  function coverUsable(b) {
+    if (!b || !b.size) return Promise.resolve(false);
+    if (global.WSShot && global.WSShot.usable) return global.WSShot.usable(b);
+    return Promise.resolve(true);
+  }
+
+  function coverInto(img, c) {
+    var key = coverKey(c);
+    function fromNet() {
+      img.src = key;   // 相对路径，自动挂当前域名
+      if (!global.WSImg || !global.fetch) return;
+      /* 和 shot.js 的 pull() 一个做法：先问有没有存过，没有才拉字节存下。
+         失败一律不管——缓存是优化，<img> 自己照样会去请求。 */
+      global.WSImg.has(key).then(function (yes) {
+        if (yes) return undefined;
+        return global.fetch(key, { credentials: "omit" })
+          .then(function (r) { return r.ok ? r.blob() : null; })
+          .then(function (b) {
+            return coverUsable(b).then(function (ok) {
+              return ok ? global.WSImg.put(key, b) : undefined;
+            });
+          });
+      })["catch"](function () { /* 存不进去就算了 */ });
+    }
+    if (!global.WSImg || !global.WSImg.get) { fromNet(); return; }
+    global.WSImg.get(key).then(function (b) {
+      return coverUsable(b).then(function (ok) {
+        if (!ok) { fromNet(); return; }
+        var u = global.URL.createObjectURL(b);
+        coverBlobUrls.push(u);
+        /* 一页最多 49 张，抽屉另 6 张；留 128 个够同时开着两处，
+           再往上 revoke 最早那批（那时早不在屏幕上了）。 */
+        while (coverBlobUrls.length > 128) {
+          var old = coverBlobUrls.shift();
+          if (old) global.URL.revokeObjectURL(old);
+        }
+        img.src = u;
+      });
+    })["catch"](fromNet);
+  }
+
   function labelOf(c) {
     return (c.label && c.label !== c.id) ? c.label : c.id;
   }
@@ -313,8 +369,8 @@
     img.loading = "lazy";
     img.decoding = "async";
     img.alt = labelOf(c);
-    img.src = "/api/runbench/cover/" + encodeURIComponent(c.id);
     img.onerror = function () { img.style.display = "none"; };
+    coverInto(img, c);
     var ph = document.createElement("div");
     ph.className = "s-ph";
     ph.textContent = labelOf(c);

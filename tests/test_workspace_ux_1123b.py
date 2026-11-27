@@ -203,15 +203,35 @@ class TestStyleSheetCovers(unittest.TestCase):
 
     def test_cover_reuses_runbench_endpoint_with_fallback(self):
         """封面走跑图台现成的免令牌缩略图，没图的藏 img 露文字占位。
-           构造抽进了 styleCard，抽屉和全屏页共用这一份。"""
+           构造抽进了 styleCard，抽屉和全屏页共用这一份。
+
+           2026-11-27：封面再套一层 WSImg 本地缓存（换域名不失效），
+           取图细节抽进 coverInto()：本地命中给 blob URL，没命中才打
+           /api/runbench/cover/ 并顺手存一份。断言跟着搬到 coverInto。"""
         js = _read("js/stack.js")
         i = js.index("function styleCard(c, cur, onPick)")
         block = js[i:js.index("\n  }", i)]
-        self.assertIn('"/api/runbench/cover/" + encodeURIComponent(c.id)', block)
+        self.assertIn("coverInto(img, c)", block)
         self.assertIn('img.loading = "lazy"', block)
         self.assertIn('img.onerror = function () { img.style.display = "none"; }', block)
         self.assertIn('ph.className = "s-ph"', block)
         self.assertNotIn("style-item", block)
+
+        j = js.index("function coverInto(img, c)")
+        cover = js[j:js.index("\n  }", j)]
+        self.assertIn('COVER_DIR = "/api/runbench/cover/"', js)  # 仍是跑图台现成接口
+        self.assertIn("global.WSImg.get(key)", cover)            # 本地缓存优先
+        self.assertIn('global.fetch(key, { credentials: "omit" })', cover)  # 没命中走网络
+        self.assertIn("global.WSImg.put(key, b)", cover)         # 顺手存一份
+        self.assertIn("coverUsable(b)", cover)                   # 不存 48B 错误体
+
+    def test_gallery_top_keeps_vtitle_class(self):
+        """AI 创作页顶栏中段只许**追加** gtabs，不能覆盖掉 vtitle——
+           sheet.css 的 `.vtitle:empty{display:none}` 靠它收掉 tabs 加载前
+           那条空白带（2026-11-27 换机实测）。"""
+        js = _read("js/gallery_shell.js")
+        self.assertIn('title.className += " gtabs"', js)
+        self.assertNotIn('title.className = "gtabs"', js)
 
     def test_click_still_sets_default_and_closes(self):
         """加了封面不能把「点一下设为默认就退出」这个行为弄丢。
