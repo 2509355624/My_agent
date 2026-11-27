@@ -296,6 +296,19 @@ class FrontendTest(unittest.TestCase):
         self.assertLess(html.index("js/visitor.js"), html.index("js/sync.js"))
         self.assertIn("WSSync.init()", html)
 
+    def test_hidden_button_is_actually_hidden(self):
+        """访客实测看到过按钮：`display:inline-flex` 盖掉了 HTML 的 hidden。
+
+        JS 把 `b.hidden` 设对了还不够——CSS 里必须有一条更高优先级的
+        `.sync-tog[hidden]{display:none}` 兜住，否则浏览器默认的
+        `[hidden]{display:none}` 会被 `.sync-tog{display:inline-flex}` 盖掉。
+        """
+        css = _read("css/base.css")
+        self.assertIn("display: inline-flex", css)
+        self.assertIn(".sync-tog[hidden]", css)
+        seg = css[css.index(".sync-tog[hidden]"):]
+        self.assertIn("display: none", seg[:120])
+
 
 if __name__ == "__main__":
     unittest.main()

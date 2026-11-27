@@ -142,3 +142,11 @@ button { cursor: pointer; }
   color: #fff;
 }
 
+/* `hidden` 是 HTML 属性，浏览器默认 `[hidden]{display:none}` 会被上面
+   `.sync-tog{display:inline-flex}` 盖掉——访客就算 `b.hidden=true` 也照样
+   看得见这颗按钮（2026-11-27 实测）。补一条同特异性、写在后面的规则，
+   让 `hidden` 真正生效：只有登录用户（sync.js 把它置 false）才露。 */
+.sync-tog[hidden] {
+  display: none;
+}
+
