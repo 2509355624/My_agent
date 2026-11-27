@@ -375,6 +375,30 @@ def login_verify():
     return resp
 
 
+@app.route("/login/local", methods=["POST"])
+def login_local():
+    """测试账号登录：账号 + 密码，不走 QQ。
+
+    面试演示用（2026-11-27）。只认 `.env` 里 `LOCAL_LOGIN` 配的那一个，
+    **没配就整条入口关着**（`local_login` 直接回「这个入口没开」）——
+    仓库是 public，凭据不写进源码，换台机器不配就没有这个门。
+    登录后拿到的身份是假 QQ 号（`friend_auth.LOCAL_QQ`），所以生图、漫画、
+    聊天、「我的」全都照常；画廊那边会把它排除掉，看不到私藏。
+    """
+    data = request.get_json(silent=True) or {}
+    ok, msg, token = friend_auth.local_login(data.get("user"),
+                                            data.get("password"))
+    if not ok:
+        return jsonify({"ok": False, "error": msg}), 400
+    resp = make_response(jsonify({"ok": True}))
+    resp.set_cookie(friend_auth.COOKIE_NAME, token,
+                    max_age=friend_auth.COOKIE_TTL, httponly=True,
+                    samesite="Lax", secure=_cookie_secure(), path="/")
+    # 同 `/login/verify`：登录成功顺手解开 /play 的页面锁。
+    resp.delete_cookie(SOLO_COOKIE, path="/")
+    return resp
+
+
 @app.route("/login/visitor", methods=["POST"])
 def login_visitor():
     """访客进入：不发码、不要 QQ，直接签一个 24 小时的访客 cookie。

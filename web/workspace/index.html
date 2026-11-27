@@ -50,11 +50,25 @@
     <button class="btn" id="btn-login" type="button" disabled>登录</button>
     <p class="foot">登录即同意服务条款与隐私政策</p>
   </section>
+  <!-- 测试账号（2026-11-27）：账号 + 密码，不走 QQ、不收验证码。
+       只有当 `.env` 里配了 `LOCAL_LOGIN` 时后端才认，没配这里点了会提示
+       「这个入口没开」。演示用，看不到画廊里藏起来的作品。 -->
+  <section id="step-pass" style="display:none">
+    <h1 class="brand-title">测试账号</h1>
+    <p class="brand-sub" id="pass-sub">输入密码进入工作台</p>
+    <div class="field">
+      <label for="pass">密码</label>
+      <input id="pass" type="password" autocomplete="current-password" placeholder="输入密码">
+    </div>
+    <button class="btn" id="btn-pass-login" type="button">登录</button>
+    <button class="btn btn-ghost" id="btn-pass-back" type="button">返回改账号</button>
+    <div class="msg" id="pass-msg"></div>
+  </section>
 </main>
 </div>
 
-<script src="js/api.js?v=20261127b"></script>
-<script src="js/login.js?v=20261127b"></script>
+<script src="js/api.js?v=20261127d"></script>
+<script src="js/login.js?v=20261127d"></script>
 <script>
   (function () {
     var d = document.documentElement;

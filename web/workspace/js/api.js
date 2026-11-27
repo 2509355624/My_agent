@@ -38,6 +38,10 @@
     sendCode: function (qq) { return post("/login/send", { qq: qq }); },
     verify: function (qq, code) {
       return post("/login/verify", { qq: qq, code: code });
+    },
+    /* 测试账号（2026-11-27）：账号 + 密码，不走 QQ。后端只认 .env 里配的那个。 */
+    localLogin: function (user, password) {
+      return post("/login/local", { user: user, password: password });
     }
   };
 })(window);

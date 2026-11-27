@@ -291,6 +291,61 @@ def issue_cookie(qq):
     return "%s.%d.%s" % (qq, exp, _sign(qq, exp))
 
 
+# ─── 本机测试账号（2026-11-27）───────────────────────────
+#
+# 面试演示用：不走 QQ 好友白名单、不发验证码，账号 + 密码直接进。
+# 凭据只从 `.env` 读（`LOCAL_LOGIN=账号:密码`）——本仓库是 public，源码里
+# 出现明文密码等于把钥匙挂在门上。**没配就整条入口不存在**：换台机器、
+# 换个部署，只要不写这一行，这个地址永远打不开。
+#
+# 登录后的身份是一个**假 QQ 号**：生图、漫画、聊天、「我的」全都按现有那套
+# qq 记账跑，不用给测试账号另开支路。代价是画廊 `_full` 要把它排除——
+# 用户要的是「演示用，看不到私藏」。
+
+LOCAL_QQ = "10000000"       # 假 QQ 号：8 位、符合 QQ_RE，走通所有按 qq 记账的链路
+
+
+def local_account():
+    """→ (账号, 密码)；没配 / 格式不对一律 ("", "")。"""
+    raw = str(os.getenv("LOCAL_LOGIN") or "").strip()
+    user, sep, pwd = raw.partition(":")
+    if not sep:
+        return "", ""
+    user, pwd = user.strip(), pwd.strip()
+    return (user, pwd) if (user and pwd) else ("", "")
+
+
+def local_login(user, password):
+    """校验测试账号。→ (ok, 说明, cookie 值)。
+
+    比对走 `compare_digest`（不因为半截就对不上提前返回）。失败计数借
+    `_bump_fail` 那本账，键加 `local:` 前缀，不占真 QQ 号的坑——否则连错
+    几次会顺手把同号的真用户锁掉。
+    """
+    good_user, good_pwd = local_account()
+    if not good_user:
+        return False, "这个入口没开", None
+    user = str(user or "").strip()
+    password = str(password or "")
+    key = "local:" + (user or "-")[:32]
+    with _lock:
+        left = _locked(key)
+        if left:
+            return False, "密码错太多次，%d 分钟后再试" % (left // 60 + 1), None
+    ok_user = hmac.compare_digest(user.encode("utf-8"),
+                                  good_user.encode("utf-8"))
+    ok_pwd = hmac.compare_digest(password.encode("utf-8"),
+                                 good_pwd.encode("utf-8"))
+    if not (ok_user and ok_pwd):
+        log.warning("测试账号登录失败：%r", user[:32])
+        with _lock:
+            _bump_fail(key)          # 内部自己落盘，不再拿锁
+        return False, "账号或密码不对", None
+    _clear_fail(key)
+    log.info("测试账号登录：%s → 身份 %s", user, LOCAL_QQ)
+    return True, "", issue_cookie(LOCAL_QQ)
+
+
 def check_cookie(value):
     """→ QQ 号；无效/过期一律 None。"""
     raw = str(value or "").strip()

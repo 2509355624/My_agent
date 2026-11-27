@@ -243,8 +243,13 @@ def _full(qq):
     和 `_seer` 的分工：这个只管**看见**，`_seer` 管**能改**（`can_hide` /
     `can_hide_item`）。工作台里登录了能看见藏起来的东西，但没有隐藏 / 恢复
     按钮——那是管理页的活。
+
+    测试账号（`friend_auth.LOCAL_QQ`）不算：它是面试演示用的，进来只该看见
+    跟普通访客一样的那 172 本，不能把站主的私藏摊在演示屏幕上。
     """
-    return _jf() and bool(qq)
+    if not _jf() or not qq:
+        return False
+    return str(qq) != friend_auth.LOCAL_QQ
 
 
 def _work_row(row, qq):

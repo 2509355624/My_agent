@@ -2302,3 +2302,15 @@ class WorkspaceSeeAllTest(_Base):
                          0, "管理页默认只看未下架")
         self.assertEqual(len(self._titles("/api/gal/list?__jf=1")), 0,
                          "访客没有 qq")
+
+    def test_test_account_sees_only_public(self):
+        """测试账号（面试演示用）跟访客一样，只看得见没藏的那批。
+
+        它是假 QQ 号，单看 `_full` 的两个条件全都满足（在工作台、带登录态），
+        所以要显式排除——用户要的是「演示的时候不该把私藏摊在屏幕上」。
+        """
+        self._seed("visible")
+        self._seed("gone", hidden=1)
+        self.assertEqual(
+            self._titles("/api/gal/list?__jf=1&qq=" + friend_auth.LOCAL_QQ),
+            ["visible"])
