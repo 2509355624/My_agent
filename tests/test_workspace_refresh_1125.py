@@ -126,6 +126,97 @@ class TestAdoptWindow(unittest.TestCase):
         self.assertIn('"owner"', body, "没按人隔离，会认到别人的任务")
 
 
+class TestAdoptByRecordId(unittest.TestCase):
+    """按**记录 id** 认领（2026-11-27）：比时间窗准，而且已完成的那张也回。
+
+    用户实测（9:55:34 提交可莉 → 大退 → 重进）：档里 `job` 是空串，图其实
+    21 秒就画完了，页面却写「这条没跑完就断了」。根子是认领只按时间、且只
+    认还在跑的任务——done 的那张永远认不回来。
+    """
+
+    def _put(self, **kw):
+        from app.features.image import routes as gen_api
+        job = {"id": "GP-adopt-test", "owner": "__anonymous__",
+               "rec": "imgabc_1", "state": "done", "file": "工作台/x.png",
+               "ts": 1.0, "skill": "silver", "prompt": "p"}
+        job.update(kw)
+        with gen_api._JOBS_LOCK:
+            gen_api._JOBS[job["id"]] = job
+        self._gen = gen_api
+        self.addCleanup(lambda: gen_api._JOBS.pop(job["id"], None))
+        return job
+
+    def test_done_job_comes_back_with_its_file(self):
+        from app import main
+        self._put()
+        d = main.app.test_client().get(
+            "/api/gen/adopt?rec=imgabc_1&at=0").get_json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["job"]["id"], "GP-adopt-test")
+        self.assertEqual(d["job"]["state"], "done", "已完成的也要认回来")
+        self.assertEqual(d["job"]["file"], "工作台/x.png", "不带 file 等于没认")
+
+    def test_unknown_record_id_falls_through_to_time_window(self):
+        from app import main
+        self._put(rec="imgother_1")
+        d = main.app.test_client().get(
+            "/api/gen/adopt?rec=imgabc_1&at=0").get_json()
+        self.assertTrue(d["ok"])
+        self.assertIsNone(d["job"], "记录对不上就不该硬认一个回来")
+
+    def test_record_id_is_written_at_enqueue(self):
+        """任务一建出来就把任务号写进档，别等「跑完」那一刻才写。"""
+        with io.open(os.path.join(
+                ROOT, "app", "features", "image", "routes.py"),
+                encoding="utf-8") as f:
+            s = f.read()
+        i = s.index("def _enqueue_job")
+        body = s[i:i + 7000]
+        self.assertIn('_archive_back(job, {"job": job["id"]', body,
+                      "入队没写档：大退那张就只剩一个空 job")
+        # 必须在起 worker 之前写：先起线程的话，图可能先跑完
+        self.assertLess(body.index('_archive_back(job, {"job"'),
+                        body.index("threading.Thread(target=_run"))
+
+
+class TestStatusSendsAheadForRunning(unittest.TestCase):
+    """`ahead` 不能只在 queued 时下发（2026-11-27 实测）。
+
+    worker 一取走 state 就变 running，字段整块消失 → 前端 `typeof` 为假、
+    当成 0 → 胶囊当场掉回灰字。用户看到的就是「刚才还是胶囊，怎么又变灰」。
+    """
+
+    def test_running_keeps_the_field(self):
+        with io.open(os.path.join(
+                ROOT, "app", "features", "image", "routes.py"),
+                encoding="utf-8") as f:
+            s = f.read()
+        i = s.index("    for job in jobs:")
+        body = s[i:i + 1200]
+        self.assertIn('not in ("queued", "running")', body,
+                      "只给 queued 算 ahead，running 时字段会消失")
+
+
+class TestOnePillAllTheWay(unittest.TestCase):
+    """外观统一（2026-11-27 用户拍板）：从提交到出图都是同一张粉紫胶囊。"""
+
+    def test_four_stages_share_one_look(self):
+        flow = _js("gen_flow.js")
+        self.assertIn("正在提交", flow, "提交阶段也是胶囊")
+        self.assertIn('"正在排队"', flow)
+        self.assertIn('"正在画了"', flow)
+        self.assertIn('"正在跑"', flow)
+        # 只有真没了的才退回普通行（那是错误态，不该还是粉紫胶囊）
+        self.assertIn('ph === "lost" ? false : qtag', flow)
+
+    def test_badge_text_comes_from_caller(self):
+        card = _js("card.js")
+        i = card.index("if (o.queue)")
+        body = card[i:i + 900]
+        self.assertIn("typeof o.queue === \"string\"", body,
+                      "徽章写死成「正在排队」，开画时字换不掉")
+
+
 class TestImageArrivedStopsSpinning(unittest.TestCase):
     """图出来了，状态行必须彻底收掉（不只是 hidden）。"""
 

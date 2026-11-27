@@ -45,18 +45,20 @@
      `card.noted` 记最后一次写进去的那句，用来避免每 2 秒重置一次动画。 */
   function paintNote(card, text, bad, run, queue) {
     if (!card || !card.note) return;
-    /* queue 一起比：胶囊是 setNote 顺手加的 class，只看文字会漏刷状态切换。 */
-    if (card.noted !== text || !!card.notedQ !== !!queue) {
+    /* `queue` 是**徽章文字**（"正在排队" / "正在画了" / "正在跑"），false = 不用
+       胶囊。比较要连徽章一起比：正文没变、徽章变了（排队 → 开画）也得重画。 */
+    var q = queue === true ? "正在排队" : (queue || "");
+    if (card.noted !== text || String(card.notedQ || "") !== q) {
       if (global.WSCard && global.WSCard.setNote) {
         global.WSCard.setNote(card.note, text,
-                             { bad: !!bad, run: run !== false, queue: !!queue });
+                             { bad: !!bad, run: run !== false, queue: queue });
       } else {
         card.note.hidden = false;
-        card.note.className = "note" + (bad ? " err" : "") + (queue ? " queue" : "");
+        card.note.className = "note" + (bad ? " err" : "") + (q ? " queue" : "");
         card.note.textContent = text;
       }
       card.noted = text;
-      card.notedQ = !!queue;
+      card.notedQ = q;
     }
   }
 
@@ -214,8 +216,7 @@
                 userText: userNode ? (userNode._wsUserText || "") : "",
                 job: "", file: "", note: "正在提交…", err: false };
     var card = H.newCard(prompt, skill, rec);
-    card.rec = rec;
-    S().cards.set(rec, card);
+    card.rec = rec; S().cards.set(rec, card);
     // 卡片自己记住参考图：点「重画」要按同一份角色重来，不能悄悄丢图
     card.refs = rec.refs;
     card.described = !!described;
@@ -279,7 +280,7 @@
     if (card.img) { card.img.remove(); card.img = null; }
     card.acts.innerHTML = "";
     card.acts.hidden = true;
-    card.say("正在提交…");
+    card.say("排上队就告诉你", false, true, "正在提交");   // 等判意图这段也是胶囊
     global.WSCard.flash(card);
     H.save(rec);
     H.patch(rec, { job: "", file: "", note: "正在提交…", err: false });
@@ -293,8 +294,7 @@
      「这轮不用画」——那时这张卡不该留（用户没要到图，留个空壳只会碍事），
      把那句话播成一条 AI 消息，并把这条记录标成 `k:"say"` 收进存档。 */
   function fire(card, rec, refs, described) {
-    card.submitting = true;
-    card.say("正在提交…");
+    card.submitting = true; card.say("排上队就告诉你", false, true, "正在提交");
     var ask = rec.route === "ask";
     var body = { skill: card.skill, prompt: card.prompt };
     if (refs && refs.length) {
@@ -530,17 +530,19 @@
              + 别的进程（QQ / 漫画台）压着的一起算，比前端自己数准。0 或不给 =
              下一个就轮到它，统一说「正在跑」（用户：「前面 0 张就统一正在跑」）。 */
           var ahead = (typeof job.ahead === "number") ? job.ahead : 0;
-          /* 排队 → 粉紫小胶囊：圆点 + 「正在排队」+「前面还有 N 张」，「终止」
-             由 card-line 接在同一张里（见 setNote）。真开画才铺 3:4 底纹，
-             排队阶段别先占一个大空壳（2026-11-24）。 */
-          var q = ph !== "lost" && ph !== "running" && ahead > 0;
+          /* 外观统一（2026-11-27 用户拍板）：「排队 → 开画」原来是胶囊掉回一行
+             灰字，看着像坏了。现在从提交到出图始终是同一张粉紫胶囊，只有徽章
+             和正文在变——排队说「前面还有 N 张」，开画说「画好会自动弹出来」。
+             真开画才铺 3:4 底纹，排队阶段别先占一个大空壳（2026-11-24）。 */
+          var qtag = ahead > 0 ? "正在排队"
+                   : ph === "running" ? "正在画了" : "正在跑";
           var text = ph === "lost"
             ? "这一张没在跑了（服务那边已经没有它），重新发一次吧"
-            : ph === "running" ? "正在画了，画好会自动弹出来" + tail
-            : q ? "前面还有 " + ahead + " 张"
-            : "正在跑，画好会自动弹出来" + tail;
+            : ahead > 0 ? "前面还有 " + ahead + " 张"
+            : "画好会自动弹出来" + tail;
           if (ph === "running") H.spawn(card);
-          paintNote(card, text, ph === "lost", ph !== "lost", q);
+          paintNote(card, text, ph === "lost", ph !== "lost",
+                    ph === "lost" ? false : qtag);
           if (card.rec) card.rec.note = text;
         }
       });

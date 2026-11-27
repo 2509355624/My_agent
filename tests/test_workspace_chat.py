@@ -779,11 +779,13 @@ async function flush() { for(let i=0;i<12;i++) await Promise.resolve(); }
   load("archive.js");
   w.WSGenFlow.submit("画猫","s");
   const rec=state.msgs[0], card=state.cards.get(rec);
-  assert.equal(card.note.textContent,"正在提交…");
+  // 2026-11-27 起提交阶段也走胶囊：徽章「正在提交」+ 正文「排上队就告诉你」。
+  assert.equal(card.note.textContent,"正在提交 排上队就告诉你");
   w.WSGenFlow.submit("画猫","s");
   assert.equal(calls,2,"相同提示词的独立消息分别提交");
   resolvers[0]({ok:true,job:{id:"j1",prompt:"cat tags"}}); await flush();
-  assert.equal(card.note.textContent,"正在跑，画好会自动弹出来");
+  // 胶囊形态：徽章「正在跑」+ 正文「画好会自动弹出来」（2026-11-27 外观统一）。
+  assert.equal(card.note.textContent,"正在跑 画好会自动弹出来");
   assert.equal(state.msgs.length,2,"相同文本的两条请求各有独立记录");
   resolvers[1]({ok:true,job:{id:"j2",prompt:"second tags"}}); await flush();
   assert.equal(Object.keys(state.pending).length,2,"两条任务分别进入轮询");

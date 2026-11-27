@@ -61,8 +61,13 @@
      刷新，存档里那条就只剩「有提示词、没任务号」。以前前端只能判它「断了」，
      可服务端还排着队。记录自己的出生时间（id 里的时间戳）是唯一还在的凭据，
      拿它去问一句，服务端知道答案。`at` 是毫秒。 */
-  function adopt(at) {
-    return global.WSApi.get(BASE + "/adopt?at=" + encodeURIComponent(at));
+  /* 认领一条已经排上的任务。`rec` 是记录 id（2026-11-27）：带上它服务端就能
+     精确认人，连**已经画完**的那张也接得回来——只按时间问的话，done 的任务
+     不在认领范围里，大退重进就只剩「这条没跑完就断了」。 */
+  function adopt(at, rec) {
+    var q = "at=" + encodeURIComponent(at || 0);
+    if (rec) q += "&rec=" + encodeURIComponent(rec);
+    return global.WSApi.get(BASE + "/adopt?" + q);
   }
 
   /* 终止一张（2026-11-23 用户：「加个终止按钮」）。和服务端同一个口子：

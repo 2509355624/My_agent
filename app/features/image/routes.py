@@ -1471,6 +1471,15 @@ def _enqueue_job(spec, owner, user_text="", lowres_on=False):
         for old in sorted(_JOBS, key=lambda k: _JOBS[k]["ts"])[:-_JOB_KEEP]:
             if _JOBS[old]["state"] != "queued":
                 _JOBS.pop(old, None)
+    # 记录里**从第一秒就有任务号**（2026-11-27 用户实测：9:55:34 提交可莉，
+    # 大退重进来只有一句「这条没跑完就断了」，可图早就画完了）。
+    # 提交那一发要等模型判意图，慢的时候几十秒；用户在这个窗口里大退，响应就
+    # 丢了，`rec.job` 永远是空。以前只有「任务结束」那一刻才写档，于是记录里
+    # 有 file、没有 job ——重进既没法按 job 查状态，adopt 又只认还在跑的，只能
+    # 判死。这里先落一次，重进直接按任务号查，done 就出图。
+    # 写不进去（记录还没推上来）也不要紧：adopt 那边有按记录 id 精确认领的一条。
+    _archive_back(job, {"job": job["id"], "err": False,
+                        "note": "正在跑，画好会自动弹出来"})
     threading.Thread(target=_run, args=(job,), daemon=True).start()
     return job, None
 
@@ -1670,46 +1679,64 @@ def api_status():
         return "lost"
 
     for job in jobs:
-        if job["state"] == "queued":
-            job["phase"] = _phase_of(job)
-            # 「前面还有几张」：前端拿它把「正在提交」说成「前面还有 3 张」
-            # （2026-11-27）。后台算，因为只有队列那边知道谁排在谁前面。
-            job["ahead"] = image_jobs.ahead_by_tag(job["id"], job.get("skill"))
+        # phase / ahead 对**所有还没结束的**都算（2026-11-27 实测）：原来只算
+        # queued，worker 一取走 state 就变 running，`ahead` 字段整块消失，
+        # 前端 `typeof job.ahead === "number"` 为假、当成 0 —— 胶囊当场掉回
+        # 灰字（用户：「刚才还是胶囊，怎么又变灰了」）。running 时它就是 0，
+        # 字段一直在，外观只随文案推进，不跳。
+        if job["state"] not in ("queued", "running"):
+            continue
+        job["phase"] = _phase_of(job)
+        # 「前面还有几张」：前端拿它把「正在提交」说成「前面还有 3 张」
+        # （2026-11-27）。后台算，因为只有队列那边知道谁排在谁前面。
+        job["ahead"] = image_jobs.ahead_by_tag(job["id"], job.get("skill"))
     return jsonify({"ok": True, "jobs": [_public(j) for j in jobs],
                     "queue_depth": depth, "comfy_online": _comfy_up})
 
 
 @bp.route("/api/gen/adopt")
 def api_adopt():
-    """按**提交时间**认领一条还在跑的任务（刷新页面时用）。
+    """按**记录 id** 或**提交时间**认领一条已经排上的任务（刷新页面时用）。
 
     「点发送 → 页面立刻刷新」这种最普通的操作，前端会丢一次：任务号是
     提交接口响应回来之后才写进记录的，页面在那一刻刷新，存档里那条就只剩
     「有提示词、没任务号、没图」。以前前端只能把它判成「这条没跑完就断了」
     ——可服务端明明还排着队（用户 2026-11-25 报的正是这句）。
 
-    这里给前端一个不靠任务号也能认回来的口子：拿记录自己的提交时间
-    （记录 id 里带着，见 archive.js 的 bornAt）来问，服务端替它找：
-       · 同一个人（`_who()`，5175 网关会注入 qq）；
-       · 提交时间落在 `at` 前后 `ADOPT_WINDOW` 秒内；
-       · 还没结束（queued / running）。
-    多条命中时取时间最接近的那条——时间是唯一的凭据，近的那条才是它。
+    认人有两条路，**先精确后模糊**：
 
-    只回**已经在跑**的：`done` 的那条不该在这里被"认领"（前端重放时它要么
-    已经有 file，要么已经判过死），结束了的也不回（回一个 error 状态的 job
-    等于让前端替别的记录收尾）。
+    ① `rec`（推荐）：任务建出来时就把记录 id 记在 `job["rec"]` 上，拿它
+       查是确定的，任何状态都回（含 done / cancelled / error）。为什么连
+       已完成的也回：用户 2026-11-27 实测「提交可莉 → 大退 → 重进」，那条
+       记录里没有 file、没有 job，而图其实已经画好了；只回还在跑的就只能
+       给他一句「这条没跑完就断了」。回 done + file，重放那一侧直接铺图。
+
+    ② `at`（老路，兼容）：按提交时间 ± `ADOPT_WINDOW` 秒、同一 owner、
+       只认还没结束的（queued / running）——时间不像 id 那样唯一，多命中
+       时取最近的那条，所以不敢回 finished 的，怕认错邻居那张。
     """
     try:
         at = float(request.args.get("at") or 0)
     except (TypeError, ValueError):
         at = 0.0
-    if at <= 0:
+    rec = str(request.args.get("rec") or "").strip()
+    if at <= 0 and not rec:
         return jsonify({"ok": False, "error": "没给时间"}), 400
     from app.features.chat import routes as chat_routes
     # 和提交同一口径（2026-11-26）：`_owner()` = qq，没有就是工作台访客的
     # `guest_<身份段>`。原先这里是 `_who()`，访客恒为空 → 落到 `__anonymous__`，
     # 而提交那边记的是 `guest_xxx`，两边永远对不上，访客刷新后认不回自己那张。
     owner = chat_routes._owner() or "__anonymous__"
+    # ① 按记录 id 认（2026-11-27）：任务建出来时就把 `rec` 记在 job 上了，
+    #    拿它认是**确定**的，比时间窗准，不会认错邻居那张。已完成 / 已终止
+    #    的也照回——「提交到一半大退」的那条记录里没有 file，全靠这里把它
+    #    接回那张**其实已经画好**的图（原来只回还在跑的，于是重进只能看到
+    #    「这条没跑完就断了」，可图在盘上躺着）。
+    if rec:
+        with _JOBS_LOCK:
+            for job in _JOBS.values():
+                if job.get("rec") == rec and job.get("owner") == owner:
+                    return jsonify({"ok": True, "job": _public(job)})
     best = None
     with _JOBS_LOCK:
         for job in _JOBS.values():

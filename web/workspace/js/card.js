@@ -178,8 +178,8 @@
       stop: stop,
       acts: acts,
       fill: fill,
-      say: function (text, bad, run) {
-        setNote(note, text, { bad: bad, run: run });
+      say: function (text, bad, run, queue) {
+        setNote(note, text, { bad: bad, run: run, queue: queue });
         settle();
       },
       show: function () {
@@ -270,14 +270,21 @@
       else line.classList.remove("is-queue");
     }
     if (o.queue) {
-      /* 结构：[圆点][正在排队][前面还有 N 张]，「终止」由 card-line 接在后面。 */
+      /* 结构：[圆点][徽章][正文]，「终止」由 card-line 接在后面。
+         徽章文字由调用方给（2026-11-27 用户：「外观统一」）：排队说「正在排队」、
+         真开画说「正在画了」、已排上等轮到说「正在跑」。外观始终是同一张粉紫
+         胶囊，状态往前推进时只有字在变，不会从胶囊掉回一行灰字。 */
+      var tag = (typeof o.queue === "string") ? o.queue : "正在排队";
       note.className = "note queue";
       note.innerHTML = '<span class="q-dot"></span>' +
-                       '<span class="q-tag">正在排队</span>' +
+                       '<span class="q-tag"></span>' +
                        '<span class="note-text"></span>';
+      var qt = note.querySelector ? note.querySelector(".q-tag") : null;
       var qn = note.querySelector ? note.querySelector(".note-text") : null;
+      if (qt) qt.textContent = tag;
       if (qn) qn.textContent = text;
-      else note.textContent = "正在排队 " + text;   // DOM 桩兜底
+      else note.textContent = tag + " " + text;   // DOM 桩兜底
+      note._qtag = tag;
       return note;
     }
     note.className = "note" + (o.bad ? " err" : "") + (o.run ? " running" : "");

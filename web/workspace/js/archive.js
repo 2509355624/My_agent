@@ -427,9 +427,13 @@
      记录（提交时间、所有者、有没有已经出图），让它自己说这条到底还
      在不在，比前端猜准得多。 */
   function promise(rec) {
+    /* 记录 id 比出生时间更硬（2026-11-27）：服务端建任务时就把 rec 记下了，
+       按它认是确定的，而且**已完成的那张也回**——「提交完就大退」的记录里
+       没有 file，全靠这一步接回那张其实已经画好的图。 */
     var t = bornAt(rec);
-    if (!t) return Promise.resolve(null);
-    return global.WSGen.adopt(t).then(function (d) {
+    var id = (rec && rec.id) || "";
+    if (!t && !id) return Promise.resolve(null);
+    return global.WSGen.adopt(t, id).then(function (d) {
       return (d && d.ok && d.job) ? d.job : null;
     })["catch"](function () { return null; });
   }
@@ -478,7 +482,14 @@
     if (global.WSChat) {
       global.WSChat.pending[card.job] = card;
       global.WSChat.armStop(card);
-      if (card.say) card.say(NOTE_RUN, false, true);
+      /* 胶囊外观统一（2026-11-27）：接回任务时也走同一张粉紫胶囊，别在这里
+         退回一行灰字——重进那一下正是用户盯着看的时候。 */
+      if (global.WSCard && global.WSCard.setNote) {
+        global.WSCard.setNote(card.note, "画好会自动弹出来",
+                              { run: true, queue: "正在跑" });
+        card.noted = "画好会自动弹出来";
+        card.notedQ = "正在跑";
+      } else if (card.say) card.say(NOTE_RUN, false, true);
       if (global.WSStore) {
         global.WSStore.patch(rec, { job: rec.job, prompt: rec.prompt,
                                     note: rec.note, err: false });
@@ -504,7 +515,12 @@
     rec.note = NOTE_UNKNOWN;
     rec.err = false;
     if (global.WSChat) {
-      if (card.say) card.say(NOTE_UNKNOWN, false, false);
+      if (global.WSCard && global.WSCard.setNote) {
+        global.WSCard.setNote(card.note, "正在确认这张有没有排上",
+                              { run: true, queue: "正在确认" });
+        card.noted = "正在确认这张有没有排上";
+        card.notedQ = "正在确认";
+      } else if (card.say) card.say(NOTE_UNKNOWN, false, false);
       if (global.WSStore) {
         global.WSStore.patch(rec, { job: "", note: NOTE_UNKNOWN, err: false });
         global.WSStore.save({ msgs: global.WSChat.msgs() });
