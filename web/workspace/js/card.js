@@ -237,11 +237,12 @@
     'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
     '<path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4.6V10h-5.4"/></svg>';
 
-  var ICON_DOWN =
+  /* 引用（2026-11-27）：一张图 + 箭头指回输入栏——「拿这张，接着说」。 */
+  var ICON_REF =
     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
     'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
-    '<path d="M12 4.5v10.4"/><path d="M7.8 11.4L12 15.6l4.2-4.2"/>' +
-    '<path d="M4.8 18.4v1.1h14.4v-1.1"/></svg>';
+    '<rect x="3.4" y="5" width="11" height="11" rx="2.2"/>' +
+    '<path d="M17 8.2L20.4 11.8 17 15.4"/><path d="M20.4 11.8H15"/></svg>';
 
   /* 排队 / 准备中 / 画图中转的那一小圈（2026-11-25 用户：「正在跑……
      跑好之后会自动弹出来」）。用 CSS 转，禁用动效的系统设置里会被停掉。 */
@@ -250,10 +251,14 @@
     'stroke="currentColor" stroke-width="2.2" stroke-linecap="round">' +
     '<path d="M12 3.2a8.8 8.8 0 1 1-6.2 2.6"/></svg>';
 
-  /* 卡片底部三个按钮：复制提示词 | 下载到本机 | 换种子重画。
+  /* 卡片底部三个按钮：复制提示词 | 引用这张图改 | 换种子重画。
      它们原来紧贴在一起（都是小圆圈、间距 8px），用户反馈「很容易误触」——
      改成两边是纯文字按钮、中间是图标按钮，中间留空推开，一个管复制
-     一个管下载一个管重画，手指不会点串。
+     一个管引用一个管重画，手指不会点串。
+
+     2026-11-27 用户拍板：把「下载」换成「引用」。下载本来用处不大（手机上
+     长按图片就能存），而引用能接着改图——点一下弹出键盘、挂上这张图，
+     用户直接说新需求。
 
      **复制拿的是实际出这张图用的那串提示词**（服务端翻完 / 拼完参考图之后
      的英文 tags），不是用户敲的那句话——`card.prompt` 由 chat.js 在提交
@@ -263,7 +268,7 @@
      下载（2026-11-24 定稿）：拉「≤1MB」那一档，先问浏览器本地缓存。
 
      `hooks.again` 由 chat.js 提供（重画要走「同一份请求只留一张卡」那套
-     收口）；`hooks.download` 同理。两个都不传就不挂监听——存档重放需要
+     收口）；`hooks.quote` 同理。两个都不传就不挂监听——存档重放需要
      按钮长得一样但点了不能炸。 */
   /* 状态行（「排队中 / 正在跑 / 已终止」那一行）。
      `run=true` 时前面带一个转圈的图标，告诉用户「它确实在跑，跑好会自动
@@ -348,14 +353,16 @@
       });
     });
 
-    var save = document.createElement("button");
-    save.type = "button";
-    save.className = "act act-icon";
-    save.title = "下载到本机";
-    save.setAttribute("aria-label", "下载到本机");
-    save.innerHTML = ICON_DOWN + "<span>下载</span>";
-    save.addEventListener("click", function () {
-      if (hooks.download) hooks.download(card, save);
+    /* 引用这张图（2026-11-27 取代下载）：挂成这一轮的参考图、弹键盘，
+       用户接着说「换成正面视角」就行。具体流程在 ref.js 的 quoteCard。 */
+    var quote = document.createElement("button");
+    quote.type = "button";
+    quote.className = "act act-icon";
+    quote.title = "引用这张图改";
+    quote.setAttribute("aria-label", "引用这张图改");
+    quote.innerHTML = ICON_REF + "<span>引用</span>";
+    quote.addEventListener("click", function () {
+      if (hooks.quote) hooks.quote(card, quote);
     });
 
     /* 「重画」= 换种子再来一张；卡住的那张换成「重试」，同一个意思但
@@ -375,7 +382,7 @@
     });
 
     card.acts.appendChild(copy);
-    card.acts.appendChild(save);
+    card.acts.appendChild(quote);
     card.acts.appendChild(again);
   }
 

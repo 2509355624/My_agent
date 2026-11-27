@@ -95,18 +95,33 @@ class TestBubbleKeepsRefs(unittest.TestCase):
 
 
 class TestDownloadButton(unittest.TestCase):
-    """3. 复制旁边要有下载。"""
+    """3. 复制旁边原来要有下载；2026-11-27 用户拍板换成「引用」。"""
 
     def test_three_buttons_in_order(self):
+        """复制 | 引用 | 重画，顺序不许乱（下载按钮已换成引用）。"""
         # 三个按钮的拼装 2026-11-24 拆到了 card.js
         js = _read("js/card.js")
         i = js.index("function buildActs")
         seg = js[i:js.index("function copyText", i)]
-        self.assertIn("下载", seg)
+        self.assertIn("引用", seg)
+        self.assertNotIn("下载到本机", seg, "下载入口已按用户要求撤掉")
         self.assertLess(seg.index("acts.appendChild(copy)"),
-                        seg.index("acts.appendChild(save)"))
-        self.assertLess(seg.index("acts.appendChild(save)"),
+                        seg.index("acts.appendChild(quote)"))
+        self.assertLess(seg.index("acts.appendChild(quote)"),
                         seg.index("acts.appendChild(again)"))
+
+    def test_quote_uses_chat_upload_and_skips_frontend_describe(self):
+        """引用走 `cr_` 临时引用（后端 `_web_images` 只认它），并且
+           `pre: true` 让前端不再识一次图——只留 `_revise` 读那一次。
+
+           另外焦点要在点击当下给（手机键盘只认用户手势那一帧）。"""
+        js = _read("js/ref.js")
+        i = js.index("function quoteCard")
+        seg = js[i:js.index("function init", i)]
+        self.assertIn("global.WSGen.chatUpload", seg)
+        self.assertIn("pre: true", seg)
+        self.assertIn("say.focus()", seg, "点引用要立刻把键盘叫起来")
+        self.assertNotIn("el.say.value =", seg, "不许把原 tags 灌进输入框")
 
     def test_download_uses_anchor(self):
         """下载**落在本机**这一步用 `<a download>`；取字节走本地缓存优先。

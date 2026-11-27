@@ -367,6 +367,83 @@
     });
   }
 
+  // ── 引用已出好的图（2026-11-27） ──────────────────────
+
+  /* 正在上传的张数：`send()` 见到 >0 就先别发——不然「图还没挂上就点了
+     发送」会悄悄退化成一张纯文生图，用户只会觉得「我明明引用了它」。 */
+  var pending = 0;
+
+  function toDataUrl(blob) {
+    return new Promise(function (resolve, reject) {
+      if (!global.FileReader) { reject(new Error("no FileReader")); return; }
+      var fr = new global.FileReader();
+      fr.onload = function () { resolve(String(fr.result || "")); };
+      fr.onerror = function () { reject(fr.error || new Error("read fail")); };
+      fr.readAsDataURL(blob);
+    });
+  }
+
+  /* 卡片上的「引用」：把这张已经出好的图挂成这一轮的参考图。
+
+     用户 2026-11-27 定：**不往输入框填原提示词**——输入栏很窄，他要的是
+     「我接着说一句」，不是去编辑一长串 tags。点一下就把键盘叫起来、挂上
+     这张图，用户直接打「换成正面视角看向镜头」再发送。
+
+     挂 `cr_` 临时引用（`/api/gen/chat-upload`）而不是画廊私有 ref：工作台
+     ask 路径的 `_web_images()` 只认 `cr_`，别的形态会被丢掉，等于没带图。
+
+     `pre: true` = 「前端别再识一次图」：`send()` 见到 pre 直接交给后端，
+     由 `_revise` 读一次、自己判要不要垫图。相册上传那条要前端读一遍、
+     后端再读一遍（用户 2026-11-27 说多余），引用这条不再重复。 */
+  function quoteCard(card) {
+    var say = $("say");
+    // 焦点必须在点击的同步栈里给；等异步回来再 focus，键盘不会弹。
+    if (say) { try { say.focus(); } catch (e) { /* 忽略 */ } }
+    var file = card && (card.file || (card.rec && card.rec.file));
+    if (!file) {
+      if (global.WSChat) global.WSChat.sysNote("这张还没出来，等它画完再引用");
+      return;
+    }
+    var src = global.WSGen.img(file, (global.WSShot && global.WSShot.FIT) || "1m");
+    var tip = global.WSChat ? global.WSChat.busyNote("正在引用这张图…") : null;
+    pending++;
+    global.fetch(src, { credentials: "same-origin" })
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.blob();
+      })
+      .then(function (b) {
+        // 只认真图：48B 的 JSON 错误体 / 空响应都别当图（同 shot.js）
+        if (global.WSShot && global.WSShot.usable) {
+          return global.WSShot.usable(b).then(function (ok) {
+            if (!ok) throw new Error("拿回来的不是图");
+            return b;
+          });
+        }
+        return b;
+      })
+      .then(shrink)
+      .then(toDataUrl)
+      .then(function (dataUrl) { return global.WSGen.chatUpload(dataUrl); })
+      .then(function (d) {
+        if (tip) tip.remove();
+        if (!d || !d.ok || !d.ref) {
+          if (global.WSChat) {
+            global.WSChat.sysNote("引用没成功：" + ((d && d.error) || "网络断了"));
+          }
+          return;
+        }
+        addRef({ id: d.ref, ref_id: d.ref, url: src, pre: true });
+        syncHint();
+        if (say) { try { say.focus(); } catch (e2) { /* 忽略 */ } }
+      })
+      ["catch"](function () {
+        if (tip) tip.remove();
+        if (global.WSChat) global.WSChat.sysNote("引用没成功，检查网络后再点一次");
+      })
+      .then(function () { pending--; });
+  }
+
 
   function init() {
     el.bar = $("ref-bar");
@@ -395,6 +472,9 @@
     list: function () { return S.refs.slice(); },
     useSame: useSame,
     upload: upload,
+    quote: quoteCard,
+    /* 还有引用图在路上：`send()` 拿它挡一下，别让用户发出没带图的请求。 */
+    busy: function () { return pending > 0; },
     ensureDescribed: ensureDescribed,
     syncHint: syncHint,
     rehydrate: rehydrate

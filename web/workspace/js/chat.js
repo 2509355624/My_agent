@@ -174,7 +174,7 @@
   function buildActs(card, retryLabel) {
     return global.WSCard.buildActs(card, retryLabel, {
       again: function (c) { redraw(c); },
-      download: function (c, button) { downloadImage(c, button); }
+      quote: function (c) { global.WSRef.quote(c); }   // 2026-11-27 取代下载
     });
   }
 
@@ -191,10 +191,10 @@
              userNode: user };
   }
 
-  /* 铺图 / 放大 / 下载在 shot.js，FIT（1MB 档）那里只写一次，这里转发。 */
+  /* 铺图 / 放大在 shot.js，FIT（1MB 档）那里只写一次，这里转发。
+     下载能力仍在 shot.js；卡片上那个位置 2026-11-27 换成了「引用」。 */
   var FIT = global.WSShot.FIT;
   function shotEl(file) { return global.WSShot.shotEl(file); }
-  function downloadImage(card, button) { return global.WSShot.download(card, button); }
 
   /* 出图 / 失败是「一张卡走到终点」的收尾，跟轮询同一件事，在 gen_flow.js。 */
   function showImage(card, job) {
@@ -331,6 +331,8 @@
      第 3 步原先是在点发送的同一帧去取 refIds；现在识图要等，所以不能先
      commit（commit 会清空待发送列表），等识图完再清。 */
   function send() {
+    // 引用图还在上传就别发：refs 里还没它，发出去会静默变成纯文生图（2026-11-27）
+    if (global.WSRef.busy && global.WSRef.busy()) { sysNote("引用图还在准备，稍等一秒"); return; }
     var text = el.say.value.trim();
     if (!text) return;
     var refs = global.WSRef.list();
@@ -378,6 +380,7 @@
   var DIRECT_N = 1;
 
   function sendDirect() {
+    if (global.WSRef.busy && global.WSRef.busy()) { sysNote("引用图还在准备，稍等一秒"); return; }
     var text = el.say.value.trim();
     if (!text) return;
     var refs = global.WSRef.list();
