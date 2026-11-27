@@ -94,6 +94,16 @@
     card.file = job.file || "";
     card.since = 0;
     card.noted = "";
+    /* 复制源以**服务端实际喂给工作流的那串 tags** 为准（2026-11-27 用户
+       实测：点复制拿到的是用户原话，不是出图用的英文提示词）。提交那一刻
+       `submit()` 先 H.save(rec) 把原话推上去，`attach()` 再改成 tags，两次
+       写档并发时原话版可能后落地把 tags 盖掉；刷新 / 换设备从档恢复就是
+       原话。出图这一刻拿 status 回执里的 `job.prompt`（权威 tags）再覆盖
+       一次，并跟 file 一起原子落档——当场复制、重进复制都是 tags。*/
+    if (job.prompt) {
+      card.prompt = job.prompt;
+      if (card.rec) card.rec.prompt = job.prompt;
+    }
     buildActs(card);
     if (card.rec) {
       card.rec.file = job.file;
@@ -103,7 +113,7 @@
          只清本地不写服务端的话，换设备登录读回来的还是「排队中…」
          （用户 2026-11-24 看到的那张假卡就是这样留下的）。 */
       if (H.patch) H.patch(card.rec, { file: job.file, note: "", err: false,
-                                       job: "" });
+                                       prompt: card.rec.prompt, job: "" });
       card.rec.job = "";
       if (H.save) H.save(null);
     }

@@ -39,6 +39,25 @@ class TestCopyGivesRealPrompt(unittest.TestCase):
                       "提交成功要把 job.prompt 记成复制源")
         self.assertIn("card.prompt = job.prompt", seg)
 
+    def test_show_also_restores_prompt(self):
+        """2026-11-27 回归：出图收尾要用 status 回执里的权威 tags 再盖一次。
+
+        提交那一刻 `submit()` 先写原话、`attach()` 再写 tags，两次写档并发时
+        原话版可能后落地，把档里的 prompt 盖回原话；刷新后从档恢复就复制原话。
+        出图这一刻再把 `job.prompt` 写回 card / rec，并跟 file 一起 patch 落档。
+        """
+        js = _read("js", "gen_flow.js")
+        i = js.index("function showImage")
+        seg = js[i:js.index("function fail(", i)]
+        self.assertIn("card.prompt = job.prompt", seg,
+                      "出图收尾要把复制源盖回服务端权威 tags")
+        self.assertIn("card.rec.prompt = job.prompt", seg,
+                      "存档记录也要一起改，刷新恢复才是 tags")
+        # patch 里必须带 prompt，且 prompt 在清 job 之前就写出去
+        self.assertIn("prompt: card.rec.prompt", seg,
+                      "落档 patch 必须带上 prompt")
+        self.assertLess(seg.index("H.patch"), seg.index('card.rec.job = ""'))
+
     def test_server_returns_final_prompt(self):
         """最终串在 `_public(job)` 里带出去（翻译 / 画师串 / 参考图都已合并）。"""
         from app.features.image import routes as gen_api
