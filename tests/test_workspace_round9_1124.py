@@ -70,9 +70,26 @@ class TestIdleCardIsOneLine(unittest.TestCase):
     def test_placeholder_only_after_paint_starts(self):
         """占位块只在「真开始画」时才挂（gen_flow 的 running 分支）。"""
         s = _read("js/gen_flow.js")
-        i = s.index('} else if (ph === "running")')
-        seg = s[i:i + 320]
-        self.assertIn("H.spawn(card)", seg)
+        # 2026-11-27 文案合成一个三目之后就没有 `} else if` 了，判据换成
+        # 「spawn 全文只出现一次，且条件就是 running」。
+        self.assertEqual(s.count("H.spawn(card)"), 1,
+                         "占位块只该在 running 那处挂")
+        self.assertIn('if (ph === "running") H.spawn(card);', s)
+
+    def test_queue_pill_has_no_fake_progress(self):
+        """排队胶囊：粉紫小卡片 + 「正在排队」+「前面还有 N 张」，终止也在里面。
+
+        **没有进度条**：服务端拿不到真实进度，按时间画一条假的就是骗人
+        （2026-11-27 用户：「豆包它就是有一个进度条，但我这边没有进度条」）。
+        """
+        css = _read("css/pill.css")
+        self.assertIn(".card-line.is-queue", css)
+        self.assertIn(".stop-run", css, "终止按钮要包在同一张胶囊里")
+        self.assertNotIn("progress", css, "不许出现进度条：拿不到真实进度")
+        self.assertIn("正在排队", _read("js/card.js"))
+        flow = _read("js/gen_flow.js")
+        self.assertIn("ahead > 0", flow)
+        self.assertIn('"前面还有 " + ahead + " 张"', flow)
 
     def test_new_card_has_no_placeholder(self):
         s = _read("js/chat.js")

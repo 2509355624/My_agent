@@ -43,18 +43,21 @@
 
   /* 写卡片上的状态行（带不带转圈由 `run` 定，见 card.js 的 setNote）。
      `card.noted` 记最后一次写进去的那句，用来避免每 2 秒重置一次动画。 */
-  function paintNote(card, text, bad, run) {
+  function paintNote(card, text, bad, run, queue) {
     if (!card || !card.note) return;
-    if (card.noted !== text) {
+    /* queue 一起比：胶囊是 setNote 顺手加的 class，只看文字会漏刷状态切换。 */
+    if (card.noted !== text || !!card.notedQ !== !!queue) {
       if (global.WSCard && global.WSCard.setNote) {
-        global.WSCard.setNote(card.note, text, { bad: !!bad, run: run !== false });
+        global.WSCard.setNote(card.note, text,
+                             { bad: !!bad, run: run !== false, queue: !!queue });
       } else {
         card.note.hidden = false;
-        card.note.className = "note" + (bad ? " err" : "");
+        card.note.className = "note" + (bad ? " err" : "") + (queue ? " queue" : "");
         card.note.textContent = text;
       }
+      card.noted = text;
+      card.notedQ = !!queue;
     }
-    card.noted = text;
   }
 
   /* ── 卡片收尾：出图 / 失败（2026-11-25 从 chat.js 搬过来）
@@ -523,26 +526,21 @@
           // 按「正在跑」显示：探不到 ComfyUI 不等于这张没了（2026-11-26）。
           var ph = job.phase || "";
           if (checkTimeout(card, ph)) return;
-          /* 文案口径（2026-11-25 用户：「准备中……改成正在跑了，跑好之后会
-             自动弹出来」）：别让用户猜、也别用「准备中」这种听起来没动的词。
-             真有排队人数时给具体数字，没有就一句「正在跑，跑好会自动弹出来」。 */
-          var text;
-          if (ph === "lost") {
-            text = "这一张没在跑了（服务那边已经没有它），重新发一次吧";
-          } else if (ph === "running") {
-            /* 真开始画了才铺那块 3:4 的底纹（2026-11-24）：排队阶段只是
-               一行字，别再先占出一个大空壳。 */
-            H.spawn(card);
-            text = "正在画了，画好会自动弹出来" + tail;
-          } else if (ph === "queued") {
-            var n = d.queue_depth;
-            text = (typeof n === "number" && n > 0)
-              ? "正在跑，前面还有 " + n + " 张，画好会自动弹出来" + tail
-              : "正在跑，画好会自动弹出来" + tail;
-          } else {
-            text = "正在跑，画好会自动弹出来" + tail;
-          }
-          paintNote(card, text, ph === "lost");
+          /* 「前面还有几张」由服务端算好给（`ahead`，2026-11-27）：本进程队列
+             + 别的进程（QQ / 漫画台）压着的一起算，比前端自己数准。0 或不给 =
+             下一个就轮到它，统一说「正在跑」（用户：「前面 0 张就统一正在跑」）。 */
+          var ahead = (typeof job.ahead === "number") ? job.ahead : 0;
+          /* 排队 → 粉紫小胶囊：圆点 + 「正在排队」+「前面还有 N 张」，「终止」
+             由 card-line 接在同一张里（见 setNote）。真开画才铺 3:4 底纹，
+             排队阶段别先占一个大空壳（2026-11-24）。 */
+          var q = ph !== "lost" && ph !== "running" && ahead > 0;
+          var text = ph === "lost"
+            ? "这一张没在跑了（服务那边已经没有它），重新发一次吧"
+            : ph === "running" ? "正在画了，画好会自动弹出来" + tail
+            : q ? "前面还有 " + ahead + " 张"
+            : "正在跑，画好会自动弹出来" + tail;
+          if (ph === "running") H.spawn(card);
+          paintNote(card, text, ph === "lost", ph !== "lost", q);
           if (card.rec) card.rec.note = text;
         }
       });

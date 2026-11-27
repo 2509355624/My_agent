@@ -261,6 +261,25 @@
   function setNote(note, text, opts) {
     var o = opts || {};
     note.hidden = false;
+    /* 排队胶囊（2026-11-27）。`card-line` 里正好只装了两样东西——状态行和
+       「终止」按钮——所以给它加一个 class 就够它们变成同一张胶囊，DOM 不用
+       挪。别的时候必须把这个 class 撤掉，否则出图之后卡片上还扣着一个空壳。 */
+    var line = note.parentNode;
+    if (line && line.classList) {
+      if (o.queue) line.classList.add("is-queue");
+      else line.classList.remove("is-queue");
+    }
+    if (o.queue) {
+      /* 结构：[圆点][正在排队][前面还有 N 张]，「终止」由 card-line 接在后面。 */
+      note.className = "note queue";
+      note.innerHTML = '<span class="q-dot"></span>' +
+                       '<span class="q-tag">正在排队</span>' +
+                       '<span class="note-text"></span>';
+      var qn = note.querySelector ? note.querySelector(".note-text") : null;
+      if (qn) qn.textContent = text;
+      else note.textContent = "正在排队 " + text;   // DOM 桩兜底
+      return note;
+    }
     note.className = "note" + (o.bad ? " err" : "") + (o.run ? " running" : "");
     note.innerHTML = (o.run ? ICON_SPIN : "") +
       '<span class="note-text"></span>';

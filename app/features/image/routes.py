@@ -418,6 +418,9 @@ def _public(job):
     return {k: job.get(k) for k in ("id", "skill", "prompt", "seed",
                                     "state", "error", "file", "ts",
                                     "phase", "pid", "stuck",
+                                    # 「前面还有几张」（2026-11-27）：
+                                    # 排队阶段说人话用，见 ahead_by_tag()。
+                                    "ahead",
                                     "steps", "steps_label", "cfg",
                                     "negative", "width", "height",
                                     "size_label", "secs", "landscape",
@@ -1669,6 +1672,9 @@ def api_status():
     for job in jobs:
         if job["state"] == "queued":
             job["phase"] = _phase_of(job)
+            # 「前面还有几张」：前端拿它把「正在提交」说成「前面还有 3 张」
+            # （2026-11-27）。后台算，因为只有队列那边知道谁排在谁前面。
+            job["ahead"] = image_jobs.ahead_by_tag(job["id"], job.get("skill"))
     return jsonify({"ok": True, "jobs": [_public(j) for j in jobs],
                     "queue_depth": depth, "comfy_online": _comfy_up})
 

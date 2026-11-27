@@ -200,6 +200,39 @@ class AheadOfTest(unittest.TestCase):
         third = self._enqueue(target_id="10003")
         self.assertEqual(image_jobs.ahead_of(third), 5)
 
+    def test_ahead_by_tag_reads_queue_position(self):
+        """按编号查（HTTP 层只有编号，没有 Job 对象）：排第二的报 1。"""
+        first = self._enqueue(target_id="10001")
+        second = self._enqueue(target_id="10002")
+        self.assertEqual(image_jobs.ahead_by_tag(first.tag, "anima-line"), 0)
+        self.assertEqual(image_jobs.ahead_by_tag(second.tag, "anima-line"), 1)
+        self._fake_other(3)
+        self.assertEqual(image_jobs.ahead_by_tag(second.tag, "anima-line"), 4)
+
+    def test_ahead_by_tag_unknown_tag_is_queue_depth(self):
+        """查不到的编号 = worker 还没把它取走（工作台「正在提交」就停在这一段）。
+
+        这时它排在**所有现存任务后面**，所以要给队列总量 + 别的进程，
+        不能给 0——给 0 前端就会说「正在跑」，用户看不到前面还压着几张。
+        """
+        self._enqueue(target_id="10001")
+        self._enqueue(target_id="10002")
+        self._fake_other(3)
+        self.assertEqual(
+            image_jobs.ahead_by_tag("GP-not-yet-queued", "anima-line"), 5)
+
+    def test_ahead_by_tag_nai_ignores_local_queue(self):
+        """NAI 走云端不抢锁：本地压着 5 张也不该算进它的前面。"""
+        self._enqueue(target_id="10001")
+        self._enqueue(target_id="10002")
+        self._fake_other(5)
+        nai = self._enqueue(skill="nai", target="private", target_id="20001")
+        self.assertEqual(image_jobs.ahead_by_tag(nai.tag, "nai"), 0)
+
+    def test_ahead_by_tag_empty_is_none(self):
+        """没编号就老实说不知道，别拿 0 冒充「不用等」。"""
+        self.assertIsNone(image_jobs.ahead_by_tag("", "anima-line"))
+
     def test_nai_is_not_affected(self):
         """NAI 走云端不抢锁：本地压着 5 张也不该让 NAI 报「前面还有 5 张」。"""
         self._fake_other(5)

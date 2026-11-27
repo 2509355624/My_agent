@@ -1,0 +1,127 @@
+/* 排队胶囊（2026-11-27）。用户要的是「豆包那种」：横向一张小卡片、粉紫
+   底、有点发光、里面一个标签说正在排队 + 前面还有几张，终止按钮也包进去。
+   （从 chat.css 拆出来单独一个文件：那边已经贴着 600 行硬线。只在聊天页
+   加载，紧跟 chat.css 之后——要盖掉那里对 .note / .stop-run 的默认写法。）
+
+   **没有进度条**：服务端拿不到真实进度，画一条按时间推进的假进度条就是骗人。
+   这里只用一道扫过的高光和一颗呼吸的小圆点表示「它在往下走」，不表示百分比。
+
+   `.card-line` 里正好只装两样东西——状态行和终止按钮——所以给这一行加
+   `is-queue` 就够它们变成同一张胶囊，DOM 一个节点都不用挪。 */
+.card-line.is-queue {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 5px 4px 11px;
+  border-radius: 999px;
+  background: linear-gradient(100deg, rgba(255, 143, 196, .20), rgba(150, 110, 246, .24));
+  box-shadow: inset 0 0 0 1px rgba(196, 140, 255, .34),
+              0 6px 18px -8px rgba(150, 110, 246, .60);
+  position: relative;
+  overflow: hidden;
+}
+
+/* 扫过一道高光。开了「减少动效」的系统设置里会停掉（见文件末尾）。 */
+.card-line.is-queue::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .42), transparent);
+  transform: translateX(-130%);
+  animation: ws-sweep 2.8s ease-in-out infinite;
+}
+@keyframes ws-sweep {
+  0%        { transform: translateX(-130%); }
+  55%, 100% { transform: translateX(240%); }
+}
+
+.card-line.is-queue .note.queue {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  padding: 0;
+  font-size: 12.5px;
+  color: var(--text);
+  text-align: left;
+  white-space: nowrap;
+}
+
+/* 小圆点：呼吸灯，表示「在等」，不是进度 */
+.card-line.is-queue .q-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #d4537e;
+  box-shadow: 0 0 0 3px rgba(212, 83, 126, .16);
+  animation: ws-breathe 1.8s ease-in-out infinite;
+}
+@keyframes ws-breathe {
+  0%, 100% { opacity: .55; transform: scale(.85); }
+  50%      { opacity: 1;   transform: scale(1); }
+}
+
+.card-line.is-queue .q-tag {
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: linear-gradient(100deg, #d4537e, #7f77dd);
+  color: #fff;
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+
+/* 「终止」在胶囊里要显眼（用户：「高亮显示，点击那个按钮就终止」）：
+   换成实心白底 + 粉紫字，不再是原来那条灰边胶囊。 */
+.card-line.is-queue .stop-run {
+  margin: 0;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .86);
+  color: #534ab7;
+  font-size: 12px;
+  font-weight: 500;
+  box-shadow: 0 1px 3px rgba(76, 42, 120, .16);
+}
+.card-line.is-queue .stop-run:active {
+  background: #fff;
+  transform: scale(.97);
+}
+
+/* 深色主题：浅色玻璃压在暗底上像块补丁，底色和外发光都要重新调 */
+[data-theme="dark"] .card-line.is-queue {
+  background: linear-gradient(100deg, rgba(255, 143, 196, .12), rgba(150, 110, 246, .18));
+  box-shadow: inset 0 0 0 1px rgba(196, 140, 255, .24),
+              0 8px 24px -10px rgba(168, 120, 255, .85);
+}
+[data-theme="dark"] .card-line.is-queue .note.queue { color: #cecbf6; }
+[data-theme="dark"] .card-line.is-queue .q-dot {
+  background: #ed93b1;
+  box-shadow: 0 0 0 3px rgba(237, 147, 177, .18);
+}
+[data-theme="dark"] .card-line.is-queue .q-tag {
+  background: linear-gradient(100deg, #993556, #534ab7);
+  color: #fbeaf0;
+}
+[data-theme="dark"] .card-line.is-queue .stop-run {
+  background: rgba(255, 255, 255, .14);
+  color: #cecbf6;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
+}
+[data-theme="dark"] .card-line.is-queue .stop-run:active {
+  background: rgba(255, 255, 255, .22);
+}
+
+/* 系统里开了「减少动效」：扫光和呼吸灯都停，胶囊本身还在，
+   一眼仍能看出是在排队。 */
+@media (prefers-reduced-motion: reduce) {
+  .card-line.is-queue::after { animation: none; opacity: 0; }
+  .card-line.is-queue .q-dot { animation: none; }
+}

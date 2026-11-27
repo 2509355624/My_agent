@@ -13,7 +13,7 @@ from html.parser import HTMLParser
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WS = os.path.join(ROOT, "web", "workspace")
 
-CHAT_FILES = ("chat.html", "css/chat.css", "css/sheet.css",
+CHAT_FILES = ("chat.html", "css/chat.css", "css/sheet.css", "css/pill.css",
               "js/gen.js", "js/chat.js", "js/stack.js", "js/views.js",
               "js/card.js", "js/gen_flow.js", "js/shot.js", "js/redraw.js",
               "js/direct.js", "js/scroll.js")

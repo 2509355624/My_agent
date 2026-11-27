@@ -1274,6 +1274,48 @@ def ahead_of(job):
     return mine
 
 
+def ahead_by_tag(tag, skill=""):
+    """按**编号**问「前面还有几张」（2026-11-27）。
+
+    `ahead_of()` 吃的是 Job 对象，HTTP 层手上只有任务编号（`job["id"]`，
+    入队时就是 `tag`），拿不到那个对象。所以这里补一个按编号问的口子，
+    三种情况都收在这一处：
+
+      · 已经在跑（在 running 里）        → 0
+      · 排在 queue 里                    → 它前面的 + 别的进程压着的
+      · 两边都没有（worker 还没取走它）  → 它排在所有现存任务后面，
+                                           就等于当前队列总量 + 别人的
+
+    第三种正是工作台最常见的那个阶段：提交成功、状态还是「正在提交」，
+    前端据此能说出「前面还有 3 张」而不是一句空的「正在跑」。
+
+    跨进程口径与 `ahead_of()` 一致（2026-11-25 用户原话：「我不在乎前面
+    那 3 张是网页端的还是 QQ 端的，我只需要知道一个准确的数」）。
+    两条通道仍分开算：NAI 走云端不抢本地锁，把本地那几张加进去会让一张
+    立刻能开画的图显示「前面还有十几张」，比不报还糟。
+
+    查不到编号返回 None —— 调用方据此判断「这张不在这套队列里」，不猜。
+    """
+    tag = str(tag or "")
+    if not tag:
+        return None
+    chan = _NAI if skill in NAI_SKILLS else _COMFY
+    with _lock:
+        for j in chan.running:
+            if getattr(j, "tag", "") == tag:
+                return 0
+        order = sorted(chan.queue, key=_order)
+        mine = len(chan.running) + len(order)      # 不在队列里 = 排在最后
+        for i, j in enumerate(order):
+            if getattr(j, "tag", "") == tag:
+                mine = len(chan.running) + i
+                break
+    # 锁已经放开：`pending_others()` 自己会读别的进程的计数文件，
+    # 在锁里调它是嵌套获取（_lock 不是可重入锁），会直接死锁。
+    if chan.local:
+        return mine + comfy_gate.pending_others()
+    return mine
+
 def _src_label(job):
     """队列快照里给这张图标来源（状态页用，2026-11-22）。
 
