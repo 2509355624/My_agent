@@ -202,11 +202,15 @@ class ParseBatchTest(unittest.TestCase):
 
 
 class NoLimitTest(unittest.TestCase):
-    """2026-11-25 用户拍板：跑图台**没有任何配额/限流**。
+    """2026-11-25 用户拍板：跑图台**不设自己的配额/限流**。
 
     删掉的是四条（原来都在 `bench/web.py`）：每 IP 每小时 8 张、高峰禁批量、
-    全局在途 ≤4、每令牌在途 ≤1。这里锁住「它们不许回来」——任何人再往
-    gen-many 里加一道闸，这几条会立刻红。
+    全局在途 ≤4、每令牌在途 ≤1。这里锁住「它们不许回来」——任何人在本模块
+    重建一套名额计数/时段表，这几条会立刻红。
+
+    2026-11-27 补充：这不排斥复用**全站那一条** `image_jobs.MAX_INFLIGHT=5`
+    做提交前的人话提示（`test_jobs_has_no_peak_layer` 也锁它是 5）。闸的真相源
+    只有 enqueue 一处，跑图台提前算一下只是把拒收原因如实显示，不是第二套闸。
     """
 
     def setUp(self):
@@ -559,6 +563,81 @@ class PageGuardTest(unittest.TestCase):
         # 光改 bSlots 不够：界面上的 <select> 还得跟着变，否则用户看到的是
         # 「值改了但四栏没动」。renderSlots 结尾必须按数据显式对齐 value。
         self.assertIn("sel.value = mine;", self.html)
+
+
+class DoubleEnqueueFixTest(unittest.TestCase):
+    """2026-11-27：一批五连被入队两遍 + 超额被静默打假绿勾。
+
+    现场：QQ 2141733573 一批五连，日志 10 条「直达入队」却只扣 5 张额度。
+    根因两处：① `_run_batch` 同步 `_run_channel` 入队后，又起 `_run` 线程
+    对同一 item 再入一次；② enqueue 的在途拒收不带「错误：」前缀，
+    `_run_batch` 当成成功打绿勾、回执报「都排上了」。
+    """
+
+    def setUp(self):
+        with open(rb.__file__, encoding="utf-8") as f:
+            self.src = f.read()
+
+    def test_no_second_run_thread_in_batch(self):
+        # _run_batch 里不许再起 _run 线程重复入队。取 `def _run_batch` 到
+        # `class _SwallowReceipts` 之间的源码断言。
+        body = self.src[self.src.index("def _run_batch"):
+                        self.src.index("class _SwallowReceipts")]
+        self.assertNotIn("threading.Thread(target=_run", body,
+                         "同一张图不许入队两遍")
+        self.assertIn('_JOBS[tag]["state"] = "done"', body,
+                      "同步入队后要自己收尾状态")
+
+    def test_enqueue_reject_turned_into_error(self):
+        # enqueue 拒收的不带前缀人话要翻成「错误：」，否则 _run_batch 判成功。
+        i = self.src.index("def _run_channel")
+        j = self.src.index("def _notify_fail")
+        body = self.src[i:j]
+        self.assertIn('"已经排着" in out', body)
+        self.assertIn('"错误："', body)
+
+    def test_submit_prechecks_inflight(self):
+        # api_gen_many 提交前按全站口径算在途，超额整批退回并给人话。
+        i = self.src.index("def api_gen_many")
+        j = self.src.index("def api_batch_status")
+        body = self.src[i:j]
+        self.assertIn("inflight_count(target, target_id)", body)
+        self.assertIn("inflight_limit()", body)
+        self.assertIn("cur + len(rows) > limit", body)
+        self.assertIn("429", body)
+
+    def test_precheck_rejects_when_full(self):
+        # 真跑接口层：把 inflight_count 打桩成已满，应 429 且不入队。
+        import app.features.image.jobs as image_jobs
+        from unittest import mock
+        self.app = _app()
+        self.c = self.app.test_client()
+        body = {"k": _tok(), "mode": "text", "prompt": "一只猫",
+                "items": [{"skill": s} for s in _chan_ids(5)]}
+        with mock.patch.object(rb, "_run_batch") as run_batch, \
+             mock.patch.object(image_jobs, "inflight_count", return_value=3):
+            r = self.c.post("/api/runbench/gen-many", json=body)
+        self.assertEqual(r.status_code, 429, r.get_json())
+        j = r.get_json()
+        self.assertFalse(j["ok"])
+        self.assertIn("最多 5 张", j["error"])
+        self.assertIn("3 张", j["error"])
+        run_batch.assert_not_called()
+
+    def test_precheck_allows_when_room(self):
+        # 在途 0、这批 5 张：照常放行。
+        import app.features.image.jobs as image_jobs
+        from unittest import mock
+        self.app = _app()
+        self.c = self.app.test_client()
+        body = {"k": _tok(), "mode": "text", "prompt": "一只猫",
+                "items": [{"skill": s} for s in _chan_ids(5)]}
+        with mock.patch.object(rb, "_run_batch") as run_batch, \
+             mock.patch.object(image_jobs, "inflight_count", return_value=0):
+            r = self.c.post("/api/runbench/gen-many", json=body)
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertTrue(r.get_json()["ok"])
+        run_batch.assert_called_once()
 
 
 if __name__ == "__main__":

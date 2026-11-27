@@ -366,6 +366,23 @@ def api_gen_many():
         return jsonify({"ok": False, "error": err}), code
     mode, rows = parsed_batch
 
+    # 在途上限（2026-11-27 用户拍板）：一个会话同时在途仍受全站那道
+    # MAX_INFLIGHT=5 管——11-25 删的是跑图台**自己**那几条闸（每令牌在途、
+    # 全局在途、每 IP 每小时），不是这道全站闸。这里只做**前置人话提示**：
+    # 提交那一刻按同一口径算还剩几个位，不够就整批退回并说清楚，免得用户
+    # 以为排上了、后面几张却被 enqueue 静默拒掉。
+    # 2026-11-27 现场：QQ 2141733573 一批五连被入两遍，日志 10 条「直达入队」
+    # 却只扣了 5 张额度——重复的那遍全被 in-flight 闸拒了，回执还报成功。
+    # 真正准入仍在 enqueue，二者口径同源，不是两套闸。
+    from app.features.image import jobs as image_jobs
+    limit, _label, _window = image_jobs.inflight_limit()
+    cur = image_jobs.inflight_count(target, target_id)
+    if cur + len(rows) > limit:
+        return jsonify({"ok": False, "busy": True,
+                        "error": ("现在有 %d 张在画或排队，同时最多 %d 张；"
+                                  "这批 %d 张先不收，等前面出完再跑。"
+                                  % (cur, limit, len(rows)))}), 429
+
     bid = "B-" + time.strftime("%Y%m%d-%H%M%S") + "-" + os.urandom(2).hex()
     with _BATCH_LOCK:
         _BATCHES[bid] = {"token": k, "state": "queued", "total": len(rows),
@@ -543,9 +560,15 @@ def _run_batch(bid, k, parsed, mode, rows):
                 tag = "RB-" + time.strftime("%Y%m%d-%H%M%S") + "-" + os.urandom(2).hex()
                 _batch_add_job(bid, tag, k, item)
                 _batch_advance(bid, tag=tag)
-                threading.Thread(target=_run, args=(
-                    tag, k, parsed, "channel", item["skill"],
-                    item["prompt"], item["image"]), daemon=True).start()
+                # 入队已在上面同步完成（「识完一张立刻入队一张」）；这里只把
+                # 状态收尾。原来还起一个 _run 线程、里面再调一次 _run_channel，
+                # 等于同一张图入队两遍——2026-11-27 实测一批五连打出 10 条
+                # 「直达入队」日志、额度只扣 5 张（后 5 张被 in-flight 闸拒）。
+                with _JOBS_LOCK:
+                    if tag in _JOBS:
+                        _JOBS[tag]["state"] = "done"
+                log.info("跑图台 %s：%s 用「%s」出图已提交",
+                         target, target_id, item["skill"])
                 sent += 1
                 queued_skills.append(item["skill"])
     except Exception as e:
@@ -692,8 +715,18 @@ def _run_channel(prompt, skill, image="", tags=None):
         # 渠道，但点名渠道是最高优先级，_translate 里已把话说死，这里照单入队。
         # skip_dup=True：跑图台连排 5 张同渠道同提示词（种子各不同）是抽卡，
         # 不是模型的重复误提交——查重守卫只管 QQ 对话那条路（2026-11-26）。
-        return dg._enqueue(trans["skill"], trans["prompt"], text,
-                           skip_dup=True)
+        out = dg._enqueue(trans["skill"], trans["prompt"], text,
+                          skip_dup=True)
+        # enqueue 的拒收（在途满 / 队列满 / 重渠道满）返回的是**不带前缀**的
+        # 人话，direct_gen._enqueue 只在「错误：」开头时才认失败——原样返回
+        # 会被 _run_batch 当成入队成功、打假绿勾、回执报「都排上了」。
+        # 这里翻成带前缀的一句（只截第一句，去掉尾巴那句喂模型的指令），
+        # 让批量回执如实显示「X 张没排上：这个会话已经排着 5 张了」。
+        # 入口 api_gen_many 已前置拦大额超额；这道兜住并发/单张路径的拒收。
+        if (out and not out.startswith("错误")
+                and "已经排着" in out):
+            return "错误：" + out.split("。")[0].strip() + "。"
+        return out
     return "错误: 提示词转译结果看不懂，再试一次。"
 
 
