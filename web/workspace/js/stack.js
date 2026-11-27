@@ -8,7 +8,7 @@
   var EDGE = 24;              // 触屏：手指起点离左边缘多少像素内才算「边缘右滑」
 
   var el = {};
-  var S = { top: null, allStyles: false, depth: 0, views: [], restoring: false };
+  var S = { top: null, depth: 0, views: [], restoring: false };
   var VIEW_KEY = "ws_view_v1";
 
   function saveView(name, opts) {
@@ -300,70 +300,97 @@
     return rest.length > 18 ? rest.slice(0, 18) + "…" : rest;
   }
 
+  /* 一张画风卡：抽屉和全屏画风页共用同一份构造（封面/选中/简介都只写一处）。
+     44/49 个渠道有封面，没图的藏 img 露占位，跟跑图台 coverHtml 一个做法。 */
+  function styleCard(c, cur, onPick) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "style-card" + (c.id === cur ? " on" : "");
+
+    var th = document.createElement("div");
+    th.className = "s-thumb";
+    var img = document.createElement("img");
+    img.loading = "lazy";
+    img.decoding = "async";
+    img.alt = labelOf(c);
+    img.src = "/api/runbench/cover/" + encodeURIComponent(c.id);
+    img.onerror = function () { img.style.display = "none"; };
+    var ph = document.createElement("div");
+    ph.className = "s-ph";
+    ph.textContent = labelOf(c);
+    th.appendChild(ph);
+    th.appendChild(img);
+    b.appendChild(th);
+
+    var tick = document.createElement("span");
+    tick.className = "s-tick";
+    tick.textContent = "✓";
+    b.appendChild(tick);
+
+    var meta = document.createElement("div");
+    meta.className = "s-meta";
+    var nm = document.createElement("div");
+    nm.className = "s-name";
+    nm.textContent = labelOf(c);
+    meta.appendChild(nm);
+    var brief = briefOf(c);
+    if (brief) {
+      var sub = document.createElement("div");
+      sub.className = "s-sub";
+      sub.textContent = brief;
+      meta.appendChild(sub);
+    }
+    b.appendChild(meta);
+
+    b.addEventListener("click", onPick);
+    return b;
+  }
+
+  /* 设为默认这件事两处一样，区别只在选完怎么收尾：抽屉里原地重绘并关掉，
+     全屏页退回聊天页。派发 ws:skill 让顶部 chip 跟着变。 */
+  function pickStyle(cid) {
+    global.WSGen.setDefaultSkill(cid);
+    global.dispatchEvent(new global.CustomEvent("ws:skill",
+      { detail: { id: cid } }));
+  }
+
   function renderStyles() {
     global.WSGen.channels().then(function (d) {
       var list = (d && d.ok && d.channels) || [];
       var cur = global.WSGen.defaultSkill() || ((list[0] || {}).id || "");
 
       el.list.innerHTML = "";
-      var show = S.allStyles ? list : list.slice(0, SHOW_HEAD);
-
-      show.forEach(function (c) {
-        var b = document.createElement("button");
-        b.type = "button";
-        b.className = "style-card" + (c.id === cur ? " on" : "");
-
-        /* 封面复用跑图台那套：44/49 个渠道有图。没有的藏掉 img 露占位，
-           跟跑图台 coverHtml 一个做法。img 长边 480 的缩略图 ~30KB，
-           lazy 加载，展开全部 49 个也不会一次拉完。 */
-        var th = document.createElement("div");
-        th.className = "s-thumb";
-        var img = document.createElement("img");
-        img.loading = "lazy";
-        img.decoding = "async";
-        img.alt = labelOf(c);
-        img.src = "/api/runbench/cover/" + encodeURIComponent(c.id);
-        img.onerror = function () { img.style.display = "none"; };
-        var ph = document.createElement("div");
-        ph.className = "s-ph";
-        ph.textContent = labelOf(c);
-        th.appendChild(ph);
-        th.appendChild(img);
-        b.appendChild(th);
-
-        var tick = document.createElement("span");
-        tick.className = "s-tick";
-        tick.textContent = "✓";
-        b.appendChild(tick);
-
-        var meta = document.createElement("div");
-        meta.className = "s-meta";
-        var nm = document.createElement("div");
-        nm.className = "s-name";
-        nm.textContent = labelOf(c);
-        meta.appendChild(nm);
-        var brief = briefOf(c);
-        if (brief) {
-          var sub = document.createElement("div");
-          sub.className = "s-sub";
-          sub.textContent = brief;
-          meta.appendChild(sub);
-        }
-        b.appendChild(meta);
-
-        b.addEventListener("click", function () {
-          global.WSGen.setDefaultSkill(c.id);
-          global.dispatchEvent(new global.CustomEvent("ws:skill",
-            { detail: { id: c.id } }));
+      /* 抽屉只留 6 张快速切换。49 张全塞进 66vh 必然压成扁条——全部放到
+         独立的全屏子页（用户 2026-11-27 拍板）。 */
+      list.slice(0, SHOW_HEAD).forEach(function (c) {
+        el.list.appendChild(styleCard(c, cur, function () {
+          pickStyle(c.id);
           renderStyles();
           closeStyles();
-        });
-
-        el.list.appendChild(b);
+        }));
       });
 
-      el.more.hidden = S.allStyles || list.length <= SHOW_HEAD;
-      el.more.textContent = "▾ 展开全部 " + list.length + " 个画风";
+      el.more.hidden = list.length <= SHOW_HEAD;
+      el.more.textContent = "▾ 查看全部 " + list.length + " 个画风 →";
+    });
+  }
+
+  /* 全屏画风页（2026-11-27）：点「查看全部」关抽屉滑到这里，49 张卡铺满整屏
+     （不再被 66vh 挤扁），点一张设为默认并自动退回聊天页。复用现成子页栈，
+     ✕ / 左滑 / 浏览器返回都能退，不新造一套页面机制。 */
+  function mountStyles(body) {
+    global.WSGen.channels().then(function (d) {
+      var list = (d && d.ok && d.channels) || [];
+      var cur = global.WSGen.defaultSkill() || ((list[0] || {}).id || "");
+      var grid = document.createElement("div");
+      grid.className = "style-grid";
+      list.forEach(function (c) {
+        grid.appendChild(styleCard(c, cur, function () {
+          pickStyle(c.id);
+          back();
+        }));
+      });
+      body.appendChild(grid);
     });
   }
 
@@ -388,9 +415,12 @@
     });
     bindSheetDrag();
 
+    /* 查看全部：关抽屉、滑入全屏画风页，不再在 66vh 抽屉里塞 49 张扁卡。
+       closeStyles 有 280ms 的 hidden 延时，子页滑入正好盖住它；退回时抽屉
+       已经 hidden，不会冒出来。 */
     el.more.addEventListener("click", function () {
-      S.allStyles = true;
-      renderStyles();
+      closeStyles();
+      push("styles");
     });
 
     /* 聊天页自己也要占一条历史记录（2026-11-26 用户：「AI 创作按返回整个大退」）。
@@ -447,6 +477,9 @@
       while (S.depth > want && S.top) closeNow();
     });
   }
+
+  /* 全屏画风页挂在现成子页壳上，跟 gallery/comic 一个注册法。 */
+  global.WSViews.register("styles", { mount: mountStyles });
 
   /* top()：当前真正在眼前的子页（没有就是 null）。聊天页靠它决定消息该
      落在哪——退页动画还没播完时，那一页虽然还在 DOM 里、也还带着 .in，

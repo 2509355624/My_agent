@@ -202,9 +202,10 @@ class TestStyleSheetCovers(unittest.TestCase):
         self.assertIn("aspect-ratio: 3 / 4", block)
 
     def test_cover_reuses_runbench_endpoint_with_fallback(self):
-        """封面走跑图台现成的免令牌缩略图，没图的藏 img 露文字占位。"""
+        """封面走跑图台现成的免令牌缩略图，没图的藏 img 露文字占位。
+           构造抽进了 styleCard，抽屉和全屏页共用这一份。"""
         js = _read("js/stack.js")
-        i = js.index("function renderStyles()")
+        i = js.index("function styleCard(c, cur, onPick)")
         block = js[i:js.index("\n  }", i)]
         self.assertIn('"/api/runbench/cover/" + encodeURIComponent(c.id)', block)
         self.assertIn('img.loading = "lazy"', block)
@@ -213,10 +214,14 @@ class TestStyleSheetCovers(unittest.TestCase):
         self.assertNotIn("style-item", block)
 
     def test_click_still_sets_default_and_closes(self):
-        """加了封面不能把「点一下设为默认就退出」这个行为弄丢。"""
+        """加了封面不能把「点一下设为默认就退出」这个行为弄丢。
+           设为默认抽进了 pickStyle，抽屉里点完仍要 render + close。"""
         js = _read("js/stack.js")
-        self.assertIn("global.WSGen.setDefaultSkill(c.id)", js)
-        self.assertIn("closeStyles();", js)
+        i = js.index("function renderStyles()")
+        block = js[i:js.index("\n  }", i)]
+        self.assertIn("pickStyle(c.id)", block)
+        self.assertIn("closeStyles();", block)
+        self.assertIn("global.WSGen.setDefaultSkill(cid)", js)  # pickStyle 里
 
     def test_cards_not_flattened_in_short_sheet(self):
         """抽屉只有 66vh 高，grid 默认 stretch 会把行压进去、封面变成窄条。
@@ -229,6 +234,40 @@ class TestStyleSheetCovers(unittest.TestCase):
         block = css[idx:css.index("}", idx)]
         self.assertIn("flex: 0 0 auto", block)
         self.assertIn("aspect-ratio: 3 / 4", block)
+
+    def test_expand_all_opens_fullscreen_subview(self):
+        """「查看全部」不能再把 49 张塞进矮抽屉：关抽屉 + 滑入全屏子页。"""
+        js = _read("js/stack.js")
+        i = js.index('el.more.addEventListener("click"')
+        block = js[i:js.index("});", i)]
+        self.assertIn("closeStyles()", block)
+        self.assertIn('push("styles")', block)
+        self.assertNotIn("S.allStyles", js)
+
+    def test_fullscreen_styles_page_renders_all_and_goes_back(self):
+        """全屏页铺全部画风，点一张设为默认后自动退回（back）。"""
+        js = _read("js/stack.js")
+        i = js.index("function mountStyles(body)")
+        block = js[i:js.index("\n  }", i)]
+        self.assertIn("list.forEach", block)  # 全部，不是 slice(0, SHOW_HEAD)
+        self.assertIn('style-card', js)  # 卡片构造共用
+        self.assertIn("pickStyle(c.id)", block)
+        self.assertIn("back()", block)
+        self.assertIn('WSViews.register("styles"', js)
+
+    def test_fullscreen_grid_has_its_own_layout(self):
+        """全屏页是独立网格，卡片白底靠淡阴影分界，不继承矮抽屉的高度限制。"""
+        css = _read("css/sheet.css")
+        idx = css.index(".style-grid {")
+        block = css[idx:css.index("}", idx)]
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr))", block)
+        self.assertIn("align-content: start", block)
+        self.assertIn(".style-grid .style-card", css)
+
+    def test_styles_title_registered_for_view_restore(self):
+        """子页栈恢复按 titles.hasOwnProperty 判断，styles 必须进 titles。"""
+        views = _read("js/views.js")
+        self.assertIn('styles: "全部画风"', views)
 
 
 if __name__ == "__main__":

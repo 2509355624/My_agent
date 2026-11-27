@@ -462,6 +462,18 @@
   white-space: nowrap;
 }
 
+/* 全屏画风页（「查看全部」滑进来的子页）：.vbody 已经管滚动和内边距，
+   这里只铺两列。卡片沿用 .style-card，封面 aspect-ratio 撑高；子页是纯白
+   底、卡片也是白底，补一圈淡阴影才看得出卡片边界。 */
+.style-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 12px;
+}
+
+.style-grid .style-card { box-shadow: var(--shadow-1); }
+
 /* 画风太多，先露几项，点这里展开全部 */
 .style-more {
   flex: 0 0 auto;
