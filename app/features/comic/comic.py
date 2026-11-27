@@ -941,7 +941,7 @@ def _out_dir_for(task):
 
 def _submit(workflow, skill, prompt, seed, task=None, out_dir=None, abort=None,
             with_entry=False, priority=False, wait=True, task_tag=None,
-            on_pid=None):
+            on_pid=None, batch="comic"):
     """排进全局串行队列并等出图，返回 ComfyUI 那边的输出图（相对路径）。
 
     target=None 是「网页侧」路径：worker 出图后只把 history entry 挂到 job 上，
@@ -969,12 +969,18 @@ def _submit(workflow, skill, prompt, seed, task=None, out_dir=None, abort=None,
       · wait=False → 入队并挂好中断信号后**立刻返回 job 句柄**（不阻塞），
         供独占批量「先全部推上队列、再按序收图」；调用方随后用 `_collect`
         收图。默认 wait=True 行为不变（阻塞等出图、返回文件名）。
+
+    `batch`（2026-11-27）——这张归哪个台，**默认 comic 保持漫画台原样**。
+    中断全部按 batch 归属切（`cancel_batch` / `running_batch`），工作台和写真
+    借这个函数入队时必须传自己的名字，否则漫画台一点中断会把它们的图一起
+    摘掉。同时 batch 也是漫画专属的「6 张重启」阈值开关，传别的名字自动不
+    享受那档放宽——正是我们要的隔离。
     """
     if abort is not None and abort.is_set():
         raise Cancelled("用户中断了整批渲染")
     job, reason = image_jobs.enqueue(None, None, workflow, skill=skill,
                                      prompt=prompt, seed=seed, landscape=False,
-                                     batch="comic", priority=priority,
+                                     batch=batch, priority=priority,
                                      out_dir=_out_dir_for(task) if out_dir is None
                                      else out_dir)
     if reason:

@@ -182,8 +182,11 @@ def _render_one(task_dir, no, prompt, seed, skill=SKILL, opts=None):
         raise RuntimeError("skill %s 没有文生图工作流" % skill)
     wf = comic_render_opts.apply(wf, opts)
     os.makedirs(shots_dir(task_dir), exist_ok=True)
+    # 借漫画台的 _submit 走公共队列，但批次归属是写真自己的（2026-11-27）：
+    # 不传的话默认 "comic"，漫画台点「中断全部」会把写真任务一起摘掉。
     name = comic._submit_retry(
-        lambda: comic._submit(wf, skill, prompt, seed), "[写真 %s]" % no)
+        lambda: comic._submit(wf, skill, prompt, seed, batch="portrait"),
+        "[写真 %s]" % no)
     comic._download(name, shot_path(task_dir, no))
     return {"no": no, "prompt": prompt, "seed": seed,
             "state": "rendered", "error": None}

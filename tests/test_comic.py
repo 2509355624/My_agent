@@ -10,6 +10,7 @@
   3. 编剧 system prompt 里含规范全文与契约映射，气泡2 超长会被打回。
 """
 
+import inspect
 import os
 import re
 import requests
@@ -1485,6 +1486,36 @@ class PanelNoPrefixTest(unittest.TestCase):
             os.path.join(sd["path"], "workflow_i2i.json"))
         wf = comic._stamp_panel_no(wf, "04")
         self.assertEqual("QwenI2I_04", wf["50"]["inputs"]["filename_prefix"])
+
+
+class SubmitBatchOwnerTest(unittest.TestCase):
+    """_submit 的 batch 归属（2026-11-27 跨页面串扰 bug）。
+
+    工作台和写真借 comic._submit 走公共队列，但默认 batch="comic" 会让漫画台
+    一点「中断全部」把它们的图一起摘掉。钉住：默认仍是 comic、两个借用方各
+    传自己的名字。"""
+
+    def test_default_batch_stays_comic(self):
+        sig = inspect.signature(comic._submit)
+        self.assertEqual(sig.parameters["batch"].default, "comic")
+
+    def test_enqueue_uses_the_batch_argument(self):
+        """传进来的 batch 必须真的落到 enqueue，不能只加个参数不用。"""
+        src = inspect.getsource(comic._submit)
+        self.assertIn("batch=batch, priority=priority", src)
+        self.assertNotIn('batch="comic", priority=priority', src)
+
+    def test_workspace_caller_passes_its_own_batch(self):
+        """工作台调用点必须传 batch="workspace"。"""
+        from app.features.image import routes as web_routes
+        src = inspect.getsource(web_routes._run)
+        self.assertIn('batch="workspace"', src)
+
+    def test_portrait_caller_passes_its_own_batch(self):
+        """写真调用点必须传 batch="portrait"。"""
+        from app.features.comic import portrait
+        src = inspect.getsource(portrait._render_one)
+        self.assertIn('batch="portrait"', src)
 
 
 if __name__ == "__main__":

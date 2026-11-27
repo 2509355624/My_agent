@@ -90,8 +90,11 @@ class RunTest(unittest.TestCase):
         self.subs = []          # 记录每次提交的 (workflow, prompt, seed)
         self.seeds = iter(range(1000, 1000 + 100))
 
-        def _fake_submit(wf, skill, prompt, seed, task=None):
-            self.subs.append((copy.deepcopy(wf), prompt, seed, skill))
+        # 2026-11-27：写真借 comic._submit 时开始传 batch="portrait"（避免
+        # 漫画台「中断全部」误伤），替身签名要跟上，否则这里 TypeError 会让
+        # 每一格都变 error，误报成渲染失败。
+        def _fake_submit(wf, skill, prompt, seed, task=None, batch=None):
+            self.subs.append((copy.deepcopy(wf), prompt, seed, skill, batch))
             return "fake_%d.png" % len(self.subs)
 
         p1 = mock.patch.object(comic_portrait.comic, "_submit_retry",
@@ -125,10 +128,12 @@ class RunTest(unittest.TestCase):
         self.assertEqual(len({s[2] for s in self.subs}), 3)
         # 全部走 anima-line 渠道
         self.assertEqual({s[3] for s in self.subs}, {comic_portrait.SKILL})
+        # 批次归属必须写真自己：默认 comic 会被漫画台「中断全部」误伤
+        self.assertEqual({s[4] for s in self.subs}, {"portrait"})
 
     def test_workflow_carries_prompt_and_render_overrides(self):
         self._run()
-        wf, prompt, seed, _skill = self.subs[0]
+        wf, prompt, seed, _skill, _batch = self.subs[0]
         texts = [v for n in wf.values()
                  for v in (n.get("inputs") or {}).values() if isinstance(v, str)]
         self.assertTrue(any(prompt in t for t in texts))

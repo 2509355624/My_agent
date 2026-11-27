@@ -627,12 +627,16 @@ def _run(job):
             # _submit_retry 只对超时重试；其余错误一次抛清。
             # with_entry=True：拿 history entry 算 ComfyUI 真跑这张图的耗时。
             #
-            # 2026-11-23：`_submit` 多收两个关键字（都可选，不传时它自己造）：
+            # 2026-11-23：`_submit` 多收几个关键字（都可选，不传时它自己造）：
             #   · task_tag=本台任务号 —— 让 `image_jobs.cancel_tag` / status
             #     的 phase 判断能对上「这是哪一张」；
             #   · on_pid=回调 —— ComfyUI 一接单就把 prompt_id 回填到本台 job，
             #     `/api/gen/status` 才能去 ComfyUI 那边问「它在不在队列里」。
             #     这就是用户要的「探活」：不确定就明说掉队了，别一直写画图中。
+            #   · batch="workspace"（2026-11-27）——`_submit` 默认写死 "comic"，
+            #     不传的话本台每张图都被标成漫画批次，漫画台一点「中断全部」
+            #     （cancel_batch("comic")）就把工作台排队的图一起摘掉。这里是
+            #     借漫画台的 _submit 拿探活能力，批次归属必须是本台自己的。
             def _on_pid(pid):
                 with _JOBS_LOCK:
                     job["pid"] = pid
@@ -640,7 +644,8 @@ def _run(job):
             name, entry = comic._submit_retry(
                 lambda: comic._submit(wf, job["skill"], job["prompt"], job["seed"],
                                       with_entry=True, abort=job["abort"],
-                                      task_tag=job["id"], on_pid=_on_pid),
+                                      task_tag=job["id"], on_pid=_on_pid,
+                                      batch="workspace"),
                 "[跑图台 %s]" % job["id"])
             # 采完样才出的图，也可能已经被终止（_submit 在回调里看 abort 会抛）
             if job["abort"].is_set():
