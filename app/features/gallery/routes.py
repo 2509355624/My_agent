@@ -229,6 +229,24 @@ def _seer(qq):
     return _is_owner(qq)
 
 
+def _full(qq):
+    """这次请求能不能看到**全部**——整本下架的和单张藏起来的都算。
+
+    2026-11-27 用户拍板：「登录之后全部都可以看到，不管隐藏的图还是下架的
+    本。能登录说明已经加过大大怪了，看全部没问题，只有访客看不到。」
+
+    两个条件同时成立：
+      · 是工作台（`__jf=1`）——管理页那套「默认只看未下架、点一下只看已下架」
+        是**有意分区**给站主反悔用的，不能混进来；
+      · 带着登录态（`qq` 非空）——访客没有 qq，照旧只看公开的那 172 本。
+
+    和 `_seer` 的分工：这个只管**看见**，`_seer` 管**能改**（`can_hide` /
+    `can_hide_item`）。工作台里登录了能看见藏起来的东西，但没有隐藏 / 恢复
+    按钮——那是管理页的活。
+    """
+    return _jf() and bool(qq)
+
+
 def _work_row(row, qq):
     """一行作品集 → 前端要的形状。别名在这里做，QQ 号绝不出接口。"""
     if row["src"] == "owner":
@@ -281,7 +299,12 @@ def api_list():
     # 别人带了 hidden=1 也照旧走下面的公开口径。
     hidden_only = (str(request.args.get("hidden") or "") == "1"
                    and _seer(qq))
-    if _seer(qq):
+    if _full(qq):
+        # 工作台里登录了：两面墙合成一面，不按 hidden 过滤（见 `_full`）。
+        # `n>0` 仍然留着——整本下架的那 249 本 n 都还有值，不受影响；
+        # 真正一张不剩的（n=0）本来也没内容可看。
+        pass
+    elif _seer(qq):
         # 站主自己也不看下架的（2026-11-22 用户要求）：点隐藏就和清掉扫描
         # 结果一样，从管理页消失，不然一屏里全是已经不要的目录。
         where.append("w.hidden=" + ("1" if hidden_only else "0"))
@@ -473,7 +496,7 @@ def api_work(wid):
         is_temp = str(row["use"] or "keep") == "temp"
         if is_temp:
             return jsonify({"ok": False, "error": "没有这个作品集"}), 404
-        if row["hidden"] and not mine and not _seer(qq):
+        if row["hidden"] and not mine and not _seer(qq) and not _full(qq):
             return jsonify({"ok": False, "error": "没有这个作品集"}), 404
 
         # 管理页的站主看得到自己藏了什么（带 hidden 标记，用来反悔）；
@@ -481,7 +504,12 @@ def api_work(wid):
         # 工作台不就是和普通的用户一样的吗」。藏掉的图不进轨道，就滑不到、
         # 下载不到，也不会把整页拖卡。作者本人同样是「别人」：跳过谁由站主
         # 决定，这一页对作者来说就是没了。
-        owner_view = _seer(qq)
+        #
+        # 2026-11-27 改口径：工作台里**登录了**就全给（`_full`），但下发的
+        # `hidden` 一律抹成 0——用户要的是「跟普通的一样」，不留半透明也不留
+        # 角标。`can_hide_item` 仍然是 False，这里只影响长相，不影响权限。
+        owner_view = _seer(qq) or _full(qq)
+        view_all = _full(qq)
         items = con.execute(
             "SELECT id, idx, path, COALESCE(hidden,0) AS hidden FROM items"
             " WHERE work_id=?" + ("" if owner_view else
@@ -510,7 +538,7 @@ def api_work(wid):
         "ok": True,
         "work": data,
         "items": [{"id": r["id"], "idx": r["idx"],
-                   "hidden": 1 if r["hidden"] else 0,
+                   "hidden": 0 if view_all else (1 if r["hidden"] else 0),
                    "like": 1 if r["id"] in liked else 0,
                    "fav": 1 if r["id"] in faved else 0,
                    "likes": likes.get(r["id"], 0),
@@ -538,11 +566,15 @@ def api_img(iid):
             (iid,)).fetchone()
     if not row or str(row["use"] or "keep") == "temp":
         return jsonify({"ok": False, "error": "没这张图"}), 404
-    if row["hidden"] and row["owner"] != str(qq or "") and not _seer(qq):
+    if (row["hidden"] and row["owner"] != str(qq or "")
+            and not _seer(qq) and not _full(qq)):
         return jsonify({"ok": False, "error": "没这张图"}), 404
     # 单张隐藏：只对站主可见。群友自己拍的那张被站长藏了也一样拿不到——
     # 藏的意思就是「谁都别再看」，只留站主一个人能反悔。
-    if row["ihidden"] and not _seer(qq):
+    #
+    # 工作台里登录了是例外（`_full`）：轨道里既然把他放进来了，图就得发得出
+    # 去，否则看见的是一排破图。
+    if row["ihidden"] and not _seer(qq) and not _full(qq):
         return jsonify({"ok": False, "error": "没这张图"}), 404
 
     # 老上传那批存的是相对路径（`state\gallery_upload\...`）。判存在、转码、
@@ -610,7 +642,7 @@ def api_thumbs():
             " WHERE i.id IN (%s) AND " % marks + _NOT_TEMP,
             ids).fetchall()
 
-    mine_ok = _seer(qq)
+    mine_ok = _seer(qq) or _full(qq)   # 工作台登录了：看得见就下载得下来
     todo = []
     for r in rows:
         if r["hidden"] and r["owner"] != str(qq or "") and not mine_ok:
@@ -688,7 +720,7 @@ def api_warm():
             " WHERE i.id IN (%s) AND " % marks + _NOT_TEMP,
             ids).fetchall()
 
-    mine_ok = _seer(qq)
+    mine_ok = _seer(qq) or _full(qq)   # 工作台登录了：看得见就下载得下来
     ok = {}
     for r in rows:
         if r["hidden"] and r["owner"] != str(qq or "") and not mine_ok:
@@ -1364,9 +1396,10 @@ def _read_image_text(iid, prompt):
             " FROM items i JOIN works w ON w.id=i.work_id WHERE i.id=?", (iid,)).fetchone()
     if not row:
         return ""
-    if row["hidden"] and row["owner"] != str(qq or "") and not _seer(qq):
+    if (row["hidden"] and row["owner"] != str(qq or "")
+            and not _seer(qq) and not _full(qq)):
         return ""
-    if row["ihidden"] and not _seer(qq):
+    if row["ihidden"] and not _seer(qq) and not _full(qq):
         return ""
     if str(row["use"] or "keep") == "temp":
         return ""

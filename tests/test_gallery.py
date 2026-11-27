@@ -2173,3 +2173,132 @@ class RelativePathTest(_Base):
         d = self._get("/api/gal/list?page=1&size=24").get_json()
         self.assertNotIn("web", d["grps"])
         self.assertIn("漫画", d["grps"])
+
+
+class WorkspaceSeeAllTest(_Base):
+    """2026-11-27：工作台里**登录了**就该看见全部，访客只看公开的那批。
+
+    用户原话：「游客账号没有办法看这个已经隐藏的东西……现在已经做到了。
+    但是我想要的就是，如果用户是登录的话，他可以看到全部的内容。」后来又
+    补了一句范围：「全部都可以看到，不管是隐藏的图还是下架的整本。能登录
+    说明已经加过大大怪了，看全部没问题，只有访客看不到。」
+
+    所以三档：
+      · 管理页（不带 `__jf`）：一点不变——默认只看未下架，点「看已隐藏」
+        只看已下架，那是给站主反悔用的分区墙；
+      · 工作台 + 登录（`__jf=1` 且带 qq）：421 本全出，藏起来的图也进轨道；
+      · 工作台 + 访客（`__jf=1` 不带 qq）：跟以前一样只看 172 本。
+    """
+
+    OWNER = "839125"
+
+    def _client(self):
+        from flask import Flask
+        app = Flask(__name__)
+        app.register_blueprint(gallery_api.bp)
+        return app.test_client()
+
+    def _get(self, path):
+        with mock.patch.object(friend_auth, "secret", lambda: "tok"), \
+                mock.patch.object(gallery_api, "GALLERY_OWNER_QQ", self.OWNER):
+            return self._client().get(path, headers={"X-Friend-Token": "tok"})
+
+    def _seed(self, key, hidden=0, items=3, hid_items=0):
+        """造一本：共 `items` 张图，其中 `hid_items` 张是单张藏起来的。"""
+        d = os.path.join(self.root, key)
+        os.makedirs(d, exist_ok=True)
+        with gallery.connect() as con:
+            cur = con.execute(
+                "INSERT INTO works(key, src, owner, grp, title, path, cover, n,"
+                " sort, ts, seen, hidden) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("owner:" + key, "owner", self.OWNER, "图库", key, d, "",
+                 items, 0, time.time(), time.time(), hidden))
+            wid = cur.lastrowid
+            for i in range(items):
+                p = os.path.join(d, "%03d.webp" % i)
+                with Image.new("RGB", (64, 96), (10, 20, 30 + i)) as im:
+                    im.save(p, "WEBP")
+                con.execute(
+                    "INSERT INTO items(work_id, idx, path, bytes, hidden)"
+                    " VALUES(?,?,?,?,?)",
+                    (wid, i, p, os.path.getsize(p),
+                     1 if i < hid_items else 0))
+            iids = [r[0] for r in con.execute(
+                "SELECT id FROM items WHERE work_id=? ORDER BY idx", (wid,))]
+        return wid, iids
+
+    def _titles(self, base):
+        d = self._get(base + "&page=1&size=50").get_json()
+        return sorted(w["title"] for w in d["works"])
+
+    # ── 列表 ────────────────────────────────────────────────
+
+    def test_visitor_does_not_see_hidden_work(self):
+        self._seed("visible")
+        self._seed("gone", hidden=1)
+        self.assertEqual(self._titles("/api/gal/list?__jf=1"), ["visible"])
+
+    def test_login_sees_hidden_work(self):
+        self._seed("visible")
+        self._seed("gone", hidden=1)
+        self.assertEqual(self._titles("/api/gal/list?__jf=1&qq=" + self.OWNER),
+                         ["gone", "visible"])
+
+    def test_admin_page_keeps_two_walls(self):
+        """管理页那套分区墙不能跟着松：默认 1 本，看已隐藏 1 本。"""
+        self._seed("visible")
+        self._seed("gone", hidden=1)
+        self.assertEqual(
+            self._titles("/api/gal/list?qq=" + self.OWNER), ["visible"])
+        self.assertEqual(
+            self._titles("/api/gal/list?hidden=1&qq=" + self.OWNER), ["gone"])
+
+    # ── 详情 ────────────────────────────────────────────────
+
+    def test_login_opens_hidden_work(self):
+        wid, _ = self._seed("gone", hidden=1)
+        self.assertEqual(self._get("/api/gal/work/%d" % wid).status_code, 404)
+        self.assertEqual(
+            self._get("/api/gal/work/%d?__jf=1" % wid).status_code, 404)
+        self.assertEqual(
+            self._get("/api/gal/work/%d?__jf=1&qq=%s" % (wid, self.OWNER))
+            .status_code, 200)
+
+    def test_login_gets_hidden_items_without_marks(self):
+        """藏起来的图要进轨道，但 `hidden` 字段一律下发 0。
+
+        用户选的是「不留，跟普通的一样」——前端 `filter(!it.hidden)` 和
+        `gv-off` 半透明都靠这个字段，抹成 0 就不用改前端一行。
+        """
+        wid, _ = self._seed("mixed", items=5, hid_items=2)
+        d = self._get("/api/gal/work/%d?__jf=1&qq=%s" % (wid, self.OWNER)) \
+            .get_json()
+        self.assertEqual(len(d["items"]), 5)
+        self.assertEqual([i["hidden"] for i in d["items"]], [0] * 5)
+        self.assertFalse(d["work"]["can_hide_item"],
+                         "工作台能看不能改，隐藏按钮属于管理页")
+
+        # 访客还是只有 3 张
+        d2 = self._get("/api/gal/work/%d?__jf=1" % wid).get_json()
+        self.assertEqual(len(d2["items"]), 3)
+
+    # ── 取图 ────────────────────────────────────────────────
+
+    def test_login_can_fetch_hidden_image(self):
+        _, iids = self._seed("mixed", items=3, hid_items=1)
+        hid = iids[0]
+        self.assertEqual(self._get("/api/gal/img/%d?s=t" % hid).status_code,
+                         404)
+        self.assertEqual(
+            self._get("/api/gal/img/%d?s=t&__jf=1" % hid).status_code, 404)
+        r = self._get("/api/gal/img/%d?s=t&__jf=1&qq=%s" % (hid, self.OWNER))
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.data, "看见了就要发得出来，不能是一排破图")
+
+    def test_full_needs_both_workspace_and_login(self):
+        """`_full` 是「工作台」和「登录」两个条件的交，缺一个都不放开。"""
+        self._seed("gone", hidden=1)
+        self.assertEqual(len(self._titles("/api/gal/list?qq=" + self.OWNER)),
+                         0, "管理页默认只看未下架")
+        self.assertEqual(len(self._titles("/api/gal/list?__jf=1")), 0,
+                         "访客没有 qq")
