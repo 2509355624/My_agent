@@ -124,5 +124,24 @@ class TestLowresPlan(unittest.TestCase):
         self.assertEqual(wf, snap)
 
 
+class TestDefaultOff(unittest.TestCase):
+    """2026-11-27：工作台默认跑原工作流，和 QQ 一致。
+
+    用户实测 silver 降档后有明显二次采样崩坏（两段采样渠道的二段 denoise
+    是照原倍率调的，顶到 2.41× 补不回细节），拍板「不需要为了省时间做这样
+    的优化」。默认开关必须是关的；代码留着，显式设 WORKSPACE_LOWRES=1 才启用。
+    """
+
+    def test_workspace_lowres_defaults_off(self):
+        from app.core.config.image import WORKSPACE_LOWRES
+        self.assertFalse(WORKSPACE_LOWRES, "工作台低分辨率档默认又开了")
+
+    def test_config_source_default_is_false(self):
+        src = os.path.join(ROOT, "app", "core", "config", "image.py")
+        with open(src, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn('os.getenv("WORKSPACE_LOWRES", "false")', text)
+
+
 if __name__ == "__main__":
     unittest.main()

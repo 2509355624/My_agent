@@ -51,11 +51,15 @@ IMAGE_DEFAULT_SKILL = os.getenv("IMAGE_DEFAULT_SKILL", "silver").strip() or "sil
 COMFYUI_OUTPUT_DIR = os.getenv("COMFYUI_OUTPUT_DIR", "")
 
 # 工作台的「低分辨率档」（2026-11-26）：画布降一档采样，放大链按算术补回
-# 成品尺寸（见 `app/features/image/lowres.py`）。只对**工作台**（`/workspace/`，
-# 将来的访客模式也在这一侧）生效——QQ 机器人、本地跑图台 `/gen` 都不走它，
-# 那两边要的是原图。默认开：工作台的图出站前本来就要压到 ≤1MB，先画小一点
-# 再放大，出图快、原图小。
-WORKSPACE_LOWRES = os.getenv("WORKSPACE_LOWRES", "true").lower() not in ("0", "false", "no")
+# 成品尺寸（见 `app/features/image/lowres.py`）。只对**工作台**生效——QQ、
+# 本地跑图台 `/gen` 都不走它，那两边一直是原图。
+#
+# 2026-11-27 默认关：用户实测工作台的 silver 有明显二次采样崩坏——两段采样
+# 渠道（silver / krea2 系 / nffa / sf 等 16 个）的二段 denoise 是照原放大倍率
+# 调的，降档把 LatentUpscaleBy 从 1.2× 顶到 2.41×，低 denoise 补不回小画布
+# 丢的细节。用户拍板「都跟 QQ 一样的跑相同的生图工作流即可，不需要为了省
+# 时间做这样的优化」。代码保留，想再试就在 .env 里显式设 WORKSPACE_LOWRES=1。
+WORKSPACE_LOWRES = os.getenv("WORKSPACE_LOWRES", "false").lower() not in ("0", "false", "no")
 
 # 单张图的出图上限（秒）。**注意这是「一张」的时限，不是「一次调用」的**：
 # 生图在 image_jobs 里是逐张串行排队的，计时从每张**真正开跑**算起（排队时
