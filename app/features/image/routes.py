@@ -907,6 +907,9 @@ def api_ask():
     # 访客走**原尺寸**：用户 2026-11-26 明确「访客不用走降档，没有意义，
     # 浪费时间」——他们把全部渠道都开着给访客玩，要的就是成品本身。
     ctx = {"images": _web_images(refs), "refs": list(refs or []),
+           # 「引用那张图的提示词」（2026-11-27）：卡片上的引用不是传图，
+           # 是把这张图当初那串提示词交给模型改写。有它就走文生图。
+           "anchor": str(data.get("anchor") or "").strip()[:1000],
            "lowres": (not gid) and WORKSPACE_LOWRES,
            # 前端那条聊天记录的 id（2026-11-26）：任务结束那一刻服务端要靠它
            # 把结果盖回档位，页面关掉也不会丢图。
@@ -1124,6 +1127,12 @@ def _web_decide(text, skill, hist, ctx):
         · 有上传图 → `direct_gen._revise`（QQ 那条改图管道：真识图 + 在
           原提示词上改 + 模型自己判要不要垫图）
         · 没上传图 → `direct_gen._translate`（QQ 那条主模板：`_MASTER_TEMPLATE`）
+        · **引用了自己出的图**（`ctx["anchor"]` 有值）→ 也走 `_translate`：
+          引用的是**那张图当初的提示词**，不是图的字节。把原词当「上一张」
+          交给主模板，模型按用户新说的一句改写它、纯文生图重跑。用户原话
+          （2026-11-27）：「引用的其实是那一个提示词……AI 就直接去改提示词，
+          然后重新跑一遍就可以了」。这条路不碰 `_revise`、不垫图，所以也
+          不会撞上「渠道没有图生图骨架」那条报错。
 
     两条都是 QQ 正在跑的那两份，一个字不改。**渠道由界面定死**：画风抽屉
     选了哪个，就用哪个出图——`_translate` 的 `skill` 入参本来就是
@@ -1143,12 +1152,18 @@ def _web_decide(text, skill, hist, ctx):
     # 一直是这么传的，所以 QQ 快、工作台慢。
     provider, model, strict = dg._llm_target(QQ_AGENT_ID)
     use = skill or ""                      # 界面选的渠道；空 = 没选（用默认）
-    if ctx.get("images"):
+    # 引用提示词（2026-11-27 用户拍板，原话：「引用的其实是那一个提示词……
+    # AI 就直接去改提示词，然后重新跑一遍就可以了」）：引用**不是**图生图。
+    # 那张图当初的提示词交给主模板当【上一张】，模型在新需求上改写它，
+    # 然后纯文生图重跑——所以这条路根本不该带图、也不该进 `_revise`。
+    anchor = str(ctx.get("anchor") or "").strip()
+    if ctx.get("images") and not anchor:
         got = _web_revise(text, use, hist, ctx["images"],
                           provider=provider, model=model, strict=strict)
     else:
         got = dg._translate(text, hist, skill=use or None,
-                            provider=provider, model=model, strict=strict)
+                            provider=provider, model=model, strict=strict,
+                            anchor=anchor or None)
     if not got:
         # 模型没交作业（空返回 / JSON 没解析出来）。这是可用性问题，不是它
         # 判「不画」——判不画会走下面的 reply。重来一次比出一张错图强。

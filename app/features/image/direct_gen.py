@@ -2291,12 +2291,16 @@ def _last_job(session_key):
             "tag": row.get("tag") or ""}
 
 
-def _last_job_line(job):
-    """【上一张】那一段的渲染；没有上一张就写「（无）」。"""
+def _last_job_line(job, limit=200):
+    """【上一张】那一段的渲染；没有上一张就写「（无）」。
+
+    `limit`：引用卡片那条路给整串（2026-11-27）——用户明确指的就是那一张，
+    截一半就不是它了；「再来一张」那种顺手带上的上下文仍只给 200 字够用。
+    """
     if not job:
         return "（无）"
     return "[直达生图] %s：%s" % (job.get("skill") or "默认",
-                                  (job.get("prompt") or "")[:200])
+                                  (job.get("prompt") or "")[:limit])
 
 
 def _is_channel_word(tok):
@@ -2783,19 +2787,23 @@ def _role_key_ok(skill, key):
 
 
 def _translate(text, history, skill=None, weighted=False, no_default=False,
-               doc=None, provider=None, model=None, strict=False):
+               doc=None, provider=None, model=None, strict=False, anchor=None):
     """给本轮转译套上 agent 的模型选择，再跑正文。
 
     正文 `_translate_body` 保持原签名和 `_ask(content)` 单参调用形态，
     老的 fake_ask / 直接调用用例不会因为多一个关键字参数而失败。
+
+    `anchor`（2026-11-27）：卡片上「引用」交上来的**那张图当初的提示词**。
+    有它就当【上一张】喂给模板（比内存/账本更可信——用户明确指的是这张），
+    模型在它上面改词、纯文生图重跑。
     """
     with _llm_scope(provider, model, strict):
         return _translate_body(text, history, skill=skill, weighted=weighted,
-                               no_default=no_default, doc=doc)
+                               no_default=no_default, doc=doc, anchor=anchor)
 
 
 def _translate_body(text, history, skill=None, weighted=False, no_default=False,
-                    doc=None):
+                    doc=None, anchor=None):
     """一次 LLM 调用 → 生图任务，或一句聊天回复。**所有提示词都由它产出**。
 
     2026-10-05 晚用户拍板重做：**只有一条模板 `_MASTER_TEMPLATE`**（人设 +
@@ -2876,13 +2884,21 @@ def _translate_body(text, history, skill=None, weighted=False, no_default=False,
     # 2026-11-18：上一张的事实单独给【上一张】，最近对话只留 5 条用户消息。
     # 内存没有就查账本（跨重启兜底）；取不到写「（无）」。
     prev = None
-    try:
-        prev = _last_job(qq_api.current_session_key())
-    except Exception:                                  # noqa: BLE001
-        log.warning("[direct] 取上一张任务失败，按无处理", exc_info=True)
+    if anchor:
+        # 引用卡片（2026-11-27 用户拍板：「引用的其实是那一个提示词」）：
+        # 用户点引用时前端交上来的原词，直接当【上一张】——它比内存 / 账本
+        # 里那条更可信，用户明确指的就是这张。模型在它上面改新需求、纯文生图
+        # 重跑，整条路不垫图。
+        prev = {"skill": named or "", "prompt": anchor}
+    else:
+        try:
+            prev = _last_job(qq_api.current_session_key())
+        except Exception:                              # noqa: BLE001
+            log.warning("[direct] 取上一张任务失败，按无处理", exc_info=True)
+            prev = None
     content = _MASTER_TEMPLATE.format(
         recent=_recent_lines(history) or "（无）",
-        last_job=_last_job_line(prev),
+        last_job=_last_job_line(prev, 1000 if anchor else 200),
         text=text,
         search=(_SEARCH_HEADER.format(doc=doc) if doc else ""),
         role_block=role_block,

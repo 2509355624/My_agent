@@ -110,16 +110,22 @@ class TestDownloadButton(unittest.TestCase):
         self.assertLess(seg.index("acts.appendChild(quote)"),
                         seg.index("acts.appendChild(again)"))
 
-    def test_quote_uses_chat_upload_and_skips_frontend_describe(self):
-        """引用走 `cr_` 临时引用（后端 `_web_images` 只认它），并且
-           `pre: true` 让前端不再识一次图——只留 `_revise` 读那一次。
+    def test_quote_hands_over_the_prompt_not_the_image(self):
+        """引用交出去的是**那张图当初的提示词**，不是图的字节（2026-11-27）。
 
-           另外焦点要在点击当下给（手机键盘只认用户手势那一帧）。"""
+        用户原话：「引用的其实是那一个提示词……AI 就直接去改提示词，然后
+        重新跑一遍就可以了」。所以 `quoteCard` 不取图、不上传、不进 refs，
+        只把 `{file, prompt}` 记进 `S.quote`；发送时当 anchor 交给后端。
+        这条路不碰图生图，也就不会撞上「渠道没有 i2i 骨架」那条报错。"""
         js = _read("js/ref.js")
         i = js.index("function quoteCard")
         seg = js[i:js.index("function init", i)]
-        self.assertIn("global.WSGen.chatUpload", seg)
-        self.assertIn("pre: true", seg)
+        self.assertIn("S.quote = {", seg)
+        self.assertIn("file: file", seg)
+        self.assertIn("prompt: prompt", seg)
+        self.assertNotIn("chatUpload", seg, "引用不该把图传上去")
+        self.assertNotIn("addRef", seg, "引用不进参考图列表")
+        self.assertNotIn("pre: true", seg, "引用不再需要识图标记")
         self.assertIn("say.focus()", seg, "点引用要立刻把键盘叫起来")
         self.assertNotIn("el.say.value =", seg, "不许把原 tags 灌进输入框")
 

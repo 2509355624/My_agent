@@ -215,9 +215,17 @@
       return null;
     }
     /* 每条消息独立提交，数量限制由后端按用户执行。 */
+    /* `anchor`（2026-11-27）：这一轮是从哪串提示词改的。卡片上的「引用」
+       记的是「这张图当初的提示词」，不是图的字节——用户接着说一句需求，
+       模型在这串词上改写、纯文生图重跑。读一次就清掉输入栏那个引用，
+       存进 rec 里，重画（restart）还能带着同一份。 */
+    var anchor = (global.WSRef && global.WSRef.quotePrompt)
+      ? global.WSRef.quotePrompt() : "";
+    if (anchor && global.WSRef.clearQuote) global.WSRef.clearQuote();
     var rec = { k: "img", cls: "", prompt: prompt, ask: prompt, skill: skill,
                 id: H.newId ? H.newId("img") : "",
                 refs: (refs || []).slice(),
+                anchor: anchor,
                 described: !!described,
                 route: route === "ask" ? "ask" : "",
                 userId: userNode ? (userNode._wsUserId || "") : "",
@@ -316,7 +324,13 @@
     // 「同步发 QQ」（2026-11-27）：开关在输入区右端，登录用户默认勾上。
     if (global.WSSync && global.WSSync.on()) body.qq_sync = true;
     // ask 吃的是**用户原话**（判意图、判是不是在改上一张）；submit 不看它。
-    if (ask) body.text = rec.ask || card.prompt;
+    if (ask) {
+      body.text = rec.ask || card.prompt;
+      /* 引用提示词（2026-11-27）：原词随请求交上去，后端把它当「上一张的
+         提示词」喂给主模板——模型改词、纯文生图重跑。**不带图**，所以
+         不会掉进图生图那条路，也不会再报「这个渠道不支持图生图」。 */
+      if (rec.anchor) body.anchor = rec.anchor;
+    }
     var sent = ask ? global.WSGen.ask(body) : global.WSGen.submit(body);
     sent.then(function (d) {
       card.submitting = false;
