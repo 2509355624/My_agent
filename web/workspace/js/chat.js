@@ -409,13 +409,11 @@
   }
 
   function fireDirect(text, refs, described, user) {
-    global.WSGen.direct({
-      prompt: text,
-      skill: S.skill,
-      count: DIRECT_N,
-      refs: refs,
-      ref_described: !!described
-    }).then(function (d) {
+    var body = { prompt: text, skill: S.skill, count: DIRECT_N,
+                 refs: refs, ref_described: !!described };
+    // 直达连排 N 张也认同步开关（2026-11-27）
+    if (global.WSSync && global.WSSync.on()) body.qq_sync = true;
+    global.WSGen.direct(body).then(function (d) {
       global.WSGenFlow.linkBatch(d, text, user);
     }, function () {
       dropUser(user, text);

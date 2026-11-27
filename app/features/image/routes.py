@@ -1021,7 +1021,11 @@ def api_batch():
     for _ in range(fits):
         job, busy = _enqueue_job(
             {"skill": skill, "prompt": body_prompt,
-             "ref_note": ""},
+             "ref_note": "",
+             # 直达连排 N 张：用户勾着开关就每张都发（2026-11-27 用户拍板
+             # 「只要他有这个开关，直达也好其他也好，都正确发图」）。
+             "qq_sync": bool(data.get("qq_sync")) and bool(qq),
+             "qq": qq if data.get("qq_sync") else ""},
             owner=owner,
             # 访客走原尺寸（用户 2026-11-26：「访客不用走降档」）
             lowres_on=(not gid) and WORKSPACE_LOWRES)
@@ -1480,6 +1484,10 @@ def api_submit():
     # （adopt）时按 owner 找不到自己那张，兜底写档也会写到别人那一档去。
     # 访客的身份头只有工作台发来的请求才有，跑图台照旧无副作用。
     owner = chat_routes._owner() or "__anonymous__"
+    # 「同步发 QQ」（2026-11-27）：重画 / 画同款 / 换种子重画都走 submit。
+    # 前端开关在这里也要读，不然勾着发的图只有第一张（ask）会到 QQ。
+    # qq 只认 `chat_routes._who()`——网关从 cookie 注入的那个，不信请求体。
+    _sync = bool(data.get("qq_sync")) and bool(chat_routes._who())
     job, busy = _enqueue_job({
         "skill": skill, "prompt": prompt, "loras": slots,
         "steps": steps, "cfg": cfg, "negative": negative, "ref_note": ref_note,
@@ -1487,6 +1495,9 @@ def api_submit():
         "height": size[1] if size else None,
         "landscape": landscape,
         "rec": str(data.get("rec") or "").strip(),
+        # 开关关着就写空串：`_sync_to_qq` 见到空 qq 直接返回。
+        "qq_sync": _sync,
+        "qq": (chat_routes._who() or "") if _sync else "",
     }, owner=owner)
     if job is None:
         return jsonify({"ok": False, "busy": True, "error": busy}), 429

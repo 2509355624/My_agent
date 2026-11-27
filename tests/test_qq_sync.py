@@ -183,6 +183,85 @@ class DecideCarriesTest(unittest.TestCase):
         self.assertNotIn("qq", pub)
 
 
+class AllRoutesTest(unittest.TestCase):
+    """三条提交路都要能把开关落到 job 上（2026-11-27 用户拍板）。
+
+    只有 ask 带开关时，勾着的重画 / 直达出的图不会发到 QQ——跑通了照样
+    看不出来，所以在 API 层拦 spec 断言，而不是数源码里的字符串。
+    """
+
+    def setUp(self):
+        import flask
+        from app.features.chat import routes as chat_routes
+        self.specs = []
+        self.qq = ["10001"]
+
+        def _enq(spec, owner, user_text="", lowres_on=False):
+            self.specs.append(spec)
+            return {"id": "GP-1", "skill": spec["skill"],
+                    "prompt": spec["prompt"]}, None
+
+        self.patches = [
+            mock.patch.object(R, "_channel_ids", return_value={"silver"}),
+            mock.patch.object(R, "_enqueue_job", new=_enq),
+            mock.patch.object(R, "_public", side_effect=lambda j: j),
+            mock.patch.object(R, "_ref_ids", return_value=([], "")),
+            mock.patch.object(chat_routes, "_who",
+                              side_effect=lambda: self.qq[0]),
+            mock.patch.object(chat_routes, "_owner",
+                              side_effect=lambda: self.qq[0]),
+        ]
+        for p in self.patches:
+            p.start()
+        self.app = flask.Flask(__name__)
+
+    def tearDown(self):
+        for p in reversed(self.patches):
+            p.stop()
+
+    def _post(self, fn, body):
+        with self.app.test_request_context(json=body):
+            return getattr(R, fn)()
+
+    def test_submit_carries_flag_and_qq(self):
+        self._post("api_submit", {"skill": "silver", "prompt": "P",
+                                  "prompt_is_final": True, "qq_sync": True})
+        self.assertTrue(self.specs[0]["qq_sync"])
+        self.assertEqual(self.specs[0]["qq"], "10001")
+
+    def test_submit_from_guest_is_not_synced(self):
+        self.qq[0] = ""
+        self._post("api_submit", {"skill": "silver", "prompt": "P",
+                                  "prompt_is_final": True, "qq_sync": True})
+        self.assertFalse(self.specs[0]["qq_sync"])
+        self.assertEqual(self.specs[0]["qq"], "")
+
+    def test_batch_every_job_carries_flag(self):
+        body = {"skill": "silver", "prompt": "P", "count": 3,
+                "prompt_is_final": True, "qq_sync": True}
+        with mock.patch.object(R, "_visitor") as vis:
+            vis.current.return_value = {"id": ""}
+            self._post("api_batch", body)
+        self.assertEqual(len(self.specs), 3)
+        for spec in self.specs:
+            self.assertTrue(spec["qq_sync"])
+            self.assertEqual(spec["qq"], "10001")
+
+    def test_off_leaves_every_route_clean(self):
+        for fn, body in (
+            ("api_submit", {"skill": "silver", "prompt": "P",
+                            "prompt_is_final": True}),
+            ("api_batch", {"skill": "silver", "prompt": "P", "count": 2,
+                           "prompt_is_final": True}),
+        ):
+            with mock.patch.object(R, "_visitor") as vis:
+                vis.current.return_value = {"id": ""}
+                self._post(fn, body)
+        for spec in self.specs:
+            self.assertFalse(spec["qq_sync"])
+            self.assertEqual(spec["qq"], "")
+
+
 class FrontendTest(unittest.TestCase):
     """开关本身（chat.html / sync.js / gen_flow.js）。"""
 
@@ -197,6 +276,14 @@ class FrontendTest(unittest.TestCase):
         js = _read("js/gen_flow.js")
         self.assertIn("body.qq_sync = true", js)
         self.assertIn("global.WSSync", js)
+
+    def test_direct_carries_the_switch(self):
+        """直达那条路自己构造 body，不经过 fire()，得单独带开关。"""
+        js = _read("js/chat.js")
+        i = js.index("function fireDirect(")
+        seg = js[i:i + 500]
+        self.assertIn("body.qq_sync = true", seg)
+        self.assertIn("global.WSSync.on()", seg)
 
     def test_module_defaults_to_on_and_hides_for_non_users(self):
         js = _read("js/sync.js")
