@@ -233,6 +233,40 @@ class AheadOfTest(unittest.TestCase):
         """没编号就老实说不知道，别拿 0 冒充「不用等」。"""
         self.assertIsNone(image_jobs.ahead_by_tag("", "anima-line"))
 
+    def _take(self, job):
+        """模拟 worker 把它从 queue 取走，放进 running（= state 变 running）。"""
+        self.chan.queue.remove(job)
+        self.chan.running.append(job)
+
+    def test_ahead_by_tag_waiting_for_lock_counts_others(self):
+        """取走了 ≠ 在画：锁在别的进程手里时，前面还是别人那几张。
+
+        2026-11-27 用户实测：网页端这张 state 已经 running，界面却说
+        「正在跑，画好会自动弹出来」——可他前面明明压着 QQ 的两张（锁在 QQ
+        手上）。取走只是进了 worker，`gate.hold()` 还在等。
+        """
+        self._fake_other(2)
+        job = self._enqueue()
+        self._take(job)
+        with mock.patch.object(comfy_gate, "busy_others", return_value=True):
+            self.assertEqual(image_jobs.ahead_by_tag(job.tag, "anima-line"), 2)
+
+    def test_ahead_by_tag_holding_lock_is_zero(self):
+        """锁在自己手里 = 真的在画，前面就是 0，别乱报数。"""
+        self._fake_other(2)
+        job = self._enqueue()
+        self._take(job)
+        with mock.patch.object(comfy_gate, "busy_others", return_value=False):
+            self.assertEqual(image_jobs.ahead_by_tag(job.tag, "anima-line"), 0)
+
+    def test_ahead_of_waiting_for_lock_counts_others(self):
+        """`ahead_of`（QQ 回执用的那个）同一条口径：不能两边说法不一样。"""
+        self._fake_other(2)
+        job = self._enqueue()
+        self._take(job)
+        with mock.patch.object(comfy_gate, "busy_others", return_value=True):
+            self.assertEqual(image_jobs.ahead_of(job), 2)
+
     def test_nai_is_not_affected(self):
         """NAI 走云端不抢锁：本地压着 5 张也不该让 NAI 报「前面还有 5 张」。"""
         self._fake_other(5)

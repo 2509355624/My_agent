@@ -1262,16 +1262,25 @@ def ahead_of(job):
     会让模型对一张立刻能开画的图说「前面还有十几张」，比不报还糟。
     """
     chan = _channel_of_job(job)
+    in_running = False
     with _lock:
         if job not in chan.queue:
-            return 0
-        order = sorted(chan.queue, key=_order)
-        mine = order.index(job) + len(chan.running)
-    if chan.local:
-        # 别的进程压着的张数。自己那部分已经由 `mine` 数过了，这里只取别人的
-        # （`pending_others` 会跳过本进程的计数文件），不会重复。
-        return mine + comfy_gate.pending_others()
-    return mine
+            # 不在 queue 里只有两种可能：worker 已经取走（在 running），或者
+            # 压根不属于这条队列了。只有前者才值得继续问「前面还有几张」。
+            in_running = job in chan.running
+            if not in_running:
+                return 0
+            mine = 0
+        else:
+            order = sorted(chan.queue, key=_order)
+            mine = order.index(job) + len(chan.running)
+    if not chan.local:
+        return 0 if in_running else mine
+    # 取走了不等于开画了（同上，见 `ahead_by_tag`）：worker 还要等 ComfyUI
+    # 那把锁，锁在别人手里时前面就是别人待跑的那几张。
+    if in_running:
+        return comfy_gate.pending_others() if comfy_gate.busy_others() else 0
+    return mine + comfy_gate.pending_others()
 
 
 def ahead_by_tag(tag, skill=""):
@@ -1300,21 +1309,33 @@ def ahead_by_tag(tag, skill=""):
     if not tag:
         return None
     chan = _NAI if skill in NAI_SKILLS else _COMFY
+    running = False
     with _lock:
         for j in chan.running:
             if getattr(j, "tag", "") == tag:
-                return 0
+                running = True
+                break
         order = sorted(chan.queue, key=_order)
         mine = len(chan.running) + len(order)      # 不在队列里 = 排在最后
         for i, j in enumerate(order):
             if getattr(j, "tag", "") == tag:
                 mine = len(chan.running) + i
                 break
-    # 锁已经放开：`pending_others()` 自己会读别的进程的计数文件，
-    # 在锁里调它是嵌套获取（_lock 不是可重入锁），会直接死锁。
-    if chan.local:
-        return mine + comfy_gate.pending_others()
-    return mine
+    # 锁已经放开：`pending_others()` / `busy_others()` 自己会读别的进程的
+    # 计数与锁文件，在锁里调它们是嵌套获取（_lock 不是可重入锁），会直接死锁。
+    if not chan.local:
+        return 0 if running else mine
+    others = comfy_gate.pending_others()
+    # **在 running 里 ≠ 真的在画**（2026-11-27 用户实测）：worker 把任务取走
+    # 之后还要 `comfy_gate.hold()` 等 ComfyUI 空出来，这一段 state 已经是
+    # running、但一张都还没画——而且它常常是「本进程那张在等 QQ 那两张」。
+    # 原来这里一律回 0，前端就只说「正在跑，画好会自动弹出来」，用户明明
+    # 前面压着两张（他自己的原话：「它其实还没有……这边没有说我前面有多少
+    # 张在排队」）。持锁的是自己 = 真在画 → 0；锁在别的进程手里 = 还在等，
+    # 前面就是别人待跑的那几张。
+    if running:
+        return others if comfy_gate.busy_others() else 0
+    return mine + others
 
 def _src_label(job):
     """队列快照里给这张图标来源（状态页用，2026-11-22）。
