@@ -437,6 +437,67 @@ def _enabled_loras(job):
             for s in (job.get("loras") or []) if s.get("on")]
 
 
+def _local_file(ref):
+    """任务里的图引用 → 本机真实路径；找不到返回空串。
+
+    两种引用：`nai:<文件名>` 是 NAI 云端落的临时文件（`image_out` 目录），
+    其余是 ComfyUI output 里的相对路径（可能带 `web_<owner>/` 子目录）。
+    和 `/api/gen/img` 取图用的是同一套判据，别在这儿另立一份。
+    """
+    ref = str(ref or "")
+    if not ref:
+        return ""
+    if ref.startswith("nai:"):
+        name = ref[4:]
+        if not _IMG_NAME_RE.fullmatch(name):
+            return ""
+        path = os.path.join(image_out._out_dir(), name)
+    else:
+        path = comfy_out.local_output_file(ref) or ""
+    return path if path and os.path.isfile(path) else ""
+
+
+def _qq_deliver(job, file_ref):
+    """投递这一步本身（`_sync_to_qq` 起的线程体）。
+
+    单独拎出来是为了能直接测：失败那条路只写一句提示，不打 `err`
+    ——图本身是好的，只是没送到。
+    """
+    qq = str(job.get("qq") or "")
+    path = _local_file(file_ref)
+    if not path:
+        log.warning("同步 QQ：%s 的图找不到文件（%s）",
+                    job.get("id"), file_ref)
+        _archive_back(job, {"note": "图好了，但没找到文件，没发到 QQ"})
+        return
+    try:
+        qq_api.send_image("private", qq, path)
+    except Exception as e:                              # noqa: BLE001
+        log.warning("同步 QQ 失败（%s → %s）：%s", job.get("id"), qq, e)
+        _archive_back(job, {"note": "图好了，但没发到 QQ：%s"
+                                    % (str(e) or e.__class__.__name__)})
+        return
+    log.info("跑图台 %s 已同步到 QQ %s", job.get("id"), qq)
+
+
+def _sync_to_qq(job, file_ref):
+    """出图后顺手往用户自己的 QQ 发一张（工作台「同步发 QQ」，2026-11-27）。
+
+    用户原话：「如果用户已经登录的话……加一个按钮，默认是勾选绿色的，就是
+    同步发 QQ」。工作台和 QQ 私聊本来就是同一条模型链路（见 `api_ask`），
+    差的只是最后那段投递——这里补上，走 `qq_api.send_image` 的私聊兜底
+    （非好友也能落到临时会话）。
+
+    **必须另起线程**：`send_image` 最长等 60 秒（协议端慢 / 图大），压在
+    worker 里会让 `finally` 迟落 `_thread_alive`，`_reap_stuck` 会把这张
+    当成卡死。图已经好、前端已经在显示，投递成败不该拖住收尾。
+    """
+    if not job.get("qq_sync") or not job.get("qq"):
+        return
+    threading.Thread(target=_qq_deliver, args=(job, file_ref),
+                     daemon=True).start()
+
+
 def _run(job):
     """worker 线程体：按渠道走 ComfyUI 或 NAI 队列，出图后记账。"""
     landscape_ok = False
@@ -623,6 +684,8 @@ def _run(job):
         # 服务端自己把结果写回这一档：前端在不在都一样（见 `_archive_back`）。
         _archive_back(job, {"file": file_ref, "note": "", "err": False,
                             "job": ""})
+        # 工作台「同步发 QQ」（2026-11-27）：图好了再投递，投递不占 worker。
+        _sync_to_qq(job, file_ref)
     except Cancelled:
         # 用户点了「中断」：队列里那张已由 wait() 放弃等待、worker 会跳过；
         # 正在画的由 image_jobs 定向 /interrupt 后收工。这里只改状态，不记账、
@@ -842,7 +905,11 @@ def api_ask():
            "lowres": (not gid) and WORKSPACE_LOWRES,
            # 前端那条聊天记录的 id（2026-11-26）：任务结束那一刻服务端要靠它
            # 把结果盖回档位，页面关掉也不会丢图。
-           "rec": str(data.get("rec") or "").strip()}
+           "rec": str(data.get("rec") or "").strip(),
+           # 「同步发 QQ」（2026-11-27）：开关在图卡右下角，只有登录用户看得见。
+           # 访客 qq 是空串，`_sync_to_qq` 会直接跳过——这里不另判一遍。
+           "qq_sync": bool(data.get("qq_sync")),
+           "qq": qq}
     hist = _web_history(who)
     # ⚠️ `bind_context` 是**赋值 + 返回 None**，不是上下文管理器（它把当前
     # 会话写进线程本地，靠 finally 里的 `clear_context` 收尾）。按 QQ 那边
@@ -1095,6 +1162,11 @@ def _web_decide(text, skill, hist, ctx):
                      if isinstance(r, str) and r.startswith("cr_")]}
     if ctx.get("rec"):
         body["rec"] = ctx["rec"]
+    # 同步发 QQ（2026-11-27）：开关一路带到 job 上，出图后由 `_sync_to_qq`
+    # 投递。只走 ask 这条主链——「直达」是连排 N 张，全发一遍等于刷屏。
+    if ctx.get("qq_sync"):
+        body["qq_sync"] = True
+        body["qq"] = ctx.get("qq") or ""
     if got.get("source_image"):
         # 模型判「要垫这张图」（图生图 / 照着画 / 复刻）。前端把图以 data
         # URL 交回来，`_enqueue_job` → `_run` 会带着它进 `generate_image`。
@@ -1461,6 +1533,11 @@ def _enqueue_job(spec, owner, user_text="", lowres_on=False):
                "landscape": bool(spec.get("landscape")),
                # 工作台低分辨率档：这条任务出图前画布降一档、倍率补回来。
                "lowres": bool(lowres_on),
+               # 「同步发 QQ」（2026-11-27）：出图后往 `qq` 的私聊再发一份。
+               # 只有工作台登录用户会带上来，跑图台 / QQ 那几个入口没有这两
+               # 个键，`_sync_to_qq` 直接返回。qq 不下发前端（见 `_public`）。
+               "qq_sync": bool(spec.get("qq_sync")),
+               "qq": str(spec.get("qq") or ""),
                "size_label": "",
                "ref_note": spec.get("ref_note") or "",
                # 图生图（2026-11-26 工作台）：模型判「要垫这张图」时由

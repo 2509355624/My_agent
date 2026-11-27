@@ -106,3 +106,39 @@ button { cursor: pointer; }
   text-align: center;
   letter-spacing: .2px;
 }
+
+/* 「同步发 QQ」开关（2026-11-27）：放在画风那一行的右端，跟 chip 同一高度。
+   `chips` 是横向滚动条，所以开关不能塞进去（会跟着滚走），而是并列在
+   `.chip-row` 里、`chips` 让出剩余宽度。登录用户才露（见 js/sync.js）。 */
+.chip-row {
+  display: flex;
+  align-items: center;
+}
+
+.chip-row .chips {
+  flex: 1 1 auto;
+  min-width: 0;       /* 不给 0，长内容会把开关挤出屏幕 */
+}
+
+.sync-tog {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 4px;
+  padding: 6px 10px;
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.sync-tog.on {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #fff;
+}
+

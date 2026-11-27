@@ -217,6 +217,14 @@
           c.img = img;
           c.file = m.file;
           global.WSChat.buildActs(c);
+          /* 图好了、但「同步发 QQ」没送出去（2026-11-27）：服务端把那句话
+             写进档位的 note（`_qq_deliver`）。出图正常时 note 是空串，所以
+             这里不会冒出多余的一行；有内容就贴在卡片下面，用户重进/切页
+             回来能看见——不然勾了开关却悄悄没发，等于没做。 */
+          if (m.note) {
+            c.note.hidden = false;
+            c.note.textContent = m.note;
+          }
         } else if (m.job && !m.err) {
           /* 有 job 号、没图、没判错：**它可能还在跑**（另一台设备上刚发出
              去的那张，推上来时还没出图）。先别判死，收进 again 里问一次

@@ -303,11 +303,11 @@
       if (described) body.ref_described = true;
     }
     if (rec.finalPrompt) body.prompt_is_final = true;
-    /* 这条记录自己的 id 一起交上去（2026-11-26）：任务结束那一刻服务端要
-       靠它把图盖回档位。页面关掉了、轮询那一发没了，图也不会丢。 */
+    // 记录 id 一起交上去（2026-11-26）：结束那一刻服务端靠它把图盖回档位。
     if (rec.id) body.rec = rec.id;
-    // ask 那条路吃的是**用户原话**（模型靠它判意图、判是不是在改上一张），
-    // 所以把 `ask` 一起带上；submit 那条路不看它，多带一个字段无副作用。
+    // 「同步发 QQ」（2026-11-27）：开关在输入区右端，登录用户默认勾上。
+    if (global.WSSync && global.WSSync.on()) body.qq_sync = true;
+    // ask 吃的是**用户原话**（判意图、判是不是在改上一张）；submit 不看它。
     if (ask) body.text = rec.ask || card.prompt;
     var sent = ask ? global.WSGen.ask(body) : global.WSGen.submit(body);
     sent.then(function (d) {
