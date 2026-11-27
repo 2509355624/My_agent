@@ -77,6 +77,19 @@
   white-space: nowrap;
 }
 
+/* 整块居中（2026-11-27 用户报「排队那个 UI 靠左，要居中」）。
+   排队阶段卡片还没图，是 `.card.is-idle` —— 宽度收成内容宽、自己又是
+   `align-self:flex-start`，所以胶囊和小字整块贴着消息区左边。把带胶囊
+   的那张 idle 卡本身挪到中间，胶囊的 `margin:0 auto` 才有意义。
+   只挑 `:has(.card-line.is-queue)`：报错 / 重画那些 idle 卡（一行灰字）
+   还是照旧靠左，别一起居中。老内核没有 :has() 就退回靠左，不报错。 */
+.card.is-idle:has(.card-line.is-queue) {
+  align-self: center;
+  /* 父容器不是 flex 时 align-self 不起作用，auto 外边距兜一层 */
+  margin-left: auto;
+  margin-right: auto;
+}
+
 /* 胶囊下面那行「可以先离开」小字（2026-11-27）：只在胶囊态出现，跟着
    setNote 的 queue 开关走；放在卡片里，不为它加高输入栏。窄屏允许折行。 */
 .card .queue-hint {
