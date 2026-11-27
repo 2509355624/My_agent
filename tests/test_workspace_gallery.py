@@ -4,8 +4,10 @@
 卡片只放缩略图 + 名字 + 编号、两列、点开有大图和收藏/下载、接口全部同源复用
 `/api/gal/*`。测试只看文件结构与调用路径，不跑浏览器。
 """
+import json
 import os
 import re
+import subprocess
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -117,7 +119,59 @@ class TestListLoadClaim(unittest.TestCase):
         j = _read("js/gallery_load.js")
         self.assertIn("function owns(n, rest)", j)
         self.assertIn("if (!busy) return false;", j)
-        self.assertIn("if (!rest) return true;", j)
+        # 换分类那发回来要放掉 busy（见下面那条实证），不能直接 return true
+        self.assertNotIn("if (!rest) return true;", j)
+
+    def _machine(self, steps):
+        """真跑一遍发号机，把每步结果串回来。
+
+        光断言源码拼不出状态机的问题——`owns()` 少清一个 `busy`，代码长得
+        完全正常，只有按顺序走一遍才露出来。没有 node 就跳过（这台机器有）。
+        """
+        script = (
+            "const fs=require('fs');const w={};"
+            "new Function('window',fs.readFileSync(process.argv[1],'utf8'))(w);"
+            "const m=w.WSTake.it();const out=[];"
+            + "".join("out.push(%s);" % s for s in steps) +
+            "process.stdout.write(JSON.stringify(out));"
+        )
+        try:
+            got = subprocess.check_output(
+                ["node", "-e", script, os.path.join(WS, "js", "gallery_load.js")],
+                stderr=subprocess.STDOUT, timeout=60)
+        except (OSError, subprocess.SubprocessError) as e:
+            self.skipTest("没有 node，跳过状态机实证：" + str(e))
+        return json.loads(got.decode("utf-8").strip())
+
+    def test_first_page_response_releases_the_slot(self):
+        """首屏那发回来必须放掉 busy，否则续页永远发不出去。
+
+        2026-11-27 用户实测：「MOSS 漫画的加载更多按钮失效了」，登录态和游客
+        一样，换哪个分类都一样。`owns()` 原来对 `!rest` 直接 `return true`、
+        一个字都不清，`done()` 全仓又没人调 —— 首屏一回 busy 就永久为真，
+        `claim(false)` 从此全部返回 null，按钮点了没反应、滚到底也不加页。
+        """
+        self.assertEqual(self._machine([
+            "m.claim(true)",      # 进页面 / 换分类：1
+            "m.owns(1,false)",    # 首屏回包：认领
+            "m.claim(false)",     # 点「加载更多」：必须发得出去
+        ]), [1, True, 1])
+
+    def test_rest_response_is_still_one_shot(self):
+        """翻页回包认领一次就关；换成新分类后旧翻页那发照样作废。"""
+        self.assertEqual(self._machine([
+            "m.claim(true)",      # 首屏 1
+            "m.owns(1,false)",
+            "m.claim(false)",     # 续页（沿用号 1，busy 占上）
+            "m.claim(false)",     # 再点：不许并发
+            "m.owns(1,true)",     # 续页回包：认领
+            "m.owns(1,true)",     # 重复认领：不算
+            "m.claim(true)",      # 换分类 → 号 2
+            "m.owns(1,true)",     # 旧续页回包：号对不上，作废
+            "m.claim(false)",     # 新分类首屏还没回：不许抢跑
+            "m.owns(2,false)",    # 新分类回包
+            "m.claim(false)",     # 又发得出去
+        ]), [1, True, 1, None, True, False, 2, False, None, True, 2])
 
     def test_head_guard_does_not_block_new_category(self):
         j = _read("js/gallery.js")
