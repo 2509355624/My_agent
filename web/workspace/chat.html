@@ -21,6 +21,7 @@
 <link rel="stylesheet" href="css/comic.css?v=20261127i">
 <link rel="stylesheet" href="css/create.css?v=20261127i">
 <link rel="stylesheet" href="css/me.css?v=20261127i">
+<link rel="stylesheet" href="css/composer.css?v=20261127t">
 </head>
 <body>
 
@@ -36,98 +37,107 @@
       </div>
 
       <div class="composer" id="composer">
-        <div class="chip-row">
-        <div class="chips">
-          <button class="chip" type="button" data-chip="gallery">AI 创作</button>
-          <button class="chip" type="button" data-chip="style">
-            画风 <span class="chip-sub" id="skill-name">…</span>
-          </button>
-          <button class="chip" type="button" data-chip="comic">我的漫画作品</button>
-        </div>
-
-        <!-- 同步发 QQ（2026-11-27）：登录用户才露，默认勾上。
-             出图后服务端往自己的 QQ 再发一份，手机上也能收到。 -->
-        <button class="sync-tog on" id="tog-sync" type="button" hidden
-                aria-pressed="true" title="出图后同步发一份到你的 QQ">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
-               stroke="currentColor" stroke-width="3" stroke-linecap="round"
-               stroke-linejoin="round" aria-hidden="true">
-            <path d="M4.6 12.6l4.6 4.6L19.4 6.6"/>
-          </svg>
-          同步 QQ
-        </button>
-        </div>
-
-        <!-- 漫画模式下才露出来的小标记，点 ✕ 退出 -->
-        <div class="mode-tag" id="mode-tag" hidden>
-          <span>漫画生成</span>
-          <button class="mt-x" id="mode-clear" type="button" aria-label="退出漫画模式">✕</button>
-        </div>
-
-        <!-- 这一轮带上的参考图（画同款 / 相册上传都落这儿） -->
-        <div class="ref-bar" id="ref-bar" hidden></div>
-
-        <div class="input-row">
-          <button class="icon-btn" id="btn-plus" type="button" aria-label="更多">＋</button>
-
-          <div class="plus-menu" id="plus-menu" hidden>
-            <!-- 两个平级入口：图片生成 / 漫画生成 -->
-            <div class="pm-grid">
-              <button class="pm-tile on" type="button" id="pick-img">
-                <span class="pm-ico">
-                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none"
-                       stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
-                       stroke-linejoin="round">
-                    <rect x="3.4" y="4.6" width="17.2" height="14.8" rx="3"/>
-                    <circle cx="8.6" cy="9.6" r="1.7"/>
-                    <path d="M4.2 17.2l4.6-4.4 3.4 3.2 3.6-3.8 4 4"/>
-                  </svg>
-                </span>
-                <b>图片生成</b>
-                <small>说一句就出图</small>
-              </button>
-              <button class="pm-tile" type="button" id="pick-comic">
-                <span class="pm-ico">
-                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none"
-                       stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
-                       stroke-linejoin="round">
-                    <path d="M4 5.4A2.4 2.4 0 0 1 6.4 3h5.2v16H6.4A2.4 2.4 0 0 0 4 21z"/>
-                    <path d="M20 5.4A2.4 2.4 0 0 0 17.6 3h-5.2v16h5.2A2.4 2.4 0 0 1 20 21z"/>
-                  </svg>
-                </span>
-                <b>漫画生成</b>
-                <small>说句剧情，分页画</small>
-              </button>
-            </div>
-
-            <div class="pm-row">
-              <button type="button" id="pick-camera">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                     stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
-                  <path d="M4 8.5h2.6l1.4-2h8l1.4 2H20v10H4z"/><circle cx="12" cy="13" r="3.2"/>
-                </svg>
-                相机
-              </button>
-              <button type="button" id="pick-album">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                     stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
-                  <rect x="3.5" y="5" width="17" height="14" rx="2.5"/>
-                  <path d="M3.8 16l4.4-4.2 3.2 3 3.4-3.6 5.4 5"/>
-                </svg>
-                相册
-              </button>
-            </div>
+        <div class="composer-card">
+          <!-- 漫画模式下才露出来的小标记，点 ✕ 退出 -->
+          <div class="mode-tag" id="mode-tag" hidden>
+            <span>漫画生成</span>
+            <button class="mt-x" id="mode-clear" type="button" aria-label="退出漫画模式">✕</button>
           </div>
 
+          <!-- 这一轮带上的参考图（画同款 / 相册上传都落这儿） -->
+          <div class="ref-bar" id="ref-bar" hidden></div>
+
           <textarea id="say" rows="1" maxlength="20000"
-                    placeholder="描述你想创作的内容" aria-label="创作内容"></textarea>
-          <!-- 两种发送（2026-11-26 用户提的）：粘进来的词可以选择不被改写。
-               「直达」= 原样跑一张，不经过 AI；「AI 发送」= 老行为，
-               交给大大怪改词再出图。「直达」点一下只跑一张。 -->
-          <button class="send-btn" id="btn-send" type="button" disabled
-                  title="交给大大怪改写提示词后出图">AI 发送</button>
-          <button class="send-btn direct" id="btn-direct" type="button" disabled
-                  title="原样提示词，直接跑一张（不经过 AI）">直达</button>
+                    placeholder="说说想画什么，或者点「引用」改上一张"
+                    aria-label="创作内容"></textarea>
+
+          <div class="composer-tools">
+            <button class="icon-btn" id="btn-plus" type="button" aria-label="更多">＋</button>
+
+            <div class="plus-menu" id="plus-menu" hidden>
+              <!-- 两个平级入口：图片生成 / 漫画生成 -->
+              <div class="pm-grid">
+                <button class="pm-tile on" type="button" id="pick-img">
+                  <span class="pm-ico">
+                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                         stroke-linejoin="round">
+                      <rect x="3.4" y="4.6" width="17.2" height="14.8" rx="3"/>
+                      <circle cx="8.6" cy="9.6" r="1.7"/>
+                      <path d="M4.2 17.2l4.6-4.4 3.4 3.2 3.6-3.8 4 4"/>
+                    </svg>
+                  </span>
+                  <b>图片生成</b>
+                  <small>说一句就出图</small>
+                </button>
+                <button class="pm-tile" type="button" id="pick-comic">
+                  <span class="pm-ico">
+                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                         stroke-linejoin="round">
+                      <path d="M4 5.4A2.4 2.4 0 0 1 6.4 3h5.2v16H6.4A2.4 2.4 0 0 0 4 21z"/>
+                      <path d="M20 5.4A2.4 2.4 0 0 0 17.6 3h-5.2v16h5.2A2.4 2.4 0 0 1 20 21z"/>
+                    </svg>
+                  </span>
+                  <b>漫画生成</b>
+                  <small>说句剧情，分页画</small>
+                </button>
+              </div>
+
+              <!-- 直达生图：原样提示词跑一张，不经过 AI。
+                   2026-11-27 从输入框旁边收进来——底行只留一颗「AI 发送」，
+                   两个入口的差别就在这行的说明文字里讲清楚，不靠用户猜。 -->
+              <button class="pm-item" id="btn-direct" type="button" disabled
+                      title="原样提示词，直接跑一张（不经过 AI）">
+                <b>直达生图</b>
+                <small>原样跑一张，不让 AI 改词</small>
+              </button>
+
+              <div class="pm-row">
+                <button type="button" id="pick-camera">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                       stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+                    <path d="M4 8.5h2.6l1.4-2h8l1.4 2H20v10H4z"/><circle cx="12" cy="13" r="3.2"/>
+                  </svg>
+                  相机
+                </button>
+                <button type="button" id="pick-album">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                       stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+                    <rect x="3.5" y="5" width="17" height="14" rx="2.5"/>
+                    <path d="M3.8 16l4.4-4.2 3.2 3 3.4-3.6 5.4 5"/>
+                  </svg>
+                  相册
+                </button>
+              </div>
+            </div>
+
+            <div class="chip-row">
+              <div class="chips">
+                <button class="chip" type="button" data-chip="gallery">AI 创作</button>
+                <button class="chip" type="button" data-chip="style">
+                  画风 <span class="chip-sub" id="skill-name">…</span>
+                </button>
+                <button class="chip" type="button" data-chip="comic">我的漫画</button>
+              </div>
+
+              <!-- 同步发 QQ（2026-11-27）：登录用户才露，默认勾上。
+                   出图后服务端往自己的 QQ 再发一份，手机上也能收到。 -->
+              <button class="sync-tog on" id="tog-sync" type="button" hidden
+                      aria-pressed="true" title="出图后同步发一份到你的 QQ">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="3" stroke-linecap="round"
+                     stroke-linejoin="round" aria-hidden="true">
+                  <path d="M4.6 12.6l4.6 4.6L19.4 6.6"/>
+                </svg>
+                同步 QQ
+              </button>
+            </div>
+
+            <!-- 主发送：交给大大怪改写提示词后出图。「直达」在「＋」里。 -->
+            <button class="send-btn" id="btn-send" type="button" disabled
+                    title="交给大大怪改写提示词后出图">AI 发送</button>
+          </div>
         </div>
 
         <input type="file" id="file-camera" accept="image/*" capture="environment" hidden>

@@ -16,6 +16,7 @@ WS = os.path.join(ROOT, "web", "workspace")
 CHAT_FILES = ("chat.html", "css/chat.css", "css/sheet.css", "css/pill.css",
               "js/gen.js", "js/chat.js", "js/stack.js", "js/views.js",
               "js/card.js", "js/gen_flow.js", "js/shot.js", "js/redraw.js",
+              "css/composer.css",
               "js/direct.js", "js/scroll.js")
 
 
@@ -69,7 +70,7 @@ class TestWorkspaceChatLayout(unittest.TestCase):
     def test_three_chips_only(self):
         html = _read("chat.html")
         self.assertEqual(html.count('class="chip"'), 3, "横滑 chip 只应有三个")
-        for text in ("AI 创作", "画风", "我的漫画作品"):
+        for text in ("AI 创作", "画风", "我的漫画"):
             self.assertIn(text, html)
 
 

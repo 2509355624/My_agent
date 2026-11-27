@@ -505,9 +505,9 @@
       el.menu.hidden = !el.menu.hidden;
     });
     document.addEventListener("click", function (e) {
-      if (!el.menu.hidden && !el.menu.contains(e.target) && e.target !== el.plus) {
-        el.menu.hidden = true;
-      }
+      var out = !el.menu.contains(e.target) && e.target !== el.plus;
+      var direct = el.menu.contains(e.target) && e.target.closest("#btn-direct");
+      if (!el.menu.hidden && (out || direct)) el.menu.hidden = true;
     });
 
     // 两个平级创作入口：只切模式，发什么由下面 send() 决定

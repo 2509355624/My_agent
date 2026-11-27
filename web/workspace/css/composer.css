@@ -1,0 +1,174 @@
+/* 输入栏卡片（2026-11-27）。
+
+   用户原话：「下面这一块，它都整个是一个内容输入，整个都是一个输入气泡
+   卡片。然后我们把那些 AI 创作、画风、我的漫画、同步 QQ，全部给它内置
+   到里面」——以前是「一条胶囊行 + 一条输入行」两个各自带背景的块，中间
+   有缝；输入框还被＋、AI 发送、直达挤得只剩一小截。
+
+   现在整块就是一张卡片：上面是占满宽度的输入区，下面一行工具（＋ / 三颗
+   入口 / 同步 QQ / AI 发送）。所有 id 都没动，`chat.js` 的事件绑定和
+   `views.js` 的 dockComposer（整块搬进子页）照旧生效。
+
+   单独成文件是因为 chat.css 已经贴着 600 行硬线（见 test_workspace_chat
+   的 CHAT_FILES）。这里只在 chat.css 之后加载，用同特异性、写在后面的规则
+   盖掉那边「通栏玻璃条」的底。 */
+
+/* ── 外层：只负责贴底和左右留白，背景交给卡片 ────────── */
+.composer {
+  padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+  border-top: 0;
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+/* 「＋」的面板挂在 .composer 上往上弹（.composer 是这一层里唯一的定位祖先）。
+   left 从 padding box 算，composer 自己已有 10px 左内边距，写 0 才跟卡片
+   左沿对齐；再往外 4px 也是给卡片的呼吸。 */
+.composer .plus-menu {
+  left: 0;
+  bottom: calc(100% + 4px);
+}
+
+/* ── 卡片本体 ───────────────────────────────────────── */
+.composer-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 9px 7px;
+  border: 1px solid var(--hair);
+  border-radius: 22px;
+  background: var(--card);
+  box-shadow: 0 10px 28px -20px rgba(16, 24, 40, .45);
+  transition: border-color .15s, box-shadow .15s;
+}
+
+/* 聚焦时整张卡亮边：输入区自己不再描边，让「正在输入」落在这张卡上 */
+.composer-card:focus-within {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 4px var(--ring), 0 10px 28px -20px rgba(16, 24, 40, .45);
+}
+
+/* ── 输入区：占满整行，两行起、最多约 6 行 ───────────── */
+.composer-card #say {
+  /* chat.css 里它是横排输入行的 `flex:1 1 0`；现在容器变成纵向 flex，
+     不重置的话 flex-basis:0 会把基础高度压成 0，只靠 min-height 兜着。 */
+  flex: 0 0 auto;
+  min-height: 58px;
+  max-height: 148px;
+  padding: 6px 6px 4px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  box-shadow: none;
+  font-size: 15px;
+  line-height: 22px;
+}
+
+.composer-card #say:focus {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.composer-card #say::placeholder { color: var(--text-dim); }
+
+/* 漫画标记 / 参考图条原来靠上下 margin 跟输入行拉开距离，卡片里已经有
+   `gap:4px`，留着那份 7px 会显得中间空一截。 */
+.composer-card .mode-tag { margin: 0 2px 2px; }
+.composer-card .ref-bar { margin: 0 2px 2px; }
+
+/* ── 工具行 ─────────────────────────────────────────── */
+.composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 加号缩到 32：它是卡片内部的小按钮，不再跟输入框同高 */
+.composer-tools .icon-btn {
+  width: 32px;
+  height: 32px;
+  border-color: transparent;
+  background: var(--card-2);
+  box-shadow: none;
+  font-size: 18px;
+}
+
+.composer-tools .chip-row {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.composer-tools .chips {
+  padding: 0;
+  gap: 6px;
+}
+
+.composer-tools .chip {
+  padding: 5px 10px;
+  border-color: transparent;
+  background: var(--card-2);
+  box-shadow: none;
+  font-size: 12.5px;
+}
+
+/* 同步开关跟着缩一号，避免它把 chips 挤到只剩一个 */
+.composer-tools .sync-tog {
+  padding: 4px 8px;
+  border-color: transparent;
+  background: var(--card-2);
+  font-size: 11.5px;
+}
+
+.composer-tools .sync-tog.on {
+  border-color: var(--ok);
+  background: var(--ok);
+}
+
+.composer-tools .send-btn {
+  flex: 0 0 auto;
+  height: 32px;
+  padding: 0 13px;
+  border-radius: 16px;
+  font-size: 13px;
+}
+
+.composer-tools .send-btn:disabled {
+  background: var(--card-2);
+  color: var(--text-dim);
+  box-shadow: none;
+}
+
+/* ── 「＋」里的「直达生图」 ─────────────────────────────
+   2026-11-27 从输入框旁边收进来：底行只留一颗「AI 发送」。两个入口的差别
+   写在这行说明里，不靠用户猜——只写「直达」两个字，没人知道它是跳过 AI。 */
+.plus-menu .pm-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  margin-top: 6px;
+  padding: 9px 11px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--card-2);
+  color: var(--text);
+  text-align: left;
+}
+
+.plus-menu .pm-item b {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.plus-menu .pm-item small {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.plus-menu .pm-item:active { background: var(--brand-soft); }
+
+/* 没输入内容时它跟发送按钮一起禁用：点不出图，就没必要亮着 */
+.plus-menu .pm-item:disabled { opacity: .45; }
