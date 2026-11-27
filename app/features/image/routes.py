@@ -1123,10 +1123,17 @@ def _gallery_item_data(iid, qq):
 
     「画同款」交上来的就是这个 id——它不是上传进来的参考图，而是画廊里
     已经出好的那一张。权限判据全在 `gallery._read_image_data()` 里。
+
+    `full=bool(qq)`（2026-11-27 修）：**登录用户看得到的图就必须读得到**。
+    画廊列表带 `__jf=1`，工作台里把已隐藏 / 已下架的作品也放出来；可
+    `/api/gen/ask` 本身不带 `__jf=1`，`_full()` 为 False，同一张图在这里被
+    当「别人的隐藏图」拒掉 → 后端拿到 0 张图 → 静默按纯文字重画，出来的
+    东西跟原图毫无关系。用户报的「引用了这张，画出来完全不一样」就是这条。
+    访客没有 qq，仍按严格判据。
     """
     try:
         from app.features.gallery import routes as gal
-        return gal._read_image_data(iid, qq)
+        return gal._read_image_data(iid, qq, full=bool(qq))
     except Exception:                                  # noqa: BLE001
         log.warning("工作台读作品图失败（id=%s）", iid, exc_info=True)
         return ""
@@ -1217,6 +1224,13 @@ def _web_decide(text, skill, hist, ctx):
     # 那张图当初的提示词交给主模板当【上一张】，模型在新需求上改写它，
     # 然后纯文生图重跑——所以这条路根本不该带图、也不该进 `_revise`。
     anchor = str(ctx.get("anchor") or "").strip()
+    # 带了参考图却一张都没读出来 → **说出来**，不许静默按纯文字画
+    # （2026-11-27 用户拍板）。以前这里直接落到下面的 `_translate`，模型拿着
+    # 用户那句「照着这张画」加几轮历史自由发挥，出来的图跟原图毫不相干的
+    # 同时还带上了历史里的画面内容 —— 用户只会觉得「识图坏了」，却看不到
+    # 任何出错提示。宁可让他重点一次，也别给一张错图。
+    if not anchor and (ctx.get("refs") or []) and not ctx.get("images"):
+        raise RuntimeError("这张图没读到，重发一次")
     if ctx.get("images") and not anchor:
         # 上传图 / 画廊「画同款」：**一次**多模态调用（2026-11-27）。
         # 图跟着 prompt 一起进识图模型，模型边看边按用户要求写词，直接入队。

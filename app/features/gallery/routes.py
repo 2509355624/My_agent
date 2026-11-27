@@ -1384,12 +1384,22 @@ def _read_private_image_text(ref_id, prompt):
     return (text or "").strip()
 
 
-def _readable_item_path(iid, qq):
+def _readable_item_path(iid, qq, full=None):
     """图 id → 磁盘路径；没权限 / 不存在 / 临时图返回 ""。
 
     权限判据与 `/img` 完全一致：别人隐藏的作品读不到，temp 图（上传的参考
     图，不是作品）也不算。`/describe` 和工作台「图 + 需求一次出词」共用这一
     份——分散两处迟早有一条忘了判权限。
+
+    `full`（2026-11-27）：调用方**已经确认**这次请求该按「工作台登录用户」
+    看全部，就传 True；不传则退回 `_full(qq)` 自己判。
+
+    为什么需要这个参数：`_full()` 认的是 `__jf=1` 这个**请求标记**，而
+    `/api/gen/ask` 不带它（它由 `_workspace_api` 重写 `/api/workspace/*`
+    时才加）。结果就是——画廊列表带着 `__jf=1`，被隐藏 / 已下架的图用户
+    看得见；同一张图点「画同款」交回 `gen/ask` 时 `_full()` 却是 False，被
+    当「别人的隐藏图」拒掉，`images` 恒空、静默退化成纯文生图。用户 2026-11-27
+    原话：「我看得到的图，后端能够读到就行了」。
     """
     try:
         iid = int(iid)
@@ -1401,10 +1411,12 @@ def _readable_item_path(iid, qq):
             " FROM items i JOIN works w ON w.id=i.work_id WHERE i.id=?", (iid,)).fetchone()
     if not row:
         return ""
+    if full is None:
+        full = _full(qq)
     if (row["hidden"] and row["owner"] != str(qq or "")
-            and not _seer(qq) and not _full(qq)):
+            and not _seer(qq) and not full):
         return ""
-    if row["ihidden"] and not _seer(qq) and not _full(qq):
+    if row["ihidden"] and not _seer(qq) and not full:
         return ""
     if str(row["use"] or "keep") == "temp":
         return ""
@@ -1434,13 +1446,14 @@ def _read_image_text(iid, prompt):
     return (text or "").strip()
 
 
-def _read_image_data(iid, qq):
+def _read_image_data(iid, qq, full=None):
     """图 id → data URL（这一层不调识图模型）；没权限 / 读失败返回 ""。
 
     工作台「画同款」交上来的是画廊 item id（数字），后端要把**图本身**读出来
-    交给多模态模型，跟用户那句话一起一次出词（2026-11-27）。
+    交给多模态模型，跟用户那句话一起一次出词（2026-11-27）。`full` 的含义见
+    `_readable_item_path`。
     """
-    src = _readable_item_path(iid, qq)
+    src = _readable_item_path(iid, qq, full=full)
     if not src:
         return ""
     try:

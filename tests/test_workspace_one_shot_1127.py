@@ -113,6 +113,58 @@ class WebImagesTest(unittest.TestCase):
             self.assertEqual(R._web_images(["C" * 24], ""), [])
         g.assert_not_called()
 
+    def test_logged_in_user_reads_hidden_work(self):
+        """我看得见的图，后端就必须读得到（2026-11-27 用户报的 bug）。
+
+        画廊列表带 `__jf=1`，工作台里隐藏单张 / 已下架作品都会露出来；可
+        `/api/gen/ask` 本身不带这个标记，`_full()` 于是 False，同一张图被当
+        「别人的隐藏图」拒掉 → 后端 0 张图 → 静默纯文生图。用户原话：
+        「我看得到的图，后端能够读到就行了」。
+
+        所以这里锁死：登录身份调 `_read_image_data` 时必须带 `full=True`。
+        """
+        from app.features.image import routes as R
+        seen = {}
+
+        def fake(iid, qq, full=None):
+            seen["full"] = full
+            seen["qq"] = qq
+            return "data:image/webp;base64,CC"
+
+        with mock.patch(
+                "app.features.gallery.routes._read_image_data", side_effect=fake):
+            got = R._web_images([42], "10001")
+        self.assertEqual(got, ["data:image/webp;base64,CC"])
+        self.assertTrue(seen["full"], "登录用户要按工作台可见性读，否则读不到隐藏图")
+
+
+class LostImageTest(unittest.TestCase):
+    """带了参考图却一张都没读出来：必须说出来，不许静默按纯文字画。"""
+
+    def test_ref_without_image_does_not_fall_back_to_text(self):
+        from app.features.image import routes as R
+        from app.features.image import direct_gen as dg
+        with mock.patch.object(dg, "_translate") as tr, \
+             mock.patch.object(dg, "_tags_with_request") as tags, \
+             mock.patch.object(R, "_owner_key", return_value="__test__"):
+            with self.assertRaises(RuntimeError) as ctx:
+                R._web_decide("照着这张画", "silver", [],
+                              {"images": [], "refs": [42], "qq": "10001"})
+        self.assertIn("没读到", str(ctx.exception))
+        tr.assert_not_called()
+        tags.assert_not_called()
+
+    def test_pure_text_still_ok(self):
+        """没带图就照常走转译——别把纯文生图也拦了。"""
+        from app.features.image import routes as R
+        from app.features.image import direct_gen as dg
+        with mock.patch.object(
+                dg, "_translate", return_value={"skill": "silver", "prompt": "P"}), \
+             mock.patch.object(R, "_owner_key", return_value="__test__"):
+            got = R._web_decide("画只猫", "silver", [],
+                                {"images": [], "refs": [], "qq": "10001"})
+        self.assertEqual(got["prompt"], "P")
+
 
 class FrontendGuardTest(unittest.TestCase):
     """前端不许再有「发送前识图」——那是被删掉的那一次调用。"""
