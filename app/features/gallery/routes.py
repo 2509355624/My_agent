@@ -84,8 +84,9 @@ THUMB_BATCH_V = 6
 
 # 临时参考图（use='temp'）在所有列表里被过滤掉。只写一次，免得六条 SQL
 # 各写一遍、改一处漏五处。COALESCE 兜老库：`use` 列是后加的，老行是 NULL。
+# 带 `w.` 前缀：分类条现在复用列表那套 where（2026-11-27），不再另写一份
+# 无别名的 SQL，所以不需要 RAW 版了。
 _NOT_TEMP = "COALESCE(w.use,'keep') <> 'temp'"
-_NOT_TEMP_RAW = "COALESCE(use,'keep') <> 'temp'"
 
 # 单张图隐藏（items.hidden）。站主永远看得见自己藏了什么，群友 / 游客只
 # 拿到没藏的那批。只写一次，免得七八条 SQL 各拼一遍、改一处漏三处。
@@ -116,9 +117,12 @@ def _img(path):
     存了就等于「猜到 id 就能不看登录直接拿图」。
     站主下架的图服务端仍然 404，只是浏览器里已有的副本还能打开；那是本人
     之前就看过的图，不算多给任何人一份。
+
+    路径先补成绝对的：`send_file()` 解相对路径是按 `app.root_path`（仓库下
+    `app/`），**不是 cwd**。老上传那批存的就是相对路径，见 `gallery.abs_path`。
     """
-    resp = send_file(path, mimetype="image/webp", conditional=True,
-                     max_age=IMG_MAX_AGE)
+    resp = send_file(gallery.abs_path(path), mimetype="image/webp",
+                     conditional=True, max_age=IMG_MAX_AGE)
     resp.headers["Cache-Control"] = ("private, max-age=%d, immutable"
                                      % IMG_MAX_AGE)
     return resp
@@ -307,6 +311,16 @@ def api_list():
         args.append(str(GALLERY_OWNER_QQ or ""))
         order = " ORDER BY w.id DESC"        # 公开墙看最新的，不care发现顺序
 
+    # 分类条要跟列表用**同一套过滤**，所以先把「还没加 grp 条件」的 where / args
+    # 各留一份（scope 分支里有 `?` 占位符，参数得一对一带过去）。
+    #
+    # 以前分类条另写一段 SQL，只判了 n>0、目录在不在，**不看 hidden、也不看
+    # 漫画排除**，于是会列出点进去没图的标签（2026-11-27 用户报的 `web`：30 本
+    # 全是当年 `output\web\漫画_*` 的老目录，已被「漫画」虚拟标签接管，点「web」
+    # 又被 `NOT 漫画判据` 全排除 → 一面空墙）。
+    base_where = list(where)
+    base_args = list(args)
+
     grp = str(request.args.get("grp") or "").strip()
     if grp == COMIC_LABEL:
         # 虚拟「漫画」标签：把散在 7 个 `漫画_C...` grp 和 web 组里的单渠道本
@@ -324,32 +338,36 @@ def api_list():
 
     with gallery.connect() as con:
         rows = con.execute(sql, args).fetchall()
-        # 分类条只列「这个 tab 里真有的分类」：站长 tab 是磁盘目录，
-        # 公开 tab 是群友上传。否则点进一个空分类会看到空白墙。
-        # `n>0` 现在是「还有可见的图」（见 gallery._recount）：一本被整页隐藏
-        # 完之后 n 归零，它的分类也就不该再占一个标签。
-        if scope == "owner":
-            # 下架的目录不占分类条：整个分类都被隐藏时，那个标签点进去是空墙。
-            gsql = ("SELECT DISTINCT grp, path FROM works WHERE n>0 AND grp<>''"
-                    " AND src='owner' AND hidden=0 AND " + _NOT_TEMP_RAW)
-        elif scope == "pub":
-            gsql = ("SELECT DISTINCT grp, path FROM works WHERE n>0 AND grp<>''"
-                    " AND src='user' AND " + _NOT_TEMP_RAW)
-        else:
-            gsql = ("SELECT DISTINCT grp, path FROM works WHERE n>0 AND grp<>''"
-                    " AND " + _NOT_TEMP_RAW)
+        # 漫画归一：只要库里还有漫画行，就把 7 个 `漫画_C...` 碎标签撤掉，
+        # 换成一个「漫画」。判据用 grp/title 两个字段：单渠道本藏在 web 组、
+        # 只体现在 title 里。和列表/分类条用**同一套** base_where：scope、
+        # hidden、临时图全都算进去，隐藏墙上不会冒出一个点进去空白的「漫画」。
+        #
+        # 这段原来在分类条之后，现在要先算——分类条得知道哪些行已经归到
+        # 「漫画」名下了，不然 web 这种「全被吃掉」的分类又会占一个空标签。
+        has_comic = con.execute(
+            "SELECT 1 FROM works w WHERE " + " AND ".join(base_where)
+            + " AND " + _COMIC_WHERE + " LIMIT 1", base_args).fetchone()
+        # 分类条只列「这个 tab 里真有的分类」：站长 tab 是磁盘目录，公开 tab 是
+        # 群友上传。否则点进一个空分类会看到空白墙。过滤条件直接复用列表那套
+        # （scope / hidden / 临时图全都在里面），再扣掉归到「漫画」名下的行。
+        #
+        # 注意 `SELECT DISTINCT grp, path` 是按 (grp, path) 去重的：一个分类下
+        # 有几个目录就吐几行，同名的 grp 会重复 N 次。2026-11-24 用户报「AI 创作
+        # 头顶那一排全是重复的 new」，根因就在这——下面必须按 grp 收成一组，
+        # 每个分类只出一个标签。
+        gwhere = base_where + ["w.grp<>''"]
+        if has_comic:
+            gwhere.append("NOT " + _COMIC_WHERE)
+        gsql = ("SELECT DISTINCT w.grp AS grp, w.path AS path FROM works w"
+                " WHERE " + " AND ".join(gwhere))
         # 目录被清空（站主「清空 web」之后那种）时 `n` 还是旧值，库里仍然
         # 说这个分类有图——标签留着，点进去一面空白墙。所以这里顺手判一下
         # 目录在不在，整组目录都没了就不列它（2026-11-24 用户要求）。
         # 「任何一条还活着」就算这个分类还在：漫画一个任务一个目录，删掉一本
         # 不该把「漫画」整个标签带走。
-        #
-        # 注意 `SELECT DISTINCT grp, path` 是按 (grp, path) 去重的：一个分类下
-        # 有几个目录就吐几行，同名的 grp 会重复 N 次。2026-11-24 用户报「AI 创作
-        # 头顶那一排全是重复的 new」，根因就在这——这里必须按 grp 收成一组，
-        # 每个分类只出一个标签。
         alive = {}
-        rows_g = con.execute(gsql).fetchall()
+        rows_g = con.execute(gsql, base_args).fetchall()
         if _needs_dir_check(rows_g):
             for r in rows_g:
                 g = r["grp"]
@@ -362,18 +380,6 @@ def api_list():
                 continue
             seen.add(g)
             grps.append(g)
-        # 漫画归一：只要库里还有漫画行，就把 7 个 `漫画_C...` 碎标签撤掉，
-        # 换成一个「漫画」。web 组本身保留（还有「生图页」那 1 条真·非漫画）。
-        # 判据用 grp/title 两个字段：单渠道本藏在 web 组、只体现在 title 里。
-        # 和上面 gsql 用同一套 scope 约束：公开墙全是群友上传，没有磁盘漫画，
-        # 不能给它塞一个点进去空白的「漫画」标签。
-        comic_scope = (" AND src='owner' AND hidden=0" if scope == "owner" else
-                       " AND src='user'" if scope == "pub" else "")
-        has_comic = con.execute(
-            "SELECT 1 FROM works WHERE n>0" + comic_scope + " AND "
-            + _NOT_TEMP_RAW + " AND "
-            + _COMIC_WHERE_RAW + " LIMIT 1"
-        ).fetchone()
         if has_comic:
             grps = [g for g in grps if g and not g.startswith("漫画_")]
             grps.append(COMIC_LABEL)
@@ -539,7 +545,9 @@ def api_img(iid):
     if row["ihidden"] and not _seer(qq):
         return jsonify({"ok": False, "error": "没这张图"}), 404
 
-    src = row["path"]
+    # 老上传那批存的是相对路径（`state\gallery_upload\...`）。判存在、转码、
+    # 发文件三处都得先补成绝对的，原因见 `gallery.abs_path`。
+    src = gallery.abs_path(row["path"])
     if not os.path.isfile(src):
         return jsonify({"ok": False, "error": "文件不在了"}), 404
 

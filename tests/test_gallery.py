@@ -2092,3 +2092,84 @@ class PinApiTest(_Base):
         os.remove(self.path)
         r = self.post("839125")
         self.assertEqual(r.status_code, 503)
+
+
+class RelativePathTest(_Base):
+    """2026-11-27：「上传」标签里的图，网格能看到、一点开就破图。
+
+    根因不是文件坏了，是那 20 本老上传的 `items.path` 存的是**相对路径**
+    （`state\\gallery_upload\\...`），而 Flask 的 `send_file()` 解析相对路径是
+    按 `app.root_path`（仓库下 `app/`），不是 cwd —— 拼出一个不存在的
+    `app\\state\\...`，`FileNotFoundError` → 500。
+
+    缩略图走缓存（绝对路径）所以看着正常，只有「本来就是 1600px webp、直接
+    发源文件」那条捷径会踩到。
+    """
+
+    def _seed(self, rel, grp="上传", hidden=0, title=None):
+        """插一本「群友上传」，path 故意存相对路径（老数据就是这样的）。"""
+        p = os.path.join(self.root, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with Image.new("RGB", (200, 300), (12, 34, 56)) as im:
+            im.save(p, "WEBP", quality=80)
+        title = title or os.path.dirname(rel) or "老上传"
+        with gallery.connect() as con:
+            cur = con.execute(
+                "INSERT INTO works(key, src, owner, grp, title, path, cover, n,"
+                " sort, ts, seen, hidden)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("user:1/" + rel, "user", "1", grp, title,
+                 os.path.dirname(p), "", 1, 0, time.time(), time.time(),
+                 hidden))
+            wid = cur.lastrowid
+            con.execute("INSERT INTO items(work_id, idx, path, bytes)"
+                        " VALUES(?,?,?,?)", (wid, 0, rel, os.path.getsize(p)))
+            iid = con.execute(
+                "SELECT id FROM items WHERE work_id=?", (wid,)).fetchone()[0]
+        return wid, iid
+
+    def _get(self, path):
+        from flask import Flask
+        app = Flask(__name__)
+        app.register_blueprint(gallery_api.bp)
+        with mock.patch.object(friend_auth, "secret", lambda: "tok"):
+            return app.test_client().get(
+                path, headers={"X-Friend-Token": "tok"})
+
+    def test_abs_path_joins_base_dir(self):
+        with mock.patch.object(gallery, "BASE_DIR", self.root):
+            self.assertEqual(gallery.abs_path("state/a.webp"),
+                             os.path.join(self.root, "state/a.webp"))
+        # 已经是绝对的（本机磁盘目录、别的盘符）原样返回
+        self.assertEqual(gallery.abs_path(r"D:\x\a.webp"), r"D:\x\a.webp")
+        self.assertEqual(gallery.abs_path(""), "")
+
+    def test_thumb_accepts_relative_path(self):
+        self._seed("upload/001.webp")
+        with mock.patch.object(gallery, "BASE_DIR", self.root):
+            p = gallery.thumb("upload/001.webp", "t")
+        self.assertTrue(p and os.path.isfile(p))
+
+    def test_viewer_image_is_200_not_500(self):
+        """`?s=v` 走「直接发源文件」，以前就是这一步 500。"""
+        _wid, iid = self._seed("upload/002.webp")
+        with mock.patch.object(gallery, "BASE_DIR", self.root):
+            r = self._get("/api/gal/img/%d?s=v" % iid)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.content_type, "image/webp")
+
+    def test_tabs_skip_group_that_is_all_hidden(self):
+        """整组都下架了 → 不该再占一个点进去空白的标签。"""
+        self._seed("ok/001.webp", grp="可见组")
+        self._seed("gone/001.webp", grp="全藏组", hidden=1)
+        d = self._get("/api/gal/list?page=1&size=24").get_json()
+        self.assertIn("可见组", d["grps"])
+        self.assertNotIn("全藏组", d["grps"])
+
+    def test_tabs_skip_group_swallowed_by_comic_label(self):
+        """`web` 那种：整组都被「漫画」判据吃掉，点进去 0 条。"""
+        self._seed("web/001.webp", grp="web", title="漫画_C2026/烟火")
+        self._seed("manga/001.webp", grp="漫画_C2026", title="漫画_C2026")
+        d = self._get("/api/gal/list?page=1&size=24").get_json()
+        self.assertNotIn("web", d["grps"])
+        self.assertIn("漫画", d["grps"])

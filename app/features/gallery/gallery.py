@@ -47,7 +47,7 @@ from collections import deque
 
 from PIL import Image
 
-from app.config import GALLERY_ROOTS, state_path
+from app.config import BASE_DIR, GALLERY_ROOTS, state_path
 
 log = logging.getLogger("gallery")
 
@@ -56,6 +56,29 @@ CACHE = state_path("gallery_cache")
 UPLOAD = state_path("gallery_upload")
 
 IMG_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+
+
+def abs_path(p):
+    """库里存的路径 → 绝对路径。
+
+    早年群友上传那批（`grp='上传'`）把 `state\\gallery_upload\\...` 这种**相对
+    路径**写进了库，那时候 `UPLOAD` 还不是绝对路径。现在 `UPLOAD` 已经是绝对
+    的了，老行却一直没迁移。
+
+    平时看不出问题：缩略图走 `thumb()`，缓存落在绝对路径上，`os.path.isfile`
+    按 cwd 也能找到文件。**但 Flask 的 `send_file()` 解析相对路径是按
+    `app.root_path`（仓库下 `app/`），不是 cwd** —— 「本来就是 1600px webp、
+    直接发源文件」那条捷径一走到，就拼出一个 `app\\state\\...`，`FileNotFound`
+    直接 500。用户看到的就是「网格有图、一点开就破图」（2026-11-27）。
+
+    这里只做补全：不改库、不改路径语义，只是让 `isfile` / `send_file` 拿到
+    一个它们能认的绝对路径。
+    """
+    p = str(p or "")
+    if not p or os.path.isabs(p):
+        return p
+    return os.path.join(BASE_DIR, p)
+
 
 # 一个作品集最多存几张。群友会分几次往同一个作品集里加图（一次传不完
 # 十张就先传一批），所以上限得管在「作品集」这一层，而不是只管一次请求。
@@ -646,6 +669,7 @@ def reuse_direct(src, edge=1600):
     群友上传的图在落盘时就是 1600px WebP，再压一次只掉画质、还多占一份缓存。
     只认 `.webp`：站主那边的小 PNG/JPEG 转 webp 仍然划算（体积能差十倍）。
     """
+    src = abs_path(src)
     if not str(src).lower().endswith(".webp"):
         return False
     try:
@@ -673,6 +697,9 @@ def thumb(src, kind="t", edge_override=None):
     的代码，不如把长边透出来——缓存文件名本来就带 kind，传 `kind=edge值`
     就天然是另一份缓存，锁、mtime 校验、`reuse_direct` 全部照旧复用。
     """
+    # 库里可能有相对路径（见 `abs_path` 的说明）。在这里归一，调用方就不用
+    # 每个入口各补一遍；缓存 key 也跟着走绝对路径，老那 258 张会重算一次。
+    src = abs_path(src)
     if edge_override:
         edge = int(edge_override)
         kind = str(edge)
