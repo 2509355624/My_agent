@@ -37,11 +37,12 @@ class _Base(unittest.TestCase):
 
     def setUp(self):
         self.trans = []      # _translate 调用
-        self.rev = []        # _web_revise 调用
+        self.rev = []        # _web_revise 调用（带图那条**不该**再走到它）
+        self.tags = []       # _tags_with_request 调用（图 + 需求一次出词）
         self.enq = []        # 入队的 spec
         self.lowres_flags = []   # 每次入队带的 lowres_on
         self.tr_result = {"skill": "silver", "prompt": "MASTER-OUT"}
-        self.rev_result = {"skill": "silver", "prompt": "REVISED"}
+        self.tag_result = "TAGS-OUT"
 
         def _translate(text, hist, skill=None, **k):
             self.trans.append({"text": text, "skill": skill, "hist": hist})
@@ -50,7 +51,11 @@ class _Base(unittest.TestCase):
         def _revise(text, channel, hist, images):
             self.rev.append({"text": text, "channel": channel,
                              "images": images})
-            return self.rev_result
+            return {"skill": "silver", "prompt": "REVISED"}
+
+        def _tags(images, request=""):
+            self.tags.append({"images": images, "request": request})
+            return self.tag_result
 
         def _enq(spec, owner, user_text="", lowres_on=False):
             self.enq.append(spec)
@@ -64,6 +69,10 @@ class _Base(unittest.TestCase):
             mock.patch.object(R, "_web_history", new=_FakeHistory()),
             mock.patch.object(R, "_enqueue_job", new=_enq),
             mock.patch.object(R, "_web_revise", new=_revise),
+            # `_owner_key()` 要读 request context，单测里没有；打桩让它能跑。
+            # 以前这 10 条其实一直在 `Working outside of request context` 上红，
+            # 断言根本没被执行到（2026-11-27 顺手补上）。
+            mock.patch.object(R, "_owner_key", return_value="__test__"),
         ]
         for p in self._p:
             p.start()
@@ -71,9 +80,12 @@ class _Base(unittest.TestCase):
         self.dg = direct_gen
         self._orig_tr = direct_gen._translate
         direct_gen._translate = _translate
+        self._orig_tags = direct_gen._tags_with_request
+        direct_gen._tags_with_request = _tags
 
     def tearDown(self):
         self.dg._translate = self._orig_tr
+        self.dg._tags_with_request = self._orig_tags
         for p in self._p:
             p.stop()
 
@@ -123,30 +135,38 @@ class TextToImageTest(_Base):
 
 
 class ImageToImageTest(_Base):
-    """图生图：传了图就说一句，图 + 话一起交给大怪那套。"""
+    """上传图 / 画同款：图 + 话一起交给多模态模型，**一次**调用出词。
 
-    def test_upload_goes_through_revise(self):
-        job = self._run("把这个人换到我旁边", images=["data:image/png;base64,AA"],
-                        refs=["cr_x"])
-        self.assertEqual(len(self.rev), 1)
-        self.assertEqual(self.rev[0]["channel"], "silver")
-        self.assertEqual(job["prompt"], "REVISED")
+    2026-11-27 用户拍板。以前走 `_web_revise`（先识图、再改词、还要模型判
+    要不要垫图），之后又可能有第二次转译；图在第一步之后就只剩一段中文。
+    现在的口径：`_tags_with_request(images, text)` 一次搞定。
+    """
 
-    def test_source_image_only_when_model_asks(self):
-        """模型判要垫图 → 把 data URL 一起交给任务；不垫就不传。"""
-        self.rev_result = {"skill": "silver", "prompt": "P", "source_image": True}
-        job = self._run("图生图", images=["data:image/png;base64,AA"])
-        self.assertEqual(job["source_images"], ["data:image/png;base64,AA"])
+    def test_upload_goes_through_one_shot(self):
+        job = self._run("把这个人换到我旁边", images=["data:image/png;base64,AA"])
+        self.assertEqual(len(self.tags), 1)
+        self.assertEqual(self.tags[0]["request"], "把这个人换到我旁边")
+        self.assertEqual(self.rev, [])          # 不再走 QQ 那条改图管道
+        self.assertEqual(self.trans, [])        # 也不再多转一次
+        self.assertEqual(job["prompt"], "TAGS-OUT")
 
-        self.rev_result = {"skill": "silver", "prompt": "P"}
-        job = self._run("图生图", images=["data:image/png;base64,AA"])
+    def test_no_source_image_attached(self):
+        """图只是「看」，产出的是纯文生图——不把图当垫图塞进工作流。"""
+        job = self._run("照着画", images=["data:image/png;base64,AA"])
         self.assertEqual(job["source_images"], [])
 
-    def test_ui_channel_wins_over_revise(self):
-        self.rev_result = {"skill": "qwen_image_v1", "prompt": "P"}
+    def test_ui_channel_wins_over_model(self):
         job = self._run("改一下", skill="silver",
                         images=["data:image/png;base64,AA"])
         self.assertEqual(job["skill"], "silver")
+
+    def test_read_failure_asks_to_retry(self):
+        """图没读出来（视觉调用失败）要说人话重发，不静默按文字画。"""
+        self.tag_result = ""
+        with self.assertRaises(RuntimeError) as ctx:
+            self._run("照着画", images=["data:image/png;base64,AA"])
+        self.assertIn("没读出来", str(ctx.exception))
+        self.assertEqual(self.enq, [])
 
     def test_cr_refs_pass_through(self):
         self._run("改一下", images=["data:image/png;base64,AA"],

@@ -1,20 +1,23 @@
 /* 参考图：输入栏上方那条缩略图、消息里的参考卡、上传、以及画廊的「画同款」。
    从 chat.js 拆出来的——那边原来是角色、上传、重放全挤在一起。
 
-   口径（用户 2026-11-23 定的）：这里没有图生图。相册上传是一张「参考」，
-   「画同款」是把那张图读成一段描述再生成——所以两者都只往输入栏挂缩略图，
-   真正的生成仍由 chat.js 按用户这句话去打 /api/gen/submit。
+   口径（2026-11-27 用户拍板）：这里没有图生图，也**没有前端识图**。
+   上传和「画同款」都只把图挂进这一轮的参考图；用户点发送时，图跟着他那句
+   话一起交给后端的**多模态模型**，一次调用边看边写词
+   （`direct_gen._tags_with_request`）。
 
-   **识图时机（2026-11-23 晚用户第二次纠正）**：上传只是「选了一张图」，
-   不许立刻去读；等用户点了发送，`ensureDescribed()` 才把这一轮的几张图
-   读成描述，跟用户那句话一起拼给大模型。理由是用户上传完往往还要想一秒
-   才写需求，立刻读出来的描述会先一步填进输入框，把用户想说的话顶掉；
-   而且那时白白烧一次视觉模型的钱。 */
+   2026-11-27 之前是「前端先识一遍（填进输入框）+ 后端再拿这段中文转一遍」，
+   两次调用而且第二次根本没看到图——用户原话：「一个识图模型，它本身就能
+   拿到图片和用户的需求……两次调用反而是最亏的」。 */
 (function (global) {
   "use strict";
 
   var S = { refs: [], quote: null };
   var el = {};
+  /* 正在上传的张数：`send()` 见到 >0 就先别发——不然「图还没挂上就点了
+     发送」会悄悄退化成一张纯文生图，用户只会觉得「我明明引用了它」。
+     2026-11-27 之前它从没被加减过，`busy()` 恒 false，等于没挡。 */
+  var pending = 0;
 
   function $(id) { return document.getElementById(id); }
 
@@ -27,13 +30,6 @@
     return isPrivateRef(item.ref_id || item.id)
       ? "/api/gal/ref/" + encodeURIComponent(item.ref_id || item.id)
       : "/api/gal/img/" + item.id + "?s=t";
-  }
-
-  function describeUrl(id) {
-    if (isPrivateRef(id)) {
-      return "/api/gal/ref/describe?ref_id=" + encodeURIComponent(id);
-    }
-    return "/api/gal/describe?id=" + encodeURIComponent(id);
   }
 
   /* 参考卡一律挂在根消息区（跟 chat.js 的 box() 同一条规矩，理由见那边的
@@ -103,6 +99,8 @@
     paintRef(item);
     global.WSChat.log({ k: "ref", wid: item.wid, id: item.id,
                         url: item.url || "" });
+    /* 有图没字也能发（2026-11-27）：挂上图之后把发送键点亮。 */
+    if (global.WSChat.syncSend) global.WSChat.syncSend();
   }
 
   /* 已经发出去的那张要留在「已发送」里，否则刷新后被 dropRef 一起删掉 */
@@ -142,13 +140,20 @@
           if (n.dataset.draft && want[String(n.dataset.ref)]) n.remove();
         });
     }
-    if (ids.length && global.WSChat) global.WSChat.dropRefRecords(ids);    syncHint();
+    if (ids.length && global.WSChat) global.WSChat.dropRefRecords(ids);
+    syncHint();
+    if (global.WSChat.syncSend) global.WSChat.syncSend();
   }
 
-  /* 「画同款」：把画廊这张读成一段描述再生成（用户 2026-11-23 定的口径——
-     这里没有图生图）。调用方已经退回了聊天页，这里只负责挂参考图、
-     切回图片生成、把光标放进输入框，等用户再补一句要求。 */
+  /* 「画同款」：把画廊这张挂成这一轮参考图（用户 2026-11-23 定的口径——
+     这里没有图生图）。调用方已经退回了聊天页，这里只负责挂图、切回图片
+     生成、把光标放进输入框。
+
+     **不再预读**（2026-11-27）：以前点一下就先调一次识图接口把描述填进
+     输入框，用户点发送后后端又拿这段中文转一遍，两次调用里第二次根本没
+     见过图。现在图跟着用户那句话一起交给多模态模型，一次出词。 */
   function useSame(work, itemId) {
+    global.sessionStorage.removeItem("ws_same_pending");
     global.sessionStorage.removeItem("ws_same_result");
     if (global.WSCreate) global.WSCreate.setMode("img", true);
     addRef({ wid: (work && work.id) || 0, id: itemId || 0,
@@ -156,85 +161,10 @@
     syncHint();
     var say = document.getElementById("say");
     if (say) {
-      say.placeholder = "说说这张怎么改，照着它重画";
-      say.focus();
-    }
-    // 立刻把这张读成一段描述填进输入框：用户点「画同款」要的是「照着它」，
-    // 光挂一张缩略图什么都不会发生。读出来就填，读不出来就让用户自己写一句
-    // ——两种情况都给明确反馈，不留「点了没反应」的空档。
-    if (itemId) {
-      describeInto(itemId, say).then(function (text) {
-        /* 读成功 → 给这张图打上「已读」标记。发送时（chat.js 的 send）
-           看到这个标记就直接拿去出图，不再让后端识一次——用户 2026-11-24
-           确认的口径：「不再识，用输入栏那段」。 */
-        if (!text) return;
-        S.refs.forEach(function (r) {
-          if (r.id === itemId) { r.pre = true; r.text = text; }
-        });
-      });
+      say.placeholder = "说说这张怎么改，不改就直接发送照着画";
+      try { say.focus(); } catch (e) { /* 键盘弹不弹都不影响发送 */ }
     }
     global.dispatchEvent(new Event("resize"));
-  }
-
-  /* 读图反推 → 填进输入框。已有内容就不覆盖（那是用户自己写的）。
-     只给「画同款」用：那是用户明确点了一下「照着这张画」，填进去才叫反馈。
-     相册上传不走这里（见文件头的识图时机说明）。 */
-  function describeInto(itemId, say) {
-    if (!say) return Promise.resolve("");
-    global.sessionStorage.setItem("ws_same_pending", JSON.stringify({ id: itemId }));
-    /* 「正在识图…」只放在输入框自己的 placeholder 里（用户 2026-11-25：
-       挂一行字在输入栏上面会把它压得又扁又窄）。placeholder 不新增节点、
-       不改宽度，输入栏跟平时一模一样，识图完恢复原提示。 */
-    say.placeholder = "正在识图中…";
-    function finish() {
-      say.placeholder = "说说这张怎么改，照着它重画";
-    }
-    return global.WSApi.get(describeUrl(itemId))
-      .then(function (d) {
-        finish();
-        global.sessionStorage.removeItem("ws_same_pending");
-        if (!d || !d.ok) {
-          localError(say.parentNode, (d && d.error) || "这张没读出来，自己写一句就行");
-          return "";
-        }
-        global.sessionStorage.setItem("ws_same_result", JSON.stringify({ id: itemId, text: d.text || "" }));
-        if (say.value.trim()) return d.text || "";   // 用户已经在写了，别顶掉
-        say.value = d.text || "";
-        say.dispatchEvent(new Event("input"));
-        say.focus();
-        return d.text || "";
-      })
-      .catch(function () {
-        finish();
-        localError(say.parentNode, "读图没连上，回来后会重新识图，也可以自己写一句");
-        return "";
-      });
-  }
-
-  /* 只读、不填输入框：发送那一刻用。成功才记进 item.text，失败的返回空串
-     （后端也没有描述时由 submit 那边说「没读到，按描述画」）。 */
-  function describeOnly(item) {
-    return global.WSApi.get(describeUrl(item.id))
-      .then(function (d) {
-        if (d && d.ok && d.text) { item.text = d.text; return d.text; }
-        return "";
-      })
-      .catch(function () { return ""; });
-  }
-
-  /* 发送时把这一轮还没读过的参考图读出来，返回带描述的数组。
-     全部在本地读完再发，不是一个一个等——几张图并行，用户只等最慢的那张。
-     读不出来不算失败：图仍然带着走，让后端按「只有图、没描述」处理。 */
-  function ensureDescribed(list) {
-    var items = (list || S.refs).slice();
-    var todo = items.filter(function (r) { return r.id && !r.text; });
-    if (!todo.length) return Promise.resolve(items);
-    var tag = global.WSChat.busyNote(
-      todo.length > 1 ? "正在看 " + todo.length + " 张参考图…" : "正在看图…");
-    return Promise.all(todo.map(describeOnly)).then(function () {
-      if (tag) tag.remove();
-      return items;
-    });
   }
 
   /* 撤掉一张：输入栏的缩略图、消息里那张参考卡、存档里那条记录一起删 */
@@ -244,6 +174,7 @@
     S.refs = S.refs.filter(function (o) { return o.id !== id; });
     global.WSChat.dropRef(id);
     syncHint();
+    if (global.WSChat.syncSend) global.WSChat.syncSend();
   }
 
   /* 刷新时把存档里最后那条参考图认回来。**只记着，不显示。**
@@ -356,6 +287,7 @@
 
   function upload(file) {
     if (!file) return;
+    pending++;
     var tip = global.WSChat.busyNote("正在传参考图…");
     var errorHost = el.bar && el.bar.parentNode;
     shrink(file).then(function (blob) {
@@ -386,14 +318,10 @@
     }).catch(function () {
       if (tip) tip.remove();
       localError(errorHost, "参考图没传上去，网络断了一下");
-    });
+    }).then(function () { pending--; });
   }
 
   // ── 引用已出好的图（2026-11-27） ──────────────────────
-
-  /* 正在上传的张数：`send()` 见到 >0 就先别发——不然「图还没挂上就点了
-     发送」会悄悄退化成一张纯文生图，用户只会觉得「我明明引用了它」。 */
-  var pending = 0;
 
   /* 卡片上的「引用」：引用的是**这张图当初用的那串提示词**，不是图的字节。
 
@@ -430,21 +358,12 @@
 
   function init() {
     el.bar = $("ref-bar");
+    /* 两个老 key 是「画同款预读」留下的（描述、进行中标记）。2026-11-27
+       起不预读了，也不跨刷新恢复那段描述——清掉，免得下次启动又冒出一段
+       被自动填进输入框的旧文字。 */
+    global.sessionStorage.removeItem("ws_same_pending");
+    global.sessionStorage.removeItem("ws_same_result");
     syncHint();
-    try {
-      var pending = JSON.parse(global.sessionStorage.getItem("ws_same_pending") || "null");
-      var result = JSON.parse(global.sessionStorage.getItem("ws_same_result") || "null");
-      if (pending && pending.id) useSame(null, pending.id);
-      else if (result && result.text && !$("say").value.trim()) {
-        addRef({ id: result.id, pre: true, text: result.text });
-        $("say").value = result.text;
-        $("say").dispatchEvent(new Event("input"));
-        syncHint();
-      }
-    } catch (e) {
-      global.sessionStorage.removeItem("ws_same_pending");
-      global.sessionStorage.removeItem("ws_same_result");
-    }
   }
 
   global.WSRef = {
@@ -461,7 +380,6 @@
     clearQuote: function () { if (!S.quote) return; S.quote = null; syncHint(); },
     /* 还有引用图在路上：`send()` 拿它挡一下，别让用户发出没带图的请求。 */
     busy: function () { return pending > 0; },
-    ensureDescribed: ensureDescribed,
     syncHint: syncHint,
     rehydrate: rehydrate
   };

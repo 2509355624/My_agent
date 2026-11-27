@@ -1384,17 +1384,17 @@ def _read_private_image_text(ref_id, prompt):
     return (text or "").strip()
 
 
-def _read_image_text(iid, prompt):
-    """图 id → 用识图模型读出来的一段文字；读不出来返回 ""。
+def _readable_item_path(iid, qq):
+    """图 id → 磁盘路径；没权限 / 不存在 / 临时图返回 ""。
 
-    权限判据与 `/img` 完全一致：别人隐藏的作品读不到。调用方有两条
-    （本文件的 /describe、生图提交时的参考图），所以放在这里共用一份——
-    分散两处迟早会有一条忘了判权限。
-
-    **不抛异常**：读图失败对调用方来说只意味着「这次没有参考」，不该把
-    整条消息拦下来。
+    权限判据与 `/img` 完全一致：别人隐藏的作品读不到，temp 图（上传的参考
+    图，不是作品）也不算。`/describe` 和工作台「图 + 需求一次出词」共用这一
+    份——分散两处迟早有一条忘了判权限。
     """
-    qq = _qq()
+    try:
+        iid = int(iid)
+    except (TypeError, ValueError):
+        return ""
     with gallery.connect() as con:
         row = con.execute(
             "SELECT i.path, i.hidden AS ihidden, w.hidden, w.owner, w.use"
@@ -1411,6 +1411,18 @@ def _read_image_text(iid, prompt):
     src = row["path"]
     if not src or not os.path.isfile(src):
         return ""
+    return src
+
+
+def _read_image_text(iid, prompt):
+    """图 id → 用识图模型读出来的一段文字；读不出来返回 ""。
+
+    **不抛异常**：读图失败对调用方来说只意味着「这次没有参考」，不该把
+    整条消息拦下来。
+    """
+    src = _readable_item_path(iid, _qq())
+    if not src:
+        return ""
     try:
         with open(src, "rb") as f:
             raw = f.read()
@@ -1420,6 +1432,24 @@ def _read_image_text(iid, prompt):
         log.warning("读图失败（id=%s）：%s", iid, exc)
         return ""
     return (text or "").strip()
+
+
+def _read_image_data(iid, qq):
+    """图 id → data URL（这一层不调识图模型）；没权限 / 读失败返回 ""。
+
+    工作台「画同款」交上来的是画廊 item id（数字），后端要把**图本身**读出来
+    交给多模态模型，跟用户那句话一起一次出词（2026-11-27）。
+    """
+    src = _readable_item_path(iid, qq)
+    if not src:
+        return ""
+    try:
+        from app.integrations import vision as vision_mod
+        with open(src, "rb") as f:
+            return vision_mod.to_data_url(f.read())
+    except Exception as exc:                        # noqa: BLE001
+        log.warning("读图失败（id=%s）：%s", iid, exc)
+        return ""
 
 
 @bp.route("/describe")

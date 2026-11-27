@@ -78,6 +78,10 @@ class TestQuoteSkipsImageToImage(unittest.TestCase):
             calls["revise"] = True
             return {"skill": skill, "prompt": "x"}
 
+        def fake_tags(images, request=""):
+            calls["tags"] = {"images": images, "request": request}
+            return "1girl, back view, white dress"
+
         def fake_enqueue(body, **kw):
             calls["body"] = body
             return dict(body, id="J1", ts=0, state="queued"), ""
@@ -85,6 +89,7 @@ class TestQuoteSkipsImageToImage(unittest.TestCase):
         with mock.patch.object(dg, "_translate", fake_translate), \
                 mock.patch.object(dg, "_llm_target", lambda *a, **k: (None, None, False)), \
                 mock.patch.object(r, "_web_revise", fake_revise), \
+                mock.patch.object(dg, "_tags_with_request", fake_tags), \
                 mock.patch.object(r, "_owner_key", lambda: "__test__"), \
                 mock.patch.object(r, "_enqueue_job", fake_enqueue):
             r._web_decide("把这件衣服换成 JK 服", skill, [], ctx)
@@ -98,10 +103,15 @@ class TestQuoteSkipsImageToImage(unittest.TestCase):
         self.assertNotIn("source_images", calls.get("body") or {},
                          "引用不该带图生图源图")
 
-    def test_uploaded_image_still_uses_revise(self):
-        """相册上传（没有 anchor）保持原样：它才是真的「在图上报」。"""
+    def test_uploaded_image_goes_through_one_shot(self):
+        """相册上传（没有 anchor）：图 + 需求**一次**出词，不进改图管道。
+
+        2026-11-27 用户拍板：以前这里走 `_web_revise`（识图 + 改词 + 判垫图），
+        现在直接交给多模态模型一次搞定。
+        """
         calls = self._decide({"images": ["data:image/png;base64,AAA"]})
-        self.assertTrue(calls.get("revise"))
+        self.assertTrue(calls.get("tags"))
+        self.assertNotIn("revise", calls)
 
 
 class TestAnchorBecomesPreviousPrompt(unittest.TestCase):

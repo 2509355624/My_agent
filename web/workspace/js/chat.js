@@ -299,7 +299,11 @@
   }
 
   function syncSend() {
-    var off = !el.say.value.trim() || el.say.disabled;
+    /* 有图没字也算能发（2026-11-27）：上传完直接点发送就是「照着画」。
+       `ref.js` 在挂上/撤掉参考图后会回来调一次（导出见文件尾）。 */
+    var has = el.say.value.trim()
+      || (global.WSRef && global.WSRef.list().length);
+    var off = !has || el.say.disabled;
     el.send.disabled = off;
     if (el.direct) el.direct.disabled = off;
   }
@@ -321,21 +325,21 @@
     }
   }
 
-  /* 发送。参考图的识图挪到这一步（2026-11-23 用户：上传不许立刻实图，
-     点发送才实图）：
-       1. 先把用户气泡和一起来的参考图铺上去——用户要能看见自己喂了哪张；
-       2. 再读这一轮的参考图（`ensureDescribed`，读过的跳过，并行读）；
-       3. 读到的描述交给 submit，跟用户这句话一起拼成最终提示词。
-     第 2 步的等待有「正在看图…」顶着，且这时输入框已经清空，不会再被
-     读出来的描述顶掉。
-     第 3 步原先是在点发送的同一帧去取 refIds；现在识图要等，所以不能先
-     commit（commit 会清空待发送列表），等识图完再清。 */
+  /* 发送。**前端不再识图**（2026-11-27 用户拍板）：
+       1. 把用户气泡和一起带来的参考图铺上去——用户要看得见自己喂了哪张；
+       2. 图和这句话一起交给后端，由多模态模型**一次**调用出词。
+     以前第 2 步是「前端先 ensureDescribed 读一遍、填进输入框，后端拿这段
+     中文再转一遍」——两次调用，而第二次根本没看到图。用户原话：「一个识图
+     模型，它本身就能拿到图片和用户的需求……两次调用反而是最亏的」。 */
   function send() {
     // 引用图还在上传就别发：refs 里还没它，发出去会静默变成纯文生图（2026-11-27）
     if (global.WSRef.busy && global.WSRef.busy()) { sysNote("引用图还在准备，稍等一秒"); return; }
-    var text = el.say.value.trim();
-    if (!text) return;
     var refs = global.WSRef.list();
+    var text = el.say.value.trim();
+    /* 只挂了图、没写字也能发（2026-11-27）：拍/选一张就是「想画它」，
+       补一句默认需求，别让用户对着空输入框点不了发送。 */
+    if (!text && !refs.length) return;
+    if (!text) text = "照着这张画";
     var user = addUser(text, refs);
     el.say.value = "";
     grow();
@@ -343,33 +347,17 @@
     leaveDock();
 
     // 漫画模式：这句话是剧情需求，交给创作面板去跑「编剧 → 分页画」
-    // 漫画那条链自己会读参考，不需要在这里等识图
+    // 漫画那条链自己会读参考，不走这里的单图链路
     if (global.WSCreate && global.WSCreate.mode() === "comic") {
       global.WSRef.commit();
       global.WSCreate.runComic(text, refs.map(function (r) { return r.id; }));
       return;
     }
 
-    /* 「画同款」把图读成描述填进输入栏之后，那张参考图就**已经**被读过了
-       （`pre` 标记），用户点发送时不该再让它识一次图——否则同一段描述会被
-       拼进提示词两遍，还白花一次视觉模型。见 ref.js 的 `same`。 */
-    var pre = refs.filter(function (r) { return r && r.pre && r.id; });
-    if (pre.length) {
-      global.WSRef.commit();
-      var preCard = submitJob(text, S.skill,
-                              pre.map(function (r) { return r.id; }), true, user,
-                              false, false, "ask");
-      if (!preCard) dropUser(user, text);
-      return;
-    }
-
-    global.WSRef.ensureDescribed(refs).then(function (read) {
-      global.WSRef.commit();
-      var newCard = submitJob(text, S.skill,
-                              read.map(function (r) { return r.id; }), false, user,
-                              false, false, "ask");
-      if (!newCard) dropUser(user, text);
-    });
+    global.WSRef.commit();
+    var card = submitJob(text, S.skill, refs.map(function (r) { return r.id; }),
+                         false, user, false, false, "ask");
+    if (!card) dropUser(user, text);
   }
 
   /* 「直达」：粘进来的词**原样**用，不经过大大怪，点一下只跑一张。
@@ -381,9 +369,10 @@
 
   function sendDirect() {
     if (global.WSRef.busy && global.WSRef.busy()) { sysNote("引用图还在准备，稍等一秒"); return; }
-    var text = el.say.value.trim();
-    if (!text) return;
     var refs = global.WSRef.list();
+    var text = el.say.value.trim();
+    if (!text && !refs.length) return;
+    if (!text) text = "照着这张画";
     var user = addUser(text, refs);
     el.say.value = "";
     grow();
@@ -399,16 +388,10 @@
       return;
     }
 
-    var pre = refs.filter(function (r) { return r && r.pre && r.id; });
-    if (pre.length) {
-      global.WSRef.commit();
-      fireDirect(text, pre.map(function (r) { return r.id; }), true, user);
-      return;
-    }
-    global.WSRef.ensureDescribed(refs).then(function (read) {
-      global.WSRef.commit();
-      fireDirect(text, read.map(function (r) { return r.id; }), false, user);
-    });
+    /* 直达也不在前端识图：`/api/gen/batch` 自己会读图（`_describe_refs`），
+       前端再读一遍纯属白等。 */
+    global.WSRef.commit();
+    fireDirect(text, refs.map(function (r) { return r.id; }), false, user);
   }
 
   function fireDirect(text, refs, described, user) {
@@ -577,6 +560,7 @@
     dropRef: dropRef,
     dropRefRecords: dropRefRecords,
     syncHint: function () { if (global.WSRef) global.WSRef.syncHint(); },
+    syncSend: syncSend,
     paintUser: paintUser,
     paintNote: paintNote,
     say: sayText,

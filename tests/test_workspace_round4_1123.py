@@ -28,44 +28,40 @@ def _read(rel):
         return f.read()
 
 
-class TestDescribeOnlyOnSend(unittest.TestCase):
-    """1. 识图时机。"""
+class TestNoDescribeOnSend(unittest.TestCase):
+    """1. 识图时机（2026-11-27 改口径）：前端不再识图。
 
-    def test_upload_no_longer_describes(self):
+    用户拍板：图跟着这句话一起交给后端多模态模型，**一次调用**出词。
+    以前那套「上传等发送才读 / 点发送并行读 / 画同款先填描述」全部下线——
+    它们加起来是两次模型调用，而第二次根本没看到图。
+    """
+
+    def test_upload_only_attaches(self):
         js = _read("js/ref.js")
         i = js.index("function upload(")
         seg = js[i:js.index("function init()", i)]
-        self.assertNotIn("describeInto(", seg,
-                         "上传完不许立刻识图，要等用户点发送")
         self.assertIn("addRef(", seg, "上传只负责挂缩略图")
+        self.assertNotIn("describeInto(", seg)
 
-    def test_send_describes_before_submit(self):
+    def test_send_does_not_describe(self):
         js = _read("js/chat.js")
         i = js.index("function send()")
-        seg = js[i:js.index("function copyText", i)]
-        self.assertIn("ensureDescribed", seg, "点发送才去读图")
-        # 读图的等待必须在真正 submitJob 之前，顺序反了就白读。
-        # 从最后一个 ensureDescribed 找起：函数里前面还有注释提到它。
-        # 2026-11-26 后 chat.js 里多了「直达」（sendDirect），它排在 send()
-        # 后面、走的是另一条接口。所以只取 send() 自己这一段来判顺序。
-        own = seg[:seg.index("function sendDirect")] \
-            if "function sendDirect" in seg else seg
-        at = own.rindex("ensureDescribed")
-        self.assertLess(at, own.index("submitJob", at), "读完才提交")
+        seg = js[i:js.index("function sendDirect", i)]
+        self.assertNotIn("ensureDescribed(", seg, "发送前不许再读图")
+        self.assertIn("submitJob", seg)
 
-    def test_ensure_described_is_parallel_and_skips_read_ones(self):
+    def test_ref_js_has_no_describe_helpers(self):
         js = _read("js/ref.js")
-        i = js.index("function ensureDescribed")
-        seg = js[i:js.index("function drop(", i)]
-        self.assertIn("!r.text", seg, "读过的跳过，别重复烧额度")
-        self.assertIn("Promise.all", seg, "几张图并行读，不排队等")
-        self.assertIn("busyNote", seg, "等待要有过场提示")
+        for dead in ("ensureDescribed", "describeOnly", "describeInto"):
+            self.assertNotIn(dead, js, "前端识图残留：%s" % dead)
 
-    def test_use_same_still_fills(self):
-        """「画同款」是用户主动点的一下，仍然要立刻填描述。"""
+    def test_use_same_does_not_pre_read(self):
+        """「画同款」只挂图 + 弹键盘，不再立刻发一次识图请求。"""
         js = _read("js/ref.js")
         i = js.index("function useSame")
-        self.assertIn("describeInto", js[i:i + 1400])
+        seg = js[i:i + 1200]
+        self.assertIn("addRef(", seg)
+        self.assertNotIn("describeInto", seg)
 
 
 class TestBubbleKeepsRefs(unittest.TestCase):

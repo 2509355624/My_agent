@@ -189,14 +189,19 @@ class TestRefsActuallyApply(unittest.TestCase):
         self.assertIn("c.refs", seg)
         self.assertNotIn("submitJob(c.prompt, c.skill, [])", seg)
 
-    def test_use_same_fills_prompt(self):
-        """画同款要把图读出来的描述填进输入框，不能只挂缩略图。"""
+    def test_use_same_only_attaches_the_image(self):
+        """画同款只挂图、弹键盘，**不再预读**（2026-11-27 用户拍板）。
+
+        图跟用户那句话一起交给后端多模态模型，一次调用出词；以前点一下就先
+        调一次 `/api/gal/describe`，那是白花的第一次调用。
+        """
         js = _read("web/workspace/js/ref.js")
-        self.assertIn("function describeInto", js)
+        self.assertNotIn("function describeInto", js)
         i = js.index("function useSame")
         seg = js[i:i + 1200]
-        self.assertIn("describeInto", seg)
-        self.assertIn("/api/gal/describe", js)
+        self.assertIn("addRef(", seg)
+        self.assertNotIn("describeInto", seg)
+        self.assertNotIn("/api/gal/describe", js)
 
 
 # ─── 4. 按钮不要挨在一起 ───────────────────────────────────

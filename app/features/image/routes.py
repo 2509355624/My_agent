@@ -906,7 +906,7 @@ def api_ask():
     refs = data.get("refs")
     # 访客走**原尺寸**：用户 2026-11-26 明确「访客不用走降档，没有意义，
     # 浪费时间」——他们把全部渠道都开着给访客玩，要的就是成品本身。
-    ctx = {"images": _web_images(refs), "refs": list(refs or []),
+    ctx = {"images": _web_images(refs, qq), "refs": list(refs or []),
            # 「引用那张图的提示词」（2026-11-27）：卡片上的引用不是传图，
            # 是把这张图当初那串提示词交给模型改写。有它就走文生图。
            "anchor": str(data.get("anchor") or "").strip()[:1000],
@@ -1097,47 +1097,107 @@ _WEB_IMG_MAX = 12           # 一个用户最多藏 12 张，超了丢最老的
 _WEB_IMG_TTL = 2 * 3600     # 两小时没人用就丢（工作台一轮一般几分钟）
 
 
-def _web_images(refs):
-    """本轮参考图 → 送进转译的图（聊天图的 data URL）。
+def _gallery_ref_data(ref_id, qq):
+    """画廊私有参考图 → data URL；不是自己的 / 过期 / 读失败返回 ""。
 
-    只认 `chat_ref_id`（`/api/gen/chat-upload` 存下的那份，长得像
-    `cr_<32 位>`）：画廊里的作品图走的是 item id，`_read_private_image_text`
-    那条路能读，但这里拿不到同一种形态，所以不带——**不猜、不错配**。
+    `ref_id` 是 `/api/gal/ref` 上传后返回的那个（工作台「＋」相册与拍照都走
+    它）。归属判据全交给 `gallery._read_private_image()`，这里不另写一套。
+    """
+    if not qq:
+        return ""
+    try:
+        from app.features.gallery import routes as gal
+        from app.integrations import vision as vision_mod
+        path = gal._read_private_image(ref_id, qq)
+        if not path:
+            return ""
+        with open(path, "rb") as f:
+            return vision_mod.to_data_url(f.read())
+    except Exception:                                  # noqa: BLE001
+        log.warning("工作台读参考图失败（ref_id=%s）", ref_id, exc_info=True)
+        return ""
+
+
+def _gallery_item_data(iid, qq):
+    """画廊作品图（item id，数字）→ data URL；没权限 / 读失败返回 ""。
+
+    「画同款」交上来的就是这个 id——它不是上传进来的参考图，而是画廊里
+    已经出好的那一张。权限判据全在 `gallery._read_image_data()` 里。
+    """
+    try:
+        from app.features.gallery import routes as gal
+        return gal._read_image_data(iid, qq)
+    except Exception:                                  # noqa: BLE001
+        log.warning("工作台读作品图失败（id=%s）", iid, exc_info=True)
+        return ""
+
+
+def _web_images(refs, qq=""):
+    """本轮参考图 → 真正交给模型看的图（data URL）。
+
+    三种 id 都认（2026-11-27）：
+      · `cr_<32 位>`：`/api/gen/chat-upload` 存的聊天临时图，在进程内缓存里；
+      · 画廊私有 `ref_id`（字符串）：`/api/gal/ref` 上传返回的，读盘转 data URL；
+      · 画廊作品 **item id**（数字）：「画同款」传的就是它。
+
+    以前只认第一种，而工作台上传走的是第二种、画同款走的是第三种 →
+    `images` 恒为空，后端判「没图」直接纯文生图，用户传的图**一次都没进过
+    模型**（2026-11-27 查证：日志里 `vision` 只有前端那次预读，`/api/gen/ask`
+    之后没有任何识图）。
     """
     from app.features.gallery import references
     urls = []
-    for r in (refs or [])[:3]:                    # `_recall_tags` 也是最多 3 张
-        if not isinstance(r, str) or not references.valid_chat_ref(r):
+    for r in (refs or [])[:3]:                    # 视觉接口一次最多 3 张
+        if r is None or isinstance(r, bool):
             continue
-        with _WEB_IMG_LOCK:
-            row = _WEB_IMG_CACHE.get(r)
-            if row:
-                row["at"] = time.time()
-                urls.append(row["data"])
+        if isinstance(r, str):
+            if not r:
+                continue
+            if references.valid_chat_ref(r):
+                with _WEB_IMG_LOCK:
+                    row = _WEB_IMG_CACHE.get(r)
+                    if row:
+                        row["at"] = time.time()
+                        urls.append(row["data"])
+                continue
+            if r.isdigit():                       # 数字 id 被写成字符串也算
+                r = int(r)
+            else:
+                data = _gallery_ref_data(r, qq)
+                if data:
+                    urls.append(data)
+                continue
+        if isinstance(r, int):
+            data = _gallery_item_data(r, qq)
+            if data:
+                urls.append(data)
     return urls
 
 
 def _web_decide(text, skill, hist, ctx):
     """工作台这一轮 → 一张已入队的图，或一句「这轮不用画」。
 
-    **只有一条路**（2026-11-26 用户拍板，原话：「我唯一的诉求就是工作台
-    的文生图、图生图……选什么渠道就是什么渠道，然后把大大怪的那套提示词
-    用到工作台这个地方」）：
+    **三条路**（2026-11-27 用户拍板，按「图有没有真的交给模型」重划）：
 
-        · 有上传图 → `direct_gen._revise`（QQ 那条改图管道：真识图 + 在
-          原提示词上改 + 模型自己判要不要垫图）
-        · 没上传图 → `direct_gen._translate`（QQ 那条主模板：`_MASTER_TEMPLATE`）
+        · **上传了图 / 画廊「画同款」** → `direct_gen._tags_with_request`：
+          图和用户那句话一起进**多模态模型**，**一次调用**边看边写词，直接
+          入队。用户原话：「一个识图模型，它本身就能够拿到图片和用户的需求，
+          然后去跑图……两次调用反而是最亏的」。
+        · **没图** → `direct_gen._translate`（QQ 那条主模板）
         · **引用了自己出的图**（`ctx["anchor"]` 有值）→ 也走 `_translate`：
           引用的是**那张图当初的提示词**，不是图的字节。把原词当「上一张」
           交给主模板，模型按用户新说的一句改写它、纯文生图重跑。用户原话
           （2026-11-27）：「引用的其实是那一个提示词……AI 就直接去改提示词，
-          然后重新跑一遍就可以了」。这条路不碰 `_revise`、不垫图，所以也
-          不会撞上「渠道没有图生图骨架」那条报错。
+          然后重新跑一遍就可以了」。这条路不垫图，所以也不会撞上「渠道没有
+          图生图骨架」那条报错。
 
-    两条都是 QQ 正在跑的那两份，一个字不改。**渠道由界面定死**：画风抽屉
-    选了哪个，就用哪个出图——`_translate` 的 `skill` 入参本来就是
-    「代码点名的 > 模型判的」，`_revise` 的 `channel` 同理；这里再把模型
-    自己填的那个渠道覆盖掉，模型只负责写提示词。
+    带图那条**不再走 `_web_revise`**（QQ 的改图管道：先识图、再在原词上改、
+    还要模型判要不要垫图）。它两次调用，而且第二步拿不到图；工作台要的是
+    「图 + 需求一次成词」。函数本身保留，QQ 那条链还在用。
+
+    **渠道由界面定死**：画风抽屉选了哪个，就用哪个出图——`_translate` 的
+    `skill` 入参本来就是「代码点名的 > 模型判的」；这里再把模型自己填的那个
+    渠道覆盖掉，模型只负责写提示词。
 
     没有第三个分支（以前那套「带 LoRA / 步数 / CFG / 横屏就回落旧路」是
     错加的：这些控件根本不在这个页面上，`web/workspace/` 里一个都不传）。
@@ -1158,8 +1218,13 @@ def _web_decide(text, skill, hist, ctx):
     # 然后纯文生图重跑——所以这条路根本不该带图、也不该进 `_revise`。
     anchor = str(ctx.get("anchor") or "").strip()
     if ctx.get("images") and not anchor:
-        got = _web_revise(text, use, hist, ctx["images"],
-                          provider=provider, model=model, strict=strict)
+        # 上传图 / 画廊「画同款」：**一次**多模态调用（2026-11-27）。
+        # 图跟着 prompt 一起进识图模型，模型边看边按用户要求写词，直接入队。
+        # 不再让前端先识一遍、后端再转一遍——那两次里第二次根本没看到图。
+        tags = dg._tags_with_request(ctx["images"], text)
+        if not tags:
+            raise RuntimeError("这张图没读出来，换个说法再发一次")
+        got = {"skill": use or "", "prompt": tags}
     else:
         got = dg._translate(text, hist, skill=use or None,
                             provider=provider, model=model, strict=strict,

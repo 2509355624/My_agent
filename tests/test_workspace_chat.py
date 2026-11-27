@@ -239,16 +239,16 @@ Promise.resolve().then(()=>Promise.resolve()).then(()=>{
             capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_return_restores_done_image_and_reference_reading(self):
+    def test_return_restores_done_image(self):
+        """刷新回来要把「已经画完」那张盖回去（跟识图无关）。"""
         archive = _read("js/archive.js")
         self.assertIn('job.state === "done" && job.file', archive)
         self.assertIn('global.WSChat.showImage(a.card, job)', archive)
         self.assertIn('note.className = "note"', archive)
+        # 2026-11-27：前端预读整条下线——「画同款」只挂图，不填描述。
         ref = _read("js/ref.js")
-        self.assertIn('say.placeholder = "正在识图中…"', ref)
-        self.assertNotIn('say.parentNode.appendChild(tag)', ref)
-        self.assertIn('if (pending && pending.id) useSame(null, pending.id)', ref)
-        self.assertIn('ws_same_result', ref)
+        self.assertNotIn("正在识图中", ref)
+        self.assertNotIn("describeInto", ref)
 
     def test_redraw_uses_current_default_skill_not_the_old_channel(self):
         """重画取**当前默认画风**，不沿用这张当初的渠道（2026-11-25 用户）。

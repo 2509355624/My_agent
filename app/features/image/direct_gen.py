@@ -3058,6 +3058,51 @@ def _recall_tags(data_urls, numbered=True):
     return ", ".join(outs) if not numbered else "\n\n".join(outs)
 
 
+# 图 + 需求**一次**出词（2026-11-27 用户拍板，工作台专用）。
+#
+# 用户原话：「一个识图模型，它本身就能够拿到图片和用户的需求，然后去跑图」。
+# 所以工作台上传图 / 画同款不再「先 `_recall_tags` 反推、再 `_translate` 转译」
+# ——那是两次模型调用，而且第二步的模型根本没看过图，只拿到一段中文。
+#
+# 这里把 `_TAGS_PROMPT`（反推那套写法规则）和用户要求拼成**一条**指令，图跟着
+# prompt 一起进多模态模型：一次调用，模型边看边按需求改，直接吐能进工作流的
+# 英文提示词。跑图台那条两次调用的老路没动（用户 2026-11-27：「先不用修」）。
+_IMAGE_REQUEST_PROMPT = (
+    _TAGS_PROMPT
+    + "\n\n这一张不只是照搬：用户对画面提了要求，按他的要求改对应的部分，"
+      "他没提到的照原图写。\n"
+      "用户的要求：%s\n"
+      "只输出那一行英文提示词，不要解释、不要中文、不要分点。"
+)
+
+
+def _tags_with_request(images, request=""):
+    """图 + 用户需求 → **一次视觉调用** 产出出图提示词。
+
+    多图时每张各调一次（视觉接口一次只能带一张），英文逗号拼起来；工作台
+    一次最多 3 张、正常就 1 张，也就是一次调用。
+
+    失败返回 ``""``：调用方按「没读出来」提示重发。不静默退回纯文生图——
+    用户明确传了图却按文字画，比直接说读不出来更让人困惑。
+    """
+    from app.integrations.vision import describe
+    urls = [u for u in (images or []) if u][:3]
+    if not urls:
+        return ""
+    req = (request or "").strip() or "（没有额外要求，照这张画）"
+    prompt = _IMAGE_REQUEST_PROMPT % req
+    outs = []
+    for i, url in enumerate(urls, 1):
+        try:
+            text = (describe(url, prompt=prompt) or "").strip()
+        except Exception:                              # noqa: BLE001
+            log.exception("[direct] 图+需求一次转译失败（第 %d 张）", i)
+            continue
+        if text:
+            outs.append(text)
+    return ", ".join(outs)
+
+
 # 上游拒答时给用户的话（2026-10-07）：绝不能把「The request was rejected…」
 # 那种英文报错当反推结果发出去（实测一天 7 次，群 3 私聊 4）。
 _REVERSE_REFUSED_TEXT = "这张图我读不出来（内容没过审核），换一张再试。"
