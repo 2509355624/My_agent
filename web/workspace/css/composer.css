@@ -1,65 +1,55 @@
-/* 输入栏卡片（2026-11-27）。
+/* 输入栏（2026-11-27）。
 
    用户原话：「下面这一块，它都整个是一个内容输入，整个都是一个输入气泡
    卡片。然后我们把那些 AI 创作、画风、我的漫画、同步 QQ，全部给它内置
    到里面」——以前是「一条胶囊行 + 一条输入行」两个各自带背景的块，中间
    有缝；输入框还被＋、AI 发送、直达挤得只剩一小截。
 
-   现在整块就是一张卡片：上面是占满宽度的输入区，下面一行工具（＋ / 三颗
-   入口 / 直达 / AI 发送）。所有 id 都没动，`chat.js` 的事件绑定和
+   现在整块就是一条通栏玻璃：上面是占满宽度的输入区，下面一行工具（＋ /
+   三颗入口 / 直达 / AI 发送）。所有 id 都没动，`chat.js` 的事件绑定和
    `views.js` 的 dockComposer（整块搬进子页）照旧生效。同步 QQ 是附加动作，
    收在「＋」面板里（2026-11-27 用户拍板）。
 
    单独成文件是因为 chat.css 已经贴着 600 行硬线（见 test_workspace_chat
    的 CHAT_FILES）。这里只在 chat.css 之后加载，用同特异性、写在后面的规则
-   盖掉那边「通栏玻璃条」的底。 */
+   盖掉那边的底。 */
 
-/* ── 外层：只负责左右留白，底下**不留缝** ────────────
-   卡片浮在消息上，但底边要坐实到屏幕下沿：之前外层留了 8px 底内边距，
-   卡片下面拖一条背景色的缝，看着像悬浮块没落到底（用户 2026-11-27
-   「把下面那块填满，不要给我留个缝」）。安全区从外层挪进卡片内，
-   否则 home indicator 会压住工具行。 */
+/* ── 玻璃本体：横向到屏幕两边，纵向到屏幕底 ────────────
+   2026-11-27 用户连说两轮：「不要悬在半空的卡片，横向填满、竖向也填满，
+   一块玻璃」。所以材质挂在这一层（原来 chat.css 就是这么做的），左右不留
+   白、底边不留缝，`--composer-h` 量到的也是这一整条的高度，消息区的底部
+   留白跟着它走。
+   安全区留在这里的 padding 里而不是卡片上：玻璃要铺到屏幕最底下，
+   home indicator 那块是「玻璃的一部分」，只是不能压住工具行。 */
 .composer {
-  padding: 8px 10px 0;
-  border-top: 0;
-  background: transparent;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-  box-shadow: none;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--glass-line);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+  box-shadow: 0 -10px 30px -18px rgba(16, 24, 40, .35);
 }
 
 /* 「＋」的面板挂在 .composer 上往上弹（.composer 是这一层里唯一的定位祖先）。
-   left 从 padding box 算，composer 自己已有 10px 左内边距，写 0 才跟卡片
-   左沿对齐；再往外 4px 也是给卡片的呼吸。 */
+   left 从 padding box 算，composer 已有 12px 左内边距，写 0 正好跟加号对齐；
+   再往外 4px 是面板与玻璃之间的呼吸。 */
 .composer .plus-menu {
   left: 0;
   bottom: calc(100% + 4px);
 }
 
-/* ── 卡片本体 ───────────────────────────────────────── */
+/* ── 内层：只剩布局，不再是一张卡 ─────────────────────
+   边框、圆角、底色、阴影全部交还给上面的玻璃：这里再画一层，就又是
+   「玻璃里套一张悬浮卡」了。 */
 .composer-card {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  /* 底部补安全区：卡片自己贴到屏幕边，home indicator 的位置得在卡里让出来 */
-  padding: 9px 9px calc(7px + env(safe-area-inset-bottom));
-  border: 1px solid var(--hair);
-  border-bottom: 0;
-  /* 底角不做圆角：圆角一留，贴边那圈又会漏出背景 */
-  border-radius: 22px 22px 0 0;
-  /* 半透明玻璃：背后能透出滚过去的消息，跟原来那条通栏玻璃一个材质；
-     不透明度用 --glass 而不是 --glass-2，透一点才看得出「玻璃」 */
-  background: var(--glass);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  backdrop-filter: blur(24px) saturate(180%);
-  box-shadow: 0 -10px 30px -18px rgba(16, 24, 40, .35);
-  transition: border-color .15s, box-shadow .15s;
-}
-
-/* 聚焦时整张卡亮边：输入区自己不再描边，让「正在输入」落在这张卡上 */
-.composer-card:focus-within {
-  border-color: var(--brand);
-  box-shadow: 0 0 0 4px var(--ring), 0 -10px 30px -18px rgba(16, 24, 40, .35);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 /* ── 输入区：占满整行，两行起、最多约 6 行 ───────────── */
@@ -85,7 +75,7 @@
 
 .composer-card #say::placeholder { color: var(--text-dim); }
 
-/* 漫画标记 / 参考图条原来靠上下 margin 跟输入行拉开距离，卡片里已经有
+/* 漫画标记 / 参考图条原来靠上下 margin 跟输入行拉开距离，现在这层已经有
    `gap:4px`，留着那份 7px 会显得中间空一截。 */
 .composer-card .mode-tag { margin: 0 2px 2px; }
 .composer-card .ref-bar { margin: 0 2px 2px; }
@@ -97,7 +87,7 @@
   gap: 6px;
 }
 
-/* 加号缩到 32：它是卡片内部的小按钮，不再跟输入框同高 */
+/* 加号缩到 32：它是玻璃条内部的小按钮，不再跟输入框同高 */
 .composer-tools .icon-btn {
   width: 32px;
   height: 32px;
