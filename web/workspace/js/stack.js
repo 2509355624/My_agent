@@ -230,7 +230,60 @@
 
   function closeStyles() {
     el.sheet.classList.remove("on");
+    // 拖动中可能留着 inline transform，不清掉的话它比 CSS 的 translateY(100%)
+    // 还优先，抽屉就停在半路不下去了。
+    el.sheet.querySelector(".sheet-body").style.transform = "";
     setTimeout(function () { el.sheet.hidden = true; }, 280);
+  }
+
+  /* 抽屉下拉关闭（2026-11-27）：小横条原来只是道装饰，用户照着它往下一拨，
+     实际滚的是列表，滚到顶还会把整页拽下去（列表那条滚动链已在 CSS 里断掉）。
+     现在把手（横条 + 标题行）归这套手势管：竖向往下拖时整个抽屉跟手走，
+     松手过阈值或快甩就关，否则弹回。列表区不接管，照旧自己滚。
+     判据沿用 bindSwipe 的思路：多指不管、方向一次钉死、横向/往上不算。 */
+  function bindSheetDrag() {
+    var body = el.sheet.querySelector(".sheet-body");
+    var handles = el.sheet.querySelectorAll(".sheet-grip, .sheet-head");
+    var d = null;
+
+    function end() {
+      if (!d) return;
+      var cur = d;
+      d = null;
+      if (!cur.on) return;
+      body.classList.remove("drag");
+      body.style.transform = "";
+      var quick = Date.now() - cur.t0 < 400;
+      if (cur.dy > body.clientHeight * 0.28 || (quick && cur.dy > 60)) {
+        closeStyles();
+      }
+    }
+
+    Array.prototype.forEach.call(handles, function (h) {
+      h.addEventListener("touchstart", function (e) {
+        if (e.touches.length !== 1) { d = null; return; }
+        var t = e.touches[0];
+        d = { x: t.clientX, y: t.clientY, dy: 0, on: false, t0: Date.now() };
+      }, { passive: true });
+
+      h.addEventListener("touchmove", function (e) {
+        if (!d || e.touches.length !== 1) return;
+        var t = e.touches[0];
+        var dx = t.clientX - d.x, dy = t.clientY - d.y;
+        if (!d.on) {
+          if (Math.abs(dy) < 8 || Math.abs(dx) > Math.abs(dy)) return;
+          if (dy < 0) { d = null; return; }   // 往上拉不接管，留给列表滚
+          d.on = true;
+          body.classList.add("drag");
+        }
+        if (e.cancelable) e.preventDefault();  // 别让页面跟着一起动
+        d.dy = dy;
+        body.style.transform = "translateY(" + dy + "px)";
+      }, { passive: false });
+
+      h.addEventListener("touchend", end);
+      h.addEventListener("touchcancel", end);
+    });
   }
 
   function labelOf(c) {
@@ -314,6 +367,7 @@
     el.sheet.addEventListener("click", function (e) {
       if (e.target.closest("[data-close]")) closeStyles();
     });
+    bindSheetDrag();
 
     el.more.addEventListener("click", function () {
       S.allStyles = true;

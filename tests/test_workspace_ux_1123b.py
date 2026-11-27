@@ -128,5 +128,42 @@ class TestComposerStaysPut(unittest.TestCase):
         self.assertIn("scrollTop = POS", js)
 
 
+class TestStyleSheetDrag(unittest.TestCase):
+    """2026-11-27：画风抽屉拉到顶把整页拽下去，横条又拖不动。"""
+
+    def test_list_contains_scroll_chain(self):
+        """抽屉列表是 fixed 层，.view 的防护管不到它，必须自己断链。"""
+        css = _read("css/sheet.css")
+        idx = css.index(".style-list {")
+        block = css[idx:css.index("}", idx)]
+        self.assertIn("overscroll-behavior: contain", block)
+
+    def test_handle_hands_gesture_to_js(self):
+        """横条只有 4px，连同标题行一起当把手，并把竖向手势交给 JS。"""
+        css = _read("css/sheet.css")
+        idx = css.index(".sheet-grip, .sheet-head {")
+        block = css[idx:css.index("}", idx)]
+        self.assertIn("touch-action: none", block)
+        js = _read("js/stack.js")
+        self.assertIn('".sheet-grip, .sheet-head"', js)
+        self.assertIn('body.style.transform = "translateY(" + dy + "px)"', js)
+        self.assertIn("{ passive: false }", js)
+
+    def test_drag_needs_down_direction_and_closes_on_release(self):
+        """往上拉不接管（那是列表滚），往下过阈值/快甩才关闭。"""
+        js = _read("js/stack.js")
+        i = js.index("function bindSheetDrag()")
+        block = js[i:js.index("\n  }", i)]
+        self.assertIn("if (dy < 0) { d = null; return; }", block)
+        self.assertIn("closeStyles();", block)
+
+    def test_close_clears_inline_transform(self):
+        """不清 inline transform，CSS 的收起位移会被盖掉，抽屉停在半路。"""
+        js = _read("js/stack.js")
+        i = js.index("function closeStyles()")
+        block = js[i:js.index("\n  }", i)]
+        self.assertIn('style.transform = ""', block)
+
+
 if __name__ == "__main__":
     unittest.main()

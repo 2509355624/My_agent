@@ -297,6 +297,9 @@
 
 .sheet.on .sheet-body { transform: translateY(0); }
 
+/* 拖动中关掉过渡，手指松了再决定关还是弹回 */
+.sheet-body.drag { transition: none; }
+
 /* 顶上一道小横条，暗示这块能往下拖 */
 .sheet-grip {
   flex: 0 0 auto;
@@ -306,6 +309,10 @@
   border-radius: 999px;
   background: var(--line);
 }
+
+/* 横条只有 4px 高，手指很难命中；标题那一行一起当把手。
+   touch-action: none 把这一块的竖向手势交给 JS，浏览器别先把它当成页面滚动。 */
+.sheet-grip, .sheet-head { touch-action: none; }
 
 .sheet-head {
   flex: 0 0 auto;
@@ -341,6 +348,10 @@
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  /* 2026-11-27：抽屉是 fixed 挂在外层，.view 上那道 overscroll-behavior
+     管不到它。列表拉到顶还往下拽时，滚动链会传到整页，手机上是整个页面
+     被一起拉下去。这里断链，滚到头就停住。 */
+  overscroll-behavior: contain;
   padding: 0 6px 6px;
 }
 
