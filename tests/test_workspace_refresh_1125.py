@@ -244,5 +244,59 @@ class TestImageArrivedStopsSpinning(unittest.TestCase):
                       "只按一个键删，别的键还挂着这张卡")
 
 
+class TestAskUsesAgentModel(unittest.TestCase):
+    """工作台判意图必须走**管理页选的那个模型**（2026-11-27 用户实测）。
+
+    10:37:45 那一发：点发送 13 秒还在「正在提交」，日志里第一条候选是已经
+    挂掉的中转站 hfapi.cloud，卡满 30 秒读超时才轮到 deepseek 官方（官方
+    0.3 秒就回）。根因是工作台裸调 `_translate`，provider 全默认 → 落回
+    `.env` 的全局降级链；QQ 那条 `decide(agent_id=…)` 一直是传的。
+    """
+
+    def _routes(self):
+        with io.open(os.path.join(ROOT, "app", "features", "image",
+                                  "routes.py"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_decide_reads_agent_target(self):
+        s = self._routes()
+        i = s.index("def _web_decide")
+        body = s[i:s.index("def _web_revise", i)]
+        self.assertIn("_llm_target(QQ_AGENT_ID)", body,
+                      "工作台没读管理页选的模型，会先撞 30 秒读超时")
+        self.assertIn("provider=provider", body,
+                      "拿到了模型却没往翻译那条链传，等于没拿")
+
+    def test_revise_carries_the_same_target(self):
+        s = self._routes()
+        i = s.index("def _web_revise")
+        body = s[i:i + 2400]
+        self.assertIn("provider=provider", body,
+                      "带图那条（_revise）还在走全局降级链")
+
+
+class TestAdoptRetriesBeforeGivingUp(unittest.TestCase):
+    """提交后立刻大退重进，不能问一次就判死（2026-11-27 用户实测）。
+
+    那一刻服务端可能还在判意图（一次 LLM 调用），任务根本没建出来，第一问
+    必然空。原来直接写「这条没跑完就断了」，可图两秒后就画出来了。
+    """
+
+    def test_promise_retries(self):
+        s = _js("archive.js")
+        i = s.index("function promise(rec)")
+        body = s[i:i + 1200]
+        self.assertIn("CLAIM_TRIES", body)
+        self.assertIn("setTimeout", body,
+                      "只问一次：判意图那几秒里重进，必然被判成「断了」")
+
+    def test_orphan_card_is_marked_before_claim(self):
+        s = _js("archive.js")
+        i = s.index("orphan: true")
+        body = s[i:i + 700]
+        self.assertIn("正在提交", body,
+                      "认领期间卡面是空壳，用户看不到「已经提交了」这个标记")
+
+
 if __name__ == "__main__":
     unittest.main()

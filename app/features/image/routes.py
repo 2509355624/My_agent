@@ -51,7 +51,7 @@ from app.features.image import gen_steps
 from app.features.image import gen_params
 from app.core.cancel import Cancelled
 from app.config import COMFYUI_URL, NAI_API_KEY, WEB_DIR, state_path
-from app.config import WORKSPACE_LOWRES
+from app.config import QQ_AGENT_ID, WORKSPACE_LOWRES
 from app.features.image.direct_gen import _allowed_skills
 from app.gateways import visitor as _visitor
 from app.core.skills import load_skill, skill_summary
@@ -1060,11 +1060,20 @@ def _web_decide(text, skill, hist, ctx):
     """
     from app.features.image import direct_gen as dg
 
+    # 模型跟着**管理页给 QQ agent 选的那个**走（2026-11-27）。此前这里裸调
+    # `_translate`，provider 全默认 → 落回 `.env` 的全局降级链，第 1 个候选
+    # 是已经挂掉的中转站（hfapi.cloud），每次都要**白等 30 秒读超时**才轮到
+    # 第 2 个 deepseek 官方（实测官方 0.3 秒就回）。用户 10:37:45 那一发就是
+    # 这样：点发送 → 13 秒了还在「正在提交」。QQ 那边 `decide(agent_id=…)`
+    # 一直是这么传的，所以 QQ 快、工作台慢。
+    provider, model, strict = dg._llm_target(QQ_AGENT_ID)
     use = skill or ""                      # 界面选的渠道；空 = 没选（用默认）
     if ctx.get("images"):
-        got = _web_revise(text, use, hist, ctx["images"])
+        got = _web_revise(text, use, hist, ctx["images"],
+                          provider=provider, model=model, strict=strict)
     else:
-        got = dg._translate(text, hist, skill=use or None)
+        got = dg._translate(text, hist, skill=use or None,
+                            provider=provider, model=model, strict=strict)
     if not got:
         # 模型没交作业（空返回 / JSON 没解析出来）。这是可用性问题，不是它
         # 判「不画」——判不画会走下面的 reply。重来一次比出一张错图强。
@@ -1097,7 +1106,8 @@ def _web_decide(text, skill, hist, ctx):
     return job
 
 
-def _web_revise(text, channel, hist, images):
+def _web_revise(text, channel, hist, images, provider=None, model=None,
+                strict=False):
     """带图的轮次：走 QQ 的 `_revise`，再按界面的渠道把结果钉死。
 
     `_revise` 内部自己会 `_enqueue`（它原本是给 QQ 用的、入队也在里面），
@@ -1117,7 +1127,8 @@ def _web_revise(text, channel, hist, images):
     real = dg._enqueue
     dg._enqueue = _capture
     try:
-        out = dg._revise(text, images, hist, channel=channel or None)
+        out = dg._revise(text, images, hist, channel=channel or None,
+                         provider=provider, model=model, strict=strict)
     finally:
         dg._enqueue = real
     if captured:

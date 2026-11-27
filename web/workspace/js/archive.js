@@ -234,6 +234,16 @@
              `promise()`）：新鲜的、确实在跑的接回轮询；查不到、或者本来就
              是陈年记录，才说没跑完。 */
           again.push({ rec: m, card: c, orphan: true });
+          /* 认领可能要好几次才有结果（见 promise），这段期间卡面不能是空壳，
+             更不能先写「断了」再改口。用户 2026-11-27 原话：「前端我已经提交
+             任务了，那么这个时候就应该做一个标记」。跟提交时用的是同一张
+             胶囊，认到之后 attach 会把它换成「正在跑」。 */
+          if (global.WSCard && global.WSCard.setNote) {
+            global.WSCard.setNote(c.note, "正在确认这张排上了没有",
+                                  { run: true, queue: "正在提交" });
+            c.noted = "正在确认这张排上了没有";
+            c.notedQ = "正在提交";
+          } else if (c.say) c.say("正在确认这张排上了没有");
         } else {
           /* 没有 file 也没有 job 的 `img` 记录 = 提交过、但没等到结果就
              没了（服务重启 / 页面关太早）。存下来的 note 十有八九是
@@ -282,6 +292,10 @@
       else global.WSChat.scrollBottom();
       return;
     }
+    /* 认领那段可能要问好几次（见 promise），落底别等它（2026-11-27）：
+       重进页面第一眼要看到的是最底下那张卡，不是等十几秒才滚下去。 */
+    if (global.WSChat.pinBottom) global.WSChat.pinBottom();
+    else global.WSChat.scrollBottom();
     /* `seen` 要拿到两段 then 之间用（认领会往里补一条），所以先声明在外面 */
     var seen = {};
     global.WSGen.status().then(function (st) {
@@ -426,6 +440,15 @@
      说「正在跑」（第二天回来看见假卡）。服务端手里有 `_JOBS` 的完整
      记录（提交时间、所有者、有没有已经出图），让它自己说这条到底还
      在不在，比前端猜准得多。 */
+
+  /* 认领要**多问几次**（2026-11-27）。点发送 → 大退 → 重进只隔一两秒时，
+     服务端可能还在判意图（一次 LLM 调用），任务根本还没建出来，第一问必然
+     空。只问一次就判「这条没跑完就断了」，正是用户 10:40 那次看到的假
+     失败：图后来画出来了，前端早就把它写成断了。
+     次数 × 间隔盖住「判意图」那段就够，再多是白打接口——真断网 / 服务重启
+     的那种，问多久都不会有。 */
+  var CLAIM_TRIES = 6, CLAIM_GAP = 3000;
+
   function promise(rec) {
     /* 记录 id 比出生时间更硬（2026-11-27）：服务端建任务时就把 rec 记下了，
        按它认是确定的，而且**已完成的那张也回**——「提交完就大退」的记录里
@@ -433,9 +456,22 @@
     var t = bornAt(rec);
     var id = (rec && rec.id) || "";
     if (!t && !id) return Promise.resolve(null);
-    return global.WSGen.adopt(t, id).then(function (d) {
-      return (d && d.ok && d.job) ? d.job : null;
-    })["catch"](function () { return null; });
+    var left = CLAIM_TRIES;
+    function again() {
+      return new Promise(function (go) { setTimeout(go, CLAIM_GAP); })
+        .then(once);
+    }
+    function once() {
+      return global.WSGen.adopt(t, id).then(function (d) {
+        if (d && d.ok && d.job) return d.job;
+        return --left > 0 ? again() : null;
+      })["catch"](function () {
+        /* 连问都问不到（5174 没起 / 隧道断）：照样再试两次，别一次网络
+           抖动就把一条还在跑的任务判死。用完次数交回 null。 */
+        return --left > 0 ? again() : null;
+      });
+    }
+    return once();
   }
 
   /* 按 userId 在「原话 → 气泡」那张表里找人。表是按内容分桶的，这里全扫
@@ -532,17 +568,16 @@
       return;
     }
     setTimeout(function () {
-      global.WSGen.adopt(at).then(function (d) {
-        if (!d || !d.ok || !d.job) {
+      /* 走 `promise`（同一个函数、同一套重试）而不是单问一次：这里和
+         「大退重进」是同一个处境——服务端可能还在判意图，任务还没建。
+         顺带把记录 id 也带上，按 id 认比按时间准（2026-11-27）。 */
+      promise(rec).then(function (job) {
+        if (!job) {
           global.WSChat.failCard(card, "这张没排上（网络断了），点重试再发一次",
                                  true);
           return;
         }
-        attach(card, rec, d.job);
-      }, function () {
-        /* 连问都问不到（还是断网）：留在「结果还没确认」。**不判死**——
-           下次进页面 `willCheck` 还会再认一次，服务端那边已经会自己把
-           结果盖回档位。 */
+        attach(card, rec, job);
       });
     }, 4000);
   }
