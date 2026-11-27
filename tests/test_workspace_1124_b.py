@@ -302,13 +302,20 @@ class FrontendTest(unittest.TestCase):
         self.assertIn("WSImg.get", body, "下载没先问本地缓存")
         self.assertIn("saveBlob", body)
 
-    def test_timeout_gives_retry(self):
-        # 2026-11-24 晚：超时 / 轮询搬到 gen_flow.js；「重试」按钮在 chat.js 的 fail()
+    def test_no_local_timeout_judgement(self):
+        # 2026-11-27：抄跑图台——状态只认服务端，前端不再自己计时判死。
+        # 以前 SETTLE_MS=8 分钟 + since=提交时间，一张早画完的图隔 8 分钟重进
+        # 会被误判「排队卡住，点重试」；真卡住由服务端 stuck/lost/error 兜。
         s = _src("web", "workspace", "js", "gen_flow.js")
-        self.assertIn("SETTLE_MS", s)
-        self.assertIn("PAINT_MS", s)
-        self.assertIn("checkTimeout", s)
-        self.assertIn('"重试"', _src("web", "workspace", "js", "chat.js"))
+        for gone in ("SETTLE_MS", "PAINT_MS", "checkTimeout", "pauseClock"):
+            self.assertNotIn(gone, s, "前端本地计时判死又回来了：" + gone)
+        self.assertIn('job.state === "done"', s)
+        self.assertIn('job.state === "error"', s)
+        self.assertIn("job.stuck", s)
+        # 「重试」按钮文案在 card.js，原先指向 chat.js 的断言一直找不到
+        self.assertIn("重试", _src("web", "workspace", "js", "card.js"))
+        a = _src("web", "workspace", "js", "archive.js")
+        self.assertNotIn("job.ts * 1000", a, "恢复路径又拿提交时间当计时起点了")
 
     def test_restore_asks_status_before_polling(self):
         s = _src("web", "workspace", "js", "archive.js")

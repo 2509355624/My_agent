@@ -1,4 +1,4 @@
-/* 生图这一趟「干活的」部分：提交、轮询、判超时、挂/摘「终止」。
+/* 生图这一趟「干活的」部分：提交、轮询、挂/摘「终止」。
    这里不画任何东西——卡片长相在 card.js，图在 shot.js，存档怎么落由 chat.js
    的回调决定。两条硬口径：同一份词连点「重画」不许越点越多张空卡；排队中 /
    报错只是一行字，不占 3:4 的大壳（is-idle，见 card.js）。 */
@@ -8,12 +8,10 @@
 
   var POLL_MS = 2000, NOTE_RUN = "正在跑，画好会自动弹出来";
   var MAX_FAIL = 5;         // 连续失败这么多次就停轮询，别无限打接口
-  /* 卡死兜底：服务重启后存档那条会永远停在「排队中」，前端自己计时，
-     排队 / 准备中超 SETTLE_MS 判卡住，给「重试」。 */
-  var SETTLE_MS = 8 * 60 * 1000;
   /* status 里查不到这张时的宽容期（两台设备开着，一台刷新不该判死） */
   var GHOST_MS = 15 * 1000;
-  var PAINT_MS = 25 * 60 * 1000;
+  /* 状态只认服务端（2026-11-27）：和跑图台 / 漫画台同构，前端不再自己
+     计时判死——图画好了就是画好了，隔多久重进、谁的本地时钟都一样。 */
 
   /* chat.js 注入的回调（都必需：少一个这里就该报错，不能静默死循环） */
   var H = {
@@ -421,41 +419,13 @@
     card.job = "";
   }
 
-  /* 状态接口连续失败时别再打接口，但**不要把卡片判死**：网络抖一下不等于
-     这张图没了。把它们的计时按下暂停（`since` 往后推），等下一次状态恢复
-     再接着算——否则一次断网就能把半个小时的画白等。 */
-  function pauseClock() {
-    var now = Date.now(), pending = S().pending;
-    Object.keys(pending).forEach(function (id) {
-      var card = pending[id];
-      if (card.since) card.since = now - (card.since - now);
-    });
-  }
-
-  /* 判超时。两条线：
-       · 一直没轮到（排队 / 准备中 / 还没进 ComfyUI）超过 SETTLE_MS；
-       · 已经在画（running）超过 PAINT_MS。
-     判了不是「报错完事」：卡片换成「重试」，用户点一下就按同一份提示词重排。
-     这一步也不能把「画得慢」误杀——真在画的那张只看它自己的 PAINT_MS。 */
-  function checkTimeout(card, ph) {
-    if (!card.since) return false;
-    var limit = (ph === "running") ? PAINT_MS : SETTLE_MS;
-    if (Date.now() - card.since < limit) return false;
-    var mins = Math.round(limit / 60000);
-    fail(card, (ph === "running")
-      ? "等了 " + mins + " 分钟还在画，可能卡住了。点重试重排一张"
-      : "排队等了 " + mins + " 分钟还没轮到，卡住了。点重试重排一张", true);
-    forget(card);
-    return true;
-  }
-
   function tick() {
     var S0 = S();
     if (!Object.keys(S0.pending).length) { stopPoll(); return; }
     global.WSGen.status().then(function (d) {
       if (!d || !d.ok) {
         S0.fails += 1;
-        if (S0.fails >= MAX_FAIL) { stopPoll(); pauseClock(); }
+        if (S0.fails >= MAX_FAIL) stopPoll();
         return;
       }
       S0.fails = 0;
@@ -525,7 +495,6 @@
           // 现问的——排队 / 准备中 / 真在画 / 掉队了。`unknown` 是「问不到」，
           // 按「正在跑」显示：探不到 ComfyUI 不等于这张没了（2026-11-26）。
           var ph = job.phase || "";
-          if (checkTimeout(card, ph)) return;
           /* 「前面还有几张」由服务端算好给（`ahead`，2026-11-27）：本进程队列
              + 别的进程（QQ / 漫画台）压着的一起算，比前端自己数准。0 或不给 =
              下一个就轮到它，统一说「正在跑」（用户：「前面 0 张就统一正在跑」）。 */
@@ -592,8 +561,6 @@
     startPoll: startPoll,
     stopPoll: stopPoll,
     tick: tick,
-    showImage: showImage,
-    SETTLE_MS: SETTLE_MS,
-    PAINT_MS: PAINT_MS
+    showImage: showImage
   };
 })(window);

@@ -335,8 +335,9 @@
            落在这里；没认到（服务端没这张）就继续往下判死。 */
         if (!st || !st.ok || (job &&
             job.state !== "error" && job.state !== "cancelled")) {
-          // 计时起点用服务端的提交时间：昨天提交的那张一接回来就算超时
-          a.card.since = (job && job.ts ? job.ts * 1000 : 0) || Date.now();
+          /* 不再设本地计时起点（2026-11-27）：状态只认服务端，和跑图台同构。
+             以前拿提交时间当 since，一张早画完的图隔 8 分钟重进会被前端
+             判成「排队卡住」，可服务端早就说 done 了。 */
           global.WSChat.pending[a.rec.job] = a.card;
           global.WSChat.armStop(a.card);
           return;
