@@ -474,10 +474,21 @@ class PageGuardTest(unittest.TestCase):
             self.html = f.read()
 
     def test_two_tabs_only(self):
-        # 顶部只剩「官方渠道 / 连续多图」
+        # 顶部只剩「官方渠道 / 连续多图」两颗；连续多图 2026-11-27 已 hidden，
+        # DOM 还留着（见下一条），所以这里只管「没有别的 tab 混进来」。
         self.assertIn('data-tab="channel"', self.html)
         self.assertIn('data-tab="batch"', self.html)
         self.assertNotIn('data-tab="preset"', self.html)
+
+    def test_batch_entry_is_hidden(self):
+        """「连续多图」入口已下线（2026-11-27 用户拍板）。
+
+        原因是排队机制：一张一张轮流拿票，一个人连排 5 张就把别人的第一张
+        往后顶——两个人各 5 张，最后一张要等 10 轮，单人等待被严重拉长。
+        所以只藏 UI：面板、`buildSlots()`、`/api/runbench/batch` 全留着，
+        要恢复把这行的 hidden 去掉即可。
+        """
+        self.assertIn('class="tab hidden" data-tab="batch"', self.html)
 
     def test_batch_panel_has_all_three_modes(self):
         self.assertIn('data-mode="same"', self.html)

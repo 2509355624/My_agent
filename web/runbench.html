@@ -221,7 +221,13 @@
        「之前随心配其实没人用……自定义预设根本没人存」） -->
   <div class="tabs">
     <button class="tab on" data-tab="channel">官方渠道 <span class="cnt" id="cntChannel"></span></button>
-    <button class="tab" data-tab="batch">连续多图</button>
+    <!-- 连续多图入口 2026-11-27 下线（用户拍板）。
+         原因在排队机制本身，不在这个功能：一张一张轮流拿票，一个人连排 5 张，
+         其他人的第一张就得等在他后面——两个人各 5 张，最后一个要等 10 轮。
+         单人排队时间被拉长，对谁都不划算，所以干脆不给这个入口。
+         **只藏 UI**：`#batchPanel`、`buildSlots()`、`/api/runbench/batch`
+         全部原样留着，要恢复把这行的 hidden 去掉即可（DOM 在，测试也还认它）。 -->
+    <button class="tab hidden" data-tab="batch">连续多图</button>
   </div>
 
   <div class="grid" id="channelGrid"></div>
