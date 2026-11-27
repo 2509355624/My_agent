@@ -183,5 +183,41 @@ class TestStyleSheetDrag(unittest.TestCase):
         self.assertIn("touch-action: pan-y", block)
 
 
+class TestStyleSheetCovers(unittest.TestCase):
+    """2026-11-27：画风抽屉从纯文字列表改成两列封面卡片。"""
+
+    def test_list_is_two_column_grid(self):
+        css = _read("css/sheet.css")
+        idx = css.index(".style-list {")
+        block = css[idx:css.index("}", idx)]
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr))", block)
+
+    def test_cards_are_white_with_cover_area(self):
+        css = _read("css/sheet.css")
+        idx = css.index(".style-card {")
+        block = css[idx:css.index("}", idx)]
+        self.assertIn("background: var(--card)", block)  # 浅色主题 = 白底
+        idx = css.index(".style-card .s-thumb {")
+        block = css[idx:css.index("}", idx)]
+        self.assertIn("aspect-ratio: 3 / 4", block)
+
+    def test_cover_reuses_runbench_endpoint_with_fallback(self):
+        """封面走跑图台现成的免令牌缩略图，没图的藏 img 露文字占位。"""
+        js = _read("js/stack.js")
+        i = js.index("function renderStyles()")
+        block = js[i:js.index("\n  }", i)]
+        self.assertIn('"/api/runbench/cover/" + encodeURIComponent(c.id)', block)
+        self.assertIn('img.loading = "lazy"', block)
+        self.assertIn('img.onerror = function () { img.style.display = "none"; }', block)
+        self.assertIn('ph.className = "s-ph"', block)
+        self.assertNotIn("style-item", block)
+
+    def test_click_still_sets_default_and_closes(self):
+        """加了封面不能把「点一下设为默认就退出」这个行为弄丢。"""
+        js = _read("js/stack.js")
+        self.assertIn("global.WSGen.setDefaultSkill(c.id)", js)
+        self.assertIn("closeStyles();", js)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -358,57 +358,101 @@
   /* 上一层 .sheet 关了 touch-action，这里单独把列表放行，否则画风列表滚不动。
      touch-action 只管「浏览器要不要接管手势」，和上面的滚动链断链是两回事。 */
   touch-action: pan-y;
-  padding: 0 6px 6px;
+  /* 2026-11-27：改成两列卡片，跟跑图台官方渠道一个摆法——文字列表用户
+     看不出每个画风长什么样。窄屏也保持两列，缩略图靠 aspect-ratio 撑高。 */
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 2px 6px 6px;
 }
 
-.style-item {
+.style-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0;
+  border: 1px solid var(--hair);
+  border-radius: 14px;
+  background: var(--card);   /* 白底，跟跑图台卡片一致 */
+  color: var(--text);
+  overflow: hidden;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color .15s;
+}
+
+.style-card:active { border-color: var(--brand); }
+.style-card.on { border: 2px solid var(--brand); }
+
+.style-card .s-thumb {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  background: var(--card-2);
+  overflow: hidden;
+}
+
+.style-card .s-thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.style-card .s-ph {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 12px 12px;
-  border: 0;
-  border-radius: 12px;
-  background: none;
-  color: var(--text);
-  font-size: 14.5px;
-  text-align: left;
-}
-
-.style-item:active { background: var(--card-2); }
-
-.style-item .tick {
-  flex: 0 0 auto;
-  width: 18px;
-  color: var(--brand);
-  font-size: 13px;
-  opacity: 0;
-}
-
-.style-item.on {
-  color: var(--brand);
-  font-weight: 600;
-  background: var(--brand-soft);
-}
-
-.style-item.on .tick { opacity: 1; }
-
-.style-item .sname {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.style-item .meta {
-  margin-left: auto;
-  max-width: 46%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  justify-content: center;
+  padding: 8px;
+  color: var(--text-dim);
   font-size: 12px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.style-card .s-tick {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--brand);
+  color: #fff;
+  font-size: 13px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.style-card.on .s-tick { display: flex; }
+
+.style-card .s-meta { padding: 7px 9px 9px; min-width: 0; }
+
+.style-card .s-name {
+  font-size: 13px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.style-card.on .s-name { color: var(--brand); }
+
+.style-card .s-sub {
+  margin-top: 2px;
+  font-size: 11px;
   font-weight: 400;
   color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 画风太多，先露几项，点这里展开全部 */

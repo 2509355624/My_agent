@@ -311,26 +311,45 @@
       show.forEach(function (c) {
         var b = document.createElement("button");
         b.type = "button";
-        b.className = "style-item" + (c.id === cur ? " on" : "");
+        b.className = "style-card" + (c.id === cur ? " on" : "");
+
+        /* 封面复用跑图台那套：44/49 个渠道有图。没有的藏掉 img 露占位，
+           跟跑图台 coverHtml 一个做法。img 长边 480 的缩略图 ~30KB，
+           lazy 加载，展开全部 49 个也不会一次拉完。 */
+        var th = document.createElement("div");
+        th.className = "s-thumb";
+        var img = document.createElement("img");
+        img.loading = "lazy";
+        img.decoding = "async";
+        img.alt = labelOf(c);
+        img.src = "/api/runbench/cover/" + encodeURIComponent(c.id);
+        img.onerror = function () { img.style.display = "none"; };
+        var ph = document.createElement("div");
+        ph.className = "s-ph";
+        ph.textContent = labelOf(c);
+        th.appendChild(ph);
+        th.appendChild(img);
+        b.appendChild(th);
 
         var tick = document.createElement("span");
-        tick.className = "tick";
+        tick.className = "s-tick";
         tick.textContent = "✓";
-
-        var name = document.createElement("span");
-        name.className = "sname";
-        name.textContent = labelOf(c);
-
         b.appendChild(tick);
-        b.appendChild(name);
 
+        var meta = document.createElement("div");
+        meta.className = "s-meta";
+        var nm = document.createElement("div");
+        nm.className = "s-name";
+        nm.textContent = labelOf(c);
+        meta.appendChild(nm);
         var brief = briefOf(c);
         if (brief) {
-          var meta = document.createElement("span");
-          meta.className = "meta";
-          meta.textContent = brief;
-          b.appendChild(meta);
+          var sub = document.createElement("div");
+          sub.className = "s-sub";
+          sub.textContent = brief;
+          meta.appendChild(sub);
         }
+        b.appendChild(meta);
 
         b.addEventListener("click", function () {
           global.WSGen.setDefaultSkill(c.id);
