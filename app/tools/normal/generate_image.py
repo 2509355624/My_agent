@@ -1261,10 +1261,14 @@ def _generate_image(prompt, skill=None, lora=None, source_image="",
     # 不传的话前缀永远按**模板**默认（8 号开着）拼，群友在预设里关掉 8 号
     # 之后 LoRA 关了、`@//neoanime/` 那段还留在提示词里空喊。
     # preset_slots 为 None（非预设路径）时照旧读模板，行为不变。
-    # moss 系先洗干净（2026-11-04）：QQ 侧通用写法里的质量词 / 权重语法 /
-    # 打码词对 moss 是纯噪音，`score_7` 这种还会挤掉前段本该写「谁在做什么」
-    # 的注意力。判据在 `moss_prompt.is_moss`，非 moss 渠道原样返回。
+    # 打码 / 审查类词先全渠道删掉（2026-11-27）：系统提示词叫模型「别写」
+    # 挡不住，silver 记录里仍有大量 `uncensored` 真进了 ComfyUI，模型看到
+    # 就在图上糊一块。这层不挑渠道，放在 moss 专属清洗之前。
     from app.features.comic import moss_prompt
+    prompt = moss_prompt.strip_censor(prompt)
+    # moss 系再洗干净（2026-11-04）：QQ 侧通用写法里的质量词 / 权重语法 /
+    # `score_7` 这种还会挤掉前段本该写「谁在做什么」的注意力。
+    # 判据在 `moss_prompt.is_moss`，非 moss 渠道原样返回。
     prompt = moss_prompt.clean(skill, prompt)
     prompt = lora_slots.nai5_prefix(skill, preset_slots) + prompt
     # ANIMA 随心配（2026-11-13）：抽卡——底模随机选 2（可重复）、画风 LoRA

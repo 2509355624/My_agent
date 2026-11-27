@@ -1,4 +1,4 @@
-"""moss 系提示词清洗：删掉从别家抄来的 booru 习惯词。
+"""提示词清洗：moss 专属写法清洗 + 全渠道通用的打码词兜底过滤。
 
 ## 为什么需要这一步
 
@@ -47,6 +47,22 @@ _BANNED = (
     "cosplay", "cosplayer", "cosplay wig",
 )
 
+# 打码 / 审查类词：正向 prompt 里出现这些，模型会真在图上糊一块或加遮挡条。
+# 2026-11-27 群友报「大大怪总是打码」——根因是 **非 moss 渠道没有兜底**：
+# 系统提示词写了「别写这类词」，但 silver 的出图记录里仍大量出现 `uncensored`。
+# 所以这一层对所有渠道生效，出图前统一删，不能只靠模型自觉。
+# 只收确定属于「审查/打码」的词；`covered` / `obscured` 也可能是正常画面
+# 描述（被云遮住、被头发盖住），不收，判断留给模型。
+_CENSOR = (
+    "mosaic censoring", "no censorship", "without mosaic", "remove mosaic",
+    "no mosaic", "no censoring", "no censor", "remove censor",
+    "censor bar", "bar censor",
+    "uncensored", "censored", "censoring", "censorship", "censor",
+    "mosaics", "mosaic", "pixelation", "pixelated",
+    "不要打码", "不许打码", "不要马赛克", "去掉马赛克", "去除马赛克",
+    "审查遮挡", "打码", "无码", "马赛克", "遮挡",
+)
+
 _WEIGHT_RE = re.compile(r"\(\s*([^()]*?)\s*:\s*\d+(?:\.\d+)?\s*\)")
 _SCORE_RE = re.compile(r"\bscore_\d+(?:\.\d+)?\b", re.I)
 _MULTI_SPACE = re.compile(r"[ \t]{2,}")
@@ -62,18 +78,22 @@ def is_moss(skill):
     return s == "moss" or s.startswith("moss-")
 
 
-def _strip_words(text):
-    """删固定词表。按整词边界删，`high quality` 不会误伤 `quality time`。
-
-    `8k` / `4k` 这类数字词不能用 `\\b`（`8k` 后面接中文时边界判定不稳），
-    单独走一条前后加空格比对的路径。
-    """
+def _strip_exact(text, words):
+    """按整词删 `words`，替换为逗号。中文词走朴素替换（没有词边界）。"""
     out = " " + text + " "
-    for w in sorted(_QUALITY + _BANNED, key=len, reverse=True):
-        # 前后都要求不是字母数字，避免 `masterpieces` 或 `cosplayed` 被切开
-        out = re.sub(r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(w),
-                     ",", out, flags=re.I)
+    for w in sorted(words, key=len, reverse=True):
+        if re.match(r"^[A-Za-z]", w):
+            # 前后都要求不是字母数字，避免 `masterpieces` 被切开
+            out = re.sub(r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(w),
+                         ",", out, flags=re.I)
+        else:
+            out = out.replace(w, ",")
     return out.strip()
+
+
+def _strip_words(text):
+    """删质量词 + moss 必删词。数字词 `8k` 前后加空格比对，不靠 `\\b`。"""
+    return _strip_exact(text, _QUALITY + _BANNED)
 
 
 def strip_noise(prompt):
@@ -92,6 +112,11 @@ def strip_noise(prompt):
     text = _SCORE_RE.sub(",", text)
     text = _strip_words(text)
 
+    return _join_lines(text)
+
+
+def _join_lines(text):
+    """按行切逗号、丢空段、`, ` 拼回去；分块写法靠换行隔离，不能拍平。"""
     lines = []
     for raw_line in text.splitlines():
         segs = []
@@ -103,6 +128,21 @@ def strip_noise(prompt):
         if line:
             lines.append(line)
     return "\n".join(lines)
+
+
+def strip_censor(prompt):
+    """删打码 / 审查类词，**所有渠道通用**（2026-11-27）。
+
+    和 `clean()` 的分工：`clean` 是 moss 专属写法清洗，`strip_censor` 是
+    出图前对每条提示词兜底——模型没守住「别写这类词」时，这里挡住，别让
+    `uncensored` 这种词进 ComfyUI 把画面真糊一块。
+    """
+    text = str(prompt or "")
+    if not text.strip():
+        return text
+    cleaned = _join_lines(_strip_exact(text, _CENSOR))
+    # 洗空了退回原文：空提示词等于「随便画一张」，比多一个词更糟
+    return cleaned or text
 
 
 def clean(skill, prompt):
