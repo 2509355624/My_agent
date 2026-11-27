@@ -233,6 +233,20 @@ class TestStyleSheetCovers(unittest.TestCase):
         self.assertIn('title.className += " gtabs"', js)
         self.assertNotIn('title.className = "gtabs"', js)
 
+    def test_gallery_tabs_keep_horizontal_scroll(self):
+        """留着 vtitle 就必须在 `.vtitle.gtabs` 上把 overflow 写回来。
+
+        `.vtop > .vtitle` 是 (0,2,0)，gallery.css 里光着的 `.gtabs` 只有
+        (0,1,0)——基类那句 overflow:hidden 会压掉 overflow-x:auto，标签一多
+        就顶死划不动（2026-11-27 用户报「标签栏又划不动了」）。
+        同理 font-weight:600 会被子标签继承成全体加粗。"""
+        css = _read("css/sheet.css")
+        idx = css.index(".vtop > .vtitle.gtabs {")
+        block = css[idx:css.index("}", idx)]
+        self.assertIn("overflow-x: auto", block)
+        self.assertIn("overflow-y: hidden", block)
+        self.assertIn("font-weight: normal", block)
+
     def test_click_still_sets_default_and_closes(self):
         """加了封面不能把「点一下设为默认就退出」这个行为弄丢。
            设为默认抽进了 pickStyle，抽屉里点完仍要 render + close。"""

@@ -108,7 +108,14 @@
 }
 
 /* `.gtabs`（AI 创作那页的文件夹标签条）是能横向滑动的真控件，不能当标题
-   居中压住——它自己占回弹性位置，事件也自己接。 */
+   居中压住——它自己占回弹性位置，事件也自己接。
+
+   下面 notro 的三条是「压过标题基类」用的：上面 `.vtop > .vtitle` 是
+   (0,2,0)，gallery.css 里光秃秃的 `.gtabs` 只有 (0,1,0)，比不过它——
+   基类那句 `overflow: hidden` 会把 `overflow-x: auto` 吃掉，标签一多就
+   顶死划不动（2026-11-27 用户报「头顶标签栏又划不动了」，就是 11-27 那次
+   为了防白栏把 vtitle 类加回来带出来的）。同理 `font-weight: 600` 会被
+   子标签继承成全体加粗。这里在本条选择器 (0,3,0) 上显式写回来。 */
 .vtop > .vtitle.gtabs {
   position: static;
   transform: none;
@@ -117,6 +124,9 @@
   flex: 1 1 auto;
   pointer-events: auto;
   text-align: left;
+  overflow-x: auto;
+  overflow-y: hidden;
+  font-weight: normal;
 }
 
 /* 中段没有标题也不许撑出一条空栏（2026-11-24 用户两次报：
