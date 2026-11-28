@@ -473,13 +473,20 @@
 }
 
 /* 全屏画风页（「查看全部」滑进来的子页）：.vbody 已经管滚动和内边距，
-   这里只铺两列。卡片沿用 .style-card，封面 aspect-ratio 撑高；子页是纯白
+   这里只铺网格。卡片沿用 .style-card，封面 aspect-ratio 撑高；子页是纯白
    底、卡片也是白底，补一圈淡阴影才看得出卡片边界。 */
 .style-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* 以前死写两列：1701 的屏上每张 850 宽、封面 1133 高，一屏只放得下两个
+     （用户 2026-11-28：「点开查看全部是这样，展开太大了」）。列宽照画廊
+     列表的 #grid，最小 140，屏够宽就自己加列。 */
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   align-content: start;
   gap: 12px;
+}
+
+@media (min-width: 760px) {
+  .style-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
 }
 
 .style-grid .style-card { box-shadow: var(--shadow-1); }
