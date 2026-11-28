@@ -1,0 +1,48 @@
+/* 画廊查看器的左右箭头（桌面用）。
+
+   2026-11-28 用户：「电脑端这边还差一个左右的那个按钮，现在电脑都没有办法
+   左右去换页」。`.gv-track` 是 scroll-snap 的横向轨道，手机靠手指滑，桌面
+   鼠标没有这条路，只能拖滚动条——一屏一张，拖滚动条跟换页是两回事。
+
+   长相照画廊页（web/gallery.html 的 .nav）：半透明圆角块 + ‹ ›。颜色换成
+   白色薄底，因为工作台查看器的底已经是纯黑（gallery.css 的 .gviewer），
+   45% 的黑块贴上去看不见。
+
+   只在「宽屏 + 有真鼠标」上出现：触摸设备上这两个块正好压在图左右两边，
+   而那时候手指本来就能滑（画廊页 `@media(hover:none){.nav{display:none}}`
+   同一条理由）。 */
+
+.gv-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 3;
+  display: none;
+  width: 40px;
+  height: 58px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .13);
+  color: #fff;
+  font: 20px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+  place-items: center;
+  cursor: pointer;
+}
+
+.gv-nav.l { left: 8px; }
+.gv-nav.r { right: 8px; }
+.gv-nav:hover { background: rgba(255, 255, 255, .2); }
+.gv-nav:active { background: rgba(255, 255, 255, .28); }
+.gv-nav:focus-visible { outline: 2px solid rgba(255, 255, 255, .6); outline-offset: 2px; }
+
+@media (min-width: 1180px) and (hover: hover) {
+  .gv-nav { display: grid; }
+}
+
+/* 箭头是 .gv-stage 的绝对定位子元素，stage 本身得是定位上下文 */
+.gv-stage { position: relative; }
+
+@media (prefers-reduced-motion: reduce) {
+  .gv-nav { transition: none; }
+}
