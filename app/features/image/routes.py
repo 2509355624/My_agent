@@ -389,9 +389,23 @@ def _archive_back(job, fields):
         log.warning("兜底写档失败 %s", job.get("id"), exc_info=True)
 
 
-def _ledger_rows(limit=100):
-    """账本行（新的在前），跳过「清空截止」之前的。"""
+def _ledger_rows(limit=100, src=None):
+    """账本行（新的在前），跳过「清空截止」之前的；`src` 非空时只回那一台的行。
+
+    `src`（2026-11-28）：账本是跑图台和工作台**共用一本**（两条入口最后都走
+    `_enqueue_job` → `_run` → `_ledger_append`）。以前不分来源，跑图台的
+    「历史（本机生成）」把工作台 / 群友页 / 群友漫画台的图一起列了出来
+    （实测 391 行里 266 行是 `工作台/生图页`），用户原话：「工作台那边跑的
+    图会串到我跑图台这一边，不要串台了」。
+
+    不传 `src` 就是全量（测试和运维脚本要看到整本账）；`/api/gen/history`
+    显式传 `src="genpad"`。**没有 `src` 字段的是今天之前的老行**——那时两个
+    入口连落盘目录都共用（都进 `工作台/生图页/<渠道>`），日志里也一律写
+    「跑图台」，来源已经无法回溯，所以它们不会被当成跑图台的行；数据还在
+    账本里、文件还在盘上，只是不进本台列表。
+    """
     cutoff = _cleared_at()
+    want = str(src or "").strip()
     rows = []
     try:
         with open(_LEDGER, encoding="utf-8") as f:
@@ -403,8 +417,11 @@ def _ledger_rows(limit=100):
                     row = json.loads(line)
                 except ValueError:
                     continue          # 坏行跳过，别让一行坏了整本账
-                if isinstance(row, dict) and row.get("ts", 0) > cutoff:
-                    rows.append(row)
+                if not isinstance(row, dict) or row.get("ts", 0) <= cutoff:
+                    continue          # 坏行 / 清空之前的行，跳过
+                if want and row.get("src") != want:
+                    continue          # 别台的行（工作台 / 群友 / 老行无 src）
+                rows.append(row)
     except OSError:
         return []
     rows.sort(key=lambda r: r.get("ts", 0), reverse=True)
@@ -498,6 +515,22 @@ def _sync_to_qq(job, file_ref):
                      daemon=True).start()
 
 
+def _out_dir_for(job):
+    """这张图该落哪个目录（不含渠道那层）。`None` = 交给 `comfy_out` 按 target 推。
+
+    2026-11-28 用户拍板分家：「工作台那边跑的图会串到我跑图台这一边……
+    不要串台了，就是 Web 这个页面，它是我自己用的」。
+
+    · 跑图台（`src == "genpad"`）→ `web/生图页/<渠道>/`，进站主自己的 `web/`。
+      `comfy_out.session_base` 的注释里本来就是这么写的（「web/ 从此只放站主
+      自己的东西（他本人跑图台）」），但网页侧 target=None 一律被推到了
+      `工作台/生图页`，跑图台也吃到了这个默认 —— 这次补上。
+    · 工作台 / 群友 / 访客 → 不给（照旧 `工作台/生图页/<渠道>/`）。
+    · NAI / 图生图那两个分支不在这里拼渠道，见 `_run` 里各自的调用。
+    """
+    return "web/生图页" if job.get("src") == "genpad" else None
+
+
 def _run(job):
     """worker 线程体：按渠道走 ComfyUI 或 NAI 队列，出图后记账。"""
     landscape_ok = False
@@ -507,7 +540,8 @@ def _run(job):
                 "web", job.get("owner") or "anonymous", job["prompt"],
                 skill=job["skill"], prompt=job["prompt"], seed=None,
                 landscape=(job["skill"] == "nai_wide"),
-                out_dir="web_" + str(job.get("owner") or "anonymous"))
+                out_dir=_out_dir_for(job)
+                or ("web_" + str(job.get("owner") or "anonymous")))
             if queued is None:
                 raise RuntimeError(reason or "NAI 队列拒绝了这张图")
             queued.cancel = job["abort"]
@@ -545,7 +579,8 @@ def _run(job):
             mj, reason = image_jobs.enqueue(
                 "web", job.get("owner") or "anonymous", wf,
                 skill=job["skill"], prompt=job["prompt"], seed=job["seed"],
-                out_dir="web_" + str(job.get("owner") or "anonymous"),
+                out_dir=_out_dir_for(job)
+                or ("web_" + str(job.get("owner") or "anonymous")),
                 i2i_src=i2i_src, i2i_name=_I2I_PLACEHOLDER)
             if mj is None:
                 raise RuntimeError(reason or "没排上队")
@@ -645,6 +680,7 @@ def _run(job):
                 lambda: comic._submit(wf, job["skill"], job["prompt"], job["seed"],
                                       with_entry=True, abort=job["abort"],
                                       task_tag=job["id"], on_pid=_on_pid,
+                                      out_dir=_out_dir_for(job),
                                       batch="workspace"),
                 "[跑图台 %s]" % job["id"])
             # 采完样才出的图，也可能已经被终止（_submit 在回调里看 abort 会抛）
@@ -656,6 +692,8 @@ def _run(job):
         row = {"tag": job["id"], "skill": job["skill"],
                "prompt": job["prompt"], "seed": seed,
                "file": file_ref, "ts": job["ts"], "ok": True,
+               # 哪台页子出的（2026-11-28）：本台历史只显示 `genpad` 的行。
+               "src": job.get("src") or "workspace",
                "steps": steps_label, "secs": secs,
                "loras": _enabled_loras(job)}
         # 只记「这次真的改过」的字段（NAI 云端没有本地 cfg / 负向，
@@ -709,6 +747,7 @@ def _run(job):
         _ledger_append({"tag": job["id"], "skill": job["skill"],
                         "prompt": job["prompt"], "seed": job["seed"],
                         "file": "", "ts": job["ts"], "ok": False,
+                        "src": job.get("src") or "workspace",
                         "error": msg})
         log.warning("跑图台 %s 失败：%s", job["id"], msg)
         # 真失败（服务端明确说了不行）才打 err，重进时直接显示这句 + 重画。
@@ -1596,13 +1635,18 @@ def api_submit():
         # 开关关着就写空串：`_sync_to_qq` 见到空 qq 直接返回。
         "qq_sync": _sync,
         "qq": (chat_routes._who() or "") if _sync else "",
-    }, owner=owner)
+    }, owner=owner,
+        # 哪台页子发的（2026-11-28）：只有跑图台 `gen_pad.html` 会带
+        # `src="genpad"`；工作台 `chat.js` 不带（落 workspace，与以前一致）。
+        # 群友网关 / 旧页面也不带 —— 一律当工作台，别把他们的图放进站主 `web/`。
+        src="genpad" if str(data.get("src") or "").strip() == "genpad"
+        else "workspace")
     if job is None:
         return jsonify({"ok": False, "busy": True, "error": busy}), 429
     return jsonify({"ok": True, "job": _public(job)})
 
 
-def _enqueue_job(spec, owner, user_text="", lowres_on=False):
+def _enqueue_job(spec, owner, user_text="", lowres_on=False, src="workspace"):
     """建一条本台任务并起 worker。→ (job, None) 成功；→ (None, 一句人话) 没名额。
 
     `api_submit`（老路：翻译后直通）与 `api_ask`（工作台一句话，走 QQ 那份
@@ -1615,9 +1659,18 @@ def _enqueue_job(spec, owner, user_text="", lowres_on=False):
 
     spec 只收两边都有的字段；缺省按 None / "" 落（LoRA 槽位、步数、CFG 这些
     只有 `api_submit` 会带，工作台那条路全是默认值）。
+
+    `src`（2026-11-28）标记这条任务**从哪个页面发起的**：
+      · `"genpad"` = 本站跑图台 `/gen`（用户自己的台子，图落 `web/生图页`，
+        历史账本只显示它自己的）；
+      · `"workspace"` = 工作台 / 群友页 / 群友漫画台（图落 `工作台/生图页`）。
+    用户原话：「工作台那边跑的图会串到我跑图台这一边……不要串台了」。
+    默认 workspace：任何没带标记的入口（旧页面、群友网关）都当工作台处理，
+    宁可让图进 `工作台/` 也不乱丢进站主自己的 `web/`。
     """
     limit, _peak_label, _window = image_jobs.inflight_limit()
     skill = spec["skill"]
+    src = "genpad" if str(src or "") == "genpad" else "workspace"
     with _JOBS_LOCK:
         # 本台独立 worker 线程与公共 NAI 队列分别计数，避免重复计同一任务。
         active = sum(1 for j in _JOBS.values()
@@ -1628,6 +1681,8 @@ def _enqueue_job(spec, owner, user_text="", lowres_on=False):
             # 2026-11-25：高峰期那档删掉，任何时间都是「最多同时 5 张」。
             return None, "同时最多画 %d 张，等一张出来再画。" % limit
         job = {"id": _new_job_id(), "owner": owner,
+               # 哪台页子发的（见上面 `src` 说明）：决定落哪个目录、进哪本历史。
+               "src": src,
                # 这条任务对应**哪个聊天记录**（2026-11-26 服务端兜底写档用）。
                # 前端提交时带上自己的记录 id；「直达」那几条拿不到（记录是回执
                # 之后才建的），所以写档时还会退回按任务号认，见 chat.routes.write_back。
@@ -1988,8 +2043,14 @@ def api_cancel():
 
 @bp.route("/api/gen/history")
 def api_history():
+    """本台的「历史（本机生成）」——**只回跑图台自己发起的那些**（2026-11-28）。
+
+    账本是跑图台和工作台共用一本，之前不分来源，本台列表里混着大量
+    `工作台/生图页/<渠道>` 的图（用户原话「工作台那边跑的图会串到我跑图台
+    这一边」）。现在按 `src` 过滤，工作台 / 群友 / 没有 `src` 的老行都不出现。
+    """
     limit = request.args.get("limit") or 100
-    return jsonify({"ok": True, "rows": _ledger_rows(limit)})
+    return jsonify({"ok": True, "rows": _ledger_rows(limit, src="genpad")})
 
 
 @bp.route("/api/gen/clear", methods=["POST"])

@@ -519,6 +519,9 @@ class HistoryTest(unittest.TestCase):
             gen_api._ledger_append({"tag": tag, "skill": "silver",
                                     "prompt": "p%d" % i, "seed": i,
                                     "file": "f%d.png" % i,
+                                    # 2026-11-28：`/api/gen/history` 只回跑图台
+                                    # （`src=genpad`）的行，测试行必须标上。
+                                    "src": "genpad",
                                     "ts": self.base - i * 10, "ok": True})
         rows = self.c.get("/api/gen/history").get_json()["rows"]
         mine = [r["tag"] for r in rows if r["tag"] in tags]
@@ -530,7 +533,7 @@ class HistoryTest(unittest.TestCase):
 
     def test_clear_hides_older_rows_but_keeps_new_ones(self):
         gen_api._ledger_append({"tag": "GP-old", "skill": "silver", "prompt": "p",
-                                "seed": 1, "file": "a.png",
+                                "seed": 1, "file": "a.png", "src": "genpad",
                                 "ts": time.time() - 100, "ok": True})
         r = self.c.post("/api/gen/clear", json={})
         self.assertTrue(r.get_json()["ok"])
@@ -538,7 +541,7 @@ class HistoryTest(unittest.TestCase):
         self.assertNotIn("GP-old", [x["tag"] for x in rows])
         # 截止之后新记的照样出现（清空只挡显示，不挡记账）
         gen_api._ledger_append({"tag": "GP-new", "skill": "silver", "prompt": "p",
-                                "seed": 2, "file": "b.png",
+                                "seed": 2, "file": "b.png", "src": "genpad",
                                 "ts": self.base + 100, "ok": True})
         rows = self.c.get("/api/gen/history").get_json()["rows"]
         self.assertIn("GP-new", [x["tag"] for x in rows])

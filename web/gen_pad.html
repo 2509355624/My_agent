@@ -913,7 +913,12 @@ async function gen(promptOverride) {
   const artistPrefix = promptOverride === undefined ? selectedNaiPrefix() : '';
   document.getElementById('btnGen').disabled = true;
   try {
-    const body = {skill: CUR, prompt: prompt, artist_prefix: artistPrefix};
+    // 2026-11-28：标明「这张是本站跑图台发的」。后端据此把图落到
+    // `web/生图页/<渠道>`（工作台/群友仍进 `工作台/生图页`），并且本台
+    // 「历史（本机生成）」只列自己的行，不再混进工作台跑的那些
+    // （见 routes.py 的 `_out_dir_for` / `_ledger_rows`）。
+    const body = {skill: CUR, prompt: prompt, artist_prefix: artistPrefix,
+                  src: 'genpad'};
     if (LORA_KIND === 'toggle' && LORA.length) body.loras = readLoraRows();
     // 步数 / CFG / 负向只在 ComfyUI 渠道发；NAI 走云端，本地参数没意义
     // （后端也会忽略，但前端先拦住，免得用户以为填了生效）。输入框被禁用
