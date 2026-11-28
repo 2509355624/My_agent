@@ -288,7 +288,12 @@
     if (!root) build();
     opened = true;
 
-    files = list.map(function (node) { return node.dataset.file; });
+    /* 两个来源都能喂进来：聊天流给的是 `.shot` 节点（读 dataset.file），
+       桌面右栏给的是文件路径字符串（它那份列表本来就是从这些节点抽出来的，
+       再找节点反而会错位）。 */
+    files = list.map(function (node) {
+      return typeof node === "string" ? node : node.dataset.file;
+    });
     at = clamp(start);
 
     /* 形态由 JS 判定、挂在类上，CSS 只管长相。
