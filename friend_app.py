@@ -836,7 +836,12 @@ def _forward(prefix, sub, allow_guest=False, force_guest=False,
         # 访客：身份走专用头，绝不塞 `qq`——塞了就到不了访客分支，会被当成
         # 某个 QQ 号的登录态，额度全按那个人算。
         headers["X-Friend-Guest"] = request.cookies.get(visitor.COOKIE_NAME) or ""
-    elif jf and _jf_here():
+    # ⚠️ 这两件事**互不排斥**，必须各写一个 `if`（2026-11-28 用户报的 bug）：
+    # 原先写成 `elif`，访客一进来就被第一支吃掉，`__jf=1` 再也不会补上。
+    # 于是访客在工作台点「＋」选相册传参考图，5174 的 `/api/gal/ref` 认不出
+    # 「这是工作台」，回一句「请从工作台上传参考图」——而画廊「画同款」走的
+    # 是另一批不查 `__jf` 的接口，所以那边一直好的，看着像是只有上传坏了。
+    if jf and _jf_here():
         params["__jf"] = "1"
 
     # 游客身份 cookie 必须透传：5175 不解析它，只负责原样送到 5174。

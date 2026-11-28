@@ -20,6 +20,7 @@ from unittest import mock
 from PIL import Image
 
 from app.gateways import friend_auth
+from app.gateways import visitor
 from app.features.gallery import gallery
 from app.features.gallery import references
 from app.features.gallery import routes as gallery_api
@@ -732,6 +733,51 @@ class UploadTest(_Base):
         r = self.c.post("/api/gal/ref?qq=20002",
                         data={"file": (io.BytesIO(_png()), "ref.png")},
                         headers=self.h, content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(self.works(), [])
+
+    # ── 访客（工作台）的私有参考图（2026-11-28 用户报的 bug） ──────────
+    # 原状：访客点「＋」选相册 → 5174 回「请从工作台上传参考图」。两层原因：
+    # 5175 转发时 `__jf` 被 `elif` 和访客头互斥掉；且访客没有 qq，过了门槛
+    # 也会撞「参数不对」。这两条用例把「能传、只能读自己那份」钉住。
+    def _guest_headers(self, gid):
+        # 身份段至少 8 字符：`visitor.check_id` 会拒短的（那是最小熵要求）
+        raw = visitor._mint(gid)
+        return dict(self.h, **{"X-Friend-Guest": raw})
+
+    def _patch_visitor_secret(self):
+        p = mock.patch.object(visitor, "_secret", lambda: "tok")
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_guest_ref_upload_and_owner_read(self):
+        self._patch_visitor_secret()
+        h = self._guest_headers("guestAAA0001")
+        r = self.c.post("/api/gal/ref?__jf=1",
+                        data={"file": (io.BytesIO(_png()), "ref.png")},
+                        headers=h, content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()
+        self.assertTrue(d["ok"])
+        self.assertTrue(d["ref_id"])
+        self.assertEqual(self.works(), [])          # 不落作品集
+
+        own = self.c.get(d["url"] + "?__jf=1", headers=h)
+        self.assertEqual(own.status_code, 200)
+        self.assertEqual(own.mimetype, "image/webp")
+
+        # 另一个访客不能读别人的那份
+        other = self.c.get(d["url"] + "?__jf=1",
+                           headers=self._guest_headers("guestBBB0002"))
+        self.assertEqual(other.status_code, 404)
+
+    def test_guest_ref_upload_still_requires_workspace_mark(self):
+        """访客身份不是绕过；没有 `__jf=1` 照样拒（越权面没有扩大）。"""
+        self._patch_visitor_secret()
+        r = self.c.post("/api/gal/ref",
+                        data={"file": (io.BytesIO(_png()), "ref.png")},
+                        headers=self._guest_headers("guestAAA0001"),
+                        content_type="multipart/form-data")
         self.assertEqual(r.status_code, 403)
         self.assertEqual(self.works(), [])
 

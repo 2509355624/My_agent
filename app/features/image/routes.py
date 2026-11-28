@@ -1143,6 +1143,11 @@ def _gallery_ref_data(ref_id, qq):
     它）。归属判据全交给 `gallery._read_private_image()`，这里不另写一套。
     """
     if not qq:
+        # 访客（2026-11-28）：工作台的「＋」也能传参考图了，而访客没有 QQ，
+        # 归属按 `guest_<身份段>` 算——和上传那边 `gallery._ref_owner()` 同一
+        # 个键，不改这里的话图传上去了、出图时却读不回来（等于没传）。
+        qq = _guest_key()
+    if not qq:
         return ""
     try:
         from app.features.gallery import routes as gal

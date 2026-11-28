@@ -179,6 +179,29 @@ def _qq():
     return qq
 
 
+def _ref_owner():
+    """私有参考图的归属键：登录 `qq`，或工作台访客的 `guest_<身份段>`。
+
+    2026-11-28 用户报「访客模式点＋选相册传参考图，报请从工作台上传参考图」。
+    根因是两层：5175 转发那侧 `__jf` 和访客头写成了 `elif`（互斥），访客拿不到
+    工作台标记；就算拿到了，这里 `_qq()` 也只认 QQ 号格式，访客会被判「参数不对」。
+
+    归属键沿用 `image.routes._guest_key()` 那套 `guest_<id>`——那是访客在工作台
+    的通用身份（聊天档位、生图额度都用它），两边必须同一个串，否则访客传的图
+    自己都读不回来。`visitor.current()` 自己会先验内部令牌再验签名，伪造的头
+    当没带，所以这里不另做鉴权。
+    """
+    qq = _qq()
+    if qq:
+        return qq
+    try:
+        from app.gateways import visitor
+        gid = (visitor.current() or {}).get("id") or ""
+    except Exception:                       # noqa: BLE001
+        gid = ""
+    return ("guest_" + gid) if gid else ""
+
+
 def _is_owner(qq):
     return bool(GALLERY_OWNER_QQ) and str(qq) == GALLERY_OWNER_QQ
 
@@ -1264,8 +1287,8 @@ def api_ref_upload():
         return bad
     if _local_trusted() or not _jf():
         return jsonify({"ok": False, "error": "请从工作台上传参考图"}), 403
-    qq = _qq()
-    if not qq:
+    owner = _ref_owner()
+    if not owner:
         return jsonify({"ok": False, "error": "参数不对"}), 400
     f = (request.files.getlist("file") or [None])[0]
     if not f or not f.filename:
@@ -1280,7 +1303,7 @@ def api_ref_upload():
     try:
         references.init()
         references.purge()
-        row = references.create(qq, f.filename, raw)
+        row = references.create(owner, f.filename, raw)
     except Exception:
         log.warning("私有参考图保存失败：%s", f.filename, exc_info=True)
         return jsonify({"ok": False, "error": "这张图保存失败，换一张试试"}), 500
@@ -1297,10 +1320,10 @@ def api_ref_read(ref_id):
         return bad
     if _local_trusted() or not _jf():
         return jsonify({"ok": False, "error": "请从工作台读取参考图"}), 403
-    qq = _qq()
-    if not qq:
+    owner = _ref_owner()
+    if not owner:
         return jsonify({"ok": False, "error": "参数不对"}), 400
-    path = _read_private_image(ref_id, qq)
+    path = _read_private_image(ref_id, owner)
     if not path:
         return jsonify({"ok": False, "error": "参考图不存在或已过期"}), 404
     return _img(path)
@@ -1314,14 +1337,14 @@ def api_ref_describe():
         return bad
     if _local_trusted() or not _jf():
         return jsonify({"ok": False, "error": "请从工作台识别参考图"}), 403
-    qq = _qq()
-    if not qq:
+    owner = _ref_owner()
+    if not owner:
         return jsonify({"ok": False, "error": "参数不对"}), 400
     data = request.get_json(silent=True) or {}
     ref_id = request.args.get("ref_id") or data.get("ref_id")
     if not references.valid_ref_id(ref_id):
         return jsonify({"ok": False, "error": "没指定参考图"}), 400
-    path = _read_private_image(ref_id, qq)
+    path = _read_private_image(ref_id, owner)
     if not path:
         return jsonify({"ok": False, "error": "参考图不存在或已过期"}), 404
     try:
@@ -1369,8 +1392,8 @@ def api_me():
 
 def _read_private_image_text(ref_id, prompt):
     """将所有者的有效私有参考图读成绘图描述；无权或过期返回空串。"""
-    qq = _qq()
-    path = _read_private_image(ref_id, qq) if qq else None
+    owner = _ref_owner()
+    path = _read_private_image(ref_id, owner) if owner else None
     if not path:
         return ""
     try:

@@ -134,6 +134,31 @@ class StreamForwardTest(unittest.TestCase):
         self.assertNotIn("qq", m.call_args.kwargs["params"],
                          "游客自己带的 qq 不能转出去冒充别人")
 
+    def test_workspace_guest_keeps_the_jf_mark(self):
+        """访客在工作台的请求，`__jf=1` 必须和访客头一起带上（2026-11-28）。
+
+        用户报「访客模式点＋选相册，传参考图说请从工作台上传参考图，而画廊
+        画同款是好的」。根因就在这里：`_forward` 里访客头和 `__jf` 原先写成
+        `elif`，访客一进来就被第一支吃掉，5174 的 `/api/gal/ref` 认不出「这是
+        工作台」。画廊画同款走的是另一批不查 `__jf` 的接口，所以只有上传坏。
+        """
+        raw = "guestAAA0001.9999999999.sig"
+        anon = friend_app.app.test_client()
+        anon.set_cookie(friend_app.GUEST_COOKIE, "1")
+        anon.set_cookie(friend_app.visitor.COOKIE_NAME, raw)
+        with patch.object(friend_app, "_visitor_id", return_value="guestAAA0001"):
+            with patch.object(self._sess, "get",
+                              return_value=_FakeResp(
+                                  body=b'{"ok": true}',
+                                  ctype="application/json")) as m:
+                r = anon.get("/api/gal/list")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(m.call_args.kwargs["params"].get("__jf"), "1",
+                         "访客请求同样要带工作台标记，否则私有参考图一律 403")
+        self.assertEqual(m.call_args.kwargs["headers"].get("X-Friend-Guest"), raw)
+        self.assertNotIn("qq", m.call_args.kwargs["params"],
+                         "访客不能顺带把某个 qq 冒充出去")
+
     def test_persona_cg_is_forwarded(self):
         """角色扮演的 CG 必须从 5175 转出去（2026-11-04）。
 
