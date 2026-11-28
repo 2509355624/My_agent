@@ -186,22 +186,10 @@
     for (var k = i - 2; k <= i + 2; k++) ensure(k);
   }
 
-  /* 衬底走 `w=240`（2026-11-28）：它铺满全屏，240 的图被浏览器双线性拉大
-     以后本身就是糊的 —— 观感和一次 blur 差不多，但不再对全屏位图跑高斯。
-     点开大图、左右切图那一下的卡顿就是这个滤镜。 */
-  function bedUrl(file) {
-    var u = "/api/gen/img?f=" + encodeURIComponent(file) + "&w=240";
-    var k = global.WSGen && global.WSGen.sign ? global.WSGen.sign() : "";
-    return k ? u + "&k=" + encodeURIComponent(k) : u;
-  }
-
-  function bedFor(file) {
-    if (!file || !n.bed) return;
-    /* 衬底用同一张图：模糊到只剩颜色块，左右空白立刻有内容。
-       地址带引号转义——file 里可能有空格或中文，直接拼进 url() 会坏。 */
-    var url = bedUrl(file).replace(/"/g, "%22");
-    n.bed.style.backgroundImage = 'url("' + url + '")';
-  }
+  /* 衬底不再跟着当前这张图变（2026-11-28）：用户要的是「统一纯色半透明
+     磨砂背景」，整块面板是 CSS 自己画的一块底，切图时这一层不用重绘、也
+     不用再去拉任何一张小图。函数留着是因为 `syncUI` 和 `open` 都还在调。 */
+  function bedFor() {}
 
   /* 滚动时别每帧都换衬底：模糊是一整层合成，跟着滚动换会抖。停手再换。 */
   function bedSoon() {
