@@ -179,8 +179,12 @@
 
   // ── 单本 ──────────────────────────────────────────────
 
-  function bookTop(mid, opts) {
-    mid.textContent = (opts && opts.title) || "漫画作品";
+  /* 2026-11-28 用户：手机屏就这么点大，单本页顶上再挂一行书名，图就被
+     挤短一截；这本书叫什么在作品列表里已经看过，翻页时也没人看它。
+     中段留空之后，`.vtop:has(> .vtitle:empty)` 那条规则会把 ✕ 和人形
+     分列左右两端——正好是用户要的「叉在左上、头像在右上」。 */
+  function bookTop(mid) {
+    mid.textContent = "";
   }
 
   function alive() {
