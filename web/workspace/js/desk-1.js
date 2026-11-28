@@ -133,12 +133,14 @@
     countEl.textContent = files.length ? String(files.length) : "";
     emptyEl.hidden = !!files.length;
 
-    /* 两列各自纵向排，交替分配。为什么不用 CSS grid 或 columns：
+    /* 三列各自纵向排，交替分配（右栏加宽到 520 之后放得下三列 158 宽的
+       格子；两列会把每格拉到 240，缩略图反而没多少信息量）。
+       为什么不用 CSS grid 或 columns：
        · grid 里图片撑不开行高（`aspect-ratio` 对 grid item 不成立，行高
          会压到 30px、格子互相叠起来）；
        · columns 在固定高度容器里会横向溢出（43 张排到 6800px 宽）。
-       两列 flex 没有这些问题，也是画廊那种瀑布观感。 */
-    var cols = [el("div", "desk-col"), el("div", "desk-col")];
+       三列 flex 没有这些问题，也是画廊那种瀑布观感。 */
+    var cols = [el("div", "desk-col"), el("div", "desk-col"), el("div", "desk-col")];
 
     for (var i = 0; i < files.length; i++) {
       var tile = el("button", "desk-tile");
@@ -151,11 +153,12 @@
       im.alt = "";
       im.src = thumbUrl(files[i]);
       tile.appendChild(im);
-      cols[i % 2].appendChild(tile);
+      cols[i % 3].appendChild(tile);
     }
 
     grid.appendChild(cols[0]);
     grid.appendChild(cols[1]);
+    grid.appendChild(cols[2]);
   }
 
   function refresh() {

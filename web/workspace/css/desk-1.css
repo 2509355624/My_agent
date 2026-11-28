@@ -36,23 +36,26 @@
 }
 
 /* 卡片宽度（chat.css 里写死 340）跟着屏幕一起放宽：主列变宽了图还是
-   340，右边就会空出一条。上限 460 —— 再宽竖图一屏就放不下，滚动反而累。 */
+   340，右边就会空出一条。
+   上限 540 不是随便定的：工作台的图基本是 2:3 竖图，540 宽就是 810 高，
+   加详情按钮约 860，正好塞进 1080p 的一屏（再宽就得上下各切一截才能
+   看完整张，翻起来反而累）。 */
 @media (min-width: 640px) {
-  .app.app-chat .card { width: min(100%, 460px); }
+  .app.app-chat .card { width: min(100%, 540px); }
 
-  /* 主列变宽以后，消息别再贴着左边跑：把内容区收在中间 466px（正好
-     一张 460 卡片的宽度，卡片铺满后自然居中）。
-     左边用户气泡靠右、右边 AI 卡片靠左的对话感不变。 */
+  /* 主列变宽以后，消息别再贴着左边跑：内容区收在中间 580px（卡片 540
+     + 两侧各 20），卡片铺满以后左右只留一条缝，不再是「一根细柱戳在
+     白板中间」。 */
   .app.app-chat .chat-scroll {
-    padding-left: max(16px, calc((100% - 466px) / 2));
-    padding-right: max(16px, calc((100% - 466px) / 2));
+    padding-left: max(16px, calc((100% - 580px) / 2));
+    padding-right: max(16px, calc((100% - 580px) / 2));
   }
 
-  /* 输入栏：照旧铺满主列底边，内容收在 640 居中，别让输入框一路顶到
-     两侧（那样看着像一条工具栏，不像输入框）。 */
+  /* 输入栏：照旧铺满主列底边，内容收在中间，别让输入框一路顶到两侧
+     （那样看着像一条工具栏，不像输入框）。 */
   .app.app-chat .composer {
-    padding-left: max(12px, calc((100% - 640px) / 2));
-    padding-right: max(12px, calc((100% - 640px) / 2));
+    padding-left: max(12px, calc((100% - 580px) / 2));
+    padding-right: max(12px, calc((100% - 580px) / 2));
   }
 }
 
@@ -60,7 +63,7 @@
   /* ── 整块贴合 ───────────────────────────────────────── */
   .app.app-chat {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 340px;
+    grid-template-columns: minmax(0, 1fr) 560px;
     gap: 0;
     width: 100%;
     max-width: none;          /* 铺满视口，宽出来的部分由内容区自己收 */
@@ -97,29 +100,57 @@
     background: var(--card);
   }
 
-  /* ── 去卡片：图直接铺在整块底上 ──────────────────────── */
+  /* ── 图卡：留框，但不要「飘在底上的卡片」 ────────────────
+     上一版把卡片的框也去干净了，图直接铺在白底上 —— 用户反馈「没有个
+     外框把图框起来，怪」。所以框留回来：1px 细边 + 小圆角 + 极浅的
+     1px 落地，不加厚阴影、不加 backdrop 模糊，滚动时才有对比可看。
+     整块贴合靠的是「没有间隙、没有外留白」，不是「没有框」。 */
   .app.app-chat .card {
-    padding: 0;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    box-shadow: none;
+    padding: 10px;
+    border: 1px solid var(--hair);
+    border-radius: 16px;
+    background: var(--card);
+    box-shadow: 0 1px 2px rgba(16, 24, 40, .05);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
     /* 视口外的卡片不参与布局和绘制。滚动几十张图时，这一条比省一点背景
        模糊更有用。`contain-intrinsic-size: auto` 会记住真实高度，滚动条
        不会因为估算值来回跳。 */
     content-visibility: auto;
-    contain-intrinsic-size: auto 520px;
+    contain-intrinsic-size: auto 900px;
   }
 
-  /* 输入栏同理：玻璃下面那层模糊每帧都要重算，滚动时是纯负担 */
+  /* 空状态卡（还没图、只剩一行状态字）不该跟着有框。`.card.is-idle` 在
+     chat.css 里本来就是无边透明，但上面那条选择器特异性更高，会把它盖
+     回去 —— 结果渲染成一条二十来像素高的空框，很难看。这里补回来。 */
+  .app.app-chat .card.is-idle {
+    width: auto;
+    max-width: min(100%, 540px);
+    padding: 2px 2px 6px;
+    border: 0;
+    border-radius: 14px;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  /* 输入栏：改成悬在底部中央的圆角条，不再是一条通栏白带。
+     通栏白带的问题跟主列一样 —— 内容只占中间一段，左右两截就是纯白，
+     看着像没做完。给它一个明确的边界，留白就变成「浮起来的东西外面那
+     圈空白」，是能接受的。
+     顺便：玻璃底下那层模糊也去掉，每帧重算，滚动时是纯负担。 */
   .app.app-chat .composer {
+    left: 50%;
+    right: auto;
+    bottom: 16px;
+    width: min(calc(100% - 96px), 860px);
+    transform: translateX(-50%);
+    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    background: var(--card);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
-    background: var(--card);
-    border-top: 1px solid var(--line);
-    box-shadow: none;
+    box-shadow: var(--shadow-2);
   }
 
   /* ── 右栏头 ─────────────────────────────────────────── */
