@@ -189,11 +189,63 @@ html.wsv-lock body { overflow: hidden; }
   object-fit: cover;
 }
 
-/* 手机端不用这个查看器（`shot.js` 的原地放大已经够用），
-   断点和 viewer-1.js 里的 MOBILE 常量保持一致。 */
-@media (max-width: 899px) {
-  #ws-viewer { display: none !important; }
+/* ── 手机形态（`is-mobile` 由 viewer-1.js 按 900px 判断挂上） ──────
+   之前这里用 `@media` 直接把整层 `display:none`，一旦 JS 的判断和媒体
+   查询差一点，就会出现「打开了但看不见」＝用户说的「点了没反应」。
+   现在形态只由 JS 的一个类决定，CSS 只负责长相，不会再互相打架。
+
+   手机上没有左右箭头，改成左右滑（手势在 viewer-1.js 里）；底部胶片条
+   照「我的漫画」那边留着，翻到第几张最直观。 */
+#ws-viewer.is-mobile .wsv-arrow { display: none; }
+
+/* 但窄窗口 + 鼠标（把桌面浏览器拖窄、或者平板接鼠标）没有「滑」这回事，
+   箭头得还回来，否则只能点胶片条。真触屏上不出现，跟漫画那边一致。 */
+@media (hover: hover) and (pointer: fine) {
+  #ws-viewer.is-mobile .wsv-arrow {
+    display: block;
+    width: 44px; height: 44px;
+    font-size: 20px;
+  }
+  #ws-viewer.is-mobile .wsv-prev { left: 10px; }
+  #ws-viewer.is-mobile .wsv-next { right: 10px; }
+  #ws-viewer.is-mobile .wsv-img { max-width: calc(100% - 96px); }
 }
+
+#ws-viewer.is-mobile .wsv-top {
+  height: auto;
+  min-height: 52px;
+  padding: env(safe-area-inset-top) 14px 0;
+}
+
+#ws-viewer.is-mobile .wsv-title { max-width: 58%; font-size: 12px; }
+#ws-viewer.is-mobile .wsv-count { font-size: 11px; }
+
+#ws-viewer.is-mobile .wsv-x {
+  width: 34px; height: 34px;
+  font-size: 16px;
+}
+
+/* 图的高度吃掉「顶条 + 胶片条 + 安全区」之后剩下的全部 */
+#ws-viewer.is-mobile .wsv-stage {
+  inset: calc(52px + env(safe-area-inset-top)) 8px
+         calc(84px + env(safe-area-inset-bottom));
+}
+
+#ws-viewer.is-mobile .wsv-img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 6px;
+}
+
+#ws-viewer.is-mobile .wsv-strip {
+  height: auto;
+  min-height: 84px;
+  justify-content: flex-start;
+  gap: 6px;
+  padding: 0 12px max(10px, env(safe-area-inset-bottom));
+}
+
+#ws-viewer.is-mobile .wsv-thumb { width: 46px; height: 46px; }
 
 /* 桌面端：鼠标移到结果图上给个「能点开」的信号。
    手机上不出现（`zoom-in` 只在桌面有意义）。 */

@@ -128,6 +128,36 @@
     root.appendChild(top);
     root.appendChild(stage);
     root.appendChild(n.strip);
+    /* 手机端左右滑翻页——参照「我的漫画」那边的手感（漫画 ctrack 横滑）。
+       这里不做 scroll-snap 的轨道：桌面端是单张 <img> 原地换 src，换成轨道
+       要重写整层；手势够用，也不用为两种形态各建一套 DOM。
+       横向位移要明显大于纵向才认，否则纵向滑动会被当翻页。 */
+    var swipe = { x: 0, y: 0, on: false };
+
+    root.addEventListener("touchstart", function (e) {
+      swipe.on = false;
+      if (!root.classList.contains("is-mobile")) return;
+      /* 胶片条自己会横滑，那上面左右拖是浏览缩略图，不是切页 */
+      if (e.target.closest && e.target.closest(".wsv-strip")) return;
+      var t = e.touches[0];
+      if (!t) return;
+      swipe.x = t.clientX;
+      swipe.y = t.clientY;
+      swipe.on = true;
+    }, { passive: true });
+
+    root.addEventListener("touchend", function (e) {
+      if (!swipe.on) return;
+      swipe.on = false;
+      var t = e.changedTouches[0];
+      if (!t) return;
+      var dx = t.clientX - swipe.x;
+      var dy = t.clientY - swipe.y;
+      if (Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+        go(dx < 0 ? 1 : -1);
+      }
+    }, { passive: true });
+
     /* 点空白处关掉：除了主图本身和任何按钮，别的地方都算空白。
        不写死「等于某个容器」——容器多一层少一层就会失效（这里之前就
        因为 stage 的引用没存下来，点空白完全没反应）。 */
@@ -207,13 +237,19 @@
   }
 
   function open(list, start) {
-    if (!isDesktop() || !list || !list.length) return;
+    if (!list || !list.length) return;
     if (!root) build();
     opened = true;
 
     shots = list.slice();
     files = shots.map(function (node) { return node.dataset.file; });
     at = Math.max(0, Math.min(start, files.length - 1));
+
+    /* 形态由 JS 判定、挂在类上，CSS 只管长相。
+       以前手机端是在 CSS 里 `display:none` 直接藏掉整层——一旦 JS 和
+       媒体查询的判断差一点（平板、微信内核、横屏），就会出现「打开了
+       但什么都看不见」，用户看到的就是「点了没反应」。 */
+    root.classList.toggle("is-mobile", !isDesktop());
 
     /* 先把层露出来，再建胶片条：藏在 `hidden` 里的元素 clientWidth 是 0，
        算「当前这张居中」时会得到错位置（第一次打开时实测没滚动）。 */
@@ -251,14 +287,13 @@
   }
 
   /* 捕获阶段拦掉 `.shot` 的点击：`shot.js` 在那张图上绑的是冒泡监听，
-     这里 stopPropagation 之后桌面端就不会再走 `toggleFull`，手机端
-     因为 `isDesktop()` 为假直接放行。 */
+     这里 stopPropagation 之后就不会再走 `toggleFull`（那套桌面端不要，
+     手机端也统一换成查看器，两边看到的是一样的东西）。 */
   document.addEventListener("click", function (e) {
     var t = e.target;
     if (!t || t.tagName !== "IMG" || !t.classList || !t.classList.contains("shot")) {
       return;
     }
-    if (!isDesktop()) return;
     var list = collect();
     var idx = list.indexOf(t);
     if (idx < 0) return;
