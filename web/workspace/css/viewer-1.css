@@ -1,0 +1,202 @@
+/* 桌面端图片查看器（M1 · 2026-11-28）——配合 js/viewer-1.js。
+   ─────────────────────────────────────────────────────────
+   只在这一层做样式，不碰 chat.css / gallery.css：查看器是浮在最上面的
+   独立层，跟底下哪一页没关系，将来画廊详情（M3）也能复用同一套。
+
+   配色不跟主题走：看图的时候周围越暗越好，深色底在亮色主题下同样
+   成立。所以这里写死深色，只有描边和图标用低透明白。
+*/
+
+#ws-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;                 /* 高于 sheet（9000 档），低于任何系统弹层 */
+  opacity: 0;
+  transition: opacity .18s ease;
+  color: #fff;
+  font-size: 14px;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: contain;
+}
+
+#ws-viewer.on { opacity: 1; }
+
+/* 打开时锁住背后的滚动，不然滚轮会带着聊天流一起动 */
+html.wsv-lock,
+html.wsv-lock body { overflow: hidden; }
+
+/* ── 衬底：当前这张图放大 + 模糊 + 压暗 ───────────────── */
+#ws-viewer .wsv-bed {
+  position: absolute;
+  inset: -12%;                   /* 模糊会把边缘啃掉，外扩一圈补上 */
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  filter: blur(44px) brightness(.72) saturate(1.25);
+  transform: scale(1.08);
+}
+
+/* 遮罩只压边缘、中间留亮——衬底要能看出颜色，否则跟纯黑底没区别，
+   用户抱怨的「左右一片空」等于没解决。 */
+#ws-viewer .wsv-scrim {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(118% 90% at 50% 44%,
+              rgba(8, 10, 14, .16) 0%,
+              rgba(8, 10, 14, .50) 54%,
+              rgba(8, 10, 14, .88) 100%);
+}
+
+/* ── 顶条：文件名 / 计数 / 关闭 ─────────────────────────── */
+#ws-viewer .wsv-top {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 22px;
+  pointer-events: none;          /* 顶条本身不挡点击，只有按钮可点 */
+}
+
+#ws-viewer .wsv-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 46%;
+  font-size: 13px;
+  letter-spacing: .02em;
+  color: rgba(255, 255, 255, .82);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#ws-viewer .wsv-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: rgba(255, 255, 255, .5);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
+}
+
+#ws-viewer .wsv-x {
+  pointer-events: auto;
+  flex: 0 0 auto;
+  width: 36px; height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .10);
+  color: #fff;
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .15s ease;
+}
+
+#ws-viewer .wsv-x:hover { background: rgba(255, 255, 255, .22); }
+
+/* ── 主图 ─────────────────────────────────────────────── */
+#ws-viewer .wsv-stage {
+  position: absolute;
+  inset: 54px 0 92px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#ws-viewer .wsv-img {
+  max-width: calc(100% - 168px);  /* 两侧各留 84px 给箭头 */
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, .55);
+  user-select: none;
+  transition: opacity .2s ease;
+}
+
+/* 图还没下来时压淡一点，免得一块高亮空白挂在屏幕中间 */
+#ws-viewer .wsv-img.is-loading { opacity: .28; }
+
+/* ── 左右箭头 ─────────────────────────────────────────── */
+#ws-viewer .wsv-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 52px; height: 52px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .10);
+  backdrop-filter: blur(10px);
+  color: #fff;
+  font-size: 25px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: .55;
+  transition: opacity .15s ease, background .15s ease;
+}
+
+#ws-viewer .wsv-arrow:hover { opacity: 1; background: rgba(255, 255, 255, .2); }
+
+#ws-viewer .wsv-prev { left: 18px; }
+#ws-viewer .wsv-next { right: 18px; }
+
+/* 只有一张图时箭头整个收起，不占视觉也不留一个点不动的空按钮 */
+#ws-viewer .wsv-arrow:disabled { opacity: 0; pointer-events: none; }
+
+/* ── 底部胶片条 ───────────────────────────────────────── */
+#ws-viewer .wsv-strip {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 92px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 张数多到溢出时 `center` 会把左端推到视口外、滚不到，
+     `safe` 让溢出时退化成靠左起排。老浏览器不认就退回上一行。 */
+  justify-content: safe center;
+  gap: 8px;
+  padding: 0 22px 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  /* 底部压一层暗，缩略图不会跟主图糊在一起 */
+  background: linear-gradient(to top, rgba(6, 8, 11, .55), rgba(6, 8, 11, 0));
+}
+
+#ws-viewer .wsv-strip::-webkit-scrollbar { display: none; }
+
+#ws-viewer .wsv-thumb {
+  flex: 0 0 auto;
+  width: 52px; height: 52px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #1c1f25;
+  cursor: pointer;
+  opacity: .45;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  transition: opacity .15s ease, outline-color .15s ease;
+}
+
+#ws-viewer .wsv-thumb:hover { opacity: .78; }
+#ws-viewer .wsv-thumb.on { opacity: 1; outline-color: rgba(255, 255, 255, .88); }
+
+#ws-viewer .wsv-thumb img {
+  display: block;
+  width: 100%; height: 100%;
+  object-fit: cover;
+}
+
+/* 手机端不用这个查看器（`shot.js` 的原地放大已经够用），
+   断点和 viewer-1.js 里的 MOBILE 常量保持一致。 */
+@media (max-width: 899px) {
+  #ws-viewer { display: none !important; }
+}
+
+/* 桌面端：鼠标移到结果图上给个「能点开」的信号。
+   手机上不出现（`zoom-in` 只在桌面有意义）。 */
+@media (min-width: 900px) {
+  .shot { cursor: zoom-in; }
+}
