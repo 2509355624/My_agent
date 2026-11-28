@@ -629,6 +629,63 @@ def my_cards_delete(cid):
     return jsonify({"ok": True, "id": cid})
 
 
+# 同一个人同时只允许一个生成在跑（2026-11-28）：2 万字输入 + 四五千字输出的
+# 单次调用要十几秒到一分钟，连点几下会排进好几个一样的调用，既白等也容易把
+# 中转站打到限流。中转站免费，所以**不做每日次数限制**，只挡这一层。
+_GEN_RUNNING = set()
+_GEN_LOCK = threading.Lock()
+
+
+@bp.route("/api/persona/card_from_text", methods=["POST"])
+def card_from_text_api():
+    """贴一段原文 → AI 生成一张自建角色卡 → **直接落库**（2026-11-28 用户拍板）。
+
+    为什么直接建卡而不是回草稿让前端填表：用户原话「创建完成之后自动保存，
+    后期我们也是可以在创建角色之后去对这个角色进行编辑的」。落库仍然走
+    `make_user_card`（权限、长度、重名、卡数上限一道不少），所以不是绕过校验。
+
+    入参：{text: 原文(≤2 万字，超了服务端自动截), who: 以谁为基准(必填)}
+    出参：{ok, card, markdown, truncated, note}
+    """
+    from app.features.persona import card_from_text as cft
+
+    who, deny = _member_only()
+    if deny is not None:
+        return deny
+    body = request.get_json(silent=True) or {}
+    text = str(body.get("text") or "")
+    target = str(body.get("who") or "").strip()[:40]
+    if not text.strip():
+        return jsonify({"ok": False, "error": "没贴原文"}), 400
+    if not target:
+        return jsonify({"ok": False,
+                        "error": "要填「以谁为基准」——原文里那个角色的名字"}), 400
+    with _GEN_LOCK:
+        if who in _GEN_RUNNING:
+            return jsonify({"ok": False,
+                            "error": "上一张还在生成，等它出来再试"}), 429
+        _GEN_RUNNING.add(who)
+    try:
+        with usage.scope("private_%s" % who):
+            card, err, meta = cft.generate(text, target)
+            if err:
+                return jsonify({"ok": False, "error": err}), 400
+            saved, err, renamed = cft.save(who, card)
+        if not saved:
+            return jsonify({"ok": False, "error": err or "建卡失败"}), 400
+        return jsonify({
+            "ok": True,
+            "card": _user_card_json(saved),
+            "markdown": cft.to_markdown(saved),
+            "truncated": bool(meta.get("truncated")),
+            "note": ("和你已有的卡重名，自动命名为「%s」" % saved.get("name")
+                     if renamed else ""),
+        })
+    finally:
+        with _GEN_LOCK:
+            _GEN_RUNNING.discard(who)
+
+
 def _card_by_id(cid, qq=""):
     """按 id 或名字找卡。
 

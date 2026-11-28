@@ -121,6 +121,26 @@
   .mcDel { color: #e57373; }
   .mcDel.armed { background: #e57373; color: #200a0a; }
   .mcErr { font-size: 12px; color: #e57373; margin: 6px 0; min-height: 16px; }
+  /* 从原文生成（2026-11-28）：折叠块，默认收着，不挤手动填表的位置 */
+  .mcFromText { margin: 2px 0 8px; font-size: 12px; color: var(--text-dim);
+    border-top: 1px dashed var(--border-soft); padding-top: 7px; }
+  .mcFromText > summary { cursor: pointer; padding: 3px 0; color: var(--accent); }
+  .mcFromText > summary span { color: var(--text-mute); }
+  .mcFT { margin-top: 5px; }
+  .mcFT textarea, .mcFT input { width: 100%; box-sizing: border-box;
+    background: var(--bg-input); color: var(--text);
+    border: 1px solid var(--border-soft); border-radius: var(--rs);
+    padding: 6px 8px; font: 13px/1.6 inherit; }
+  .mcFT textarea { font-size: 12px; resize: vertical; }
+  .mcFT textarea:focus, .mcFT input:focus { border-color: var(--accent); }
+  .mcFT .lab { margin: 7px 0 3px; font-size: 11px; color: var(--text-dim); }
+  .mcFT .lab i { font-style: normal; color: var(--text-mute); }
+  .mcFTgo { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .mcFTgo .cnt { flex: 1; font-size: 11px; color: var(--text-mute); }
+  .mcFTgo .cnt.over { color: #e0a24a; }
+  .mcFTst { margin-top: 6px; min-height: 15px; color: var(--text-mute); }
+  .mcFTst.bad { color: #e57373; }
+  .mcFTst.run { color: var(--accent); }
   /* 起点那行的问号 + 展开的说明（文案全从接口/配置来，前端只有样式） */
   .mcQ { width: 17px; height: 17px; margin-left: 5px; border-radius: 50%;
     border: 1px solid var(--border-soft); background: var(--bg-input);
@@ -1861,6 +1881,10 @@
     <p class="itIntro">只有你自己看得到。卡名和「她真正的名字」都不能和
       官方角色或你自己的角色重名。</p>
     <div id="mcBody" class="mcBody"></div>
+    <!-- 从原文生成（2026-11-28 用户要求）：整块放在字段表**外面**，因为
+         `mcRender` 每次都会把 `mcBody` 的 innerHTML 清空重画，放里面会被连根拔掉。
+         只在新建模式出现，编辑模式不显示（已经在改的卡不需要再生成一张）。 -->
+    <div id="mcFromText" class="mcFromText"></div>
     <div id="mcErr" class="mcErr"></div>
     <div class="mcFoot">
       <button class="btn mcDel" id="mcDel">删除</button>
@@ -2462,6 +2486,7 @@ async function openMyCard(c) {
   mcEditId = c && c.mine ? String(c.id) : "";
   $("mcTitle").textContent = mcEditId ? "编辑角色" : "新建角色";
   $("myCardMask").classList.add("on");
+  renderFromText(false);        // 先清掉上一次的残留（下面几个提前 return 的分支不会再清）
   let src = null;
   if (mcEditId) {
     $("mcBody").innerHTML = '<div style="font-size:12px;color:var(--text-mute)">' +
@@ -2495,6 +2520,8 @@ async function openMyCard(c) {
     } catch (e) { /* 拿不到上限也不挡新建，服务端还会判一次 */ }
   }
   mcRender(src);
+  // 只有新建模式给这条路：编辑模式是在改已有的一张，再生成一张没意义
+  renderFromText(!mcEditId);
 }
 
 function closeMyCard() {
@@ -2523,7 +2550,7 @@ function mcCollect() {
 }
 
 async function saveMyCard() {
-  if (mcBusy) return;
+  if (mcBusy || mcFTBusy) return;      // 生成还在跑时别让人再存一张空卡
   const body = mcCollect();
   if (!String(body.name || "").trim()) {
     $("mcErr").textContent = "卡名要填。";
@@ -2548,6 +2575,135 @@ async function saveMyCard() {
   } finally {
     mcBusy = false;
     $("mcSave").disabled = false;
+  }
+}
+
+// ── 从原文生成角色卡（2026-11-28 用户要求）──────────────────
+// 用户原话：「我加一个输入原文，AI 帮你自动创建……创建完成之后自动保存，
+// 后期我们也是可以在创建角色之后去对这个角色进行编辑的」。
+//
+// 所以这条路**不是**「回一份草稿填进表单让人确认」：后端一次生成整张卡并直接
+// 落库（走同一个 `make_user_card`，权限/长度/重名/卡数上限一道不少），前端只
+// 负责关弹窗、切到「自定义」栏、给一句结果。要改就之后点卡片编辑。
+//
+// 几个刻意的选择：
+//  · 折叠起来默认收着——它是个旁路，不该挤手动填表的位置；
+//  · 只在新建模式出现，编辑模式不显示（已经在改的那张不需要再生成一张）；
+//  · 字数只做提示不做拦截：超 2 万字服务端会截头留尾，这里提前说清楚；
+//  · 生成期间禁用按钮并把状态写在块里，因为一次要十几秒到一分钟。
+const MC_FT_MAX = 20000;     // 只用来提示；真正的截断在 `card_from_text.truncate_text`
+let mcFTBusy = false;
+
+function renderFromText(show) {
+  const box = $("mcFromText");
+  if (!box) return;
+  box.innerHTML = "";
+  box.style.display = show ? "" : "none";
+  if (!show) return;
+
+  const det = document.createElement("details");
+  const sum = document.createElement("summary");
+  sum.textContent = "从原文生成";
+  const hint = document.createElement("span");
+  hint.textContent = "　贴一段小说或同人短文，AI 照它写一张卡（2 万字以内）";
+  sum.appendChild(hint);
+  det.appendChild(sum);
+
+  const wrap = document.createElement("div");
+  wrap.className = "mcFT";
+
+  const l1 = document.createElement("div");
+  l1.className = "lab";
+  l1.textContent = "原文";
+  const ta = document.createElement("textarea");
+  ta.id = "mcFTtext";
+  ta.rows = 6;
+  ta.placeholder = "整段粘进来。开头有登场、结尾有情绪高点的，比只粘中间一段更准。";
+
+  const l2 = document.createElement("div");
+  l2.className = "lab";
+  l2.textContent = "以谁为基准";
+  const l2i = document.createElement("i");
+  l2i.textContent = "　必填：原文里要提取的那个角色";
+  l2.appendChild(l2i);
+  const who = document.createElement("input");
+  who.id = "mcFTwho";
+  who.type = "text";
+  who.maxLength = 40;
+  who.placeholder = "她的名字或称呼，例如「林晚」「隔壁的姐姐」";
+
+  const go = document.createElement("div");
+  go.className = "mcFTgo";
+  const cnt = document.createElement("span");
+  cnt.className = "cnt";
+  cnt.id = "mcFTcnt";
+  const btn = document.createElement("button");
+  btn.className = "btn pri";
+  btn.id = "mcFTgo";
+  btn.textContent = "生成并保存";
+  go.appendChild(cnt);
+  go.appendChild(btn);
+
+  const st = document.createElement("div");
+  st.className = "mcFTst";
+  st.id = "mcFTst";
+
+  wrap.appendChild(l1); wrap.appendChild(ta);
+  wrap.appendChild(l2); wrap.appendChild(who);
+  wrap.appendChild(go); wrap.appendChild(st);
+  det.appendChild(wrap);
+  box.appendChild(det);
+
+  const count = () => {
+    const n = ta.value.length;
+    if (!n) { cnt.textContent = ""; cnt.className = "cnt"; return; }
+    const over = n > MC_FT_MAX;
+    cnt.textContent = "已贴 " + n + " 字" +
+      (over ? "，超出部分会自动截掉（留头留尾）" : "");
+    cnt.className = over ? "cnt over" : "cnt";
+  };
+  ta.oninput = count;
+  count();
+  btn.onclick = runFromText;
+}
+
+async function runFromText() {
+  if (mcFTBusy) return;
+  const ta = $("mcFTtext"), who = $("mcFTwho");
+  const st = $("mcFTst"), btn = $("mcFTgo");
+  const text = String((ta && ta.value) || "").trim();
+  const target = String((who && who.value) || "").trim();
+  if (!st) return;
+  if (!text) {
+    st.className = "mcFTst bad";
+    st.textContent = "先把原文贴进去。";
+    return;
+  }
+  if (!target) {
+    st.className = "mcFTst bad";
+    st.textContent = "要填「以谁为基准」——不然不知道写的是谁。";
+    return;
+  }
+  mcFTBusy = true;
+  if (btn) { btn.disabled = true; btn.textContent = "正在读原文…"; }
+  st.className = "mcFTst run";
+  st.textContent = "正在读原文并写卡，两万字大概要半分钟到一分钟，别关这个窗口。";
+  try {
+    const d = await post("/api/persona/card_from_text", { text: text, who: target });
+    const nm = (d.card && d.card.name) || target;
+    closeMyCard();
+    CARD_TAB = "mine";
+    await loadCards();      // 坑：名单整块重画，这里不能再持有任何旧元素引用
+    let msg = "建好了：" + nm;
+    if (d.note) msg += "（" + d.note + "）";
+    if (d.truncated) msg += "。原文超了两万字，只用了开头和结尾";
+    toast(msg);
+  } catch (e) {
+    st.className = "mcFTst bad";
+    st.textContent = e.message || "生成失败";
+  } finally {
+    mcFTBusy = false;
+    if (btn) { btn.disabled = false; btn.textContent = "生成并保存"; }
   }
 }
 
