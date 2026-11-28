@@ -168,9 +168,13 @@
   padding: 10px;
   border: 1px solid var(--hair);
   border-radius: 20px 20px 20px 8px;
-  background: var(--glass-2);
-  -webkit-backdrop-filter: blur(14px) saturate(160%);
-  backdrop-filter: blur(14px) saturate(160%);
+  background: var(--card);
+  /* 2026-11-28 用户：「每一张卡片都要去渲染它的那一个背景吗……直接使用
+     那种默认的毛玻璃背景就行了」。卡片有几十张，每张都挂一层实时模糊，
+     滚动时每帧都要重算 —— 这是掉帧的最大来源。改成实色底，玻璃感只靠
+     边框和底色维持。 */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   box-shadow: var(--shadow-2);
   animation: ws-in .2s ease-out both;
 }

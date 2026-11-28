@@ -186,11 +186,21 @@
     for (var k = i - 2; k <= i + 2; k++) ensure(k);
   }
 
+  /* 衬底走 `w=480`（2026-11-28）：它会被 blur(44px) 糊到只剩色块，用 1MB
+     的原尺寸图去糊，等于每次切图都要对一张 1024×1536 的位图做一遍大半径
+     模糊 —— 点开大图、左右切换时那一下卡的就是它。480 宽的图糊出来的颜色
+     几乎看不出差别，成本降到零头。 */
+  function bedUrl(file) {
+    var u = "/api/gen/img?f=" + encodeURIComponent(file) + "&w=480";
+    var k = global.WSGen && global.WSGen.sign ? global.WSGen.sign() : "";
+    return k ? u + "&k=" + encodeURIComponent(k) : u;
+  }
+
   function bedFor(file) {
     if (!file || !n.bed) return;
     /* 衬底用同一张图：模糊到只剩颜色块，左右空白立刻有内容。
        地址带引号转义——file 里可能有空格或中文，直接拼进 url() 会坏。 */
-    var url = urlOf(file).replace(/"/g, "%22");
+    var url = bedUrl(file).replace(/"/g, "%22");
     n.bed.style.backgroundImage = 'url("' + url + '")';
   }
 

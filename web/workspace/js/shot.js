@@ -192,6 +192,22 @@
     })["catch"](fromNet);
   }
 
+  /* 聊天流里到底铺哪一档（2026-11-28）。
+
+     桌面宽屏的一张卡片是 540 宽，用 1MB 那档（长边 1024）等于把 1024×1536
+     的位图铺在 540 的位置上 —— 43 张解码完就是两三百 MB 纹理，滚动时显卡
+     一直在搬这些大图，看着就是「一抽一抽」。宽屏改用服务端 `w=640` 的缩略
+     档（一张二十来 KB、位图 640×960），铺 540 够用，纹理直接砍到四分之一。
+
+     注意：只换**显示**用的地址。下载和查看器仍然走 `FIT`（1m），见下面的
+     `pull` —— 别为了省解码把「点下载就存盘」变成等网络。 */
+  function chatSrc(file) {
+    if (global.innerWidth < 1180) return global.WSGen.img(file, FIT);
+    var u = "/api/gen/img?f=" + encodeURIComponent(file) + "&w=640";
+    var k = global.WSGen && global.WSGen.sign ? global.WSGen.sign() : "";
+    return k ? u + "&k=" + encodeURIComponent(k) : u;
+  }
+
   /* 聊天区里铺的是 **1MB 那一档**（2026-11-24 用户：「直接压到 1m 即可，
      不管什么图片，只要是工作台的，服务端压缩到 1m 再传过来」）。原图常有
      2~8MB，一张卡一张原图，恢复历史十几张就是几十 MB 全从这台机器往上走
@@ -206,11 +222,12 @@
     img.alt = "生成结果";
     img.loading = "lazy";
     img.decoding = "async";
-    img.src = global.WSGen.img(file, FIT);
+    img.src = chatSrc(file);
     img.dataset.file = file || "";
     img.className = "shot";
     img.addEventListener("click", function () { toggleFull(img); });
-    pull(global.WSGen.imgKey(file, FIT), img.src);
+    /* 显示用小档，缓存仍然存 1MB 那份：下载按钮和查看器都靠它命中。 */
+    pull(global.WSGen.imgKey(file, FIT), global.WSGen.img(file, FIT));
     return img;
   }
 

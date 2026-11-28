@@ -113,11 +113,11 @@
     box-shadow: 0 1px 2px rgba(16, 24, 40, .05);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
-    /* 视口外的卡片不参与布局和绘制。滚动几十张图时，这一条比省一点背景
-       模糊更有用。`contain-intrinsic-size: auto` 会记住真实高度，滚动条
-       不会因为估算值来回跳。 */
-    content-visibility: auto;
-    contain-intrinsic-size: auto 900px;
+    /* 这里以前挂过 `content-visibility: auto`，想法是「屏幕外的卡片不画」。
+       实际用下来它是新的卡顿源：每次有一张卡滚进视口，浏览器要现场把
+       1024 长边那张位图光栅化一遍，一抽一抽的正是这一下。Chrome 本来就
+       不会绘制视口外的内容，省不了多少，所以撤掉。 */
+    contain: layout style;
   }
 
   /* 空状态卡（还没图、只剩一行状态字）不该跟着有框。`.card.is-idle` 在

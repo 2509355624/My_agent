@@ -24,9 +24,12 @@
 .composer {
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--glass-line);
-  background: var(--glass);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  backdrop-filter: blur(24px) saturate(180%);
+  background: var(--card);
+  /* 2026-11-28 用户：「现在还是卡卡的……直接用一个固定的毛玻璃背景就行，
+     一种颜色用到底」。所以这里不再做实时背景模糊，改成实色底 —— 玻璃感
+     靠半透明色和一条分隔线维持，滚动时不再有逐帧的合成开销。 */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   box-shadow: 0 -10px 30px -18px rgba(16, 24, 40, .35);
 }
 
