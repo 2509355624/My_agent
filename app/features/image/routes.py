@@ -1124,16 +1124,16 @@ def _gallery_item_data(iid, qq):
     「画同款」交上来的就是这个 id——它不是上传进来的参考图，而是画廊里
     已经出好的那一张。权限判据全在 `gallery._read_image_data()` 里。
 
-    `full=bool(qq)`（2026-11-27 修）：**登录用户看得到的图就必须读得到**。
-    画廊列表带 `__jf=1`，工作台里把已隐藏 / 已下架的作品也放出来；可
-    `/api/gen/ask` 本身不带 `__jf=1`，`_full()` 为 False，同一张图在这里被
-    当「别人的隐藏图」拒掉 → 后端拿到 0 张图 → 静默按纯文字重画，出来的
-    东西跟原图毫无关系。用户报的「引用了这张，画出来完全不一样」就是这条。
-    访客没有 qq，仍按严格判据。
+    `full=True`（2026-11-27 用户最终拍板）：**引用就是引用，这里不判身份**。
+    可见性只在画廊列表判一次——访客看不到隐藏 / 下架，登录用户看到全部；
+    凡是页面上点得开、点得到「做同款」的图，就有权拿它反推生成。生图入口
+    再判一次访客 / 登录没有意义：列表里看得到、点得着，提交时却被挡回去，
+    出来的图只会跟原图无关（用户 21:59 / 22:01 两次报的就是这个）。
+    `/img`、`/describe` 这些**展示面**不传 `full`，仍按 `_full(qq)` 判。
     """
     try:
         from app.features.gallery import routes as gal
-        return gal._read_image_data(iid, qq, full=bool(qq))
+        return gal._read_image_data(iid, qq, full=True)
     except Exception:                                  # noqa: BLE001
         log.warning("工作台读作品图失败（id=%s）", iid, exc_info=True)
         return ""
