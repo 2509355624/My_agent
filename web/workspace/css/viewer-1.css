@@ -1,10 +1,13 @@
-/* 桌面端图片查看器（M1 · 2026-11-28）——配合 js/viewer-1.js。
+/* 桌面 + 手机图片查看器（M1 · 2026-11-28）——配合 js/viewer-1.js。
    ─────────────────────────────────────────────────────────
    只在这一层做样式，不碰 chat.css / gallery.css：查看器是浮在最上面的
    独立层，跟底下哪一页没关系，将来画廊详情（M3）也能复用同一套。
 
    配色不跟主题走：看图的时候周围越暗越好，深色底在亮色主题下同样
    成立。所以这里写死深色，只有描边和图标用低透明白。
+
+   主图区是「横向滚动轨道」（`.wsv-track`），每张一屏。这是手机端横滑
+   能跟手、又不会把返回手势带出来的关键：横滑由容器自己消费。
 */
 
 #ws-viewer {
@@ -57,6 +60,7 @@ html.wsv-lock body { overflow: hidden; }
   gap: 16px;
   padding: 0 22px;
   pointer-events: none;          /* 顶条本身不挡点击，只有按钮可点 */
+  z-index: 3;
 }
 
 #ws-viewer .wsv-title {
@@ -95,13 +99,37 @@ html.wsv-lock body { overflow: hidden; }
 
 #ws-viewer .wsv-x:hover { background: rgba(255, 255, 255, .22); }
 
-/* ── 主图 ─────────────────────────────────────────────── */
+/* ── 主图区：横向滚动轨道，每张一屏 ─────────────────────── */
 #ws-viewer .wsv-stage {
   position: absolute;
   inset: 54px 0 92px;
+}
+
+#ws-viewer .wsv-track {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  /* 这两条是「右滑别把页面退掉」的关键：滚动到尽头不再往上传，
+     横向手势明确归这个容器处理，浏览器不会认成返回手势。 */
+  overscroll-behavior-x: contain;
+  touch-action: pan-x;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+#ws-viewer .wsv-track::-webkit-scrollbar { display: none; }
+
+#ws-viewer .wsv-slide {
+  flex: 0 0 100%;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
+  scroll-snap-align: center;
+  scroll-snap-stop: always;      /* 一次只翻一格，别甩过头跳三张 */
 }
 
 #ws-viewer .wsv-img {
@@ -115,13 +143,14 @@ html.wsv-lock body { overflow: hidden; }
 }
 
 /* 图还没下来时压淡一点，免得一块高亮空白挂在屏幕中间 */
-#ws-viewer .wsv-img.is-loading { opacity: .28; }
+#ws-viewer .wsv-slide.is-loading .wsv-img { opacity: .28; }
 
 /* ── 左右箭头 ─────────────────────────────────────────── */
 #ws-viewer .wsv-arrow {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
+  z-index: 2;
   width: 52px; height: 52px;
   border: 0;
   border-radius: 50%;
@@ -140,7 +169,7 @@ html.wsv-lock body { overflow: hidden; }
 #ws-viewer .wsv-prev { left: 18px; }
 #ws-viewer .wsv-next { right: 18px; }
 
-/* 只有一张图时箭头整个收起，不占视觉也不留一个点不动的空按钮 */
+/* 到头了就把那颗箭头收起，不占视觉也不留一个点不动的空按钮 */
 #ws-viewer .wsv-arrow:disabled { opacity: 0; pointer-events: none; }
 
 /* ── 底部胶片条 ───────────────────────────────────────── */
@@ -159,6 +188,7 @@ html.wsv-lock body { overflow: hidden; }
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
+  z-index: 3;
   /* 底部压一层暗，缩略图不会跟主图糊在一起 */
   background: linear-gradient(to top, rgba(6, 8, 11, .55), rgba(6, 8, 11, 0));
 }
@@ -194,8 +224,8 @@ html.wsv-lock body { overflow: hidden; }
    查询差一点，就会出现「打开了但看不见」＝用户说的「点了没反应」。
    现在形态只由 JS 的一个类决定，CSS 只负责长相，不会再互相打架。
 
-   手机上没有左右箭头，改成左右滑（手势在 viewer-1.js 里）；底部胶片条
-   照「我的漫画」那边留着，翻到第几张最直观。 */
+   手机上没有左右箭头，改成横滑（轨道原生滚动）；底部胶片条照「我的
+   漫画」那边留着，翻到第几张最直观。 */
 #ws-viewer.is-mobile .wsv-arrow { display: none; }
 
 /* 但窄窗口 + 鼠标（把桌面浏览器拖窄、或者平板接鼠标）没有「滑」这回事，
@@ -208,7 +238,6 @@ html.wsv-lock body { overflow: hidden; }
   }
   #ws-viewer.is-mobile .wsv-prev { left: 10px; }
   #ws-viewer.is-mobile .wsv-next { right: 10px; }
-  #ws-viewer.is-mobile .wsv-img { max-width: calc(100% - 96px); }
 }
 
 #ws-viewer.is-mobile .wsv-top {

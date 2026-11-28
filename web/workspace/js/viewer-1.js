@@ -1,43 +1,53 @@
-/* 桌面端的图片查看器（M1 · 2026-11-28）
+/* 桌面 + 手机共用的图片查看器（M1 · 2026-11-28）
    ─────────────────────────────────────────────────────────
-   用户原话：「电脑端点开某一个图片的话，它其实左右有很大的一个空缺，
-   然后应该有一个换页的按钮……手机端它是直接完整的显示这个图片的」。
+   用户原话：「电脑端点开某一个图片的话，左右有很大的空缺，应该有换页
+   按钮……手机端点击放大之后也是这样的效果，其实类似于我的漫画那边」。
 
-   所以这里只管**桌面**（≥900px）。手机上依旧走 `shot.js` 的
-   `toggleFull`（原地放大），一行都不改——两套行为各有各的场景，不要
-   硬合成一套，手机端那套是能用的。
+   所以两端是同一个层、同一套 DOM，形态只由 `is-mobile` 一个类切换。
 
-   为什么要一个查看器而不是把图放大：
-     · 竖图在 2560 屏上放大后左右全是空的，且没法翻；
-     · 「这一套有几张、我看到的第几张」在聊天流里根本看不出来。
+   为什么是「横向滚动轨道」而不是「一个 <img> 换 src」：
+   第一版是单图换 src + 自己写的 touchstart/touchend 手势，实测手机上
+   往右滑会**直接把页面退掉**——因为横滑没有被页面里的某个容器消费，
+   浏览器/WebView 就把它当成系统的返回手势。换成 `overflow-x:auto`
+   的轨道（跟「我的漫画」的 `ctrack` 一个思路）之后，横滑就是容器自己
+   滚动，`overscroll-behavior-x: contain` + `touch-action: pan-x` 再把
+   滚动链掐断，返回手势不会被触发，手感也是跟手的惯性滑动。
 
-   结构四层（见 viewer-1.css）：
-     `wsv-bed`    当前这张图放大 / 模糊 / 压暗，铺满整屏当衬底，
-                  左右空白被同一张图的氛围填掉，不再是一片死白；
-     `wsv-img`    主图，等比 contain，≤ 78vh；
-     `wsv-arrow`  左右箭头，只有一张时自动隐藏；
-     `wsv-strip`  底部胶片条，当前那张描边高亮。
+   图不一次全建：43 张各 1MB，全插进 DOM 会同时解码几十张。只给当前
+   前后各两张插 <img>，滚到哪补哪（`ensure` / `prime`）。
 
-   交互：← → 切图、Esc 关闭、点背景关闭、点缩略图跳转。
-   图片地址一律走 `WSGen.img(file, WSShot.FIT)` —— 跟聊天流同一份
-   1MB 压缩档，浏览器 HTTP 缓存直接命中，不额外再拉原图。
+   结构四层（样式见 viewer-1.css）：
+     wsv-bed    当前这张放大 / 模糊 / 压暗，铺满整屏当衬底，填掉左右空白
+     wsv-track  横向滚动轨道，每张一屏，scroll-snap 对齐
+     wsv-arrow  左右箭头（桌面；手机隐藏改滑动手势，窄窗口+鼠标时还回来）
+     wsv-strip  底部胶片条，当前那张描边高亮、自动滚到中间
+
+   交互：← → 切图、Esc 关闭、点空白关闭、点缩略图跳转；手机横滑翻页。
+   图片地址一律走 `WSGen.img(file, WSShot.FIT)` —— 跟聊天流同一份 1MB
+   压缩档，浏览器 HTTP 缓存直接命中，不额外再拉原图。
 */
 (function (global) {
   "use strict";
 
-  /* 和 viewer-1.css 的 `@media (max-width: 899px)` 必须同一个数：
-     改一边忘另一边，就会出现「DOM 打开了但 CSS 把它藏了」的幽灵层。 */
+  /* 和 viewer-1.css 的 `.is-mobile` 断点必须同一个数 */
   var MOBILE = "(max-width: 899px)";
 
   var root = null;
-  var shots = [];        // 当前这一套的元素（按 DOM 顺序）
-  var files = [];        // 跟 shots 一一对应的 file
+  var track = null;
+  var slides = [];
+  var files = [];
   var at = 0;
   var opened = false;
-  var n = {};            // 缓存的节点引用
+  var n = {};
+  var scrollRaf = 0;
+  var bedTimer = 0;
 
   function isDesktop() {
     return !global.matchMedia(MOBILE).matches;
+  }
+
+  function clamp(i) {
+    return Math.max(0, Math.min(i, files.length - 1));
   }
 
   function urlOf(file) {
@@ -94,6 +104,11 @@
 
     var stage = el("div", "wsv-stage");
     n.stage = stage;
+
+    track = el("div", "wsv-track");
+    n.track = track;
+    track.addEventListener("scroll", onScroll, { passive: true });
+
     n.prev = el("button", "wsv-arrow wsv-prev");
     n.next = el("button", "wsv-arrow wsv-next");
     n.prev.type = "button";
@@ -105,20 +120,8 @@
     n.prev.onclick = function (e) { e.stopPropagation(); go(-1); };
     n.next.onclick = function (e) { e.stopPropagation(); go(1); };
 
-    n.img = el("img", "wsv-img");
-    n.img.alt = "生成结果";
-    n.img.draggable = false;
-    n.img.addEventListener("load", function () {
-      n.img.classList.remove("is-loading");
-    });
-    /* 图取不到（签名过期 / 文件挪走）时也要把半透明去掉，否则它一直像
-       「还在加载」，比直接露出一张破图更让人迷惑。 */
-    n.img.addEventListener("error", function () {
-      n.img.classList.remove("is-loading");
-    });
-
+    stage.appendChild(track);
     stage.appendChild(n.prev);
-    stage.appendChild(n.img);
     stage.appendChild(n.next);
 
     n.strip = el("div", "wsv-strip");
@@ -128,90 +131,79 @@
     root.appendChild(top);
     root.appendChild(stage);
     root.appendChild(n.strip);
-    /* 手机端左右滑翻页——参照「我的漫画」那边的手感（漫画 ctrack 横滑）。
-       这里不做 scroll-snap 的轨道：桌面端是单张 <img> 原地换 src，换成轨道
-       要重写整层；手势够用，也不用为两种形态各建一套 DOM。
-       横向位移要明显大于纵向才认，否则纵向滑动会被当翻页。 */
-    var swipe = { x: 0, y: 0, on: false };
-
-    root.addEventListener("touchstart", function (e) {
-      swipe.on = false;
-      if (!root.classList.contains("is-mobile")) return;
-      /* 胶片条自己会横滑，那上面左右拖是浏览缩略图，不是切页 */
-      if (e.target.closest && e.target.closest(".wsv-strip")) return;
-      var t = e.touches[0];
-      if (!t) return;
-      swipe.x = t.clientX;
-      swipe.y = t.clientY;
-      swipe.on = true;
-    }, { passive: true });
-
-    root.addEventListener("touchend", function (e) {
-      if (!swipe.on) return;
-      swipe.on = false;
-      var t = e.changedTouches[0];
-      if (!t) return;
-      var dx = t.clientX - swipe.x;
-      var dy = t.clientY - swipe.y;
-      if (Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.4) {
-        go(dx < 0 ? 1 : -1);
-      }
-    }, { passive: true });
 
     /* 点空白处关掉：除了主图本身和任何按钮，别的地方都算空白。
        不写死「等于某个容器」——容器多一层少一层就会失效（这里之前就
        因为 stage 的引用没存下来，点空白完全没反应）。 */
     root.addEventListener("click", function (e) {
-      if (e.target === n.img) return;
       if (e.target.closest && e.target.closest("button")) return;
+      if (e.target.tagName === "IMG") return;   // 点图本身不关，方便看细节
+      if (e.target === track) return;           // 轨道空白也一样
       close();
     });
+
     document.body.appendChild(root);
   }
 
-  /* 胶片条只在打开时建一次：同一套的缩略图，地址跟聊天流完全一致，
-     浏览器缓存里已经有了，不会因为开个查看器再下一遍。 */
-  function buildStrip() {
-    n.strip.innerHTML = "";
+  /* 轨道里只建空的一屏一屏，图按需插进去。 */
+  function buildSlides() {
+    track.innerHTML = "";
+    slides = [];
     for (var i = 0; i < files.length; i++) {
-      var b = el("button", "wsv-thumb");
-      b.type = "button";
-      b.dataset.idx = String(i);
-      b.setAttribute("aria-label", "第 " + (i + 1) + " 张");
-      var im = el("img");
-      im.src = urlOf(files[i]);
-      im.loading = "lazy";
-      im.alt = "";
-      b.appendChild(im);
-      b.onclick = function (e) {
-        e.stopPropagation();
-        at = parseInt(this.dataset.idx, 10) || 0;
-        show();
-      };
-      n.strip.appendChild(b);
+      var s = el("div", "wsv-slide");
+      s.dataset.idx = String(i);
+      track.appendChild(s);
+      slides.push(s);
     }
   }
 
-  function show() {
-    var file = files[at];
-    if (!file) return;
-    var url = urlOf(file);
+  function ensure(i) {
+    if (i < 0 || i >= slides.length) return;
+    var s = slides[i];
+    if (s.dataset.on === "1") return;
+    s.dataset.on = "1";
+    s.classList.add("is-loading");
 
+    var img = document.createElement("img");
+    img.className = "wsv-img";
+    img.alt = "第 " + (i + 1) + " 张：" + nameOf(files[i]);
+    img.decoding = "async";
+    img.draggable = false;
+    img.addEventListener("load", function () {
+      s.classList.remove("is-loading");
+    });
+    /* 图取不到（签名过期 / 文件挪走）时也要把半透明去掉，否则它一直像
+       「还在加载」，比直接露出一张破图更让人迷惑。 */
+    img.addEventListener("error", function () {
+      s.classList.remove("is-loading");
+    });
+    s.appendChild(img);
+    img.src = urlOf(files[i]);
+  }
+
+  /* 当前前后各两张：微信里先出的就是眼前这张，再往外滑立刻有货。 */
+  function prime(i) {
+    for (var k = i - 2; k <= i + 2; k++) ensure(k);
+  }
+
+  function bedFor(file) {
+    if (!file || !n.bed) return;
     /* 衬底用同一张图：模糊到只剩颜色块，左右空白立刻有内容。
        地址带引号转义——file 里可能有空格或中文，直接拼进 url() 会坏。 */
-    n.bed.style.backgroundImage = 'url("' + url.replace(/"/g, "%22") + '")';
-    /* 同一张地址聊天流里已经加载过，正常是缓存秒开；只有刚出图、缩略图
-       还没落在缓存里时才会慢半拍，这时候先把主图压淡，别让一块空白顶着。 */
-    n.img.classList.add("is-loading");
-    n.img.src = url;
-    n.title.textContent = nameOf(file);
-    n.title.title = nameOf(file);
-    n.count.textContent = (at + 1) + " / " + files.length;
+    var url = urlOf(file).replace(/"/g, "%22");
+    n.bed.style.backgroundImage = 'url("' + url + '")';
+  }
 
-    var solo = files.length < 2;
-    n.prev.disabled = solo;
-    n.next.disabled = solo;
+  /* 滚动时别每帧都换衬底：模糊是一整层合成，跟着滚动换会抖。停手再换。 */
+  function bedSoon() {
+    if (bedTimer) global.clearTimeout(bedTimer);
+    bedTimer = global.setTimeout(function () {
+      bedTimer = 0;
+      bedFor(files[at]);
+    }, 130);
+  }
 
+  function syncStrip() {
     var thumbs = n.strip.children;
     for (var i = 0; i < thumbs.length; i++) {
       thumbs[i].classList.toggle("on", i === at);
@@ -226,24 +218,78 @@
     }
   }
 
-  /* 预取左右各一张，按下方向键时不用等下载。 */
-  function prefetch() {
-    [at - 1, at + 1].forEach(function (i) {
-      if (files[i]) {
-        var probe = new global.Image();
-        probe.src = urlOf(files[i]);
-      }
+  function syncUI() {
+    var file = files[at];
+    var label = nameOf(file);
+    n.title.textContent = label;
+    n.title.title = label;
+    n.count.textContent = (at + 1) + " / " + files.length;
+    n.prev.disabled = at <= 0;
+    n.next.disabled = at >= files.length - 1;
+    syncStrip();
+    bedSoon();
+  }
+
+  function buildStrip() {
+    n.strip.innerHTML = "";
+    for (var i = 0; i < files.length; i++) {
+      var b = el("button", "wsv-thumb");
+      b.type = "button";
+      b.dataset.idx = String(i);
+      b.setAttribute("aria-label", "第 " + (i + 1) + " 张");
+      var im = el("img");
+      im.src = urlOf(files[i]);
+      im.loading = "lazy";
+      im.alt = "";
+      b.appendChild(im);
+      b.onclick = function (e) {
+        e.stopPropagation();
+        jump(parseInt(this.dataset.idx, 10) || 0);
+      };
+      n.strip.appendChild(b);
+    }
+  }
+
+  function onScroll() {
+    if (!track || scrollRaf) return;
+    scrollRaf = global.requestAnimationFrame(function () {
+      scrollRaf = 0;
+      var w = track.clientWidth || 1;
+      var i = clamp(Math.round(track.scrollLeft / w));
+      if (i === at) return;
+      at = i;
+      syncUI();
+      prime(i);
     });
   }
+
+  /* 跳到某一张：靠容器滚动，而不是重建节点，图不会闪。 */
+  function jump(i) {
+    var target = clamp(i);
+    if (!track) return;
+    var left = target * track.clientWidth;
+    if (track.scrollTo) {
+      var smooth = Math.abs(target - at) === 1;
+      track.scrollTo({ left: left, behavior: smooth ? "smooth" : "auto" });
+    } else {
+      track.scrollLeft = left;
+    }
+    /* smooth 滚动期间 scroll 事件要过半才更新计数，这里先对齐一次，
+       让标题 / 计数立刻跟上手指。 */
+    at = target;
+    syncUI();
+    prime(target);
+  }
+
+  function go(step) { jump(at + step); }
 
   function open(list, start) {
     if (!list || !list.length) return;
     if (!root) build();
     opened = true;
 
-    shots = list.slice();
-    files = shots.map(function (node) { return node.dataset.file; });
-    at = Math.max(0, Math.min(start, files.length - 1));
+    files = list.map(function (node) { return node.dataset.file; });
+    at = clamp(start);
 
     /* 形态由 JS 判定、挂在类上，CSS 只管长相。
        以前手机端是在 CSS 里 `display:none` 直接藏掉整层——一旦 JS 和
@@ -251,17 +297,20 @@
        但什么都看不见」，用户看到的就是「点了没反应」。 */
     root.classList.toggle("is-mobile", !isDesktop());
 
-    /* 先把层露出来，再建胶片条：藏在 `hidden` 里的元素 clientWidth 是 0，
-       算「当前这张居中」时会得到错位置（第一次打开时实测没滚动）。 */
+    /* 先把层露出来，再建轨道：藏在 `hidden` 里的元素 clientWidth 是 0，
+       摆位置和算「当前这张居中」都会错（第一版实测就是没滚动）。 */
     root.hidden = false;
+    buildSlides();
     buildStrip();
-    show();
-    prefetch();
+    prime(at);
+
+    void track.offsetWidth;                 // 让刚插进去的一屏屏先拿到宽度
+    track.scrollLeft = at * track.clientWidth;
+
+    syncUI();
+    bedFor(files[at]);
 
     document.documentElement.classList.add("wsv-lock");
-    /* 读一次布局，把 `display:none → block` 和「加 .on」挤进不同帧，
-       否则透明度过渡在部分浏览器上会直接跳过、变成硬切。 */
-    void root.offsetHeight;
     root.focus({ preventScroll: true });
     global.requestAnimationFrame(function () {
       if (opened) root.classList.add("on");
@@ -279,16 +328,9 @@
     }, 180);
   }
 
-  function go(step) {
-    if (!files.length) return;
-    at = (at + step + files.length) % files.length;
-    show();
-    prefetch();
-  }
-
   /* 捕获阶段拦掉 `.shot` 的点击：`shot.js` 在那张图上绑的是冒泡监听，
      这里 stopPropagation 之后就不会再走 `toggleFull`（那套桌面端不要，
-     手机端也统一换成查看器，两边看到的是一样的东西）。 */
+     手机端也统一换成查看器，两边看到的是同一套东西）。 */
   document.addEventListener("click", function (e) {
     var t = e.target;
     if (!t || t.tagName !== "IMG" || !t.classList || !t.classList.contains("shot")) {
@@ -309,5 +351,12 @@
     if (e.key === "ArrowRight") { e.preventDefault(); go(1); }
   });
 
-  global.WSViewer = { open: open, close: close, go: go };
+  /* 手机地址栏收起/展开、横竖屏一切换，每屏宽度就变了，轨道位置要重量；
+     否则会出现「明明在第 5 张，屏幕上是第 4 和第 5 张的缝」。 */
+  global.addEventListener("resize", function () {
+    if (!opened || !track) return;
+    track.scrollLeft = at * track.clientWidth;
+  });
+
+  global.WSViewer = { open: open, close: close, go: go, jump: jump };
 })(window);
