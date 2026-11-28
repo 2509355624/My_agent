@@ -378,6 +378,29 @@
     height: auto;
     aspect-ratio: 2 / 3;
   }
+
+  /* 空态（「还没有漫画作品…」）以前只占网格第一格：200px 宽，第二行从
+     「剧 / 情」中间断开，整段缩在左上角（用户 2026-11-28 截图）。
+     现在跨满整行、自己居中；宽度收到 20em —— 26em 时最后剩一个「里」字
+     单独一行，20em 正好切成 20 + 8。 */
+  .cnote {
+    grid-column: 1 / -1;
+    justify-self: center;
+    max-width: 32em;
+    margin: 10vh 0 0;
+    /* 两行时让浏览器把字数分匀（28 字 → 14 + 14），不然会断在
+       「我跑 / 完就出现在这里」这种半个词中间 */
+    text-wrap: balance;
+  }
+
+  /* 红字提醒跟着文字收：铺满 1677 的一条红带比这句话本身还长 */
+  .cwarn {
+    width: fit-content;
+    max-width: 100%;
+    margin: 0 auto 16px;
+  }
+
+  .cbody { padding: 16px 24px 32px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
