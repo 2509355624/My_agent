@@ -186,12 +186,11 @@
     for (var k = i - 2; k <= i + 2; k++) ensure(k);
   }
 
-  /* 衬底走 `w=480`（2026-11-28）：它会被 blur(44px) 糊到只剩色块，用 1MB
-     的原尺寸图去糊，等于每次切图都要对一张 1024×1536 的位图做一遍大半径
-     模糊 —— 点开大图、左右切换时那一下卡的就是它。480 宽的图糊出来的颜色
-     几乎看不出差别，成本降到零头。 */
+  /* 衬底走 `w=240`（2026-11-28）：它铺满全屏，240 的图被浏览器双线性拉大
+     以后本身就是糊的 —— 观感和一次 blur 差不多，但不再对全屏位图跑高斯。
+     点开大图、左右切图那一下的卡顿就是这个滤镜。 */
   function bedUrl(file) {
-    var u = "/api/gen/img?f=" + encodeURIComponent(file) + "&w=480";
+    var u = "/api/gen/img?f=" + encodeURIComponent(file) + "&w=240";
     var k = global.WSGen && global.WSGen.sign ? global.WSGen.sign() : "";
     return k ? u + "&k=" + encodeURIComponent(k) : u;
   }

@@ -191,8 +191,8 @@ body.g-lock { overflow: hidden; }
   display: flex;
   flex-direction: column;
   background: rgba(14, 18, 26, .78);
-  -webkit-backdrop-filter: blur(12px) saturate(140%);
-  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .gviewer[hidden] { display: none; }

@@ -54,8 +54,8 @@
   padding-top: calc(8px + env(safe-area-inset-top));
   border-bottom: 1px solid var(--hair);
   background: var(--glass);
-  -webkit-backdrop-filter: blur(18px) saturate(170%);
-  backdrop-filter: blur(18px) saturate(170%);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   /* 2026-11-26 用户：「这个我的，头顶那个我的，它不是放在中间的」。
      标题原来靠 flex 的 `flex:1 + text-align:center` 居中，那是**在两个兄弟
      等宽时才成立**：左 ✕ 和右人形都是 38px，本来该齐，可这页的标题不是建页
@@ -186,8 +186,8 @@
   background: var(--glass-2);
   border: 1px solid var(--glass-line);
   box-shadow: var(--shadow-1);
-  -webkit-backdrop-filter: blur(12px) saturate(150%);
-  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .view-float > .vbody {
@@ -281,8 +281,8 @@
   position: absolute;
   inset: 0;
   background: rgba(16, 24, 40, .3);
-  -webkit-backdrop-filter: blur(3px);
-  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   opacity: 0;
   transition: opacity .2s;
 }
@@ -301,8 +301,8 @@
   border-bottom: 0;
   border-radius: 24px 24px 0 0;
   background: var(--glass-2);
-  -webkit-backdrop-filter: blur(28px) saturate(180%);
-  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   box-shadow: var(--shadow-3);
   transform: translateY(100%);
   transition: transform .26s cubic-bezier(.32, .72, 0, 1);

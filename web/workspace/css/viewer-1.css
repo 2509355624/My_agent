@@ -28,15 +28,20 @@
 html.wsv-lock,
 html.wsv-lock body { overflow: hidden; }
 
-/* ── 衬底：当前这张图放大 + 模糊 + 压暗 ───────────────── */
+/* ── 衬底：当前这张图放大 + 压暗 ─────────────────────────
+   2026-11-28 用户：「我不要模糊背景了」。所以这里不再对整屏做 blur(44px)
+   —— 那是每次换图都要对一张全屏位图跑一遍大半径高斯，点开大图、左右切
+   图时卡的就是它。
+
+   改成拿 `w=240` 的小图铺满：240 的图放大到全屏，浏览器做的是最便宜的双
+   线性拉伸，出来的观感就是糊的，但零滤镜开销。 */
 #ws-viewer .wsv-bed {
   position: absolute;
-  inset: -12%;                   /* 模糊会把边缘啃掉，外扩一圈补上 */
+  inset: 0;
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
-  filter: blur(44px) brightness(.72) saturate(1.25);
-  transform: scale(1.08);
+  filter: brightness(.72) saturate(1.25);
 }
 
 /* 遮罩只压边缘、中间留亮——衬底要能看出颜色，否则跟纯黑底没区别，
@@ -155,7 +160,7 @@ html.wsv-lock body { overflow: hidden; }
   border: 0;
   border-radius: 50%;
   background: rgba(255, 255, 255, .10);
-  backdrop-filter: blur(10px);
+  backdrop-filter: none;
   color: #fff;
   font-size: 25px;
   line-height: 1;
