@@ -480,6 +480,27 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    # 不登记的话 `_STYLE_RE` 会把 `2s` 啃掉，正文里剩个 `-2s`。
                    "anima2s": "anima-2s",
                    "anima-2s": "anima-2s",
+                   # 2026-11-28 用户新增三条「二」渠道（`anima-clear-2` /
+                   # `anima-soft-2` / `anima-gloss-2`）：把各自原渠道里用到
+                   # Realskin **1.3B** 的那一段换成 2.9B
+                   # (`miaomiaoRealskin_anima29B10`)，其余参数一字不动
+                   # （clear 两段都换 / soft 只换一段 / gloss 只换精修段）。
+                   # 点名词是**中文「二」、不带杠**——用户原话「不要加杠二……
+                   # 大大怪那边他是通过指令直接去说的，他有可能说 Clear 二」。
+                   # ⚠️ `_fixed_chan` 会 `re.sub(r"\s+","")` 再 lower，所以键写成
+                   #    去空格形态：`anima clear 二` → `animaclear二`。
+                   # ⚠️ 前缀写法与裸写法都收——群里有人只说「soft 二」。
+                   # ⚠️ id 本身也登记，理由同上面那批连字符 id（不然 `-2` 会被
+                   #    `_SKILL_ID_RE` 之外的东西啃掉，正文里剩个 `-2`）。
+                   "animaclear二": "anima-clear-2",
+                   "clear二": "anima-clear-2",
+                   "animasoft二": "anima-soft-2",
+                   "soft二": "anima-soft-2",
+                   "animagloss二": "anima-gloss-2",
+                   "gloss二": "anima-gloss-2",
+                   "anima-clear-2": "anima-clear-2",
+                   "anima-soft-2": "anima-soft-2",
+                   "anima-gloss-2": "anima-gloss-2",
                    # 2026-11-13 ANIMA 随心配（随机配）：双模型两段，底模从 anima
                    # 池随机选 2 个（可重复）、画风 LoRA 随机选 5 个（不重复）、
                    # 角色卡第 6 槽。点名词「随心配」/「ANIMA随心配」都认。
@@ -586,6 +607,22 @@ _FIXED_CHAN_RE = re.compile(
     # ⚠️ 必须排在裸 `anima` 档位词前面（本正则本来就先于 `_TIER_RE` 尝试，
     #    排在组内哪个位置不影响，但别把它挪到 `_TIER_RE` 之后）。
     r"|anima\s*2s|anima-2s"
+    # 2026-11-28 新增三条「二」渠道（`anima-clear-2` / `anima-soft-2` /
+    # `anima-gloss-2`）：各自原渠道里用到 Realskin 1.3B 的那一段换成
+    # Realskin 2.9B，参数一字不动。点名词是**中文「二」、不带杠**（用户原话
+    # 「不要加杠二……他有可能说 Clear 二」）。
+    # ⚠️ 带 `anima` 前缀的长写法必须写在本组里、并且排在裸画风词那三个分支
+    #    前面（组内左优先）：否则「anima clear 二」的 `anima` 会被 `_TIER_RE`
+    #    当档位词、`clear` 被 `_STYLE_RE` 当画风词，拼成 `hd_3_clear`。
+    # ⚠️ 尾巴 `(?![档])` 留给「clear 二档」——二档是已取消的旧档位词
+    #    （`_TIER_MAP` 仍映射到三档），不能把它中间的「二」字吃掉。
+    r"|anima\s*clear\s*二|anima\s*soft\s*二|anima\s*gloss\s*二"
+    r"|clear\s*二(?![档])|soft\s*二(?![档])|gloss\s*二(?![档])"
+    # 同上三条的 **id 原名**（`anima-clear-2` 等）。必须写进本正则：① 开头
+    # `_FIXED_CHAN_RE.match(lead)` 就能锁住，不依赖 `_allowed_skills()` 那份
+    # 白名单（白名单来自模块级 `_CHANNELS` 常量，新建渠道不重启认不到——
+    # 实测「anima-clear-2 一个女孩」会掉到 hd_3_clear）。
+    r"|anima-clear-2|anima-soft-2|anima-gloss-2"
     # 2026-11-13 ANIMA 随心配（随机配）。两种写法都登记：`anima\s*随心配` 管
     # 「anima 随心配 / anima随心配」，裸 `随心配` 管不带前缀的。⚠️ 必须排在裸
     # `anima` 档位词（`_TIER_RE`）前面——「anima 随心配」里的 `anima` 会被当

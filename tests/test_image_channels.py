@@ -1775,7 +1775,10 @@ class ToolDescriptionBudgetTest(unittest.TestCase):
         # `anima_clear/curvy/gloss/soft` 2026-11-06 从归档放回、`sf` /
         # `semi-thick` / `rs29` 陆续进来，这条上限一直没跟着抬（不是本次才超的）。
         # 再往上加渠道时，先看是不是又漏抬了。
-        self.assertLess(len(param), 640,
+        # **2026-11-28：上限 640 → 700。** 新增三条「二」渠道
+        # （`anima-clear-2` / `anima-soft-2` / `anima-gloss-2`，用户点词
+        # 「Clear 二 / Soft 二 / Gloss 二」），清单各自 +14 字，当前 **671**。
+        self.assertLess(len(param), 700,
                         "skill 参数又涨回 %d 字（精简前是 947）" % len(param))
         # 至少别把四个画风全名逐一抄一遍
         for ch in ("hd_3_soft", "hd_3_gloss", "hd_3_curvy"):

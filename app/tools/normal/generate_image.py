@@ -1538,8 +1538,10 @@ def _skill_param_desc():
     if any(c.startswith("hd_3_") for c in _CHANNELS):
         parts.append("说「anima」「三档」→ `hd_3_<画风>`。")
     if {"anima-line", "anima-2s", "anima-real", "anima-guizhencao",
-            "anima-flesh"} <= set(_CHANNELS):
-        parts.append("⚠️「anima线条 / anima 2s / 写实 / 鬼针草 / 肉感」= 五个独立渠道，"
+            "anima-flesh", "anima-clear-2", "anima-soft-2",
+            "anima-gloss-2"} <= set(_CHANNELS):
+        parts.append("⚠️「anima线条 / anima 2s / 写实 / 鬼针草 / 肉感 / Clear 二 / "
+                     "Soft 二 / Gloss 二」= 八个独立渠道，"
                      "**别拆成 anima + 画风**。")
     parts.append("**只在用户点名画风 / 尺寸 / 渠道时才传**；"
                  "分不清照 Available Skills 摘要选。")
@@ -1577,6 +1579,14 @@ tool = {
                   "`anima-2s`（「anima 2s」，同配方换 2.9B 底模、15+10 步、两段 er_sde）/ "
                   "`anima-real`（「anima写实」）/ `anima-guizhencao`（「anima鬼针草」）/ "
                   "`anima-flesh`（「anima肉感」，皮肤质感最重）。"
+                  "- **2026-11-28 又添三条换底模的「二」渠道**："
+                  "`anima-clear-2`（「**Clear 二**」）/ `anima-soft-2`（「**Soft 二**」）/ "
+                  "`anima-gloss-2`（「**Gloss 二**」）——各自原渠道里用到 Realskin "
+                  "1.3B 的那一段换成 2.9B（`miaomiaoRealskin_anima29B10`），其余"
+                  "（728×1024 / 768×1024、10+5 步、cfg 5~6、LoRA 0.5+1.0）一字不动。"
+                  "⚠️ 这里的「二」是**第二代**，不是二档；只在用户明说「clear 二 / "
+                  "soft 二 / gloss 二」时才传，裸 `clear` / `soft` / `gloss` 仍走 `hd_3_*`。"
+                  "（`rs29` 是同一块 2.9B 底模的**高清三档版**，两者不重复。）"
                   "前三条 = 6 条 LoRA + silvermoonmix 二段（2456×3686）；"
                   "后两条单段（鬼针草 7 LoRA/30 步，肉感 Turbo+qaq/8 步/"
                   "1024×1536 再 2x），输出都是 2048×3072。"
