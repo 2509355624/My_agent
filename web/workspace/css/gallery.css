@@ -80,8 +80,12 @@
 
 .ggrid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px 10px;
+  /* 列宽照抄画廊列表（web/gallery.html 的 #grid）：手机最小 140 排两列，
+     ≥760 换 190。这里以前是死写 `repeat(2, ...)`，1701 的屏上一条就 560
+     宽、封面 750 高，一屏只看得见四本（用户 2026-11-28：「Web 端不需要
+     那么大一个」）。 */
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 14px 10px;
 }
 
 .gcard {
@@ -190,7 +194,9 @@ body.g-lock { overflow: hidden; }
   z-index: 80;
   display: flex;
   flex-direction: column;
-  background: rgba(14, 18, 26, .78);
+  /* 纯黑底，不透光（2026-11-28 用户：「背景要纯黑色的，不然它会跟那个图片
+     透亮过来」——原来是 rgba(14,18,26,.78)，点开之后后面的网格还看得见）。 */
+  background: #000;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
@@ -363,4 +369,13 @@ body.g-lock { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   .gsk .gpic { animation: none; }
   .gpic { transition: none; }
+}
+
+/* 跟画廊列表同一条断点：平板/桌面把每列收到 190 以下就不放更多列。
+   1701 的屏（AI 创作页现在整宽，右栏让出来）排 8 列，每列约 197，
+   跟直接打开 /gallery 的密度一致。 */
+@media (min-width: 760px) {
+  .ggrid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 16px 14px; }
+  /* 整宽之后两侧 12px 太贴边，跟画廊列表页的边距对齐 */
+  .gscroll { padding: 16px 20px calc(var(--composer-h, 128px) + 20px); }
 }

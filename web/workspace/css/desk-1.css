@@ -81,6 +81,19 @@
   .app.app-chat.side-off { grid-template-columns: minmax(0, 1fr) 0; }
   .app.app-chat.side-off > .desk-side { display: none; }
 
+  /* 子页（AI 创作 / 我的漫画 / 上传…）是全屏浮层，右栏留在旁边只会把左边
+     挤窄一半 —— 1701 的屏上主列只剩 1141，AI 创作页一排只排得下 5 张封面。
+     子页滑进来时把 560 让出去，✕ 关掉、`.in` 摘掉之后 grid 自动回到两栏，
+     用户自己按过的折叠状态（.side-off）不受影响。
+     用 :has 而不是让 JS 去记「进子页前是开是关」，省掉一份要同步的状态。 */
+  .app.app-chat:has(> .stack > .view-push.in) {
+    grid-template-columns: minmax(0, 1fr) 0;
+  }
+  .app.app-chat:has(> .stack > .view-push.in) > .desk-side,
+  .app.app-chat:has(> .stack > .view-push.in) > .stack > .desk-open {
+    display: none;
+  }
+
   /* 主列不再是卡片，只是左半边一块底 */
   .app.app-chat > .stack {
     border-radius: 0;
