@@ -70,8 +70,31 @@
   /* 出图：把占位块换成真图，记下 file，挂上三个按钮。 */
   function showImage(card, job) {
     var img = global.WSShot.shotEl(job.file);
+    /* 这一次 error 多半不是图丢了（2026-11-27 实测）：`fit=1m` 要现场把
+       9.6 MB 的原图缩成 WebP，服务端到 22:40:32 才回 200，手机端加载先
+       超时判死，用户看到的就是「图不在了」。等两秒换一条新地址重取——那时
+       缩略图已经写进 `state/gallery_cache`，第二次是秒回；只有第二次还
+       失败才算真的取不到。
+       重取必须换 URL（加 `&r=`）：同一条地址浏览器可能直接复用那份失败
+       结果，根本不会重发请求。`loading` 也改 eager——懒加载会压着不请求。 */
+    var retried = false;
     img.addEventListener("error", function () {
-      failUserLine(card, "图不在了，点重画再来一次");
+      if (!retried) {
+        retried = true;
+        img.loading = "eager";
+        global.setTimeout(function () {
+          img.src = global.WSGen.img(job.file, global.WSShot.FIT)
+                    + "&r=" + Date.now();
+        }, 2500);
+        return;
+      }
+      /* 第二次还失败：别再引导「重画」——原图一直在盘上，刷新就能看到，
+         重画只会白跑一张 GPU。 */
+      if (global.WSChat && global.WSChat.sysNote) {
+        global.WSChat.sysNote("这张图没加载出来，刷新页面就能看到");
+      } else {
+        failUserLine(card, "这张图没加载出来，刷新页面就能看到");
+      }
     });
     if (card.ph) card.ph.parentNode.replaceChild(img, card.ph);
     else card.body.appendChild(img);
