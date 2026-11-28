@@ -20,6 +20,8 @@
   "use strict";
 
   var MIN = 1180;              // 必须和 desk-1.css 的断点同一个数
+  var SIDE_KEY = "ws_side_off"; // 右栏收没收起，记在本地，下次进来照旧
+  var appEl = null;
   var side = null;
   var grid = null;
   var countEl = null;
@@ -46,6 +48,7 @@
   function build() {
     var app = document.querySelector(".app-chat");
     if (!app) return false;
+    appEl = app;
 
     side = document.createElement("aside");
     side.id = "desk-side";
@@ -60,6 +63,16 @@
     head.appendChild(label);
     head.appendChild(countEl);
 
+    /* 收起：挂在头最右边，一个 ›。收起后整栏让位给主列，跟豆包那样
+       历史可以藏起来，不画图的时候不用一直占着右边一条。 */
+    var fold = el("button", "desk-fold");
+    fold.type = "button";
+    fold.textContent = "\u203A";
+    fold.title = "收起历史作品";
+    fold.setAttribute("aria-label", "收起历史作品");
+    fold.addEventListener("click", function () { setSide(true, true); });
+    head.appendChild(fold);
+
     grid = document.createElement("div");
     grid.className = "desk-grid";
 
@@ -71,6 +84,19 @@
     side.appendChild(grid);
     side.appendChild(emptyEl);
     app.appendChild(side);
+
+    /* 收起后把历史拉回来的 ☰。挂在 .stack 上（不是聊天流里），所以
+       消息怎么滚它都待在右上角。默认 display:none，只有 .side-off 时才出。 */
+    var stack = app.querySelector(".stack");
+    if (stack) {
+      var openBtn = el("button", "desk-open");
+      openBtn.type = "button";
+      openBtn.textContent = "\u2630";
+      openBtn.title = "展开历史作品";
+      openBtn.setAttribute("aria-label", "展开历史作品");
+      openBtn.addEventListener("click", function () { setSide(false, true); });
+      stack.appendChild(openBtn);
+    }
 
     /* 点一张开大图：传的是「这一栏的顺序」，跟点到的位置严格对应。
        查看器自己认字符串数组（file 列表），不用再从 DOM 里找节点。 */
@@ -91,6 +117,15 @@
     var node = document.createElement(tag);
     if (cls) node.className = cls;
     return node;
+  }
+
+  /* 收起 / 展开右栏。只切一个 class，宽高全交给 CSS 的 grid 列宽去算，
+     避免这里再去量一遍 DOM。 */
+  function setSide(off, remember) {
+    if (!appEl) return;
+    appEl.classList.toggle("side-off", off);
+    if (!remember) return;
+    try { localStorage.setItem(SIDE_KEY, off ? "1" : "0"); } catch (e) {}
   }
 
   function render(files) {
@@ -142,6 +177,11 @@
 
   function init() {
     if (!build()) return;
+
+    /* 上次收起了就还是收着。这条只在宽屏有意义，窄屏反正看不见右栏。 */
+    var off = false;
+    try { off = localStorage.getItem(SIDE_KEY) === "1"; } catch (e) {}
+    if (off) setSide(true, false);
 
     var scroll = document.getElementById("chat-scroll");
     if (scroll && global.MutationObserver) {

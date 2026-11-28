@@ -1,19 +1,32 @@
 /* 桌面两栏（M2 · 2026-11-28）——配合 js/desk-1.js。
    ─────────────────────────────────────────────────────────
-   用户原话：「桌面形态改成主列 + 右侧栏，右栏当成历史作品上下滑」。
-   断点定在 1180：再窄一格（比如 1024 的老笔记本、平板横屏），主列会被
-   压到 660 以下，图和小卡片都会开始挤，不如继续留在手机壳形态。
+   同日第二版：拿豆包的 AI 创作页对比过之后改的。
+
+   1) 不要「两张卡片 + 中间的缝」。整块贴合：一块底铺满视口，右栏用一条
+      1px 分隔线切开，没有圆角、没有阴影、没有外留白。上一版是两块圆角
+      卡片飘在渐变底上，100% 缩放下左右各空出一大条，用户看着怪。
+   2) 聊天流里的图不再套卡片（去掉边框 / 白底 / 阴影），直接铺在整块底上。
+      豆包也是这样：进去是整片，点开某张才浮出来。
+   3) 右栏可收起。收起后主列独占整宽，右上角留一个 ☰ 再展开；状态记在
+      localStorage，下次进来还是收着的。
+   4) 掉帧：`.card` 上有 43 个 `backdrop-filter: blur(14px)`，每个都在滚动
+      时逐帧重算背景模糊 —— 这是「抽帧」最典型的原因。桌面上直接关掉，
+      再给卡片挂 `content-visibility`，视口外的卡片不参与布局和绘制。
+
+   断点定在 1180：再窄一格（1024 的老笔记本、平板横屏），主列会被压到
+   660 以下，图和小卡片都会开始挤，不如继续留在手机壳形态。
 
    三段宽度各管一段，互不重叠：
      < 640          手机壳（base.css 的 420px 卡片，本次一行没动）
-     640 – 1179     铺开的单列（手机壳但更宽，聊天区自然变宽，本次没动）
-     ≥ 1180         主列 854 + 右栏 336（本文件负责）
+     640 – 1179     单列铺到 720（聊天区变宽，但仍是卡片形态）
+     ≥ 1180         整块贴合：主列 + 右栏；右栏可收起
 
    侧栏只在宽屏存在。窄屏下 `.desk-side` 是 `display:none`，DOM 里那个
-   空白壳不会挤到 `.app` 的流里——`desk-1.js` 只在宽屏时才有意义。
+   空壳不会挤到 `.app` 的流里 —— `desk-1.js` 只在宽屏时才有意义。
 */
 
 .desk-side { display: none; }
+.desk-open { display: none; }
 
 /* 640 – 1179：还没到两栏，但也不该是 420px 的小卡片孤岛。
    把它铺到 720，聊天区和输入栏跟着变宽，图不再挤在中间一条。
@@ -35,8 +48,8 @@
     padding-right: max(16px, calc((100% - 466px) / 2));
   }
 
-  /* 输入栏：玻璃条照旧铺满主列底边，内容收在 640 居中，别让输入框
-     一路顶到两侧（那样看着像一条工具栏，不像输入框）。 */
+  /* 输入栏：照旧铺满主列底边，内容收在 640 居中，别让输入框一路顶到
+     两侧（那样看着像一条工具栏，不像输入框）。 */
   .app.app-chat .composer {
     padding-left: max(12px, calc((100% - 640px) / 2));
     padding-right: max(12px, calc((100% - 640px) / 2));
@@ -44,49 +57,78 @@
 }
 
 @media (min-width: 1180px) {
-  /* 主列 854 = 1260 − 左右 padding 48 − gap 22 − 右栏 336 */
+  /* ── 整块贴合 ───────────────────────────────────────── */
   .app.app-chat {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 336px;
-    gap: 22px;
+    grid-template-columns: minmax(0, 1fr) 340px;
+    gap: 0;
     width: 100%;
-    max-width: 1260px;
+    max-width: none;          /* 铺满视口，宽出来的部分由内容区自己收 */
     height: 100vh;
     height: 100dvh;
     min-height: 0;
-    margin: 0 auto;
-    padding: 22px 24px calc(22px + env(safe-area-inset-bottom));
-    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    border-radius: 0;
+    box-shadow: none;
+    background: var(--card);
+  }
+
+  /* 收起右栏：列宽压到 0，右栏整个摘掉，主列自己占满 */
+  .app.app-chat.side-off { grid-template-columns: minmax(0, 1fr) 0; }
+  .app.app-chat.side-off > .desk-side { display: none; }
+
+  /* 主列不再是卡片，只是左半边一块底 */
+  .app.app-chat > .stack {
     border-radius: 0;
     box-shadow: none;
     background: transparent;
-  }
-
-  /* 主列就是原来那块卡片，只是不能再跟着手机壳限宽 */
-  .app.app-chat > .stack {
-    border-radius: 20px;
     overflow: hidden;
-    background: var(--card);
-    box-shadow: var(--shadow-3);
   }
 
-  /* 右栏：另一块卡片，自己滚自己的，跟聊天流互不影响 */
+  /* 右栏也不是卡片：只靠左边一条 1px 分隔线跟主列分开 */
   .app.app-chat > .desk-side {
     display: flex;
     flex-direction: column;
     min-height: 0;
-    border-radius: 20px;
+    border-radius: 0;
     overflow: hidden;
+    border-left: 1px solid var(--line);
     background: var(--card);
-    box-shadow: var(--shadow-2);
   }
 
+  /* ── 去卡片：图直接铺在整块底上 ──────────────────────── */
+  .app.app-chat .card {
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    /* 视口外的卡片不参与布局和绘制。滚动几十张图时，这一条比省一点背景
+       模糊更有用。`contain-intrinsic-size: auto` 会记住真实高度，滚动条
+       不会因为估算值来回跳。 */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 520px;
+  }
+
+  /* 输入栏同理：玻璃下面那层模糊每帧都要重算，滚动时是纯负担 */
+  .app.app-chat .composer {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: var(--card);
+    border-top: 1px solid var(--line);
+    box-shadow: none;
+  }
+
+  /* ── 右栏头 ─────────────────────────────────────────── */
   .desk-head {
     flex: 0 0 auto;
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 8px;
-    padding: 16px 16px 10px;
+    padding: 14px 10px 10px 16px;
   }
 
   .desk-head b {
@@ -102,13 +144,47 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* 两列瀑布：竖图横图都按自己比例排，不裁也不留大片空白。
-     用 columns 而不是 grid —— 固定格子会把 2:3 的竖图裁成方块。 */
-  /* 两列等宽网格。为什么不用 columns 做瀑布：多列布局在「高度固定 + 内容
-     超过一屏」时不会纵向滚，而是继续向右生成新的列——43 张一路排到
-     6800px 宽，整栏横着溢出。grid 才是能滚的那个。
-     格子固定 3:4（工作台的图绝大多数是 2:3 竖图），横图会被裁一点，
-     缩略图上可以接受；点开大图仍是完整比例。 */
+  /* 收起按钮：贴在右栏头最右侧，一个 › */
+  .desk-fold {
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .desk-fold:hover { background: var(--card-2); color: var(--text); }
+
+  /* 收起之后，主列右上角挂一个 ☰ 用来把历史栏拉回来。
+     它挂在 `.stack` 上而不是聊天流里，所以滚消息时它不动。 */
+  .desk-open {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    z-index: 6;
+    width: 34px;
+    height: 34px;
+    place-items: center;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    background: var(--card);
+    color: var(--text-dim);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .desk-open:hover { background: var(--card-2); color: var(--text); }
+  .app.app-chat.side-off .desk-open { display: grid; }
+
+  /* ── 右栏列表 ───────────────────────────────────────── */
   /* 两列各排一列（`desk-1.js` 交替分配）。为什么不用 CSS grid 或 columns：
      · grid 里图片撑不开行高，同一行的格子会被压成 30px 互相叠；
      · columns 在固定高度容器里不会纵向滚，而是继续向右生成列，整栏横着
