@@ -291,8 +291,11 @@ def decide(agent_id, group_id):
     _mark_judged(agent_id, gid)
     t0 = time.time()
     try:
-        # 接话是隐形调用，token 账单列成 interject 类别（app/usage 每日统计）
-        with usage.scope("interject"):
+        # 接话是隐形调用，token 账单列成 interject 类别（app/usage 每日统计）。
+        # 2026-11-28 起用 `scope_or`：这是**替某个群判的**，QQ 轮里判的那次
+        # 应该记到 group_xxx 头上；硬设 "interject" 会把它挤进「无归属」，
+        # 账单上就看不出是哪个群在烧钱。没有会话归属时才用这个类别名。
+        with usage.scope_or("interject"):
             out = call_llm(
                 [{"role": "system", "content": _SYSTEM},
                  {"role": "user", "content": "群聊记录：\n" + state}],

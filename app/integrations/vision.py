@@ -740,13 +740,18 @@ def _post_ollama(cfg, model, data_url, prompt, timeout, started):
 
 
 def _record_usage(hit, miss, output, pid, model):
-    """识图是隐形调用，token 账不进主轮的 [cache] 统计——在这里单独归账，
-    挂「vision」类别（跟 LLM 后台对账时，账就齐了）。"""
+    """识图是隐形调用，token 账不进主轮的 [cache] 统计——在这里单独归账。
+
+    归属用 `scope_or("vision")` 而不是 `scope("vision")`（2026-11-28）：识图
+    多数是**替某个会话看的图**（QQ 引用图、跑图台上的传图），钱应该记在那个
+    会话头上；硬设 "vision" 会把它从会话行挤进「无归属」，账单就对不上是谁
+    花的。只有真没有会话归属（后台巡检）时才挂 "vision" 这个名字。
+    """
     if (hit or 0) + (miss or 0) <= 0:
         return
     try:
         from app.core import usage as usage_stats
-        with usage_stats.scope("vision"):
+        with usage_stats.scope_or("vision"):
             usage_stats.record(hit or 0, miss or 0, output=output,
                                provider=pid, model=model, kind="vision")
     except Exception:

@@ -120,9 +120,46 @@ def model_key(provider, model):
     return "%s/%s" % (provider or "-", model or "-")
 
 
+# 延迟解析 qq_api 的会话键函数（避免 core -> features 的模块级循环导入）。
+# 用 list 当哨兵：None 也是一个确定了的结果，不能和「还没试过」混为一谈。
+_BIND_FN = []
+
+
+def _bound_key_fn():
+    """取 `qq_api.current_session_key`；取不到就返回 None（只解析一次）。"""
+    if _BIND_FN:
+        return _BIND_FN[0]
+    try:
+        from app.features.qq.api import current_session_key as fn
+    except Exception:                                  # noqa: BLE001
+        fn = None
+    _BIND_FN.append(fn)
+    return fn
+
+
+def _bound_key():
+    """本轮绑定的会话键（没有绑定 / 取失败一律 None）。"""
+    fn = _bound_key_fn()
+    if not fn:
+        return None
+    try:
+        return fn()
+    except Exception:                                  # noqa: BLE001
+        return None
+
+
 def current_tag():
-    """当前线程的归属名；没设过就是 other（不该出现，兜底可见）。"""
-    return getattr(_local, "tag", None) or "other"
+    """当前线程的归属名；没设过就按会话绑定兜底，再不行才是 other。
+
+    2026-11-28：这条兜底是「无归属」桶长期虚高的根因之一。跑图台
+    （`/api/runbench/gen` 的后台线程）、网页工作台都 `bind_context()` 绑好了
+    会话键，却没设 usage scope；QQ 轮里派生的线程同理。于是「明明是某个会话
+    花的钱」全记进 other。未设 scope 时先问 qq_api 要本轮会话键。
+    """
+    tag = getattr(_local, "tag", None)
+    if tag:
+        return tag
+    return _bound_key() or "other"
 
 
 def set_tail(n):
@@ -137,6 +174,35 @@ def set_tail(n):
 def current_tail():
     """当前线程记下的尾巴 token 数；没设过是 0。"""
     return int(getattr(_local, "tail", 0) or 0)
+
+
+class scope_or:
+    """子归属：外层已经有归属就继承，没有才用自己的类别名。
+
+    2026-11-28：`vision` / `interject` 原来各自硬设类别名，QQ 轮里的识图、
+    插话判定于是全从会话行掉进「无归属」桶——账单上看不出钱是谁花的。
+    这两件事是**替某个会话干的活**，钱该记在那个会话头上；只有真没有会话
+    （后台巡检）时才用自己的名字。
+
+    外层没设 scope、但线程已经 `qq_api.bind_context()` 绑了会话的（跑图台
+    后台出图就是这种），也按会话算——`bind_context` 已经说明了「这是谁的」。
+    """
+
+    def __init__(self, fallback):
+        self.fallback = fallback
+        self._prev = None
+
+    def __enter__(self):
+        outer = getattr(_local, "tag", None)
+        self._prev = outer
+        if not outer:
+            outer = _bound_key()
+        _local.tag = outer or self.fallback
+        return self
+
+    def __exit__(self, *exc):
+        _local.tag = self._prev
+        return False
 
 
 class scope:

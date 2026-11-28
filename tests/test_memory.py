@@ -192,7 +192,9 @@ class TrimHistoryTest(unittest.TestCase):
         self.assertIsNot(self._trim(h, 33_000, 0.1), h)
 
     def test_too_few_turns_returns_unchanged(self):
-        h = self._history_with_turns(2)                   # 轮数 <= FULL_RECENT_TURNS
+        # 「轮数 <= 完整保留窗口」就不压。窗口是可变参数（2026-11-28 由 3 降到
+        # 1），这里跟着常量走，别再写死 2——写死会随参数调整假红。
+        h = self._history_with_turns(memory.FULL_RECENT_TURNS)
         self.assertIs(self._trim(h, 33_000, 0.0), h)
 
     def test_only_system_messages_returned_as_is(self):
@@ -247,9 +249,12 @@ class CompactKeepDegradeTest(unittest.TestCase):
     def _kept_turns(out):
         return len([m for m in out if m.get("role") == "user"])
 
+    @unittest.skipUnless(memory.FULL_RECENT_TURNS > 1,
+                         "完整保留窗口已是 1 轮，没有可再降的空间"
+                         "（2026-11-28 用户拍板把窗口降到 1）")
     def test_keep_degrades_when_recent_turns_too_big(self):
-        # 每轮约 2×4000 字 ≈ 4800 token。预算 12000 装不下最近 3 轮，
-        # 于是只能再少留一轮
+        # 每轮约 2×4000 字 ≈ 4800 token。预算 12000 装不下窗口内的几轮，
+        # 于是只能再少留一轮（下限恒为 1，见 _compact 的 `keep <= 1`）
         h = self._fat_history(6, 4000)
         out = memory.trim_history(h, usage={"total_tokens": 40_000,
                                             "hit_rate": 0.0}, budget=12_000)
