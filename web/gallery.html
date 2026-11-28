@@ -173,7 +173,7 @@
   #detail.on{display:flex}
   .dtop{display:flex;align-items:center;gap:10px;padding:12px 14px;
     padding-top:calc(12px + env(safe-area-inset-top,0));flex:0 0 auto;
-    background:var(--topbar);backdrop-filter:blur(14px);
+    background:var(--card);
     border-bottom:1px solid var(--line)}
   .dtop button{border:0;background:var(--card2);color:var(--tx);
     font:inherit;font-size:20px;line-height:1;width:36px;height:36px;
@@ -188,7 +188,7 @@
   /* 「加图」单独占一行放在左上：36px 的圆形按钮里塞三个字点不准，
      而且在顶栏里还得跟标题抢位置。给个 44px 高的大按钮，拇指一按就到。 */
   .daddbar{display:none;align-items:center;gap:10px;padding:10px 14px 12px;
-    flex:0 0 auto;background:var(--topbar);backdrop-filter:blur(14px);
+    flex:0 0 auto;background:var(--card);
     border-bottom:1px solid var(--line)}
   .daddbar.on{display:flex}
   #dadd{height:44px;border:0;border-radius:12px;padding:0 22px;font:inherit;
@@ -225,7 +225,7 @@
   .shot img.ok{opacity:1}
   .shot .pg{position:absolute;left:6px;top:6px;background:rgba(0,0,0,.62);
     color:var(--on-image);font-size:11px;line-height:16px;padding:1px 6px;
-    border-radius:20px;backdrop-filter:blur(4px)}
+    border-radius:20px;}
   .shot .mk{position:absolute;right:7px;top:6px;font-size:14px;line-height:1;
     text-shadow:0 1px 4px rgba(0,0,0,.9)}
   /* 单张隐藏：右下角那颗按钮。存在感要低（一屏几十张，别抢图），但按下去
@@ -233,7 +233,7 @@
   .shot .hb-item{position:absolute;right:6px;bottom:6px;z-index:3;
     padding:3px 9px;border:0;border-radius:999px;cursor:pointer;
     background:rgba(0,0,0,.56);color:#fff;font-size:11px;line-height:16px;
-    font-family:inherit;backdrop-filter:blur(4px);opacity:.72;
+    font-family:inherit;;opacity:.72;
     transition:opacity .16s,background .16s}
   .shot .hb-item:hover,.shot .hb-item:active{opacity:1;background:rgba(0,0,0,.78)}
   /* 已藏的那张：压暗 + 灰，一眼能看出「这张不公开」 */
@@ -359,8 +359,8 @@
      上一页 / 直接输页码 / 下一页。位置记在 localStorage，下次进来直接还原。 */
   .pager{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);
     display:none;align-items:center;gap:2px;z-index:40;
-    background:var(--topbar);border:1px solid var(--line);border-radius:20px;
-    padding:4px 6px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+    background:var(--card);border:1px solid var(--line);border-radius:20px;
+    padding:4px 6px;}
   .pager.on{display:flex}
   .pager button{width:32px;height:30px;border:0;background:transparent;color:var(--tx);
     font-size:18px;line-height:1;border-radius:50%;cursor:pointer;padding:0}
@@ -371,6 +371,7 @@
   .pager input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
   .pager .pgsum{color:var(--dim);font-size:11.5px;padding:0 6px 0 2px;white-space:nowrap}
 </style>
+<link rel="stylesheet" href="gallery-desk-1.css?v=20261128a">
 </head>
 <body>
 
