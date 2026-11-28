@@ -316,6 +316,70 @@
   to { background-position: -120% 0; }
 }
 
+/* ── 桌面宽屏：作品列表改成画廊那种网格（2026-11-28）─────────
+   用户拿画廊列表对比过：「参考画廊的布局吧」。
+
+   手机上一列横条是对的 —— 96px 的封面 + 书名 + 进度条，一屏能读到十几本
+   的信息，也不用滚很久。但 1701 的屏上，一条就占满 1100 宽，封面还是 96，
+   右边那一大片全是空的，一屏只能看四五本。
+
+   宽屏改成网格：封面在上、名字和进度在下，列宽自适应（最小 200）。1701 的
+   主列能排 5 列，一屏二十本出头，跟画廊列表的密度对上了。
+   卡片本身去掉白底和阴影 —— 画廊那边封面就是卡片，底下只跟一行小字。 */
+@media (min-width: 1180px) {
+  .clist {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 18px 16px;
+    align-items: start;
+  }
+
+  .cwork {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .cwork:active { transform: scale(.985); box-shadow: none; }
+
+  .cpic {
+    width: 100%;
+    aspect-ratio: var(--cpic-ar, 2 / 3);
+    border-radius: 10px;
+  }
+
+  .cinfo {
+    padding: 0 2px;
+    gap: 4px;
+    justify-content: flex-start;
+  }
+
+  /* 书名在网格里只给一行 —— 两行会把卡片高度撑得不齐，瀑布就对不上了 */
+  .cname {
+    display: block;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .cmeta { font-size: 11.5px; }
+  .cbar { height: 3px; }
+
+  /* 骨架也得是封面的形状，不然网格里会出现一条横着的空条 */
+  .csk {
+    height: auto;
+    aspect-ratio: 2 / 3;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .csk { animation: none; }
   .cwork, .cbar i { transition: none; }
