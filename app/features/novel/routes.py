@@ -36,12 +36,16 @@
 「自己配的自定义模型 / 代充付费段」，**站主不替它掏官方那份钱**。
 ⇒ 站主态**无条件**挂覆盖（空列表也挂），链尾爱空就空，报错交给前端引导。
 
-群友态一律不挂：自带 API Key 不该明文经过站主服务器，也不该绕开计费。
+2026-11-28 群友态也挂上了（用户拍板放开）：Key 仍然只存在玩家自己的浏览器，
+随请求临时进来、`teardown_request` 立刻摘掉、不落盘不记日志；计费闸门不动——
+自带模型那一层不扣次数，只有落到代充才扣（见 `_friend_run` 的三段）。
 """
 import json
 import logging
+import re
 
 from flask import Blueprint, g, jsonify, request
+from urllib.parse import urlsplit
 
 from app.features.comic import quota as comic_quota
 from app.integrations import llm
@@ -67,6 +71,14 @@ DELETE_CONFIRM = "我确认删掉这本书"
 # 免费层的参数是每次请求现算的（见 _relay_opts），别在 import 时定死，
 # 否则测试 patch config 换链头不生效。
 _PAID_OPTS = {"provider": None, "model": None, "strict": False}
+
+# 「测试连接」的内网闸（2026-11-28）：放开给群友后，这个接口等于让服务器
+# 代发一次 POST，不挡内网就是个现成的 SSRF 探针。
+_PRIVATE_HOST = re.compile(
+    r"^(localhost|127\.|0\.0\.0\.0|10\."
+    r"|192\.168\.|169\.254\."
+    r"|172\.(1[6-9]|2\d|3[01])\."
+    r"|::1|\[::1\])", re.I)
 
 
 def _novel_customs(body):
@@ -99,22 +111,27 @@ def _begin_request():
         log.warning("[novel] 群友身份识别失败，按站主处理", exc_info=True)
         g.novel_qq = ""
     g.novel_paid = False
-    # 群友一律不用自定义模型：Key 不能过站主服务器，也不能绕开计费。
-    customs = [] if g.novel_qq else _novel_customs(
-        request.get_json(silent=True) or {})
+    # 自定义模型**谁都能挂**（2026-11-28 用户拍板放开群友态）。
+    # 旧口径是「群友一律不用」：Key 不能过站主服务器、也不能绕开计费。放开
+    # 的理由是页面那半边——5175 的 /novel 强制登录，群友态把整颗「自定义模型」
+    # 按钮 display:none 掉，群友打开小说页只看得到「查询额度」，以为自己没得选。
+    # Key 的处理方式不变：只存在玩家自己的浏览器 localStorage，每轮随请求临时
+    # 进来，`teardown_request` 立刻摘掉，不落盘、不写日志；站主进程只在内存里
+    # 转一手就还给他。计费闸门也不动，见 `_friend_run`：自带模型不扣次数。
+    customs = _novel_customs(request.get_json(silent=True) or {})
     g.novel_has_custom = bool(customs)
-    if not g.novel_qq:
-        # 站主：**无条件**挂覆盖，空列表也挂（2026-11-15 用户拍板）。
-        # 只有挂了 `persona_chain_active()` 才会是 True，candidates() 的链尾
-        # 才会换成「自定义模型 + 代充付费段」；不挂就退回 LLM_FALLBACK_CHAIN，
-        # 那条链第一项过后就是付费官方 —— 小说不该烧那个钱。
-        # 链尾可能因此是空的（没配自定义、也没代充），中转站一挂直接报错，
-        # 由 `_fail` 给「去配自定义模型 / 找站长加次数」的引导。
-        try:
-            llm.set_custom_override(customs)
-        except Exception:                                   # noqa: BLE001
-            log.warning("[novel] 自定义模型覆盖挂载失败", exc_info=True)
-            g.novel_has_custom = False
+    # **无条件**挂覆盖，空列表也挂（2026-11-15 用户拍板）。
+    # 只有挂了 `persona_chain_active()` 才会是 True，candidates() 的链尾
+    # 才会换成「自定义模型 + 代充付费段」；不挂就退回 LLM_FALLBACK_CHAIN，
+    # 那条链第一项过后就是付费官方 —— 小说不该烧那个钱。
+    # 链尾可能因此是空的（没配自定义、也没代充），中转站一挂直接报错，
+    # 由 `_fail` 给「去配自定义模型 / 找站长加次数」的引导。
+    # paid_after=True：小说里玩家自己掏钱的模型永远排在付费段之前先试。
+    try:
+        llm.set_custom_override(customs, paid_after=True)
+    except Exception:                                       # noqa: BLE001
+        log.warning("[novel] 自定义模型覆盖挂载失败", exc_info=True)
+        g.novel_has_custom = False
 
 
 @bp.teardown_request
@@ -203,9 +220,18 @@ def _relay_opts():
 def _friend_run(qq, run):
     """群友整轮作业：`run(opts)` → 结果。
 
-    先免费层跑整轮；链路异常才扣 1 次代充、换全局链整轮重跑。整轮重跑是
-    安全的：`novel.run_turn` 在写作 AI 抛异常时还没落盘（`_apply` 只改内存
-    副本），同一个 `turn_token` 也不会被判成重复。
+    三段（2026-11-28 加了中间那段「自带模型」）：
+
+    1. 免费层：只打公用中转站，成功不扣次数；
+    2. 自带模型：群友自己填的那几条（Key 在**他自己浏览器**里，随请求临时
+       进来）。链尾已经在 `_begin_request` 挂好，这里把链头让开（provider=None）
+       就只剩他的模型——成功即返回，**不扣次数**、不碰站主余额；这一层是
+       「中转站挂了也能自己接着写」，不是代充的替代品，所以排在免费层之后。
+    3. 代充：扣 1 次 `script`，走站主官方那条全局链。**必须先把覆盖摘掉**：
+       挂着覆盖时 `candidates()` 只会给出群友自己的模型，代充会变成空跑。
+
+    整轮重跑是安全的：`novel.run_turn` 在写作 AI 抛异常时还没落盘（`_apply`
+    只改内存副本），同一个 `turn_token` 也不会被判成重复。
     「模型没交作业」「参数不合法」不是链路故障，原样抛、不白扣次数。
     """
     if not qq:
@@ -217,13 +243,24 @@ def _friend_run(qq, run):
         except (novel.NoHomework, ValueError):
             raise
         except Exception as e:                              # noqa: BLE001
-            log.warning("[novel] 群友免费层没跑成，试代充：%s", e)
+            log.warning("[novel] 群友免费层没跑成：%s", e)
+    # 第二段：群友自带模型（不扣次数）
+    if getattr(g, "novel_has_custom", False):
+        try:
+            return run({"provider": None, "model": None, "strict": False})
+        except (novel.NoHomework, ValueError):
+            raise
+        except Exception as e:                              # noqa: BLE001
+            log.warning("[novel] 群友自带模型也没跑成，试代充：%s", e)
     if comic_quota.remaining(qq, "script") <= 0:
-        raise ValueError("中转站暂时跑不了，免费的这一轮用不了；"
-                         "找站长加次数，就能用站主额度继续写")
+        raise ValueError("中转站和你的自定义模型都没跑成，这一轮用不了；"
+                         "填一个你自己的 API（「自定义模型」里），"
+                         "或者找站长加次数")
     if not comic_quota.consume(qq, "script"):
         raise ValueError("代充次数刚好用完，找站长加次数吧")
     g.novel_paid = True
+    # 代充走全局链：先摘覆盖，跑完在 teardown 里不会再挂回来。
+    llm.set_custom_override(None)
     try:
         return run(_PAID_OPTS)
     except Exception:
@@ -387,19 +424,19 @@ def quota():
         _u = novel.usage_snapshot()
     except Exception:                                     # noqa: BLE001
         _u = {"tokens": 0, "calls": 0}
-    _usage_txt = ("本次运行已调用 %d 次 · 约 %s token"
-                  % (_u["calls"], format(_u["tokens"], ","))) if _u["calls"] \
-                 else "本次运行还没写过"
     if not qq:
         return jsonify({"ok": True, "mode": "owner", "limited": False,
                         "remaining": None, "usage": _u,
-                        "text": "站主自用 · 走自己的链头，没有次数额度\n"
-                                + _usage_txt})
+                        # 用量交给 `usage` 字段渲染（2026-11-28 修）：这里再拼一遍
+                        # `_usage_txt`，前端又 append 一次，页面上会重复出现
+                        # 「本次运行还没写过」两遍。
+                        "text": "站主自用 · 走自己的链头，没有次数额度"})
     left = comic_quota.snapshot(qq)["left"].get("script", 0)
     return jsonify({
         "ok": True, "mode": "friend", "limited": left <= 0,
         "remaining": left,
-        "text": ("公用中转站在线时免费随便写；挂了才用站长给的次数"
+        "text": ("公用中转站在线时免费随便写；它挂了先用你自己配的模型"
+                 "（「自定义模型」里填，不扣次数），都没跑成才用站长给的次数"
                  "（代充剩 %d 次）" % left),
     })
 
@@ -408,11 +445,11 @@ def quota():
 def custom_test():
     """「测试连接」：拿弹窗草稿发一条 ping，不读 localStorage、不落盘。
 
-    群友态关掉：自定义 API Key 不该明文经过站主服务器，也不该绕开计费；
-    前端在群友态会把这颗入口整个藏起来，这里是服务端那一半。
+    2026-11-28 群友也能用（跟着自定义模型一起放开）：他自己填的 Key、他自己
+    付钱，没理由不给测。加了一条内网闸——这个接口本质是「服务器替玩家发一次
+    POST」，放开就等于送一个 SSRF 探针，所以 127./10./192.168./172.16-31./
+    localhost 一律拒掉。
     """
-    if _qq():
-        return jsonify({"ok": False, "error": "自定义模型是站主自用功能"}), 403
     body = request.get_json(silent=True) or {}
     base_url = str(body.get("base_url") or "").strip()
     model = str(body.get("model") or "").strip()
@@ -421,6 +458,10 @@ def custom_test():
             and model and api_key):
         return jsonify({"ok": False,
                         "error": "接口地址（http/https）、模型名、API Key 都要填"}), 400
+    host = (urlsplit(base_url).hostname or "").strip().lower()
+    if not host or _PRIVATE_HOST.match(host):
+        return jsonify({"ok": False,
+                        "error": "内网 / 本机地址不能测，填你模型的公网地址"}), 400
     ok, elapsed, info = llm.test_custom(base_url, model, api_key)
     if not ok:
         return jsonify({"ok": False, "elapsed": elapsed, "error": info})

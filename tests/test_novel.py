@@ -1593,9 +1593,13 @@ class UiSevenTest(unittest.TestCase):
     def test_owner_never_falls_back_to_the_global_chain(self):
         # 模块注释里会引用旧写法解释为什么改，断言只看真正的代码部分。
         code = re.sub(r'^""".*?"""', '', self.api, count=1, flags=re.S)
-        self.assertIn("if not g.novel_qq:", code)
-        self.assertIn("llm.set_custom_override(customs)", code)
+        # 2026-11-28：群友态也挂覆盖了，所以不再有「按身份分列表」的分支；
+        # 无论谁进来都无条件挂，空列表也挂（否则会退回全局降级链烧付费官方）。
+        self.assertIn("llm.set_custom_override(customs, paid_after=True)", code)
+        self.assertNotIn("customs = [] if g.novel_qq", code)
         self.assertNotIn("if customs:", code)
+        # 代充那一段必须先把覆盖摘掉，否则 candidates() 只给出自带模型，代充空跑。
+        self.assertIn("llm.set_custom_override(None)", code)
 
 
 # ─── 上架 5175（2026-11-12）：归属隔离 / 链策略 / 幂等 / 计费 / 网关 ───
@@ -1886,6 +1890,52 @@ class FriendBillingTest(NovelBase):
                         "123", lambda o: (_ for _ in ()).throw(RuntimeError("402")))
         consume.assert_not_called()
 
+    def test_friend_custom_models_are_tried_before_charging_quota(self):
+        """2026-11-28：中转站挂了先用群友自己的模型，跑成了不扣次数。"""
+        calls = []
+        with self.app.test_request_context():
+            novel_api.g.novel_has_custom = True
+            with mock.patch.object(novel_api._cfg, "PERSONA_PROVIDER", "relay"), \
+                    mock.patch.object(novel_api.comic_quota, "consume") as consume:
+                def run(o):
+                    calls.append(o)
+                    if len(calls) == 1:
+                        raise RuntimeError("402")
+                    return "ok"
+                got = novel_api._friend_run("123", run)
+        self.assertEqual(got, "ok")
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(calls[0]["strict"])
+        self.assertIsNone(calls[1]["provider"])
+        self.assertFalse(calls[1]["strict"])
+        consume.assert_not_called()
+
+    def test_charging_quota_detaches_the_custom_override(self):
+        """代充那一段走的是站主官方全局链，必须先摘覆盖——挂着覆盖时
+        `candidates()` 只给出自带模型，代充会变成空跑（2026-11-28）。"""
+        calls = []
+        cfg = [{"base_url": "https://a.example/v1", "model": "m", "api_key": "k"}]
+        try:
+            with self.app.test_request_context():
+                novel_api.g.novel_has_custom = True
+                novel_api.llm.set_custom_override(cfg)
+                with mock.patch.object(novel_api._cfg, "PERSONA_PROVIDER", "relay"), \
+                        mock.patch.object(novel_api.comic_quota, "remaining",
+                                          return_value=1), \
+                        mock.patch.object(novel_api.comic_quota, "consume",
+                                          return_value=True):
+                    def run(o):
+                        calls.append(novel_api.llm.persona_chain_active())
+                        if len(calls) <= 2:
+                            raise RuntimeError("down")
+                        return "paid-ok"
+                    got = novel_api._friend_run("123", run)
+        finally:
+            novel_api.llm.set_custom_override(None)
+        self.assertEqual(got, "paid-ok")
+        self.assertEqual(calls, [True, True, False],
+                         "免费层 / 自带模型都在覆盖里，代充那一段必须摘掉")
+
     def test_paid_failure_refunds_the_quota(self):
         with self.app.test_request_context():
             with mock.patch.object(novel_api._cfg, "PERSONA_PROVIDER", "relay"), \
@@ -1930,12 +1980,25 @@ class FriendBillingTest(NovelBase):
         rows = self.c.get("/api/novel/worlds").get_json()["worlds"]
         self.assertEqual([w["name"] for w in rows], ["群友那本"])
 
-    def test_custom_test_is_closed_for_friends(self):
+    def test_custom_test_is_open_for_friends_but_blocks_private_hosts(self):
+        """2026-11-28 放开群友态（跟着自定义模型一起）：他自己填的 Key、
+        他自己付钱，得能测。但内网地址一律 400——这个接口等于让服务器替
+        玩家发一次 POST，放开就是个 SSRF 探针。"""
         self._as_friend("123")
-        r = self.c.post("/api/novel/custom_test", json={
-            "base_url": "https://x", "model": "m", "api_key": "k"})
-        self.assertEqual(r.status_code, 403)
-        self.assertIn("站主自用", r.get_json()["error"])
+        for url in ("http://127.0.0.1:5174/v1", "http://10.0.0.5/v1",
+                    "http://192.168.1.2/v1", "http://localhost/v1",
+                    "http://172.20.0.3/v1"):
+            r = self.c.post("/api/novel/custom_test", json={
+                "base_url": url, "model": "m", "api_key": "k"})
+            self.assertEqual(r.status_code, 400, url)
+            self.assertIn("内网", r.get_json()["error"])
+        with mock.patch.object(novel_api.llm, "test_custom",
+                               return_value=(True, 0.4, "pong")):
+            r = self.c.post("/api/novel/custom_test", json={
+                "base_url": "https://api.deepseek.com", "model": "m",
+                "api_key": "k"})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["ok"])
 
     def test_turn_route_passes_owner_and_token_through(self):
         self._as_friend("123")
@@ -1997,10 +2060,15 @@ class FriendUiTest(unittest.TestCase):
     def test_boot_asks_quota_before_anything_else(self):
         self.assertIn("await nvQuota();", self.html)
         self.assertIn("nvFriendMode = d.mode === 'friend'", self.html)
-        self.assertIn("cb.style.display = nvFriendMode ? 'none' : ''", self.html)
+        # 2026-11-28：群友态不再藏那颗按钮，只换面板里的一句说明。
+        self.assertNotIn("nvFriendMode ? 'none'", self.html)
+        self.assertIn("nvFriendMode ? '' : 'none'", self.html)
 
-    def test_friend_posts_do_not_carry_custom_models(self):
-        self.assertIn("if(!nvFriendMode) body.custom_models = nvCM;", self.html)
+    def test_both_identities_carry_custom_models(self):
+        """2026-11-28 用户拍板：群友也能用自己的 Key，所以两种身份都带。
+        空数组也有意义——后端靠它认出「这是小说请求」。"""
+        self.assertIn("body.custom_models = nvCM;", self.html)
+        self.assertNotIn("if(!nvFriendMode) body.custom_models", self.html)
 
 
 class ExpansionContractTest(unittest.TestCase):
