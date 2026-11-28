@@ -415,6 +415,11 @@ _FIXED_CHAN_MAP = {"sd": "image_gen_v1",
                    "krea2极光单次": "krea2-jiguang-1x",
                    "极光单次": "krea2-jiguang-1x",
                    "krea2-jiguang-1x": "krea2-jiguang-1x",
+                   # 2026-11-28 用户拍板的双 LoRA 混搭（极光旧梦 1.0 + in_real 1.0，
+                   # 见 `skills/krea2-xianshi/`）。点名词「krea2现实」——
+                   # ⚠️ 和「krea2写实」（`krea2-real`，单挂 超写实 LoRA）只差一个字，
+                   # 别以为是同一个：现实 = 极光 + in_real，写实 = krea2-超写实。
+                   "krea2现实": "krea2-xianshi",
                    "qwen": "qwen_image_v1",
                    "qwen角色设定表": "qwen-charsheet",
                    "qwen修复": "qwen-restore",
@@ -616,6 +621,11 @@ _FIXED_CHAN_RE = re.compile(
     # 吃成「krea2极光」，剩下的「单次」还会被当正文塞进提示词。
     r"|krea2\s*极光\s*单\s*次"
     r"|krea2\s*极光"
+    # 2026-11-28 双 LoRA 渠道（极光旧梦 + in_real）。跟「krea2写实」只差一个字，
+    # 但只有整串登记才认得出：不写这条的话，尾部前瞻 `(?![0-9A-Za-z_-])` 挡不住
+    # 中文「现」，兜底的裸 `krea2` 会把它吃成 `krea2-general`，剩下的「现实」
+    # 还会被当正文塞进提示词。
+    r"|krea2\s*现实"
     r"|qwen\s*角色设定表"
     r"|qwen\s*修复"
     # 2026-11-18：qwen30 / qwen真人 / qwen-hd 已下架，但旧说法还要**吃掉**
